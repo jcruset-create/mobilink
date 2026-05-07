@@ -412,20 +412,17 @@ function updateTechStatusTotals(
   const previousStatus = tech.status;
   const previousTotals = tech.statusTotals ?? {};
 
+  const shouldClearCurrentJob =
+    nextStatus === "disponible" ||
+    nextStatus === "nodisponible" ||
+    nextStatus === "supervisor" ||
+    isManualUnavailableStatus(nextStatus);
+
   return {
     ...tech,
     status: nextStatus,
     blocked: isUnavailableTechStatus(nextStatus),
-    currentJobId:
-      nextStatus === "disponible" ||
-      nextStatus === "nodisponible" ||
-      nextStatus === "supervisor" ||
-      nextStatus === "vacaciones" ||
-      nextStatus === "baja" ||
-      nextStatus === "permiso" ||
-      nextStatus === "otro_taller"
-        ? null
-        : tech.currentJobId,
+    currentJobId: shouldClearCurrentJob ? null : tech.currentJobId,
     statusChangedAtMs: changedAtMs,
     statusTotals: {
       ...previousTotals,
@@ -940,6 +937,18 @@ function applyAssignmentToTechs(
     };
   });
 }
+function isManualUnavailableStatus(status: string) {
+  return (
+       status === "nodisponible" ||
+    status === "permiso" ||
+    status === "vacaciones" ||
+    status === "baja" ||
+    status === "otro_taller" ||
+    status === "en_otro_taller" ||
+    status === "en otro taller"
+  );
+}
+
 
 function allocateJobPure(
   job: Job,
@@ -1376,45 +1385,87 @@ function normalizeJobFromApi(job: any): Job {
   };
 }
 
+const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";
+
+function normalizeTechNameKey(name: string) {
+  return name
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function getManualTechStatusOverrides(): Record<string, TechStatus> {
+  try {
+    const raw = localStorage.getItem(MANUAL_TECH_STATUS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
+  const overrides = getManualTechStatusOverrides();
+
+  return techsToApply.map((tech): Tech => {
+    const key = normalizeTechNameKey(tech.name);
+    const forcedStatus = overrides[key];
+
+    if (!forcedStatus) return tech;
+
+    return {
+      ...tech,
+      status: forcedStatus as TechStatus,
+      blocked: isManualUnavailableStatus(forcedStatus),
+      currentJobId: null,
+    };
+  });
+}
+
 function syncTechsWithActiveJobs(baseTechs: Tech[], jobs: Job[]): Tech[] {
   const activeJobs = jobs.filter((job) => job.status === "activo");
 
-  return baseTechs.map((tech) => {
+  const synced: Tech[] = baseTechs.map((tech): Tech => {
+    if (isManualUnavailableStatus(tech.status)) {
+      return {
+        ...tech,
+        blocked: true,
+        currentJobId: null,
+      };
+    }
+
     const activeJob = activeJobs.find((job) =>
       (job.assignedNames ?? []).includes(tech.name)
     );
 
     if (!activeJob) {
-      if (isUnavailableTechStatus(tech.status)) {
-        return {
-          ...tech,
-          blocked: true,
-          currentJobId: null,
-        };
-      }
+      const nextStatus: TechStatus =
+        tech.name === "Ramón" ? "supervisor" : "disponible";
 
       return {
         ...tech,
-        status: tech.name === "Ramón" ? "supervisor" : "disponible",
-        blocked: false,
+        status: nextStatus,
         currentJobId: null,
       };
     }
 
     const index = (activeJob.assignedNames ?? []).indexOf(tech.name);
 
+    const nextStatus: TechStatus =
+      index === 0
+        ? tech.name === "Ramón"
+          ? "supervisor"
+          : "ocupado"
+        : "refuerzo";
+
     return {
       ...tech,
       currentJobId: activeJob.id,
-      blocked: false,
-      status:
-        index === 0
-          ? tech.name === "Ramón"
-            ? "supervisor"
-            : "ocupado"
-          : "refuerzo",
+      status: nextStatus,
     };
   });
+
+  return applyManualTechStatusOverrides(synced);
 }
 
 
@@ -1984,49 +2035,56 @@ useEffect(() => {
   }, [log]);
 
 useEffect(() => {
-  async function loadTechs() {
-    try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
-      const data = await response.json();
+async function loadTechs() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
+    const data = await response.json();
 
-      if (!Array.isArray(data)) return;
+    if (!Array.isArray(data)) return;
 
-      setTechs(() => {
-        const merged = INITIAL_TECHS.map((baseTech) => {
-          const found = data.find((t: any) => t.name === baseTech.name);
+    setTechs(() => {
+      const merged = INITIAL_TECHS.map((baseTech) => {
+        const found = data.find((t: any) => t.name === baseTech.name);
 
-          const hasCompetencies =
-            found?.competencies &&
-            Object.keys(found.competencies).length > 0;
+        const hasCompetencies =
+          found?.competencies &&
+          Object.keys(found.competencies).length > 0;
 
-          const hasPriorities =
-            found?.priorities &&
-            Object.keys(found.priorities).length > 0;
+        const hasPriorities =
+          found?.priorities &&
+          Object.keys(found.priorities).length > 0;
 
-          return found
-  ? {
-      ...baseTech,
-      status: found.status as TechStatus,
-      blocked: !!found.blocked,
-      currentJobId: found.currentJobId ?? null,
-      competencies: hasCompetencies
-        ? found.competencies
-        : baseTech.competencies,
-      priorities: hasPriorities
-        ? found.priorities
-        : baseTech.priorities,
-      avatar: found.avatar ?? baseTech.avatar ?? null,
-    }
-  : baseTech;
-        });
+        if (!found) return baseTech;
 
-        return syncTechsWithActiveJobs(merged, jobs);
+        const loadedStatus = found.status as TechStatus;
+        const isManualUnavailable = isManualUnavailableStatus(loadedStatus);
+
+        return {
+          ...baseTech,
+          status: loadedStatus,
+          blocked: isManualUnavailable || !!found.blocked,
+          currentJobId: isManualUnavailable ? null : found.currentJobId ?? null,
+          competencies: hasCompetencies
+            ? found.competencies
+            : baseTech.competencies,
+          priorities: hasPriorities
+            ? found.priorities
+            : baseTech.priorities,
+          avatar: found.avatar ?? baseTech.avatar ?? null,
+          statusChangedAtMs:
+            found.statusChangedAtMs ?? baseTech.statusChangedAtMs,
+          statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
+        };
       });
-    } catch (error) {
-      console.error("Error cargando técnicos:", error);
-    }
-  }
 
+      const synced = syncTechsWithActiveJobs(merged, jobs);
+
+      return applyManualTechStatusOverrides(synced);
+    });
+  } catch (error) {
+    console.error("Error cargando técnicos:", error);
+  }
+}
   loadTechs();
 }, []);
 
@@ -3016,14 +3074,46 @@ function allocateJob(
   logResult = true,
   askRamonApproval = false
 ): AllocationResult {
+  const protectedStatusesByName = new Map(
+    baseTechs
+      .filter((tech) => isManualUnavailableStatus(tech.status))
+      .map((tech) => [tech.name, tech.status])
+  );
+
+  const safeBaseTechs = baseTechs.map((tech) => {
+    if (isManualUnavailableStatus(tech.status)) {
+      return {
+        ...tech,
+        currentJobId: null,
+      };
+    }
+
+    return tech;
+  });
+
   const result = allocateJobPure(
     job,
-    baseTechs,
+    safeBaseTechs,
     baseJobs,
     quickTemplates,
     techStats,
     techLoadStats
   );
+
+  const restoreProtectedTechs = (techsToRestore: Tech[]) =>
+    techsToRestore.map((tech) => {
+      const protectedStatus = protectedStatusesByName.get(tech.name);
+
+      if (protectedStatus) {
+        return {
+          ...tech,
+          status: protectedStatus,
+          currentJobId: null,
+        };
+      }
+
+      return tech;
+    });
 
   if (result.assigned && result.needsRamonApproval) {
     if (!askRamonApproval) {
@@ -3031,14 +3121,16 @@ function allocateJob(
         "Trabajo enviado a cola: Ramón solo se usará como último recurso con confirmación.";
 
       if (logResult) {
-        appendLog(`${AREA_META[job.area].label} ${job.plate} queda en cola. Ramón era el único disponible.`);
+        appendLog(
+          `${AREA_META[job.area].label} ${job.plate} queda en cola. Ramón era el único disponible.`
+        );
       }
 
       return {
         assigned: false,
         assignedNames: [],
         reason,
-        techs: baseTechs,
+        techs: restoreProtectedTechs(safeBaseTechs),
         jobs: baseJobs.map((i) =>
           i.id === job.id
             ? {
@@ -3055,7 +3147,9 @@ function allocateJob(
     }
 
     const confirmRamon = window.confirm(
-      `Ramón es el único disponible para ${getOperationLabel(job)} ${job.plate}.\n\nAceptar = asignar a Ramón.\nCancelar = enviar a cola hasta que quede libre otro empleado.`
+      `Ramón es el único disponible para ${getOperationLabel(
+        job
+      )} ${job.plate}.\n\nAceptar = asignar a Ramón.\nCancelar = enviar a cola hasta que quede libre otro empleado.`
     );
 
     if (!confirmRamon) {
@@ -3063,14 +3157,16 @@ function allocateJob(
         "Pendiente en cola: se esperará al próximo técnico libre antes de usar a Ramón.";
 
       if (logResult) {
-        appendLog(`${AREA_META[job.area].label} ${job.plate} enviado a cola. Ramón no asignado.`);
+        appendLog(
+          `${AREA_META[job.area].label} ${job.plate} enviado a cola. Ramón no asignado.`
+        );
       }
 
       return {
         assigned: false,
         assignedNames: [],
         reason,
-        techs: baseTechs,
+        techs: restoreProtectedTechs(safeBaseTechs),
         jobs: baseJobs.map((i) =>
           i.id === job.id
             ? {
@@ -3087,21 +3183,53 @@ function allocateJob(
     }
   }
 
+  const safeResult: AllocationResult = {
+    ...result,
+    techs: restoreProtectedTechs(result.techs),
+  };
+
   if (logResult) {
     appendLog(
-      result.assigned
-        ? `${AREA_META[job.area].label} ${job.plate} asignado a ${result.assignedNames.join(
+      safeResult.assigned
+        ? `${AREA_META[job.area].label} ${job.plate} asignado a ${safeResult.assignedNames.join(
             " + "
           )}.`
-        : `${AREA_META[job.area].label} ${job.plate} queda en espera: ${result.reason}`
+        : `${AREA_META[job.area].label} ${job.plate} queda en espera: ${safeResult.reason}`
     );
   }
 
-  return result;
+  return safeResult;
+}
+
+function isManualUnavailableStatus(status: string) {
+  return (
+    status === "permiso" ||
+    status === "vacaciones" ||
+    status === "baja" ||
+    status === "otro_taller" ||
+    status === "en_otro_taller" ||
+    status === "en otro taller"
+  );
 }
 
 function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
-  let currentTechs = [...updatedTechs];
+  const protectedStatusesByName = new Map(
+    updatedTechs
+      .filter((tech) => isManualUnavailableStatus(tech.status))
+      .map((tech) => [tech.name, tech.status])
+  );
+
+  let currentTechs = updatedTechs.map((tech) => {
+    if (isManualUnavailableStatus(tech.status)) {
+      return {
+        ...tech,
+        currentJobId: null,
+      };
+    }
+
+    return tech;
+  });
+
   let currentJobs = [...updatedJobs];
   let changed = false;
 
@@ -3124,11 +3252,26 @@ function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
       continue;
     }
 
-    currentTechs = result.techs;
+    currentTechs = result.techs.map((tech) => {
+      const protectedStatus = protectedStatusesByName.get(tech.name);
+
+      if (protectedStatus) {
+        return {
+          ...tech,
+          status: protectedStatus,
+          currentJobId: null,
+        };
+      }
+
+      return tech;
+    });
+
     currentJobs = result.jobs;
     changed = true;
 
-    appendLog(`Auto-asignado ${job.plate} → ${result.assignedNames.join(" + ")}`);
+    appendLog(
+      `Auto-asignado ${job.plate} → ${result.assignedNames.join(" + ")}`
+    );
   }
 
   const supported = assignAsSupportIfPossible(
@@ -3139,19 +3282,47 @@ function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
     techLoadStats
   );
 
+  const protectedSupportTechs = supported.techs.map((tech) => {
+    const protectedStatus = protectedStatusesByName.get(tech.name);
+
+    if (protectedStatus) {
+      return {
+        ...tech,
+        status: protectedStatus,
+        currentJobId: null,
+      };
+    }
+
+    return tech;
+  });
+
   const supportChanged =
-    JSON.stringify(supported.techs) !== JSON.stringify(currentTechs) ||
+    JSON.stringify(protectedSupportTechs) !== JSON.stringify(currentTechs) ||
     JSON.stringify(supported.jobs) !== JSON.stringify(currentJobs);
 
   if (supportChanged) {
-    currentTechs = supported.techs;
+    currentTechs = protectedSupportTechs;
     currentJobs = supported.jobs;
     changed = true;
   }
 
+  currentTechs = currentTechs.map((tech) => {
+    const protectedStatus = protectedStatusesByName.get(tech.name);
+
+    if (protectedStatus) {
+      return {
+        ...tech,
+        status: protectedStatus,
+        currentJobId: null,
+      };
+    }
+
+    return tech;
+  });
+
   if (!changed) return;
 
-  setTechs(currentTechs);
+  setTechs(applyManualTechStatusOverrides(currentTechs));
   setJobs(currentJobs);
 
   for (const tech of currentTechs) {
@@ -3982,27 +4153,141 @@ async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
     console.error("Error actualizando entrada rápida:", error);
   }
 }
+const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";
 
+function normalizeTechNameKey(name: string) {
+  return name
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function getManualTechStatusOverrides(): Record<string, TechStatus> {
+  try {
+    const raw = localStorage.getItem(MANUAL_TECH_STATUS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveManualTechStatusOverride(name: string, status: TechStatus) {
+  try {
+    const current = getManualTechStatusOverrides();
+    const key = normalizeTechNameKey(name);
+
+    if (
+      status === "disponible" ||
+      status === "supervisor" ||
+      status === "ocupado" ||
+      status === "refuerzo"
+    ) {
+      delete current[key];
+    } else {
+      current[key] = status;
+    }
+
+    localStorage.setItem(MANUAL_TECH_STATUS_KEY, JSON.stringify(current));
+  } catch {}
+}
+
+function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
+  const overrides = getManualTechStatusOverrides();
+
+  return techsToApply.map((tech) => {
+    const key = normalizeTechNameKey(tech.name);
+    const forcedStatus = overrides[key];
+
+    if (!forcedStatus) return tech;
+
+    return {
+      ...tech,
+      status: forcedStatus,
+      blocked: isManualUnavailableStatus(forcedStatus),
+      currentJobId: null,
+    };
+  });
+}
 async function setTechManual(name: string, nextStatus: TechStatus) {
-  const changedAtMs = nowMs();
+  saveManualTechStatusOverride(name, nextStatus);
 
-  const updated: Tech[] = techs.map((tech) => {
+  const isManualUnavailable = isManualUnavailableStatus(nextStatus);
+
+  const updatedTechs: Tech[] = techs.map((tech) => {
     if (tech.name !== name) return tech;
 
-    return updateTechStatusTotals(tech, nextStatus, changedAtMs);
+    const nextTech = updateTechStatusTotals(tech, nextStatus);
+
+    return {
+      ...nextTech,
+      status: nextStatus,
+      blocked: isManualUnavailable,
+      currentJobId:
+        isManualUnavailable ||
+        nextStatus === "disponible" ||
+        nextStatus === "supervisor"
+          ? null
+          : nextTech.currentJobId,
+    };
   });
 
-  setTechs(updated);
-  appendLog(`${name} cambia a estado: ${getTechStatusLabel(nextStatus)}.`);
+  const updatedJobs: Job[] = jobs.map((job) => {
+    if (!isManualUnavailable) return job;
 
-  const changed = updated.find((tech) => tech.name === name);
+    const previousAssignedNames = job.assignedNames ?? [];
+
+    if (!previousAssignedNames.includes(name)) return job;
+
+    const assignedNames = previousAssignedNames.filter(
+      (techName) => techName !== name
+    );
+
+    if (assignedNames.length === 0 && job.status === "activo") {
+      return {
+        ...job,
+        status: "espera" as JobStatus,
+        assignedNames: [],
+        reason: `${name} no disponible. Trabajo devuelto a cola.`,
+        startedAtMs: null,
+      };
+    }
+
+    return {
+      ...job,
+      assignedNames,
+      reason: `${name} no disponible. Se mantiene con el resto de técnicos.`,
+    };
+  });
+
+  const protectedTechs = applyManualTechStatusOverrides(updatedTechs);
+
+  setTechs(protectedTechs);
+  setJobs(updatedJobs);
+
+  const changed = protectedTechs.find((tech) => tech.name === name);
+
+  appendLog(`Ramón marca a ${name} como ${nextStatus}.`);
 
   if (changed) {
-    saveTechToBackend(changed);
+    try {
+      await saveTechToBackend(changed);
+    } catch (error) {
+      console.error("Error guardando técnico:", error);
+      appendLog(`Error guardando estado de ${name}.`);
+    }
+  }
+
+  for (const job of updatedJobs) {
+    const previousJob = jobs.find((item) => item.id === job.id);
+
+    if (previousJob && JSON.stringify(previousJob) !== JSON.stringify(job)) {
+      saveJobToBackend(job);
+    }
   }
 
   if (nextStatus === "disponible" || nextStatus === "supervisor") {
-    recalcWaitingQueue(updated, jobs);
+    recalcWaitingQueue(protectedTechs, updatedJobs);
   }
 }
 
@@ -5605,14 +5890,14 @@ setIsAuthenticated(false);
                           className="rounded-lg border border-slate-200 bg-white px-2 py-1"
                         >
                           <option value="disponible">disponible</option>
-                          <option value="refuerzo">refuerzo</option>
-                          <option value="ocupado">ocupado</option>
-                          <option value="nodisponible">no disponible</option>
+<option value="refuerzo">refuerzo</option>
+<option value="ocupado">ocupado</option>
+<option value="nodisponible">nodisponible</option>
+<option value="permiso">permiso</option>
 <option value="vacaciones">vacaciones</option>
 <option value="baja">baja</option>
-<option value="permiso">permiso</option>
-<option value="otro_taller">en otro taller</option>
-{tech.name === "Ramón" && (
+<option value="otro_taller">otro taller</option>
+                  {tech.name === "Ramón" && (
   <option value="supervisor">supervisor</option>
 )}
                         </select>

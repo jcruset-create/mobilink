@@ -109,7 +109,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 
   next();
 }
-type UserRole = "admin" | "supervisor" | "operario";
+type UserRole = "admin" | "supervisor" | "pantallas";
 
 function getRoleFromRequest(req: express.Request): UserRole | null {
   const token = String(req.headers["x-admin-token"] ?? "");
@@ -125,12 +125,12 @@ function getRoleFromRequest(req: express.Request): UserRole | null {
     return "supervisor";
   }
 
-  if (
-    process.env.OPERARIO_PASSWORD &&
-    token === process.env.OPERARIO_PASSWORD
-  ) {
-    return "operario";
-  }
+if (
+  process.env.SCREENS_PASSWORD &&
+  token === process.env.SCREENS_PASSWORD
+) {
+  return "pantallas";
+}
 
   return null;
 }
@@ -161,7 +161,7 @@ function requireRole(allowedRoles: UserRole[]) {
 
 const requireAdminRole = requireRole(["admin"]);
 const requireSupervisorRole = requireRole(["admin", "supervisor"]);
-const requireOperarioRole = requireRole(["admin", "supervisor", "operario"]);
+const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
 app.use((req, _res, next) => {
   console.log(`[REQ] ${req.method} ${req.url}`);
   next();
@@ -343,52 +343,78 @@ app.get("/api/techs", async (_req, res) => {
 app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
   try {
     const name = String(req.params.name);
-    const { status, blocked, currentJobId, competencies, priorities, avatar } =
-      req.body ?? {};
 
-const existsResult = await db.query(
-  `SELECT 1 FROM techs WHERE name = $1`,
-  [name]
-);
+    const {
+      status,
+      blocked,
+      currentJobId,
+      competencies,
+      priorities,
+      avatar,
+      statusChangedAtMs,
+      statusTotals,
+    } = req.body ?? {};
 
-const exists = (existsResult.rowCount ?? 0) > 0;
-    if (!exists) {
-      return res.status(404).json({ error: "Técnico no encontrado" });
-    }
+    const normalizedStatus = status ?? "disponible";
+    const normalizedBlocked = !!blocked;
 
-await db.query(
-  `
-    UPDATE techs
-    SET
-      status = $1,
-      blocked = $2,
-      "currentJobId" = $3,
-      competencies = $4,
-      priorities = $5,
-      avatar = $6
-    WHERE name = $7
-  `,
-  [
-    status ?? "disponible",
-    !!blocked,
-    currentJobId ?? null,
-    JSON.stringify(competencies ?? {}),
-    JSON.stringify(priorities ?? {}),
-    avatar ?? null,
-    name,
-  ]
-);
+    await db.query(
+      `
+        INSERT INTO techs (
+          name,
+          status,
+          blocked,
+          "currentJobId",
+          competencies,
+          priorities,
+          avatar,
+          "statusChangedAtMs",
+          "statusTotals"
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (name)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          blocked = EXCLUDED.blocked,
+          "currentJobId" = EXCLUDED."currentJobId",
+          competencies = EXCLUDED.competencies,
+          priorities = EXCLUDED.priorities,
+          avatar = EXCLUDED.avatar,
+          "statusChangedAtMs" = EXCLUDED."statusChangedAtMs",
+          "statusTotals" = EXCLUDED."statusTotals"
+      `,
+      [
+        name,
+        normalizedStatus,
+        normalizedBlocked,
+        currentJobId ?? null,
+        JSON.stringify(competencies ?? {}),
+        JSON.stringify(priorities ?? {}),
+        avatar ?? null,
+        statusChangedAtMs ?? Date.now(),
+        JSON.stringify(statusTotals ?? {}),
+      ]
+    );
 
-const techResult = await db.query(
-  `
-    SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar
-    FROM techs
-    WHERE name = $1
-  `,
-  [name]
-);
+    const techResult = await db.query(
+      `
+        SELECT
+          name,
+          status,
+          blocked,
+          "currentJobId",
+          competencies,
+          priorities,
+          avatar,
+          "statusChangedAtMs",
+          "statusTotals"
+        FROM techs
+        WHERE name = $1
+      `,
+      [name]
+    );
 
-const tech = techResult.rows[0];
+    const tech = techResult.rows[0];
 
     res.json(normalizeTechRow(tech));
   } catch (error) {
