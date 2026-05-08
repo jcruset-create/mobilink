@@ -11,6 +11,14 @@ import {
   PauseCircle,
 } from "lucide-react";
 
+type IncludedTaskForWall = {
+  id: string;
+  label: string;
+  area?: string;
+  standardMinutes?: number | null;
+  source?: string;
+};
+
 type Job = {
   id: number;
   plate: string;
@@ -24,12 +32,31 @@ type Job = {
   startedAtMs?: number | null;
   createdAtMs?: number | null;
   actualMinutes?: number | null;
+  includedTasks?: IncludedTaskForWall[];
 };
 
 type Tech = {
   name: string;
   status: string;
   currentJobId?: number | null;
+};
+
+type QuickTemplateForWall = {
+  key: string;
+  label: string;
+  area?: string;
+};
+
+type ScheduledJobForWall = ScheduledJob & {
+  includedTasks?: IncludedTaskForWall[];
+};
+
+type WorkshopWallScreenProps = {
+  jobs?: Job[];
+  techs?: Tech[];
+  scheduledJobs?: ScheduledJobForWall[];
+  quickTemplates?: QuickTemplateForWall[];
+  onBack: () => void;
 };
 
 function LiveClock() {
@@ -57,137 +84,202 @@ export default function WorkshopWallScreen({
   jobs = [],
   techs = [],
   scheduledJobs = [],
+  quickTemplates = [],
   onBack,
-}: {
-  jobs?: Job[];
-  techs?: Tech[];
-  scheduledJobs?: ScheduledJob[];
-  onBack: () => void;
-}) {
-
+}: WorkshopWallScreenProps) {
   const active = jobs.filter(
-    (j) => j.status === "activo" || j.status === "en_proceso"
+    (job) => job.status === "activo" || job.status === "en_proceso"
   );
 
   const waiting = jobs.filter(
-    (j) => j.status === "espera" || j.status === "pendiente"
+    (job) => job.status === "espera" || job.status === "pendiente"
   );
 
   const paused = jobs.filter(
-    (j) => j.status === "parado" || j.status === "standby"
+    (job) => job.status === "parado" || job.status === "standby"
   );
 
   const tvScheduledJobs = scheduledJobs
-  .filter((job) => job.status === "programado")
-  .filter((job) => {
-    const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
+    .filter((job) => job.status === "programado")
+    .filter((job) => {
+      const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
 
-    if (Number.isNaN(startMs)) return false;
+      if (Number.isNaN(startMs)) return false;
 
-    const oneHourFromNow = Date.now() + 60 * 60 * 1000;
+      const oneHourFromNow = Date.now() + 60 * 60 * 1000;
 
-    return startMs <= oneHourFromNow;
-  })
-  .sort((a, b) => {
-    const aMs = new Date(`${a.date}T${a.startTime}`).getTime();
-    const bMs = new Date(`${b.date}T${b.startTime}`).getTime();
+      return startMs <= oneHourFromNow;
+    })
+    .sort((a, b) => {
+      const aMs = new Date(`${a.date}T${a.startTime}`).getTime();
+      const bMs = new Date(`${b.date}T${b.startTime}`).getTime();
 
-    return aMs - bMs;
-  });
+      return aMs - bMs;
+    });
 
-function MiniKpi({
-  title,
-  value,
-  tone,
-}: {
-  title: string;
-  value: number;
-  tone: "emerald" | "red" | "amber" | "violet";
-}) {
-  const tones = {
-    emerald: "text-emerald-300 border-emerald-400/20 bg-emerald-500/10",
-    red: "text-red-300 border-red-400/20 bg-red-500/10",
-    amber: "text-amber-300 border-amber-400/20 bg-amber-500/10",
-    violet: "text-violet-300 border-violet-400/20 bg-violet-500/10",
-  };
+  const availableTechs = techs.filter(
+    (tech) => tech.status === "disponible"
+  ).length;
 
-  return (
-    <motion.div
-      animate={
-        title === "Urgentes" && value > 0
-          ? { scale: [1, 1.03, 1] }
-          : { scale: 1 }
-      }
-      transition={
-        title === "Urgentes" && value > 0
-          ? { repeat: Infinity, duration: 1.2 }
-          : { duration: 0.2 }
-      }
-      className={`flex items-center justify-between border-r border-white/10 px-6 py-4 ${tones[tone]}`}
-    >
-      <div className="text-xs uppercase tracking-[0.3em]">{title}</div>
-      <div className="text-3xl font-bold">{value}</div>
-    </motion.div>
-  );
-}
+  const responsibleTechs = techs.filter(
+    (tech) => tech.status === "ocupado"
+  ).length;
 
-function getElapsedMinutes(ms?: number | null) {
-  if (!ms) return null;
-  return Math.max(0, Math.round((Date.now() - ms) / 60000));
-}
+  const supportTechs = techs.filter(
+    (tech) => tech.status === "refuerzo"
+  ).length;
 
-function formatMinutes(minutes?: number | null) {
-  if (minutes == null || Number.isNaN(minutes)) return "-";
-  const rounded = Math.round(minutes);
-  const h = Math.floor(rounded / 60);
-  const m = rounded % 60;
-  return h > 0 ? `${h} h ${m} min` : `${m} min`;
-}
-
-function getJobCardClass(job: Job) {
-  const area = job.area?.toLowerCase() ?? "";
-
-  if (job.urgent) return "border-red-400/50 bg-red-500/25 text-red-50";
-  if (area.includes("camion")) return "border-red-300/50 bg-red-500/15 text-red-50";
-  if (area.includes("movil")) return "border-amber-300/50 bg-amber-500/15 text-amber-50";
-  if (area.includes("tacografo")) return "border-violet-300/50 bg-violet-500/15 text-violet-50";
-  if (area.includes("turismo")) return "border-sky-300/50 bg-sky-500/15 text-sky-50";
-  if (area.includes("mecanica")) return "border-emerald-300/50 bg-emerald-500/15 text-emerald-50";
-
-  return "border-slate-300/30 bg-slate-500/10 text-slate-50";
-}
-
-function getWaitingCardClass(job: Job) {
-  return getJobCardClass(job);
-}
-
-function getTechCardClass(status: string) {
-  if (status === "disponible") return "border-emerald-400/20 bg-emerald-500/15";
-  if (status === "ocupado") return "border-red-400/20 bg-red-500/20";
-  if (status === "refuerzo") return "border-amber-400/20 bg-amber-500/15";
-  if (status === "supervisor") return "border-violet-400/20 bg-violet-500/15";
-  return "border-slate-400/20 bg-slate-500/10";
-}
-
-function getStatusPill(status: string) {
-  if (status === "disponible") {
-    return "border-emerald-400/30 bg-emerald-500/20 text-emerald-100";
-  }
-  if (status === "ocupado") {
-    return "border-red-400/30 bg-red-500/20 text-red-100";
-  }
-  if (status === "refuerzo") {
-    return "border-amber-400/30 bg-amber-500/20 text-amber-100";
-  }
-  if (status === "supervisor") {
-    return "border-violet-400/30 bg-violet-500/20 text-violet-100";
-  }
-  return "border-slate-400/20 bg-slate-500/10 text-slate-200";
-}
-  const availableTechs = techs.filter((tech) => tech.status === "disponible").length;
-  const responsibleTechs = techs.filter((tech) => tech.status === "ocupado").length;
-  const supportTechs = techs.filter((tech) => tech.status === "refuerzo").length;
   const urgentJobs = jobs.filter((job) => job.urgent).length;
+
+  function MiniKpi({
+    title,
+    value,
+    tone,
+  }: {
+    title: string;
+    value: number;
+    tone: "emerald" | "red" | "amber" | "violet";
+  }) {
+    const tones = {
+      emerald: "text-emerald-300 border-emerald-400/20 bg-emerald-500/10",
+      red: "text-red-300 border-red-400/20 bg-red-500/10",
+      amber: "text-amber-300 border-amber-400/20 bg-amber-500/10",
+      violet: "text-violet-300 border-violet-400/20 bg-violet-500/10",
+    };
+
+    return (
+      <motion.div
+        animate={
+          title === "Urgentes" && value > 0
+            ? { scale: [1, 1.03, 1] }
+            : { scale: 1 }
+        }
+        transition={
+          title === "Urgentes" && value > 0
+            ? { repeat: Infinity, duration: 1.2 }
+            : { duration: 0.2 }
+        }
+        className={`flex items-center justify-between border-r border-white/10 px-6 py-4 ${tones[tone]}`}
+      >
+        <div className="text-xs uppercase tracking-[0.3em]">{title}</div>
+        <div className="text-3xl font-bold">{value}</div>
+      </motion.div>
+    );
+  }
+
+  function getElapsedMinutes(ms?: number | null) {
+    if (!ms) return null;
+    return Math.max(0, Math.round((Date.now() - ms) / 60000));
+  }
+
+  function formatMinutes(minutes?: number | null) {
+    if (minutes == null || Number.isNaN(minutes)) return "-";
+
+    const rounded = Math.round(minutes);
+    const h = Math.floor(rounded / 60);
+    const m = rounded % 60;
+
+    return h > 0 ? `${h} h ${m} min` : `${m} min`;
+  }
+
+  function formatTemplateKey(templateKey?: string | null) {
+    if (!templateKey) return "";
+
+    return templateKey
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function getTemplateLabel(templateKey?: string | null) {
+    if (!templateKey) return "";
+
+    return (
+      quickTemplates.find((template) => template.key === templateKey)?.label ||
+      formatTemplateKey(templateKey)
+    );
+  }
+
+  function getScheduledMainLabel(job: ScheduledJobForWall) {
+    if (job.linkedTemplateLabel) return job.linkedTemplateLabel;
+
+    return (
+      getTemplateLabel(job.firstTemplateKey || job.templateKey) ||
+      "Trabajo programado"
+    );
+  }
+
+  function getScheduledSecondLabel(job: ScheduledJobForWall) {
+    if (!job.secondTemplateKey) return "";
+
+    return getTemplateLabel(job.secondTemplateKey);
+  }
+
+  function getIncludedTasks(job: ScheduledJobForWall) {
+    return Array.isArray(job.includedTasks) ? job.includedTasks : [];
+  }
+
+  function getJobCardClass(job: Job) {
+    const area = job.area?.toLowerCase() ?? "";
+
+    if (job.urgent) return "border-red-400/50 bg-red-500/25 text-red-50";
+    if (area.includes("camion")) {
+      return "border-red-300/50 bg-red-500/15 text-red-50";
+    }
+    if (area.includes("movil")) {
+      return "border-amber-300/50 bg-amber-500/15 text-amber-50";
+    }
+    if (area.includes("tacografo")) {
+      return "border-violet-300/50 bg-violet-500/15 text-violet-50";
+    }
+    if (area.includes("turismo")) {
+      return "border-sky-300/50 bg-sky-500/15 text-sky-50";
+    }
+    if (area.includes("mecanica")) {
+      return "border-emerald-300/50 bg-emerald-500/15 text-emerald-50";
+    }
+
+    return "border-slate-300/30 bg-slate-500/10 text-slate-50";
+  }
+
+  function getTechCardClass(status: string) {
+    if (status === "disponible") {
+      return "border-emerald-400/20 bg-emerald-500/15";
+    }
+
+    if (status === "ocupado") {
+      return "border-red-400/20 bg-red-500/20";
+    }
+
+    if (status === "refuerzo") {
+      return "border-amber-400/20 bg-amber-500/15";
+    }
+
+    if (status === "supervisor") {
+      return "border-violet-400/20 bg-violet-500/15";
+    }
+
+    return "border-slate-400/20 bg-slate-500/10";
+  }
+
+  function getStatusPill(status: string) {
+    if (status === "disponible") {
+      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-100";
+    }
+
+    if (status === "ocupado") {
+      return "border-red-400/30 bg-red-500/20 text-red-100";
+    }
+
+    if (status === "refuerzo") {
+      return "border-amber-400/30 bg-amber-500/20 text-amber-100";
+    }
+
+    if (status === "supervisor") {
+      return "border-violet-400/30 bg-violet-500/20 text-violet-100";
+    }
+
+    return "border-slate-400/20 bg-slate-500/10 text-slate-200";
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 p-6 text-white">
@@ -203,6 +295,7 @@ function getStatusPill(status: string) {
                 <h1 className="text-4xl font-bold tracking-tight">
                   Pantalla TV · Taller SEA Tarragona
                 </h1>
+
                 <p className="mt-1 text-lg text-slate-300">
                   Dashboard operativo en tiempo real
                 </p>
@@ -222,6 +315,7 @@ function getStatusPill(status: string) {
                 <div className="text-xs uppercase tracking-[0.4em] text-slate-400">
                   Hora actual
                 </div>
+
                 <LiveClock />
               </div>
             </div>
@@ -235,7 +329,7 @@ function getStatusPill(status: string) {
           </div>
         </header>
 
-        <main className="grid gap-6 xl:grid-cols-[1fr_420px]">
+        <main className="grid gap-6 xl:grid-cols-[1fr_460px]">
           <section className="rounded-3xl border border-slate-800 bg-slate-900 p-5 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-xl font-bold">
@@ -266,6 +360,20 @@ function getStatusPill(status: string) {
                     <div className="mt-2 text-lg opacity-90">
                       {job.quickEntryLabel || job.area}
                     </div>
+
+                    {job.includedTasks && job.includedTasks.length > 0 && (
+                      <div className="mt-3 rounded-2xl border border-emerald-400/30 bg-emerald-500/15 px-3 py-2">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-emerald-100">
+                          Tareas incluidas
+                        </div>
+
+                        <div className="mt-1 text-sm font-bold text-emerald-50">
+                          {job.includedTasks
+                            .map((task) => task.label)
+                            .join(" + ")}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="mt-3 text-sm opacity-80">
                       Tiempo activo:{" "}
@@ -307,7 +415,9 @@ function getStatusPill(status: string) {
               {waiting.length === 0 ? (
                 <div className="rounded-3xl border border-slate-800 bg-slate-950/40 p-8 text-center">
                   <CheckCircle2 className="mx-auto h-9 w-9 text-emerald-400" />
+
                   <div className="mt-3 text-lg font-bold">Sin espera</div>
+
                   <div className="mt-1 text-sm text-slate-400">
                     No hay trabajos pendientes.
                   </div>
@@ -317,12 +427,24 @@ function getStatusPill(status: string) {
                   {waiting.map((job) => (
                     <div
                       key={job.id}
-                      className={`rounded-2xl border p-4 ${getWaitingCardClass(job)}`}
+                      className={`rounded-2xl border p-4 ${getJobCardClass(
+                        job
+                      )}`}
                     >
                       <div className="text-xl font-bold">{job.plate}</div>
+
                       <div className="text-sm opacity-90">
                         {job.quickEntryLabel || job.area}
                       </div>
+
+                      {job.includedTasks && job.includedTasks.length > 0 && (
+                        <div className="mt-2 text-xs font-semibold opacity-90">
+                          +{" "}
+                          {job.includedTasks
+                            .map((task) => task.label)
+                            .join(" + ")}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -355,9 +477,19 @@ function getStatusPill(status: string) {
                       <div className="text-xl font-bold text-white">
                         {job.plate}
                       </div>
+
                       <div className="text-sm text-orange-100">
                         {job.quickEntryLabel || job.area}
                       </div>
+
+                      {job.includedTasks && job.includedTasks.length > 0 && (
+                        <div className="mt-2 text-xs font-semibold text-orange-100">
+                          +{" "}
+                          {job.includedTasks
+                            .map((task) => task.label)
+                            .join(" + ")}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -372,7 +504,7 @@ function getStatusPill(status: string) {
                 </h2>
 
                 <span className="rounded-full bg-violet-900 px-4 py-1 text-sm font-semibold text-violet-100">
-                 {tvScheduledJobs.length}
+                  {tvScheduledJobs.length}
                 </span>
               </div>
 
@@ -381,31 +513,77 @@ function getStatusPill(status: string) {
                   Sin citas próximas pendientes.
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {tvScheduledJobs.map((job) => (
-                    <div
-                      key={job.id}
-                      className="rounded-2xl border border-violet-800/50 bg-violet-900/30 p-4"
-                    >
-                      <div className="text-xl font-bold text-white">
-                        {job.plate || "Sin matrícula"}
-                      </div>
+                <div className="space-y-4">
+                  {tvScheduledJobs.map((job) => {
+                    const mainLabel = getScheduledMainLabel(job);
+                    const secondLabel = getScheduledSecondLabel(job);
+                    const includedTasks = getIncludedTasks(job);
 
-                      <div className="mt-1 text-sm text-violet-100">
-                        {job.date} · {job.startTime}
-                      </div>
+                    return (
+                      <div
+                        key={job.id}
+                        className="rounded-3xl border border-violet-700/60 bg-violet-900/40 p-4 shadow-lg"
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-3xl font-black tracking-wide text-white">
+                              {job.plate || "Sin matrícula"}
+                            </div>
 
-                      <div className="mt-1 text-xs text-slate-300">
-                        {job.customerName || "Cliente sin nombre"}
-                      </div>
+                            <div className="mt-1 text-sm font-bold text-violet-100">
+                              {job.date} · {job.startTime}
+                            </div>
+                          </div>
 
-                      {job.customerPhone && (
-                        <div className="mt-1 text-xs text-slate-400">
-                          {job.customerPhone}
+                          {job.urgent && (
+                            <span className="rounded-full bg-red-600 px-3 py-1 text-xs font-black text-white">
+                              URGENTE
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  ))}
+
+                        <div className="rounded-2xl border border-violet-600/40 bg-violet-950/50 px-4 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-violet-300">
+                            Trabajo programado
+                          </div>
+
+                          <div className="mt-1 text-lg font-black text-white">
+                            {mainLabel}
+                          </div>
+
+                          {secondLabel && (
+                            <div className="mt-2 rounded-xl border border-fuchsia-400/40 bg-fuchsia-950/50 px-3 py-2 text-sm font-bold text-fuchsia-100">
+                              Después: {secondLabel}
+                            </div>
+                          )}
+
+                          {includedTasks.length > 0 && (
+                            <div className="mt-2 rounded-xl border border-emerald-400/40 bg-emerald-950/50 px-3 py-2">
+                              <div className="text-[10px] font-black uppercase tracking-widest text-emerald-300">
+                                Tareas incluidas
+                              </div>
+
+                              <div className="mt-1 text-sm font-bold text-emerald-100">
+                                {includedTasks
+                                  .map((task) => task.label)
+                                  .join(" + ")}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-3 grid gap-2 text-xs font-semibold text-violet-100">
+                          <div className="rounded-xl bg-violet-950/50 px-3 py-2">
+                            Cliente: {job.customerName || "Sin nombre"}
+                          </div>
+
+                          <div className="rounded-xl bg-violet-950/50 px-3 py-2">
+                            Teléfono: {job.customerPhone || "Sin teléfono"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -446,6 +624,7 @@ function getStatusPill(status: string) {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-lg font-bold">{tech.name}</div>
+
                     <div className="mt-1 text-xs opacity-80">
                       {tech.currentJobId
                         ? `Trabajo ${tech.currentJobId}`

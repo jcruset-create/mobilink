@@ -4,6 +4,12 @@ import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import OperariosTVView from "./components/OperariosTVView";
 import {
+  type IncludedTask,
+  type CustomExtraTask,
+  buildSelectableIncludedTasks,
+  getIncludedTasksByIds,
+} from "./modules/quickTaskSelector";
+import {
   type AppView,
   type UserRole,
   canAccessView,
@@ -104,6 +110,7 @@ type Job = {
   template?: TemplateKey | null;
   quickEntryLabel?: string | null;
   quickEntryMode?: QuickEntryMode | null;
+  includedTasks?: IncludedTask[];
   actualMinutes?: number | null;
   workedAccumulatedMinutes?: number | null;
   pausedAccumulatedMinutes?: number | null;
@@ -113,7 +120,6 @@ type Job = {
   blockedReason?: string | null;
   linkedOrder?: 1 | 2 | null;
   blockedByJobId?: number | null;
-  
 };
 
 type AllocationResult = {
@@ -1381,7 +1387,16 @@ function normalizeJobFromApi(job: any): Job {
     template: job.template ?? null,
     quickEntryLabel: job.quickEntryLabel ?? null,
     quickEntryMode: job.quickEntryMode ?? null,
+    includedTasks: Array.isArray(job.includedTasks) ? job.includedTasks : [],
     actualMinutes: job.actualMinutes ?? null,
+    workedAccumulatedMinutes: job.workedAccumulatedMinutes ?? null,
+    pausedAccumulatedMinutes: job.pausedAccumulatedMinutes ?? null,
+    pausedAtMs: job.pausedAtMs ?? null,
+    linkedGroupId: job.linkedGroupId ?? null,
+    dependsOnJobId: job.dependsOnJobId ?? null,
+    blockedReason: job.blockedReason ?? null,
+    linkedOrder: job.linkedOrder ?? null,
+    blockedByJobId: job.blockedByJobId ?? null,
   };
 }
 
@@ -1869,14 +1884,45 @@ const [quickDraft, setQuickDraft] = useState<{
   linkedTemplateKey: string;
   plate: string;
   urgent: boolean;
+  includedTaskIds: string[];
 }>({
   templateKey: "",
   linkedTemplateKey: "",
   plate: "",
   urgent: false,
+  includedTaskIds: [],
 });
 const [quickSelectedArea, setQuickSelectedArea] = useState<AreaKey>("camion");
+const [customExtraTasks, setCustomExtraTasks] = useState<CustomExtraTask[]>(() => {
+  try {
+    if (typeof window === "undefined") return [];
 
+    const saved = window.localStorage.getItem("customExtraTasks");
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+});
+
+const [newCustomExtraTask, setNewCustomExtraTask] = useState<{
+  label: string;
+  area: AreaKey;
+  standardMinutes: string;
+}>({
+  label: "",
+  area: "camion",
+  standardMinutes: "",
+});
+useEffect(() => {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        "customExtraTasks",
+        JSON.stringify(customExtraTasks)
+      );
+    }
+  } catch {}
+}, [customExtraTasks]);
 const [newQuickTemplate, setNewQuickTemplate] = useState<{
   label: string;
   area: AreaKey;
@@ -3370,6 +3416,10 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     ? `linked-${scheduled.id}-${createdAt}`
     : null;
 
+  const scheduledIncludedTasks = Array.isArray(scheduled.includedTasks)
+    ? scheduled.includedTasks
+    : [];
+
   const firstJob: Job = {
     id: nextJobId,
     area: firstTemplate.area,
@@ -3377,16 +3427,22 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     urgent: scheduled.urgent,
     status: "espera",
     assignedNames: [],
-    reason: isLinkedJob
-      ? `Trabajo combinado iniciado desde agenda: ${scheduled.linkedTemplateLabel}`
-      : `Llegada confirmada desde agenda: ${
-          scheduled.customerName || "cliente"
-        }`,
+    reason:
+      scheduledIncludedTasks.length > 0
+        ? `Llegada confirmada desde agenda con tareas incluidas: ${scheduledIncludedTasks
+            .map((task) => task.label)
+            .join(" + ")}.`
+        : isLinkedJob
+        ? `Trabajo combinado iniciado desde agenda: ${scheduled.linkedTemplateLabel}`
+        : `Llegada confirmada desde agenda: ${
+            scheduled.customerName || "cliente"
+          }`,
     createdAtMs: createdAt,
     startedAtMs: null,
     template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
     quickEntryLabel: firstTemplate.label,
     quickEntryMode: firstTemplate.mode,
+    includedTasks: scheduledIncludedTasks,
 
     linkedGroupId,
     linkedOrder: isLinkedJob ? 1 : null,
@@ -3425,6 +3481,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
           : null,
         quickEntryLabel: secondTemplate.label,
         quickEntryMode: secondTemplate.mode,
+        includedTasks: [],
 
         linkedGroupId,
         linkedOrder: 2,
@@ -3464,13 +3521,19 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     }
 
     appendLog(
-      isLinkedJob
+      scheduledIncludedTasks.length > 0
+        ? `Llegada confirmada: ${scheduled.plate} · ${
+            firstTemplate.label
+          } + ${scheduledIncludedTasks.map((task) => task.label).join(" + ")}.`
+        : isLinkedJob
         ? `Llegada confirmada: ${scheduled.plate} · ${scheduled.linkedTemplateLabel}. Segundo trabajo bloqueado hasta finalizar el primero.`
         : `Llegada confirmada: ${scheduled.plate}.`
     );
+
+    await reloadJobsFromBackend();
   } catch (error) {
     console.error("Error confirmando llegada:", error);
-    appendLog(`Error al confirmar llegada de ${scheduled.plate}.`);
+    appendLog(`Error guardando trabajo ${scheduled.plate}.`);
   }
 }
 async function createJob() {
@@ -3581,6 +3644,17 @@ async function createTemplateEntry() {
   const secondTemplate = quickDraft.linkedTemplateKey
     ? quickTemplates.find((item) => item.key === quickDraft.linkedTemplateKey)
     : null;
+ const availableIncludedTasks = buildSelectableIncludedTasks(
+  firstTemplate.area,
+  quickTemplates,
+  customExtraTasks,
+  firstTemplate.key
+);
+
+const selectedIncludedTasks = getIncludedTasksByIds(
+  quickDraft.includedTaskIds,
+  availableIncludedTasks
+);  
 
   const isLinkedEntry = !!secondTemplate;
 
@@ -3592,28 +3666,33 @@ async function createTemplateEntry() {
     : null;
 
   const firstJob: Job = {
-    id: nextJobId,
-    area: firstTemplate.area,
-    plate,
-    urgent: quickDraft.urgent,
-    status: "espera",
-    assignedNames: [],
-    reason: isLinkedEntry
-      ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
-      : `Entrada creada desde plantilla: ${firstTemplate.label}`,
-    createdAtMs,
-    startedAtMs: null,
-    template: isBuiltInTemplateKey(firstTemplate.key)
-      ? firstTemplate.key
-      : null,
-    quickEntryLabel: firstTemplate.label,
-    quickEntryMode: firstTemplate.mode,
+  id: nextJobId,
+  area: firstTemplate.area,
+  plate,
+  urgent: quickDraft.urgent,
+  status: "espera",
+  assignedNames: [],
+  reason: isLinkedEntry
+    ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
+    : selectedIncludedTasks.length > 0
+    ? `Entrada creada desde plantilla: ${firstTemplate.label}. Tareas incluidas: ${selectedIncludedTasks
+        .map((task) => task.label)
+        .join(" + ")}`
+    : `Entrada creada desde plantilla: ${firstTemplate.label}`,
+  createdAtMs,
+  startedAtMs: null,
+  template: isBuiltInTemplateKey(firstTemplate.key)
+    ? firstTemplate.key
+    : null,
+  quickEntryLabel: firstTemplate.label,
+  quickEntryMode: firstTemplate.mode,
+  includedTasks: selectedIncludedTasks,
 
-    linkedGroupId,
-    linkedOrder: isLinkedEntry ? 1 : null,
-    dependsOnJobId: null,
-    blockedReason: null,
-  };
+  linkedGroupId,
+  linkedOrder: isLinkedEntry ? 1 : null,
+  dependsOnJobId: null,
+  blockedReason: null,
+};
 
   const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true, true);
 
@@ -3657,19 +3736,24 @@ async function createTemplateEntry() {
   setNextJobId((value) => value + jobsToSave.length);
 
   setQuickDraft((prev) => ({
-    ...prev,
-    linkedTemplateKey: "",
-    plate: "",
-    urgent: false,
-  }));
+  ...prev,
+  linkedTemplateKey: "",
+  plate: "",
+  urgent: false,
+  includedTaskIds: [],
+}));
 
   setQuickEntryOpen(false);
 
   appendLog(
-    isLinkedEntry && secondTemplate
-      ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}.`
-      : `Nueva entrada creada: ${firstTemplate.label} (${plate}).`
-  );
+  isLinkedEntry && secondTemplate
+    ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}.`
+    : selectedIncludedTasks.length > 0
+    ? `Nueva entrada creada: ${firstTemplate.label} (${plate}) con tareas: ${selectedIncludedTasks
+        .map((task) => task.label)
+        .join(" + ")}.`
+    : `Nueva entrada creada: ${firstTemplate.label} (${plate}).`
+);
 
   try {
     for (const job of jobsToSave) {
@@ -3684,6 +3768,44 @@ async function createTemplateEntry() {
   } catch (error) {
     console.error("Error guardando entrada rápida:", error);
     appendLog(`Error guardando entrada rápida ${plate}.`);
+  }
+}
+function addCustomExtraTask() {
+  const label = newCustomExtraTask.label.trim();
+
+  if (!label) return;
+
+  const task: CustomExtraTask = {
+    id: `custom-extra-${Date.now()}`,
+    label,
+    area: newCustomExtraTask.area,
+    standardMinutes: newCustomExtraTask.standardMinutes
+      ? Number(newCustomExtraTask.standardMinutes)
+      : null,
+  };
+
+  setCustomExtraTasks((prev) =>
+    [...prev, task].sort((a, b) =>
+      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+    )
+  );
+
+  setNewCustomExtraTask({
+    label: "",
+    area: newCustomExtraTask.area,
+    standardMinutes: "",
+  });
+
+  appendLog(`Tarea extra creada: ${label}.`);
+}
+
+function removeCustomExtraTask(id: string) {
+  const task = customExtraTasks.find((item) => item.id === id);
+
+  setCustomExtraTasks((prev) => prev.filter((item) => item.id !== id));
+
+  if (task) {
+    appendLog(`Tarea extra eliminada: ${task.label}.`);
   }
 }
 async function addQuickTemplate() {
@@ -3764,9 +3886,15 @@ async function removeQuickTemplate(key: string) {
 
     setQuickTemplates((prev) => prev.filter((t) => t.key !== key));
 
-    setQuickDraft((prev) =>
+setQuickDraft((prev) =>
   prev.templateKey === key
-    ? { templateKey: "", linkedTemplateKey: "", plate: "", urgent: false }
+    ? {
+        templateKey: "",
+        linkedTemplateKey: "",
+        plate: "",
+        urgent: false,
+        includedTaskIds: [],
+      }
     : prev
 );
 
@@ -4002,6 +4130,7 @@ async function finishJob(jobId: number) {
     workedAccumulatedMinutes: actualMinutes,
     pausedAccumulatedMinutes: pausedMinutes,
     pausedAtMs: null,
+    startedAtMs: null,
   };
 
   const jobsAfterClose: Job[] = jobs.map((job) =>
@@ -4036,12 +4165,10 @@ async function finishJob(jobId: number) {
 
     if (
       job.plate === target.plate &&
-      (
-        (job.reason || "").includes("Pendiente del trabajo anterior") ||
+      ((job.reason || "").includes("Pendiente del trabajo anterior") ||
         (job.reason || "").includes("Trabajo vinculado") ||
         !!job.blockedReason ||
-        job.linkedOrder === 2
-      )
+        job.linkedOrder === 2)
     ) {
       return true;
     }
@@ -4079,7 +4206,10 @@ async function finishJob(jobId: number) {
       true
     );
 
-    finalJobs = result.jobs;
+    finalJobs = result.jobs.map((job) =>
+      job.id === closedJob.id ? closedJob : job
+    );
+
     finalTechs = result.techs;
 
     reactivatedLinkedJob =
@@ -4105,7 +4235,7 @@ async function finishJob(jobId: number) {
   }
 
   try {
-    await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
+    const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
       method: "POST",
       headers: getAdminHeaders({
         "Content-Type": "application/json",
@@ -4115,8 +4245,15 @@ async function finishJob(jobId: number) {
         actualMinutes,
         workedAccumulatedMinutes: actualMinutes,
         pausedAccumulatedMinutes: pausedMinutes,
+        status: "cerrado",
+        startedAtMs: null,
       }),
     });
+
+    if (!response.ok) {
+      // Fallback: si el endpoint /finish no guarda bien, guardamos el trabajo cerrado entero.
+      await saveJobToBackend(closedJob);
+    }
 
     if (reactivatedLinkedJob) {
       await saveJobToBackend(reactivatedLinkedJob);
@@ -4130,9 +4267,15 @@ async function finishJob(jobId: number) {
     recalcWaitingQueue(finalTechs, finalJobs);
   } catch (error) {
     console.error("Error cerrando trabajo:", error);
-    setJobs(jobs);
-    setTechs(techs);
-    appendLog(`Error al finalizar ${target.plate}.`);
+
+    // Fallback final: intentamos guardar el cerrado igualmente.
+    try {
+      await saveJobToBackend(closedJob);
+      await reloadJobsFromBackend();
+    } catch (fallbackError) {
+      console.error("Error guardando cierre fallback:", fallbackError);
+      appendLog(`Error al finalizar ${target.plate}.`);
+    }
   }
 }
 
@@ -4645,11 +4788,12 @@ function updateTechPriority(
 if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
   return (
     <WorkshopWallScreen
-      jobs={jobs}
-      techs={techs}
-      scheduledJobs={scheduledJobs}
-      onBack={() => setView("operativo")}
-    />
+  jobs={jobs}
+  techs={techs}
+  scheduledJobs={scheduledJobs}
+  quickTemplates={quickTemplates}
+  onBack={() => setView("operativo")}
+/>
   );
 }
 if (view === "operarios" && canAccessView(userRole, "operarios")) {
@@ -4681,6 +4825,7 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
       scheduledJobs={scheduledJobs}
       setScheduledJobs={setScheduledJobs}
       quickTemplates={quickTemplates}
+      customExtraTasks={customExtraTasks}
       linkedTemplates={linkedTemplates}
       AREA_META={AREA_META}
       onBack={() => setView("operativo")}
@@ -5133,51 +5278,153 @@ setIsAuthenticated(false);
 )}
 
 {dueScheduledJobs.length > 0 && (
-  <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-    <div className="mb-3 text-sm font-semibold text-amber-900">
-      Citas programadas pendientes de llegada
+  <div className="rounded-3xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+    <div className="mb-4 flex items-center justify-between gap-3">
+      <div>
+        <h2 className="text-xl font-black text-amber-950">
+          Citas programadas pendientes de llegada
+        </h2>
+
+        <p className="mt-1 text-sm font-medium text-amber-700">
+          Vehículos con cita próxima o vencida. Pulsa “Llegó” para pasarlos a operativo.
+        </p>
+      </div>
+
+      <span className="rounded-full bg-amber-100 px-4 py-2 text-lg font-black text-amber-800">
+        {dueScheduledJobs.length}
+      </span>
     </div>
 
-    <div className="grid gap-3 md:grid-cols-2">
-      {dueScheduledJobs.map((job) => (
-        <div
-          key={job.id}
-          className="rounded-2xl border border-amber-200 bg-white p-4"
-        >
-          <div className="font-semibold text-amber-900">
-            {job.plate} · {job.date} · {job.startTime}
-   <div className="mt-1 text-xs font-medium text-amber-700">
-  {new Date(`${job.date}T${job.startTime}`).getTime() <= Date.now()
-  ? "Pendiente de confirmar llegada"
-  : "Entra en operativo porque falta menos de 1 hora"}
-</div>      </div>
-          
+    <div className="grid gap-4 md:grid-cols-2">
+      {dueScheduledJobs.map((job) => {
+        const firstTemplate = quickTemplates.find(
+          (template) =>
+            template.key === (job.firstTemplateKey || job.templateKey)
+        );
 
-          <div className="mt-1 text-sm text-amber-700">
-            {job.customerName || "Cliente sin nombre"}
+        const secondTemplate = job.secondTemplateKey
+          ? quickTemplates.find(
+              (template) => template.key === job.secondTemplateKey
+            )
+          : null;
+
+        const mainLabel =
+          job.linkedTemplateLabel ||
+          firstTemplate?.label ||
+          "Trabajo programado";
+
+        const includedTasks = Array.isArray(job.includedTasks)
+          ? job.includedTasks
+          : [];
+
+        const appointmentMs = new Date(
+          `${job.date}T${job.startTime}`
+        ).getTime();
+
+        const isLate =
+          !Number.isNaN(appointmentMs) && appointmentMs <= Date.now();
+
+        return (
+          <div
+            key={job.id}
+            className={`rounded-3xl border-2 bg-white p-5 shadow-sm ${
+              isLate
+                ? "border-red-300"
+                : "border-amber-200"
+            }`}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <div className="text-3xl font-black tracking-wide text-slate-950">
+                  {job.plate}
+                </div>
+
+                <div className="mt-1 text-lg font-bold text-amber-900">
+                  {job.date} · {job.startTime}
+                </div>
+              </div>
+
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-black uppercase ${
+                  isLate
+                    ? "bg-red-100 text-red-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {isLate ? "Pendiente" : "Próxima"}
+              </span>
+            </div>
+
+            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+              <div className="text-xs font-bold uppercase text-amber-600">
+                Trabajo principal
+              </div>
+
+              <div className="mt-1 text-lg font-black text-amber-950">
+                {mainLabel}
+              </div>
+
+              {secondTemplate && (
+                <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800">
+                  Después: {secondTemplate.label}
+                </div>
+              )}
+
+              {includedTasks.length > 0 && (
+                <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <div className="text-xs font-bold uppercase text-emerald-700">
+                    Tareas incluidas
+                  </div>
+
+                  <div className="mt-1 text-sm font-semibold text-emerald-900">
+                    {includedTasks.map((task) => task.label).join(" + ")}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 grid gap-2 text-sm">
+              <div className="rounded-xl bg-slate-50 px-3 py-2">
+                <span className="font-bold text-slate-700">Cliente:</span>{" "}
+                <span className="text-slate-700">
+                  {job.customerName || "Cliente sin nombre"}
+                </span>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 px-3 py-2">
+                <span className="font-bold text-slate-700">Teléfono:</span>{" "}
+                <span className="text-slate-700">
+                  {job.customerPhone || "Sin teléfono"}
+                </span>
+              </div>
+
+              {job.urgent && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-black text-red-700">
+                  URGENTE
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => confirmScheduledArrival(job)}
+                className="rounded-2xl bg-green-600 px-4 py-4 text-lg font-black text-white hover:bg-green-700"
+              >
+                Llegó
+              </button>
+
+              <button
+                type="button"
+                onClick={() => cancelScheduledJob(job.id)}
+                className="rounded-2xl border border-red-200 bg-white px-4 py-4 text-lg font-bold text-red-600 hover:bg-red-50"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
-
-          <div className="mt-1 text-xs text-slate-500">
-            {job.customerPhone || "Sin teléfono"}
-          </div>
-
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => confirmScheduledArrival(job)}
-              className="rounded-xl bg-green-600 px-3 py-2 text-sm font-medium text-white"
-            >
-              Llegó
-            </button>
-
-            <button
-              onClick={() => cancelScheduledJob(job.id)}
-              className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   </div>
 )}
@@ -5354,80 +5601,84 @@ setIsAuthenticated(false);
 )}
 
 <div className="space-y-4">
-  <div className="grid grid-cols-5 gap-2">
-    {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
-      (area) => {
-        const areaTemplates = quickTemplates.filter(
-          (template) => template.area === area
+<div className="grid grid-cols-5 gap-2">
+  {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
+    (area) => {
+      const areaTemplates = quickTemplates.filter(
+        (template) => template.area === area
+      );
+
+      const areaLinkedTemplates = linkedTemplates.filter((linked) => {
+        const firstTemplate = quickTemplates.find(
+          (template) => template.key === linked.firstTemplateKey
         );
 
-        const areaLinkedTemplates = linkedTemplates.filter((linked) => {
-          const firstTemplate = quickTemplates.find(
-            (template) => template.key === linked.firstTemplateKey
-          );
+        return firstTemplate?.area === area;
+      });
 
-          return firstTemplate?.area === area;
-        });
+      const meta = AREA_META[area];
+      const Icon = meta.icon;
+      const active = quickSelectedArea === area;
+      const totalEntries = areaTemplates.length + areaLinkedTemplates.length;
 
-        if (areaTemplates.length === 0 && areaLinkedTemplates.length === 0) {
-          return null;
-        }
+      return (
+        <button
+          key={`quick-icon-${area}`}
+          type="button"
+          onClick={() => {
+            setQuickSelectedArea(area);
 
-        const meta = AREA_META[area];
-        const Icon = meta.icon;
-        const active = quickSelectedArea === area;
+            const firstLinked = [...areaLinkedTemplates].sort((a, b) =>
+              a.label.localeCompare(b.label, "es", {
+                sensitivity: "base",
+              })
+            )[0];
 
-        return (
-          <button
-            key={`quick-icon-${area}`}
-            type="button"
-            onClick={() => {
-              setQuickSelectedArea(area);
+            const firstTemplate = [...areaTemplates].sort((a, b) =>
+              a.label.localeCompare(b.label, "es", {
+                sensitivity: "base",
+              })
+            )[0];
 
-              const firstLinked = [...areaLinkedTemplates].sort((a, b) =>
-                a.label.localeCompare(b.label, "es", {
-                  sensitivity: "base",
-                })
-              )[0];
-
-              const firstTemplate = [...areaTemplates].sort((a, b) =>
-                a.label.localeCompare(b.label, "es", {
-                  sensitivity: "base",
-                })
-              )[0];
-
-              if (firstLinked) {
-                setQuickDraft((prev) => ({
-                  ...prev,
-                  templateKey: firstLinked.firstTemplateKey,
-                  linkedTemplateKey: firstLinked.secondTemplateKey,
-                }));
-
-                return;
-              }
-
+            if (firstLinked) {
               setQuickDraft((prev) => ({
                 ...prev,
-                templateKey: firstTemplate?.key ?? "",
-                linkedTemplateKey: "",
+                templateKey: firstLinked.firstTemplateKey,
+                linkedTemplateKey: firstLinked.secondTemplateKey,
+                includedTaskIds: [],
               }));
-            }}
-            className={`rounded-2xl border px-3 py-3 text-xs font-semibold transition ${meta.color} ${
-              active
-                ? "ring-2 ring-slate-900 ring-offset-2"
-                : "opacity-80 hover:opacity-100"
-            }`}
-            title={meta.label}
-          >
-            <Icon className="mx-auto mb-1 h-6 w-6" />
-            <span className="block truncate text-[11px] font-bold">
-              {meta.label}
-            </span>
-          </button>
-        );
-      }
-    )}
-  </div>
+
+              return;
+            }
+
+            setQuickDraft((prev) => ({
+              ...prev,
+              templateKey: firstTemplate?.key ?? "",
+              linkedTemplateKey: "",
+              includedTaskIds: [],
+            }));
+          }}
+          className={`rounded-2xl border px-3 py-3 text-xs font-semibold transition ${meta.color} ${
+            active
+              ? "ring-2 ring-slate-900 ring-offset-2"
+              : "opacity-80 hover:opacity-100"
+          }`}
+          title={meta.label}
+        >
+          <Icon className="mx-auto mb-1 h-6 w-6" />
+
+          <span className="block truncate text-[11px] font-bold">
+            {meta.label}
+          </span>
+
+          <span className="mt-1 block text-[10px] font-medium opacity-70">
+            {totalEntries} entradas
+          </span>
+        </button>
+      );
+    }
+  )}
+</div>
 
   {(() => {
     const areaMeta = AREA_META[quickSelectedArea];
@@ -5592,7 +5843,108 @@ setIsAuthenticated(false);
     );
   })()}
 </div>
+{view === "ajustes" && isSupervisor && (
+  <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+    <div className="mb-3">
+      <div className="text-sm font-semibold text-emerald-900">
+        Crear tarea extra seleccionable
+      </div>
 
+      <div className="mt-1 text-xs text-emerald-700">
+        Estas tareas aparecerán como opciones para añadir al mismo trabajo.
+      </div>
+    </div>
+
+    <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+      <input
+        value={newCustomExtraTask.label}
+        onChange={(e) =>
+          setNewCustomExtraTask((prev) => ({
+            ...prev,
+            label: e.target.value,
+          }))
+        }
+        placeholder="Ej: 2 equilibrados, Cambiar válvula, Revisar presión"
+        className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+      />
+
+      <select
+        value={newCustomExtraTask.area}
+        onChange={(e) =>
+          setNewCustomExtraTask((prev) => ({
+            ...prev,
+            area: e.target.value as AreaKey,
+          }))
+        }
+        className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+      >
+        {Object.entries(AREA_META).map(([key, meta]) => (
+          <option key={key} value={key}>
+            {meta.label}
+          </option>
+        ))}
+      </select>
+
+      <input
+        type="number"
+        min="0"
+        value={newCustomExtraTask.standardMinutes}
+        onChange={(e) =>
+          setNewCustomExtraTask((prev) => ({
+            ...prev,
+            standardMinutes: e.target.value,
+          }))
+        }
+        placeholder="Min"
+        className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+      />
+
+      <button
+        type="button"
+        onClick={addCustomExtraTask}
+        disabled={!newCustomExtraTask.label.trim()}
+        className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+      >
+        Añadir tarea
+      </button>
+    </div>
+
+    {customExtraTasks.length > 0 && (
+      <div className="mt-4 space-y-2">
+        <div className="text-xs font-medium text-emerald-700">
+          Tareas extra guardadas
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {customExtraTasks.map((task) => (
+            <div
+              key={task.id}
+              className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs"
+            >
+              <span className="font-medium text-emerald-900">
+                {AREA_META[task.area].label} · {task.label}
+              </span>
+
+              {task.standardMinutes != null && (
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                  {task.standardMinutes} min
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={() => removeCustomExtraTask(task.id)}
+                className="font-medium text-red-600 hover:text-red-700"
+              >
+                Eliminar
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+  </div>
+)}
   {view === "ajustes" && isSupervisor && (
     <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
       <div className="mb-3 text-sm font-medium text-slate-700">
@@ -6184,6 +6536,30 @@ setIsAuthenticated(false);
           <div className="mt-1 text-xs text-slate-500">
             Motivo: {job.reason || "Sin motivo especificado."}
           </div>
+          {job.includedTasks && job.includedTasks.length > 0 && (
+  <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">
+      Tareas incluidas
+    </div>
+
+    <div className="space-y-1">
+      {job.includedTasks.map((task) => (
+        <div
+          key={task.id}
+          className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 text-xs font-medium text-emerald-900"
+        >
+          <span>✓ {task.label}</span>
+
+          {task.standardMinutes != null && (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+              {task.standardMinutes} min
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
           {recommendedTechByJobId[job.id] && (
             <div className="mt-1 text-xs text-violet-700">
@@ -6612,6 +6988,82 @@ setIsAuthenticated(false);
               </button>
             </div>
             <div className="mt-5 space-y-4">
+              {(() => {
+  const selectedTemplate = quickTemplates.find(
+    (template) => template.key === quickDraft.templateKey
+  );
+
+  if (!selectedTemplate) return null;
+
+ const availableIncludedTasks = buildSelectableIncludedTasks(
+  selectedTemplate.area,
+  quickTemplates,
+  customExtraTasks,
+  selectedTemplate.key
+);
+
+  const selectedIncludedTasks = getIncludedTasksByIds(
+    quickDraft.includedTaskIds,
+    availableIncludedTasks
+  );
+
+  if (availableIncludedTasks.length === 0) return null;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-2 text-sm font-semibold text-slate-700">
+        Añadir tareas al mismo trabajo
+      </div>
+
+      <div className="space-y-2">
+        {availableIncludedTasks.map((task) => {
+          const checked = quickDraft.includedTaskIds.includes(task.id);
+
+          return (
+            <label
+              key={task.id}
+              className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            >
+              <span className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    setQuickDraft((prev) => ({
+                      ...prev,
+                      includedTaskIds: e.target.checked
+                        ? [...prev.includedTaskIds, task.id]
+                        : prev.includedTaskIds.filter((id) => id !== task.id),
+                    }));
+                  }}
+                />
+
+                <span className="font-medium text-slate-700">
+                  {task.label}
+                </span>
+              </span>
+
+              {task.standardMinutes != null && (
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                  {task.standardMinutes} min
+                </span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+
+      {selectedIncludedTasks.length > 0 && (
+        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          Se añadirán al mismo trabajo:{" "}
+          <span className="font-semibold">
+            {selectedIncludedTasks.map((task) => task.label).join(" + ")}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+})()}
               <div>
                 <label className="mb-2 block text-sm font-medium">Tipo</label>
                 <select

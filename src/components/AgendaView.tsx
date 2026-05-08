@@ -1,4 +1,11 @@
 import { useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
+import {
+  type IncludedTask,
+  type CustomExtraTask,
+  buildSelectableIncludedTasks,
+  getIncludedTasksByIds,
+} from "../modules/quickTaskSelector";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -17,6 +24,7 @@ type QuickTemplate = {
   mode: "single" | "team";
   allowedTechs: string[];
   priorityOrder: string[];
+  standardMinutes?: number | null;
 };
 
 export type ScheduledJob = {
@@ -30,6 +38,7 @@ export type ScheduledJob = {
   customerName: string;
   customerPhone: string;
   urgent: boolean;
+  includedTasks?: IncludedTask[];
   assignedTech?: string | null;
   status: ScheduledJobStatus;
   arrivedAtMs?: number | null;
@@ -40,19 +49,19 @@ export type ScheduledJob = {
   firstTemplateKey?: string | null;
   secondTemplateKey?: string | null;
   createdAtMs?: number;
-  
 };
 
 type Props = {
   scheduledJobs: ScheduledJob[];
-  setScheduledJobs: React.Dispatch<React.SetStateAction<ScheduledJob[]>>;
+  setScheduledJobs: Dispatch<SetStateAction<ScheduledJob[]>>;
   quickTemplates: QuickTemplate[];
+  customExtraTasks?: CustomExtraTask[];
   AREA_META: any;
   onBack: () => void;
   appendLog: (text: string) => void;
   confirmScheduledArrival: (scheduled: ScheduledJob) => void;
   cancelScheduledJob: (id: number) => void;
-    linkedTemplates?: {
+  linkedTemplates?: {
     id: string;
     label: string;
     firstTemplateKey: string;
@@ -107,32 +116,22 @@ function getWeekDays(weekOffset = 0) {
 }
 
 function getDayStart(dayIndex: number) {
-  // Sábado
   if (dayIndex === 5) return 9 * 60;
-
-  // Lunes a viernes
   return 8 * 60 + 30;
 }
 
 function getDayEnd(dayIndex: number) {
-  // Sábado: así aparece también el bloque de las 13:00
   if (dayIndex === 5) return 13 * 60 + 15;
-
-  // Lunes a viernes: así aparece también el bloque de las 18:30
   return 18 * 60 + 45;
 }
 
 function isWorkingTime(dayIndex: number, time: string) {
   const minutes = timeToMinutes(time);
 
-  // Sábado: 09:00 - 13:00 (incluyendo 13:00)
   if (dayIndex === 5) {
     return minutes >= 9 * 60 && minutes <= 13 * 60;
   }
 
-  // Lunes a viernes:
-  // mañana 08:30 - 13:30 (incluyendo 13:30)
-  // tarde 15:00 - 18:30 (incluyendo 18:30)
   const morning = minutes >= 8 * 60 + 30 && minutes <= 13 * 60 + 30;
   const afternoon = minutes >= 15 * 60 && minutes <= 18 * 60 + 30;
 
@@ -150,6 +149,7 @@ function getTimeSlotsForDay(dayIndex: number) {
 
   return slots;
 }
+
 function addMinutesToTime(time: string, minutes: number) {
   return minutesToTime(timeToMinutes(time) + minutes);
 }
@@ -174,14 +174,9 @@ function isPastDateTime(date: string, time: string) {
   return timeToMinutes(time) <= nowMinutes;
 }
 
-function getValidSlotsForDate(
-  date: string,
-  dayIndex: number
-) {
+function getValidSlotsForDate(date: string, dayIndex: number) {
   return getTimeSlotsForDay(dayIndex).filter(
-    (slot) =>
-      isWorkingTime(dayIndex, slot) &&
-      !isPastDateTime(date, slot)
+    (slot) => isWorkingTime(dayIndex, slot) && !isPastDateTime(date, slot)
   );
 }
 
@@ -325,6 +320,7 @@ export default function AgendaView({
   scheduledJobs,
   setScheduledJobs,
   quickTemplates,
+  customExtraTasks = [],
   linkedTemplates = [],
   AREA_META,
   onBack,
@@ -334,7 +330,7 @@ export default function AgendaView({
   const [weekOffset, setWeekOffset] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [calendarMode, setCalendarMode] = useState<"week" | "day">("week");
-const [selectedDayDate, setSelectedDayDate] = useState<string>("");
+  const [selectedDayDate, setSelectedDayDate] = useState<string>("");
   const [editingJobId, setEditingJobId] = useState<number | null>(null);
 
   const [selectedSlot, setSelectedSlot] = useState<{
@@ -342,7 +338,7 @@ const [selectedDayDate, setSelectedDayDate] = useState<string>("");
     startTime: string;
   } | null>(null);
 
-const [selectedArea, setSelectedArea] = useState<AreaKey>("camion");
+  const [selectedArea, setSelectedArea] = useState<AreaKey>("camion");
 
   const [draft, setDraft] = useState({
     templateKey: quickTemplates[0]?.key ?? "",
@@ -352,275 +348,314 @@ const [selectedArea, setSelectedArea] = useState<AreaKey>("camion");
     urgent: false,
     estimatedMinutes: 45,
     linkedTemplateKey: "",
+    includedTaskIds: [] as string[],
   });
 
   const templatesForSelectedArea = quickTemplates.filter(
-  (template) => template.area === selectedArea
-);
+    (template) => template.area === selectedArea
+  );
+
+  const selectedTemplate = quickTemplates.find(
+    (template) => template.key === draft.templateKey
+  );
+
+  const availableIncludedTasks = selectedTemplate
+    ? buildSelectableIncludedTasks(
+        selectedTemplate.area,
+        quickTemplates,
+        customExtraTasks,
+        selectedTemplate.key
+      )
+    : [];
+
+  const selectedIncludedTasks = getIncludedTasksByIds(
+    draft.includedTaskIds,
+    availableIncludedTasks
+  );
 
   const days = getWeekDays(weekOffset);
+
   const visibleDays =
-  calendarMode === "day"
-    ? days.filter((day) => day.date === (selectedDayDate || getTodayKey()))
-    : days;
+    calendarMode === "day"
+      ? days.filter((day) => day.date === (selectedDayDate || getTodayKey()))
+      : days;
+
   const finalVisibleDays =
-  visibleDays.length > 0
-    ? visibleDays
-    : days.length > 0
-    ? [days[0]]
-    : [];
+    visibleDays.length > 0 ? visibleDays : days.length > 0 ? [days[0]] : [];
+
   const todayKey = formatLocalDate(new Date());
- 
-function openNewAppointment(date: string, startTime: string) {
-  const day = days.find((item) => item.date === date);
 
-  if (!day) return;
-
-  if (isPastDateTime(date, startTime)) {
-    alert("No se pueden crear citas en días u horas ya pasadas.");
-    return;
+  function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
+    setDraft({
+      templateKey,
+      plate: "",
+      customerName: "",
+      customerPhone: "",
+      urgent: false,
+      estimatedMinutes: 45,
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+    });
   }
 
-  const firstTemplate = quickTemplates.find(
-  (template) => template.area === "camion"
-) ?? quickTemplates[0];
-
-const firstTemplateKey = firstTemplate?.key ?? "";
-const firstArea = firstTemplate?.area ?? "camion";
-
-setSelectedArea(firstArea);
-
-  setEditingJobId(null);
-
-  setSelectedSlot({ date, startTime });
-
-  setDraft({
-    templateKey: firstTemplateKey,
-    plate: "",
-    customerName: "",
-    customerPhone: "",
-    urgent: false,
-    estimatedMinutes: 45,
-    linkedTemplateKey: "",
-  });
-
-  setModalOpen(true);
-}
-
-function openNewAppointmentFromHeader() {
-  const currentWeekDays = getWeekDays(0);
-  const firstAvailable = getFirstAvailableSlotInWeek(currentWeekDays);
-
-  if (!firstAvailable) {
-    alert("No quedan horas disponibles esta semana.");
-    return;
+  function getFirstTemplateForArea(area: AreaKey) {
+    return (
+      quickTemplates
+        .filter((template) => template.area === area)
+        .slice()
+        .sort((a, b) =>
+          a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+        )[0] ?? quickTemplates[0]
+    );
   }
 
-  setWeekOffset(0);
+  function openNewAppointment(date: string, startTime: string) {
+    const day = days.find((item) => item.date === date);
 
-  setEditingJobId(null);
+    if (!day) return;
 
-  setSelectedSlot({
-    date: firstAvailable.date,
-    startTime: firstAvailable.startTime,
-  });
-const firstTemplate = quickTemplates.find(
-  (template) => template.area === "camion"
-) ?? quickTemplates[0];
+    if (isPastDateTime(date, startTime)) {
+      alert("No se pueden crear citas en días u horas ya pasadas.");
+      return;
+    }
 
-setSelectedArea(firstTemplate?.area ?? "camion");
-  setDraft({
-    templateKey: firstTemplate?.key ?? "",
-    plate: "",
-    customerName: "",
-    customerPhone: "",
-    urgent: false,
-    estimatedMinutes: 45,
-    linkedTemplateKey: "",
-  });
+    const firstTemplate = getFirstTemplateForArea("camion");
+    const firstTemplateKey = firstTemplate?.key ?? "";
+    const firstArea = firstTemplate?.area ?? "camion";
 
-  setModalOpen(true);
-}
+    setSelectedArea(firstArea);
+    setEditingJobId(null);
+    setSelectedSlot({ date, startTime });
 
-function openEditAppointment(job: ScheduledJob) {
-  setSelectedArea(job.area);
-  setEditingJobId(job.id);
+    setDraft({
+      templateKey: firstTemplateKey,
+      plate: "",
+      customerName: "",
+      customerPhone: "",
+      urgent: false,
+      estimatedMinutes: 45,
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+    });
 
-  setSelectedSlot({
-    date: job.date,
-    startTime: job.startTime,
-  });
-
-  setDraft({
-    linkedTemplateKey: "",
-    templateKey: job.templateKey,
-    plate: job.plate,
-    customerName: job.customerName,
-    customerPhone: job.customerPhone,
-    urgent: job.urgent,
-    estimatedMinutes: Math.max(
-      15,
-      timeToMinutes(job.endTime) - timeToMinutes(job.startTime)
-    ),
-  });
-
-  setModalOpen(true);
-}
-
-function createScheduledJob() {
-  if (!selectedSlot || !draft.templateKey || !draft.plate.trim()) return;
-
-  if (isPastDateTime(selectedSlot.date, selectedSlot.startTime)) {
-    alert("No se puede guardar una cita en una fecha u hora pasada.");
-    return;
+    setModalOpen(true);
   }
 
-  const selectedLinkedTemplate = linkedTemplates.find(
-  (linked) =>
-    linked.firstTemplateKey === draft.templateKey &&
-    linked.secondTemplateKey === draft.linkedTemplateKey
-);
+  function openNewAppointmentFromHeader() {
+    const currentWeekDays = getWeekDays(0);
+    const firstAvailable = getFirstAvailableSlotInWeek(currentWeekDays);
 
-  const finalTemplateKey = selectedLinkedTemplate
-    ? selectedLinkedTemplate.firstTemplateKey
-    : draft.templateKey || templatesForSelectedArea[0]?.key || "";
+    if (!firstAvailable) {
+      alert("No quedan horas disponibles esta semana.");
+      return;
+    }
 
-  const template = quickTemplates.find((t) => t.key === finalTemplateKey);
+    setWeekOffset(0);
+    setEditingJobId(null);
 
-  if (!template) {
-    alert("No se encuentra la entrada rápida seleccionada.");
-    return;
+    setSelectedSlot({
+      date: firstAvailable.date,
+      startTime: firstAvailable.startTime,
+    });
+
+    const firstTemplate = getFirstTemplateForArea("camion");
+
+    setSelectedArea(firstTemplate?.area ?? "camion");
+
+    setDraft({
+      templateKey: firstTemplate?.key ?? "",
+      plate: "",
+      customerName: "",
+      customerPhone: "",
+      urgent: false,
+      estimatedMinutes: 45,
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+    });
+
+    setModalOpen(true);
   }
 
-  const nextData = {
-    date: selectedSlot.date,
-    startTime: selectedSlot.startTime,
-    endTime: addMinutesToTime(selectedSlot.startTime, draft.estimatedMinutes),
+  function openEditAppointment(job: ScheduledJob) {
+    setSelectedArea(job.area);
+    setEditingJobId(job.id);
 
-    templateKey: template.key,
-    area: template.area,
+    setSelectedSlot({
+      date: getScheduledDate(job),
+      startTime: getScheduledStartTime(job),
+    });
 
-    linkedTemplateId: selectedLinkedTemplate?.id ?? null,
-    linkedTemplateLabel: selectedLinkedTemplate?.label ?? null,
-    firstTemplateKey: selectedLinkedTemplate?.firstTemplateKey ?? null,
-    secondTemplateKey: selectedLinkedTemplate?.secondTemplateKey ?? null,
+    setDraft({
+      templateKey: job.firstTemplateKey || job.templateKey,
+      linkedTemplateKey: job.secondTemplateKey || "",
+      plate: job.plate,
+      customerName: job.customerName,
+      customerPhone: job.customerPhone,
+      urgent: job.urgent,
+      estimatedMinutes: Math.max(
+        15,
+        timeToMinutes(getScheduledEndTime(job)) -
+          timeToMinutes(getScheduledStartTime(job))
+      ),
+      includedTaskIds: (job.includedTasks ?? []).map((task) => task.id),
+    });
 
-    plate: draft.plate.trim().toUpperCase(),
-    customerName: draft.customerName.trim(),
-    customerPhone: draft.customerPhone.trim(),
-    urgent: draft.urgent,
-    estimatedMinutes: draft.estimatedMinutes,
-  };
+    setModalOpen(true);
+  }
 
-  console.log("AGENDA nextData resumen", {
-  templateKey: nextData.templateKey,
-  linkedTemplateId: nextData.linkedTemplateId,
-  linkedTemplateLabel: nextData.linkedTemplateLabel,
-  firstTemplateKey: nextData.firstTemplateKey,
-  secondTemplateKey: nextData.secondTemplateKey,
-});
+  function createScheduledJob() {
+    if (!selectedSlot || !draft.templateKey || !draft.plate.trim()) return;
 
-  const logLabel = selectedLinkedTemplate
-    ? selectedLinkedTemplate.label
-    : template.label;
+    if (isPastDateTime(selectedSlot.date, selectedSlot.startTime)) {
+      alert("No se puede guardar una cita en una fecha u hora pasada.");
+      return;
+    }
 
-  if (editingJobId != null) {
-    setScheduledJobs((prev) =>
-      prev.map((item) =>
-        item.id === editingJobId
-          ? {
-              ...item,
-              ...nextData,
-            }
-          : item
-      )
+    const selectedLinkedTemplate = linkedTemplates.find(
+      (linked) =>
+        linked.firstTemplateKey === draft.templateKey &&
+        linked.secondTemplateKey === draft.linkedTemplateKey
     );
 
-    appendLog(`Cita editada: ${nextData.plate} · ${logLabel}.`);
-  } else {
-    const scheduled: ScheduledJob = {
-      id: Date.now(),
-      ...nextData,
-      status: "programado",
-      assignedTech: null,
-      createdAtMs: Date.now(),
+    const finalTemplateKey = selectedLinkedTemplate
+      ? selectedLinkedTemplate.firstTemplateKey
+      : draft.templateKey || templatesForSelectedArea[0]?.key || "";
+
+    const template = quickTemplates.find((t) => t.key === finalTemplateKey);
+
+    if (!template) {
+      alert("No se encuentra la entrada rápida seleccionada.");
+      return;
+    }
+
+    const availableTasksForSave = buildSelectableIncludedTasks(
+      template.area,
+      quickTemplates,
+      customExtraTasks,
+      template.key
+    );
+
+    const includedTasks = getIncludedTasksByIds(
+      draft.includedTaskIds,
+      availableTasksForSave
+    );
+
+    const nextData = {
+      date: selectedSlot.date,
+      startTime: selectedSlot.startTime,
+      endTime: addMinutesToTime(selectedSlot.startTime, draft.estimatedMinutes),
+
+      templateKey: template.key,
+      area: template.area,
+
+      linkedTemplateId: selectedLinkedTemplate?.id ?? null,
+      linkedTemplateLabel: selectedLinkedTemplate?.label ?? null,
+      firstTemplateKey: selectedLinkedTemplate?.firstTemplateKey ?? null,
+      secondTemplateKey: selectedLinkedTemplate?.secondTemplateKey ?? null,
+
+      plate: draft.plate.trim().toUpperCase(),
+      customerName: draft.customerName.trim(),
+      customerPhone: draft.customerPhone.trim(),
+      urgent: draft.urgent,
+      includedTasks,
+      estimatedMinutes: draft.estimatedMinutes,
     };
 
-    setScheduledJobs((prev) => [...prev, scheduled]);
-    appendLog(`Cita programada: ${scheduled.plate} · ${logLabel}.`);
+    const logLabel = selectedLinkedTemplate
+      ? selectedLinkedTemplate.label
+      : includedTasks.length > 0
+      ? `${template.label} + ${includedTasks.map((task) => task.label).join(" + ")}`
+      : template.label;
+
+    if (editingJobId != null) {
+      setScheduledJobs((prev) =>
+        prev.map((item) =>
+          item.id === editingJobId
+            ? {
+                ...item,
+                ...nextData,
+              }
+            : item
+        )
+      );
+
+      appendLog(`Cita editada: ${nextData.plate} · ${logLabel}.`);
+    } else {
+      const scheduled: ScheduledJob = {
+        id: Date.now(),
+        ...nextData,
+        status: "programado",
+        assignedTech: null,
+        createdAtMs: Date.now(),
+      };
+
+      setScheduledJobs((prev) => [...prev, scheduled]);
+      appendLog(`Cita programada: ${scheduled.plate} · ${logLabel}.`);
+    }
+
+    resetDraft();
+    setEditingJobId(null);
+    setModalOpen(false);
+    setSelectedSlot(null);
   }
 
-  setDraft({
-    templateKey: quickTemplates[0]?.key ?? "",
-    plate: "",
-    customerName: "",
-    customerPhone: "",
-    urgent: false,
-    estimatedMinutes: 45,
-    linkedTemplateKey: "",
-  });
+  function deleteScheduledJob(id: number) {
+    const job = scheduledJobs.find((item) => item.id === id);
+    if (!job) return;
 
-  setEditingJobId(null);
-  setModalOpen(false);
-  setSelectedSlot(null);
-}
+    const ok = window.confirm(
+      `¿Eliminar definitivamente la cita ${job.plate} del ${job.date} a las ${job.startTime}?`
+    );
 
-function deleteScheduledJob(id: number) {
-  const job = scheduledJobs.find((item) => item.id === id);
-  if (!job) return;
+    if (!ok) return;
 
-  const ok = window.confirm(
-    `¿Eliminar definitivamente la cita ${job.plate} del ${job.date} a las ${job.startTime}?`
-  );
+    setScheduledJobs((prev) => prev.filter((item) => item.id !== id));
 
-  if (!ok) return;
-
-  setScheduledJobs((prev) => prev.filter((item) => item.id !== id));
-
-  appendLog(`Cita eliminada: ${job.plate} · ${job.date} · ${job.startTime}.`);
-}
-
-function cleanExpiredScheduledJobs() {
-  const now = new Date();
-  const nowKey = formatLocalDate(now);
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-
-  const expiredJobs = scheduledJobs.filter((job) => {
-    if (job.status === "cancelado") return true;
-    if (job.status === "cerrado") return true;
-
-    const jobDate = getScheduledDate(job);
-    const jobEndTime = getScheduledEndTime(job);
-    const jobEndMinutes = timeToMinutes(jobEndTime);
-
-    if (jobDate < nowKey) return true;
-    if (jobDate === nowKey && jobEndMinutes < nowMinutes) return true;
-
-    return false;
-  });
-
-  if (expiredJobs.length === 0) {
-    alert("No hay citas vencidas para limpiar.");
-    return;
+    appendLog(`Cita eliminada: ${job.plate} · ${job.date} · ${job.startTime}.`);
   }
 
-  const ok = window.confirm(
-    `Se eliminarán ${expiredJobs.length} citas vencidas/canceladas. ¿Continuar?`
-  );
+  function cleanExpiredScheduledJobs() {
+    const now = new Date();
+    const nowKey = formatLocalDate(now);
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-  if (!ok) return;
+    const expiredJobs = scheduledJobs.filter((job) => {
+      if (job.status === "cancelado") return true;
+      if (job.status === "cerrado") return true;
 
-  const expiredIds = new Set(expiredJobs.map((job) => job.id));
+      const jobDate = getScheduledDate(job);
+      const jobEndTime = getScheduledEndTime(job);
+      const jobEndMinutes = timeToMinutes(jobEndTime);
 
-  setScheduledJobs((prev) => prev.filter((job) => !expiredIds.has(job.id)));
+      if (jobDate < nowKey) return true;
+      if (jobDate === nowKey && jobEndMinutes < nowMinutes) return true;
 
-  appendLog(`Agenda limpiada: ${expiredJobs.length} citas vencidas eliminadas.`);
-}
+      return false;
+    });
+
+    if (expiredJobs.length === 0) {
+      alert("No hay citas vencidas para limpiar.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `Se eliminarán ${expiredJobs.length} citas vencidas/canceladas. ¿Continuar?`
+    );
+
+    if (!ok) return;
+
+    const expiredIds = new Set(expiredJobs.map((job) => job.id));
+
+    setScheduledJobs((prev) => prev.filter((job) => !expiredIds.has(job.id)));
+
+    appendLog(`Agenda limpiada: ${expiredJobs.length} citas vencidas eliminadas.`);
+  }
 
   return (
-  <div className="h-screen overflow-hidden bg-slate-50 p-3 text-slate-900">
-  <div className="w-full space-y-4">
-<div className="sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">          <div>
+    <div className="h-screen overflow-hidden bg-slate-50 p-3 text-slate-900">
+      <div className="w-full space-y-4">
+        <div className="sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+          <div>
             <h1 className="text-2xl font-semibold">Agenda semanal</h1>
             <p className="text-sm text-slate-500">
               Vista tipo Calendar · lunes a sábado
@@ -628,25 +663,26 @@ function cleanExpiredScheduledJobs() {
           </div>
 
           <div className="mt-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-  Citas cargadas: {scheduledJobs.length} · Semana: {days[0]?.date} a{" "}
-  {days[5]?.date}
-</div>
+            Citas cargadas: {scheduledJobs.length} · Semana: {days[0]?.date} a{" "}
+            {days[5]?.date}
+          </div>
 
           <div className="flex flex-wrap gap-2">
-          <button
-  type="button"
-  onClick={openNewAppointmentFromHeader}
-  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
->
-  + Nueva cita
-</button>
-<button
-  type="button"
-  onClick={cleanExpiredScheduledJobs}
-  className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
->
-  Limpiar vencidas
-</button>
+            <button
+              type="button"
+              onClick={openNewAppointmentFromHeader}
+              className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+            >
+              + Nueva cita
+            </button>
+
+            <button
+              type="button"
+              onClick={cleanExpiredScheduledJobs}
+              className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+            >
+              Limpiar vencidas
+            </button>
 
             <button
               type="button"
@@ -656,52 +692,53 @@ function cleanExpiredScheduledJobs() {
               ← Semana anterior
             </button>
 
-           <button
-  type="button"
-  onClick={() => {
-    setWeekOffset(0);
-    setSelectedDayDate(getTodayKey());
-  }}
+            <button
+              type="button"
+              onClick={() => {
+                setWeekOffset(0);
+                setSelectedDayDate(getTodayKey());
+              }}
               className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
             >
               Hoy
             </button>
 
             <button
-  type="button"
-  onClick={() => {
-    if (calendarMode === "week") {
-      setSelectedDayDate(getTodayKey());
-      setCalendarMode("day");
-    } else {
-      setCalendarMode("week");
-    }
-  }}
-  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
->
-  {calendarMode === "week" ? "Vista día" : "Vista semana"}
-</button>
-{calendarMode === "day" && (
-  <select
-    value={selectedDayDate || getTodayKey()}
-    onChange={(e) => setSelectedDayDate(e.target.value)}
-    className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
-  >
-    {days.map((day) => (
-      <option key={day.date} value={day.date}>
-        {day.label}
-      </option>
-    ))}
-  </select>
-)}
+              type="button"
+              onClick={() => {
+                if (calendarMode === "week") {
+                  setSelectedDayDate(getTodayKey());
+                  setCalendarMode("day");
+                } else {
+                  setCalendarMode("week");
+                }
+              }}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+            >
+              {calendarMode === "week" ? "Vista día" : "Vista semana"}
+            </button>
 
-           <button
-  type="button"
-  onClick={() => setWeekOffset((v) => v + 1)}
-  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
->
-  Semana siguiente →
-</button>
+            {calendarMode === "day" && (
+              <select
+                value={selectedDayDate || getTodayKey()}
+                onChange={(e) => setSelectedDayDate(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+              >
+                {days.map((day) => (
+                  <option key={day.date} value={day.date}>
+                    {day.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setWeekOffset((v) => v + 1)}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+            >
+              Semana siguiente →
+            </button>
 
             <button
               type="button"
@@ -713,13 +750,14 @@ function cleanExpiredScheduledJobs() {
           </div>
         </div>
 
-<div className="h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm"><div
-  className={`sticky top-0 z-40 grid border-b border-slate-200 bg-white ${
-    calendarMode === "day"
-      ? "min-w-[900px] grid-cols-[70px_1fr]"
-      : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
-  }`}
->
+        <div className="h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div
+            className={`sticky top-0 z-40 grid border-b border-slate-200 bg-white ${
+              calendarMode === "day"
+                ? "min-w-[900px] grid-cols-[70px_1fr]"
+                : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
+            }`}
+          >
             <div className="p-3 text-xs font-medium text-slate-500">Hora</div>
 
             {finalVisibleDays.map((day) => (
@@ -732,13 +770,13 @@ function cleanExpiredScheduledJobs() {
             ))}
           </div>
 
-<div
-  className={`grid ${
-    calendarMode === "day"
-      ? "min-w-[900px] grid-cols-[70px_1fr]"
-      : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
-  }`}
->
+          <div
+            className={`grid ${
+              calendarMode === "day"
+                ? "min-w-[900px] grid-cols-[70px_1fr]"
+                : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
+            }`}
+          >
             <div>
               {getTimeSlotsForDay(0).map((slot) => (
                 <div
@@ -753,20 +791,17 @@ function cleanExpiredScheduledJobs() {
 
             {finalVisibleDays.map((day) => {
               const slots = getTimeSlotsForDay(day.index);
-const dayStart = 8 * 60 + 30;
-const dayHeight = slots.length * SLOT_HEIGHT;
+              const dayStart = 8 * 60 + 30;
+              const dayHeight = slots.length * SLOT_HEIGHT;
 
-const dayJobs = scheduledJobs
-  .filter((job) => job.status !== "cancelado")
-  .filter((job) => {
-    const jobDate = getScheduledDate(job);
-    return jobDate === day.date;
-  })
-  .map((job) => ({
-    ...job,
-    startTime: getScheduledStartTime(job),
-    endTime: getScheduledEndTime(job),
-  }));
+              const dayJobs = scheduledJobs
+                .filter((job) => job.status !== "cancelado")
+                .filter((job) => getScheduledDate(job) === day.date)
+                .map((job) => ({
+                  ...job,
+                  startTime: getScheduledStartTime(job),
+                  endTime: getScheduledEndTime(job),
+                }));
 
               const laidOutJobs = layoutOverlappingJobs(dayJobs);
 
@@ -783,38 +818,37 @@ const dayJobs = scheduledJobs
                   className="relative border-l border-slate-200"
                   style={{ height: dayHeight }}
                 >
-{slots.map((slot) => {
-  const working = isWorkingTime(day.index, slot);
-  const past = isPastDateTime(day.date, slot);
-  const disabled = !working || past;
+                  {slots.map((slot) => {
+                    const working = isWorkingTime(day.index, slot);
+                    const past = isPastDateTime(day.date, slot);
+                    const disabled = !working || past;
 
-  let cellClass = "bg-slate-200/70";
+                    let cellClass = "bg-slate-200/70";
 
-  if (working && !past) {
-    cellClass = "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
-  }
+                    if (working && !past) {
+                      cellClass = "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
+                    }
 
-  if (working && past) {
-    cellClass = "bg-red-50";
-  }
+                    if (working && past) {
+                      cellClass = "bg-red-50";
+                    }
 
-  return (
-    <div
-  key={`${day.date}-${slot}`}
-  style={{ height: SLOT_HEIGHT }}
-  onClick={() => {
-    if (disabled || !isWorkingTime(day.index, slot)) return;
-    openNewAppointment(day.date, slot);
-  }}
-  className={`relative border-b border-slate-100 ${
-    !isWorkingTime(day.index, slot)
-      ? "cursor-not-allowed bg-slate-200"
-      : cellClass
-  }`}
->
-  </div>
-  );
-})}
+                    return (
+                      <div
+                        key={`${day.date}-${slot}`}
+                        style={{ height: SLOT_HEIGHT }}
+                        onClick={() => {
+                          if (disabled || !isWorkingTime(day.index, slot)) return;
+                          openNewAppointment(day.date, slot);
+                        }}
+                        className={`relative border-b border-slate-100 ${
+                          !isWorkingTime(day.index, slot)
+                            ? "cursor-not-allowed bg-slate-200"
+                            : cellClass
+                        }`}
+                      />
+                    );
+                  })}
 
                   {showNowLine && (
                     <div
@@ -829,108 +863,112 @@ const dayJobs = scheduledJobs
                     </div>
                   )}
 
-                 {laidOutJobs.map(({ job, column, columns }) => {
-  const template = quickTemplates.find(
-    (t) => t.key === job.templateKey
-  );
+                  {laidOutJobs.map(({ job, column, columns }) => {
+                    const template = quickTemplates.find(
+                      (t) => t.key === job.templateKey
+                    );
 
-  const jobStartTime = getScheduledStartTime(job);
-  const jobEndTime = getScheduledEndTime(job);
+                    const jobStartTime = getScheduledStartTime(job);
+                    const jobEndTime = getScheduledEndTime(job);
 
-  const start = timeToMinutes(jobStartTime);
-  const end = timeToMinutes(jobEndTime);
+                    const start = timeToMinutes(jobStartTime);
+                    const end = timeToMinutes(jobEndTime);
 
-  const safeStart = Math.max(start, dayStart);
-  const safeEnd = Math.min(end, getDayEnd(day.index));
+                    const safeStart = Math.max(start, dayStart);
+                    const safeEnd = Math.min(end, getDayEnd(day.index));
 
-  const top =
-    ((safeStart - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
+                    const top =
+                      ((safeStart - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
 
-  const height = Math.max(
-    50,
-    ((safeEnd - safeStart) / SLOT_MINUTES) * SLOT_HEIGHT - 6
-  );
+                    const height = Math.max(
+                      50,
+                      ((safeEnd - safeStart) / SLOT_MINUTES) * SLOT_HEIGHT - 6
+                    );
 
-  const width = 100 / columns;
-  const left = column * width;
+                    const width = 100 / columns;
+                    const left = column * width;
 
-  return (
-    <div
-      key={job.id}
-      onClick={(e) => {
-        e.stopPropagation();
-        openEditAppointment(job);
-      }}
-      className={`absolute z-40 cursor-pointer overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getSolidAreaClass(
-        job.area
-      )}`}
-      style={{
-        top,
-        height,
-        left: `calc(${left}% + 4px)`,
-        width: `calc(${width}% - 8px)`,
-      }}
-    >
-      <div className="truncate uppercase">
-        {job.linkedTemplateLabel || template?.label || "Operación"}
-      </div>
+                    return (
+                      <div
+                        key={job.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditAppointment(job);
+                        }}
+                        className={`absolute z-40 cursor-pointer overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getSolidAreaClass(
+                          job.area
+                        )}`}
+                        style={{
+                          top,
+                          height,
+                          left: `calc(${left}% + 4px)`,
+                          width: `calc(${width}% - 8px)`,
+                        }}
+                      >
+                        <div className="truncate uppercase">
+                          {job.linkedTemplateLabel || template?.label || "Operación"}
+                        </div>
 
-      <div className="truncate">
-        {job.plate}
-      </div>
+                        {job.includedTasks && job.includedTasks.length > 0 && (
+                          <div className="truncate text-[10px] font-normal opacity-90">
+                            + {job.includedTasks.map((task) => task.label).join(" + ")}
+                          </div>
+                        )}
 
-      <div className="text-xs font-normal">
-        {jobStartTime} – {jobEndTime}
-      </div>
+                        <div className="truncate">{job.plate}</div>
 
-      {job.customerName && (
-        <div className="truncate text-xs font-normal opacity-90">
-          {job.customerName}
-        </div>
-      )}
+                        <div className="text-xs font-normal">
+                          {jobStartTime} – {jobEndTime}
+                        </div>
 
-<div className="absolute bottom-1 left-1 right-1 flex gap-1">
-  {job.status === "programado" && (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        cancelScheduledJob(job.id);
-      }}
-      className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm"
-    >
-      Cancelar
-    </button>
-  )}
+                        {job.customerName && (
+                          <div className="truncate text-xs font-normal opacity-90">
+                            {job.customerName}
+                          </div>
+                        )}
 
-  <button
-    type="button"
-    onClick={(e) => {
-      e.stopPropagation();
-      deleteScheduledJob(job.id);
-    }}
-    className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-slate-700 shadow-sm"
-  >
-    Eliminar
-  </button>
-</div>
-    </div>
-  );
-})}
+                        <div className="absolute bottom-1 left-1 right-1 flex gap-1">
+                          {job.status === "programado" && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                cancelScheduledJob(job.id);
+                              }}
+                              className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm"
+                            >
+                              Cancelar
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteScheduledJob(job.id);
+                            }}
+                            className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-slate-700 shadow-sm"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
           </div>
         </div>
 
-
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
             <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
               <div className="mb-4">
-<h3 className="text-xl font-semibold">
-  {editingJobId != null ? "Editar cita" : "Nueva cita"}
-</h3>
+                <h3 className="text-xl font-semibold">
+                  {editingJobId != null ? "Editar cita" : "Nueva cita"}
+                </h3>
+
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-500">
@@ -940,34 +978,34 @@ const dayJobs = scheduledJobs
                     <select
                       value={selectedSlot.date}
                       onChange={(e) => {
-  const nextDate = e.target.value;
-  const day = days.find((d) => d.date === nextDate);
+                        const nextDate = e.target.value;
+                        const day = days.find((d) => d.date === nextDate);
 
-  if (!day) return;
+                        if (!day) return;
 
-  const validSlots = getValidSlotsForDate(nextDate, day.index);
+                        const validSlots = getValidSlotsForDate(nextDate, day.index);
 
-  if (validSlots.length === 0) {
-    alert("Este día no tiene horas disponibles.");
-    return;
-  }
+                        if (validSlots.length === 0) {
+                          alert("Este día no tiene horas disponibles.");
+                          return;
+                        }
 
-  setSelectedSlot({
-    date: nextDate,
-    startTime: validSlots[0],
-  });
-}}
+                        setSelectedSlot({
+                          date: nextDate,
+                          startTime: validSlots[0],
+                        });
+                      }}
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     >
                       {days.map((day) => (
-  <option
-    key={day.date}
-    value={day.date}
-    disabled={isPastDate(day.date)}
-  >
-    {day.label}
-  </option>
-))}
+                        <option
+                          key={day.date}
+                          value={day.date}
+                          disabled={isPastDate(day.date)}
+                        >
+                          {day.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -985,119 +1023,246 @@ const dayJobs = scheduledJobs
                       }
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     >
-{(() => {
-  const selectedDay = days.find((d) => d.date === selectedSlot.date);
-  const slots = selectedDay
-    ? getValidSlotsForDate(selectedSlot.date, selectedDay.index)
-    : [];
+                      {(() => {
+                        const selectedDay = days.find(
+                          (d) => d.date === selectedSlot.date
+                        );
+                        const slots = selectedDay
+                          ? getValidSlotsForDate(selectedSlot.date, selectedDay.index)
+                          : [];
 
-  return slots.map((slot) => (
-    <option key={slot} value={slot}>
-      {slot}
-    </option>
-  ));
-})()}
+                        return slots.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {slot}
+                          </option>
+                        ));
+                      })()}
                     </select>
                   </div>
                 </div>
               </div>
 
               <div className="space-y-4">
-<div className="space-y-3">
-  <div className="grid grid-cols-5 gap-2">
-  {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
-    (area) => {
-      const areaTemplates = quickTemplates.filter(
-        (template) => template.area === area
-      );
+                <div className="space-y-3">
+                  <div className="grid grid-cols-5 gap-2">
+                    {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
+                      (area) => {
+                        const areaTemplates = quickTemplates
+                          .filter((template) => template.area === area)
+                          .slice()
+                          .sort((a, b) =>
+                            a.label.localeCompare(b.label, "es", {
+                              sensitivity: "base",
+                            })
+                          );
 
-      if (areaTemplates.length === 0) return null;
+                        const areaLinkedTemplates = linkedTemplates
+                          .filter((linked) => {
+                            const firstTemplate = quickTemplates.find(
+                              (template) =>
+                                template.key === linked.firstTemplateKey
+                            );
 
-      const meta = AREA_META[area];
-      const Icon = meta.icon;
-      const active = selectedArea === area;
+                            return firstTemplate?.area === area;
+                          })
+                          .slice()
+                          .sort((a, b) =>
+                            a.label.localeCompare(b.label, "es", {
+                              sensitivity: "base",
+                            })
+                          );
 
-      return (
-        <button
-  key={area}
-  type="button"
-  onClick={() => {
-    const firstTemplate = areaTemplates[0];
+                        const meta = AREA_META[area];
+                        const Icon = meta.icon;
+                        const active = selectedArea === area;
+                        const totalEntries =
+                          areaTemplates.length + areaLinkedTemplates.length;
 
-    setSelectedArea(area);
+                        return (
+                          <button
+                            key={area}
+                            type="button"
+                            onClick={() => {
+                              const firstLinked = areaLinkedTemplates[0];
+                              const firstTemplate = areaTemplates[0];
 
-    setDraft((prev) => ({
-      ...prev,
-      area,
-      templateKey: firstTemplate?.key ?? "",
-    }));
-  }}
-          className={`rounded-2xl border px-2 py-2 text-xs font-semibold transition ${meta.color} ${
-            active
-              ? "ring-2 ring-slate-900 ring-offset-2"
-              : "opacity-80 hover:opacity-100"
-          }`}
-          title={meta.label}
-        >
-          <Icon className="mx-auto mb-1 h-4 w-4" />
-          <span className="block truncate">{meta.label}</span>
-        </button>
-      );
-    }
-  )}
-</div>
+                              setSelectedArea(area);
 
- <select
-  value={
-    draft.linkedTemplateKey
-      ? `${draft.templateKey}|||${draft.linkedTemplateKey}`
-      : draft.templateKey
-  }
-  onChange={(e) => {
-    const [templateKey, linkedTemplateKey] = e.target.value.split("|||");
-     console.log("SELECT AGENDA", {
-    rawValue: e.target.value,
-    templateKey,
-    linkedTemplateKey,
-  });
-    setDraft((prev) => ({
-      ...prev,
-      templateKey,
-      linkedTemplateKey: linkedTemplateKey || "",
-    }));
-  }}
-  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
->
-  <optgroup label="Trabajos vinculados">
-    {linkedTemplates
-      .filter((linked) => {
-        const firstTemplate = quickTemplates.find(
-          (template) => template.key === linked.firstTemplateKey
-        );
+                              setDraft((prev) => ({
+                                ...prev,
+                                templateKey: firstLinked
+                                  ? firstLinked.firstTemplateKey
+                                  : firstTemplate?.key ?? "",
+                                linkedTemplateKey: firstLinked
+                                  ? firstLinked.secondTemplateKey
+                                  : "",
+                                includedTaskIds: [],
+                              }));
+                            }}
+                            className={`rounded-2xl border px-2 py-2 text-xs font-semibold transition ${meta.color} ${
+                              active
+                                ? "ring-2 ring-slate-900 ring-offset-2"
+                                : "opacity-80 hover:opacity-100"
+                            }`}
+                            title={meta.label}
+                          >
+                            <Icon className="mx-auto mb-1 h-4 w-4" />
 
-        return firstTemplate?.area === selectedArea;
-      })
-      .map((linked) => (
-        <option
-          key={linked.id}
-          value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
-        >
-          {linked.label}
-        </option>
-      ))}
-  </optgroup>
+                            <span className="block truncate font-bold">
+                              {meta.label}
+                            </span>
 
-  <optgroup label="Entradas rápidas">
-    {quickTemplates
-      .filter((template) => template.area === selectedArea)
-      .map((template) => (
-        <option key={template.key} value={template.key}>
-          {template.label}
-        </option>
-      ))}
-  </optgroup>
-</select>
-</div>
+                            <span className="mt-1 block text-[10px] font-medium opacity-70">
+                              {totalEntries} entradas
+                            </span>
+                          </button>
+                        );
+                      }
+                    )}
+                  </div>
+
+                  {(() => {
+                    const linkedTemplatesForSelectedArea = linkedTemplates
+                      .filter((linked) => {
+                        const firstTemplate = quickTemplates.find(
+                          (template) =>
+                            template.key === linked.firstTemplateKey
+                        );
+
+                        return firstTemplate?.area === selectedArea;
+                      })
+                      .slice()
+                      .sort((a, b) =>
+                        a.label.localeCompare(b.label, "es", {
+                          sensitivity: "base",
+                        })
+                      );
+
+                    const templatesForSelectedAreaSorted = quickTemplates
+                      .filter((template) => template.area === selectedArea)
+                      .slice()
+                      .sort((a, b) =>
+                        a.label.localeCompare(b.label, "es", {
+                          sensitivity: "base",
+                        })
+                      );
+
+                    const hasEntries =
+                      linkedTemplatesForSelectedArea.length > 0 ||
+                      templatesForSelectedAreaSorted.length > 0;
+
+                    const selectedValue = draft.linkedTemplateKey
+                      ? `${draft.templateKey}|||${draft.linkedTemplateKey}`
+                      : draft.templateKey;
+
+                    return (
+                      <select
+                        value={hasEntries ? selectedValue : ""}
+                        disabled={!hasEntries}
+                        onChange={(e) => {
+                          const [templateKey, linkedTemplateKey] =
+                            e.target.value.split("|||");
+
+                          setDraft((prev) => ({
+                            ...prev,
+                            templateKey,
+                            linkedTemplateKey: linkedTemplateKey || "",
+                            includedTaskIds: [],
+                          }));
+                        }}
+                        className="w-full rounded-2xl border border-slate-200 px-3 py-3 disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        {!hasEntries && (
+                          <option value="">
+                            Sin entradas rápidas para {AREA_META[selectedArea].label}
+                          </option>
+                        )}
+
+                        {linkedTemplatesForSelectedArea.length > 0 && (
+                          <optgroup label="Trabajos vinculados">
+                            {linkedTemplatesForSelectedArea.map((linked) => (
+                              <option
+                                key={linked.id}
+                                value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
+                              >
+                                {linked.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+
+                        {templatesForSelectedAreaSorted.length > 0 && (
+                          <optgroup label="Entradas rápidas">
+                            {templatesForSelectedAreaSorted.map((template) => (
+                              <option key={template.key} value={template.key}>
+                                {template.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                    );
+                  })()}
+                </div>
+
+                {availableIncludedTasks.length > 0 && (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="mb-2 text-sm font-semibold text-emerald-900">
+                      Añadir tareas al mismo trabajo
+                    </div>
+
+                    <div className="space-y-2">
+                      {availableIncludedTasks.map((task) => {
+                        const checked = draft.includedTaskIds.includes(task.id);
+
+                        return (
+                          <label
+                            key={task.id}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    includedTaskIds: e.target.checked
+                                      ? [...prev.includedTaskIds, task.id]
+                                      : prev.includedTaskIds.filter(
+                                          (id) => id !== task.id
+                                        ),
+                                  }));
+                                }}
+                              />
+
+                              <span className="font-medium text-emerald-900">
+                                {task.label}
+                              </span>
+                            </span>
+
+                            {task.standardMinutes != null && (
+                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                {task.standardMinutes} min
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {selectedIncludedTasks.length > 0 && (
+                      <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
+                        Se añadirán al mismo trabajo:{" "}
+                        <span className="font-semibold">
+                          {selectedIncludedTasks
+                            .map((task) => task.label)
+                            .join(" + ")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <input
                   value={draft.plate}
@@ -1173,38 +1338,31 @@ const dayJobs = scheduledJobs
               </div>
 
               <div className="mt-6 flex gap-3">
-              <button
-  onClick={() => {
-    setModalOpen(false);
-    setEditingJobId(null);
-    setSelectedSlot(null);
-    setDraft({
-      templateKey: quickTemplates[0]?.key ?? "",
-      plate: "",
-      customerName: "",
-      customerPhone: "",
-      urgent: false,
-      estimatedMinutes: 45,
-      linkedTemplateKey: "",
-    });
-  }}
-  className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
->
-  Cancelar
-</button>
+                <button
+                  onClick={() => {
+                    setModalOpen(false);
+                    setEditingJobId(null);
+                    setSelectedSlot(null);
+                    resetDraft();
+                  }}
+                  className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+                >
+                  Cancelar
+                </button>
 
-<button
-  onClick={createScheduledJob}
-  disabled={
-    !draft.plate.trim() ||
-    quickTemplates.length === 0 ||
-    !selectedSlot ||
-    isPastDateTime(selectedSlot.date, selectedSlot.startTime)
-  }
-  className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
->
-  {editingJobId != null ? "Guardar cambios" : "Guardar cita"}
-</button>
+                <button
+                  onClick={createScheduledJob}
+                  disabled={
+                    !draft.plate.trim() ||
+                    !draft.templateKey ||
+                    quickTemplates.length === 0 ||
+                    !selectedSlot ||
+                    isPastDateTime(selectedSlot.date, selectedSlot.startTime)
+                  }
+                  className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
+                >
+                  {editingJobId != null ? "Guardar cambios" : "Guardar cita"}
+                </button>
               </div>
             </div>
           </div>
