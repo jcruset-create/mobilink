@@ -34,15 +34,51 @@ function safeJsonParse<T>(value: unknown, fallback: T): T {
   }
 }
 
-function normalizeTechRow(t: any) {
+function safeJson(value: any, fallback: any) {
+  if (value == null) return fallback;
+
+  if (typeof value === "object") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeTechRow(row: any) {
+  if (!row) return null;
+
+  const status = row.status ?? "disponible";
+
+  const protectedStatuses = new Set([
+    "nodisponible",
+    "vacaciones",
+    "baja",
+    "permiso",
+    "otro_taller",
+  ]);
+
   return {
-    name: t.name,
-    status: t.status,
-    blocked: !!t.blocked,
-    currentJobId: t.currentJobId ?? null,
-    competencies: safeJsonParse(t.competencies, {}),
-    priorities: safeJsonParse(t.priorities, {}),
-    avatar: t.avatar ?? null,
+    name: row.name,
+    status,
+    blocked: protectedStatuses.has(status) || Boolean(row.blocked),
+    currentJobId: row.currentJobId ?? row.currentjobid ?? null,
+    competencies: safeJson(row.competencies, {}),
+    priorities: safeJson(row.priorities, {}),
+    avatar: row.avatar ?? null,
+    statusChangedAtMs:
+      row.statusChangedAtMs ?? row.statuschangedatms ?? Date.now(),
+    statusTotals: safeJson(
+      row.statusTotals ?? row.statustotals,
+      {}
+    ),
   };
 }
 
@@ -356,7 +392,17 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
     } = req.body ?? {};
 
     const normalizedStatus = status ?? "disponible";
-    const normalizedBlocked = !!blocked;
+
+    const protectedStatuses = new Set([
+      "nodisponible",
+      "vacaciones",
+      "baja",
+      "permiso",
+      "otro_taller",
+    ]);
+
+    const normalizedBlocked =
+      protectedStatuses.has(normalizedStatus) || Boolean(blocked);
 
     await db.query(
       `

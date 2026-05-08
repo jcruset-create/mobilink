@@ -48,6 +48,7 @@ type QuickTemplateForWall = {
 };
 
 type ScheduledJobForWall = ScheduledJob & {
+  secondJobId?: number | null;
   includedTasks?: IncludedTaskForWall[];
 };
 
@@ -88,16 +89,20 @@ export default function WorkshopWallScreen({
   onBack,
 }: WorkshopWallScreenProps) {
   const active = jobs.filter(
-    (job) => job.status === "activo" || job.status === "en_proceso"
-  );
+  (j) => j.status === "activo" || j.status === "en_proceso"
+);
 
-  const waiting = jobs.filter(
-    (job) => job.status === "espera" || job.status === "pendiente"
-  );
+const validation = jobs.filter(
+  (j) => j.status === "validacion"
+);
 
-  const paused = jobs.filter(
-    (job) => job.status === "parado" || job.status === "standby"
-  );
+const waiting = jobs.filter(
+  (j) => j.status === "espera" || j.status === "pendiente"
+);
+
+const paused = jobs.filter(
+  (j) => j.status === "parado" || j.status === "standby"
+);
 
   const tvScheduledJobs = scheduledJobs
     .filter((job) => job.status === "programado")
@@ -130,6 +135,7 @@ export default function WorkshopWallScreen({
   ).length;
 
   const urgentJobs = jobs.filter((job) => job.urgent).length;
+  const validationJobs = validation.length;
 
   function MiniKpi({
     title,
@@ -213,6 +219,44 @@ export default function WorkshopWallScreen({
 
     return getTemplateLabel(job.secondTemplateKey);
   }
+
+function getScheduledPhaseLabel(job: ScheduledJobForWall) {
+  const firstJob =
+    job.jobId != null
+      ? jobs.find((item) => item.id === job.jobId)
+      : null;
+
+  const secondJob =
+    job.secondJobId != null
+      ? jobs.find((item) => item.id === job.secondJobId)
+      : null;
+
+  if (!job.secondJobId) {
+    if (!firstJob) return "Pendiente";
+    if (firstJob.status === "validacion") return "Pendiente validar";
+    if (firstJob.status === "activo") return "En curso";
+    if (firstJob.status === "espera") return "En cola";
+    if (firstJob.status === "cerrado") return "Cerrado";
+    return "Pendiente";
+  }
+
+  if (firstJob && firstJob.status !== "cerrado") {
+    if (firstJob.status === "validacion") return "1º pendiente validar";
+    if (firstJob.status === "activo") return "1º en curso";
+    if (firstJob.status === "espera") return "1º en cola";
+    return "1º pendiente";
+  }
+
+  if (secondJob) {
+    if (secondJob.status === "parado") return "2º bloqueado";
+    if (secondJob.status === "validacion") return "2º pendiente validar";
+    if (secondJob.status === "activo") return "2º en curso";
+    if (secondJob.status === "espera") return "2º en cola";
+    if (secondJob.status === "cerrado") return "Completada";
+  }
+
+  return "Vinculada pendiente";
+}
 
   function getIncludedTasks(job: ScheduledJobForWall) {
     return Array.isArray(job.includedTasks) ? job.includedTasks : [];
@@ -321,12 +365,13 @@ export default function WorkshopWallScreen({
             </div>
           </div>
 
-          <div className="grid grid-cols-4 border-t border-slate-800">
-            <MiniKpi title="Libres" value={availableTechs} tone="emerald" />
-            <MiniKpi title="Responsables" value={responsibleTechs} tone="red" />
-            <MiniKpi title="Refuerzos" value={supportTechs} tone="amber" />
-            <MiniKpi title="Urgentes" value={urgentJobs} tone="violet" />
-          </div>
+          <div className="grid grid-cols-5 border-t border-slate-800">
+  <MiniKpi title="Libres" value={availableTechs} tone="emerald" />
+  <MiniKpi title="Responsables" value={responsibleTechs} tone="red" />
+  <MiniKpi title="Refuerzos" value={supportTechs} tone="amber" />
+  <MiniKpi title="Validar" value={validationJobs} tone="violet" />
+  <MiniKpi title="Urgentes" value={urgentJobs} tone="violet" />
+</div>
         </header>
 
         <main className="grid gap-6 xl:grid-cols-[1fr_460px]">
@@ -405,6 +450,81 @@ export default function WorkshopWallScreen({
           <aside className="space-y-6">
             <section className="rounded-3xl border border-slate-800 bg-slate-900 p-5 shadow-xl">
               <div className="mb-4 flex items-center justify-between">
+                <section className="rounded-3xl border border-violet-900/40 bg-violet-950/30 p-5 shadow-xl">
+  <div className="mb-4 flex items-center justify-between">
+    <h2 className="flex items-center gap-2 text-xl font-bold text-violet-100">
+      <TimerReset className="h-5 w-5" />
+      Pendientes de validar
+    </h2>
+
+    <span className="rounded-full bg-violet-900 px-4 py-1 text-sm font-semibold text-violet-100">
+      {validation.length}
+    </span>
+  </div>
+
+  {validation.length === 0 ? (
+    <div className="rounded-2xl border border-violet-900/40 bg-slate-950/30 p-6 text-center text-sm text-slate-300">
+      Sin trabajos pendientes de validar.
+    </div>
+  ) : (
+    <div className="space-y-3">
+      {validation.map((job) => (
+        <div
+          key={job.id}
+          className="rounded-3xl border border-violet-700/60 bg-violet-900/40 p-4 shadow-lg"
+        >
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-2xl font-black tracking-wide text-white">
+                {job.plate || "Sin matrícula"}
+              </div>
+
+              <div className="mt-1 text-sm font-bold text-violet-100">
+                {job.quickEntryLabel || job.area}
+              </div>
+            </div>
+
+            {job.urgent && (
+              <span className="rounded-full bg-red-600 px-3 py-1 text-xs font-black text-white">
+                URGENTE
+              </span>
+            )}
+          </div>
+
+          {job.assignedNames && job.assignedNames.length > 0 && (
+            <div className="mt-3 rounded-2xl border border-violet-600/40 bg-violet-950/50 px-4 py-3">
+              <div className="text-[10px] font-black uppercase tracking-widest text-violet-300">
+                Propuesta pendiente
+              </div>
+
+              <div className="mt-1 text-sm font-black text-white">
+                {job.assignedNames.join(" + ")}
+              </div>
+            </div>
+          )}
+
+          {job.includedTasks && job.includedTasks.length > 0 && (
+            <div className="mt-3 rounded-2xl border border-emerald-400/40 bg-emerald-950/50 px-4 py-3">
+              <div className="text-[10px] font-black uppercase tracking-widest text-emerald-300">
+                Tareas incluidas
+              </div>
+
+              <div className="mt-1 text-sm font-bold text-emerald-100">
+                {job.includedTasks.map((task) => task.label).join(" + ")}
+              </div>
+            </div>
+          )}
+
+          {job.reason && (
+            <div className="mt-3 rounded-xl bg-violet-950/50 px-3 py-2 text-xs font-semibold text-violet-100">
+              {job.reason}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )}
+</section>
                 <h2 className="text-xl font-bold">Cola de espera</h2>
 
                 <span className="rounded-full bg-amber-500/20 px-4 py-1 text-sm font-semibold text-amber-200">
@@ -516,8 +636,9 @@ export default function WorkshopWallScreen({
                 <div className="space-y-4">
                   {tvScheduledJobs.map((job) => {
                     const mainLabel = getScheduledMainLabel(job);
-                    const secondLabel = getScheduledSecondLabel(job);
-                    const includedTasks = getIncludedTasks(job);
+const secondLabel = getScheduledSecondLabel(job);
+const includedTasks = getIncludedTasks(job);
+const phaseLabel = getScheduledPhaseLabel(job);
 
                     return (
                       <div
@@ -533,6 +654,9 @@ export default function WorkshopWallScreen({
                             <div className="mt-1 text-sm font-bold text-violet-100">
                               {job.date} · {job.startTime}
                             </div>
+                            <div className="mt-2 inline-flex rounded-full bg-violet-950/70 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-violet-100">
+  {phaseLabel}
+</div>
                           </div>
 
                           {job.urgent && (
@@ -552,10 +676,16 @@ export default function WorkshopWallScreen({
                           </div>
 
                           {secondLabel && (
-                            <div className="mt-2 rounded-xl border border-fuchsia-400/40 bg-fuchsia-950/50 px-3 py-2 text-sm font-bold text-fuchsia-100">
-                              Después: {secondLabel}
-                            </div>
-                          )}
+  <div className="mt-2 rounded-xl border border-fuchsia-400/40 bg-fuchsia-950/50 px-3 py-2 text-sm font-bold text-fuchsia-100">
+    <div>Después: {secondLabel}</div>
+
+    {job.secondJobId != null && (
+      <div className="mt-1 text-[10px] font-semibold opacity-80">
+        ID segundo trabajo: {job.secondJobId}
+      </div>
+    )}
+  </div>
+)}
 
                           {includedTasks.length > 0 && (
                             <div className="mt-2 rounded-xl border border-emerald-400/40 bg-emerald-950/50 px-3 py-2">

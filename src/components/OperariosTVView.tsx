@@ -9,6 +9,11 @@ type JobForOperarios = {
   assignedNames?: string[];
   template?: TemplateKey | null;
   quickEntryLabel?: string | null;
+  reason?: string;
+  linkedGroupId?: string | null;
+  linkedOrder?: 1 | 2 | null;
+  dependsOnJobId?: number | null;
+  blockedReason?: string | null;
   includedTasks?: {
     id: string;
     label: string;
@@ -84,6 +89,30 @@ function getTechCardClass(status: string) {
   return "border-slate-300 bg-slate-200 text-slate-800";
 }
 
+function getLinkedPhaseLabel(job: JobForOperarios) {
+  if (!job.linkedGroupId && !job.linkedOrder && !job.dependsOnJobId) {
+    return "";
+  }
+
+  if (job.linkedOrder === 1) {
+    if (job.status === "validacion") return "1º pendiente de validar";
+    if (job.status === "activo") return "1º en curso";
+    if (job.status === "cerrado") return "1º finalizado";
+    return "1º trabajo vinculado";
+  }
+
+  if (job.linkedOrder === 2) {
+    if (job.status === "parado") return "2º bloqueado";
+    if (job.status === "validacion") return "2º pendiente de validar";
+    if (job.status === "activo") return "2º en curso";
+    if (job.status === "espera") return "2º en cola";
+    if (job.status === "cerrado") return "2º finalizado";
+    return "2º trabajo vinculado";
+  }
+
+  return "Trabajo vinculado";
+}
+
 function getAreaClass(area: AreaKey) {
   if (area === "camion") return "bg-red-100 text-red-700";
   if (area === "movil") return "bg-amber-100 text-amber-700";
@@ -150,8 +179,9 @@ function SmallJobCard({
   getOperationLabel: (job: OperationLabelJob) => string;
 }) {
   const assignedNames = job.assignedNames || [];
+const linkedPhaseLabel = getLinkedPhaseLabel(job);
 
-  return (
+return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="mb-1 flex items-center gap-2">
         <span
@@ -172,6 +202,11 @@ function SmallJobCard({
       <div className="text-xs font-semibold text-slate-700">
         {getOperationLabel(job)}
       </div>
+      {linkedPhaseLabel && (
+  <div className="mt-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase text-violet-700">
+    {linkedPhaseLabel}
+  </div>
+)}
       {job.includedTasks && job.includedTasks.length > 0 && (
   <div className="mt-2 space-y-1">
     {job.includedTasks.map((task) => (
@@ -202,6 +237,11 @@ function SmallJobCard({
           })}
         </div>
       )}
+      {job.includedTasks && job.includedTasks.length > 0 && (
+  <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+    + {job.includedTasks.map((task) => task.label).join(" + ")}
+  </div>
+)}
     </div>
   );
 }
@@ -218,8 +258,9 @@ export default function OperariosTVView({
   onLogout,
 }: Props) {
   const activeJobs = jobs.filter((job) => job.status === "activo");
-  const standByJobs = jobs.filter((job) => job.status === "parado");
-  const waitingJobs = jobs.filter((job) => job.status === "espera");
+const validationJobs = jobs.filter((job) => job.status === "validacion");
+const standByJobs = jobs.filter((job) => job.status === "parado");
+const waitingJobs = jobs.filter((job) => job.status === "espera");
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 text-slate-900">
@@ -389,6 +430,75 @@ export default function OperariosTVView({
           <section className="rounded-3xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-orange-900">
+                <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+  <div className="mb-3 flex items-center justify-between">
+    <h2 className="text-lg font-black text-violet-900">
+      Pendientes de validar
+    </h2>
+
+    <span className="rounded-full bg-violet-100 px-3 py-1 text-sm font-bold text-violet-700">
+      {validationJobs.length}
+    </span>
+  </div>
+
+  {validationJobs.length === 0 ? (
+    <div className="rounded-2xl bg-white/60 p-4 text-center text-sm text-violet-700">
+      Sin trabajos pendientes de validar.
+    </div>
+  ) : (
+    <div className="space-y-2">
+      {validationJobs.map((job) => {
+  const linkedPhaseLabel = getLinkedPhaseLabel(job);
+
+  return (
+        <div
+          key={job.id}
+          className="rounded-2xl border border-violet-200 bg-white p-3"
+        >
+          <div className="mb-1 flex items-center gap-2">
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${getAreaClass(
+                job.area
+              )}`}
+            >
+              {job.area}
+            </span>
+
+            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700">
+              PENDIENTE
+            </span>
+          </div>
+
+          <div className="text-xl font-black text-slate-950">
+            {job.plate}
+          </div>
+
+          <div className="text-xs font-semibold text-violet-800">
+            {getOperationLabel(job)}
+          </div>
+          {linkedPhaseLabel && (
+  <div className="mt-2 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase text-violet-700">
+    {linkedPhaseLabel}
+  </div>
+)}
+
+          {job.assignedNames && job.assignedNames.length > 0 && (
+            <div className="mt-2 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900">
+              Propuesto: {job.assignedNames.join(" + ")}
+            </div>
+          )}
+
+          {job.reason && (
+            <div className="mt-2 text-[11px] text-slate-500">
+              {job.reason}
+            </div>
+          )}
+        </div>
+        );
+})}
+    </div>
+  )}
+</section>
                 Trabajos en Stand by
               </h2>
 

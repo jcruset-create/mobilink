@@ -4,6 +4,12 @@ import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import OperariosTVView from "./components/OperariosTVView";
 import {
+  buildAuthorizedJob,
+  buildRejectedValidationJob,
+  buildValidationJob,
+  getValidationLabel,
+} from "./modules/jobValidation";
+import {
   type IncludedTask,
   type CustomExtraTask,
   buildSelectableIncludedTasks,
@@ -45,8 +51,13 @@ type TechStatus =
   | "permiso"
   | "otro_taller";
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
-type JobStatus = "espera" | "activo" | "parado" | "cerrado" | "bloqueado";
-type TemplateKey = "alineacion_camion" | "pinchazo_camion";
+type JobStatus =
+  | "espera"
+  | "validacion"
+  | "activo"
+  | "parado"
+  | "cerrado"
+  | "bloqueado";type TemplateKey = "alineacion_camion" | "pinchazo_camion";
 type QuickEntryMode = "single" | "team";
 type CompetencyKey = AreaKey | TemplateKey;
 type AssignmentRole = "responsable" | "apoyo";
@@ -347,18 +358,101 @@ function nowMs(): number {
   return Date.now();
 }
 
-const UNAVAILABLE_TECH_STATUSES: TechStatus[] = [
-  "nodisponible",
-  "vacaciones",
-  "baja",
-  "permiso",
-  "otro_taller",
-];
-
-function isUnavailableTechStatus(status: TechStatus) {
-  return UNAVAILABLE_TECH_STATUSES.includes(status);
+function normalizeTechStatusValue(status?: string | null) {
+  return String(status || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "_");
 }
 
+function isUnavailableTechStatus(status?: string | null) {
+  const normalized = normalizeTechStatusValue(status);
+
+  return [
+    "nodisponible",
+    "no_disponible",
+    "vacaciones",
+    "baja",
+    "permiso",
+    "otro_taller",
+    "en_otro_taller",
+  ].includes(normalized);
+}
+
+function isTechUnavailableForAssignment(tech: Tech) {
+  return (
+    tech.blocked ||
+    isUnavailableTechStatus(tech.status) ||
+    tech.status === "baja" ||
+    tech.status === "vacaciones" ||
+    tech.status === "permiso" ||
+    tech.status === "otro_taller" ||
+    tech.status === "nodisponible"
+  );
+}
+
+function canAssignTechManuallyToJob(
+  tech: Tech,
+  job: Job,
+  jobs: Job[],
+  quickTemplates: QuickTemplate[],
+  role: AssignmentRole
+) {
+  if (isTechUnavailableForAssignment(tech)) {
+    return false;
+  }
+
+  const targetKey = getCompetencyTargetKey(job, quickTemplates);
+
+  if (!tech.competencies[targetKey]?.[role]) {
+    return false;
+  }
+
+  const templateConfig = getQuickTemplateForJob(job, quickTemplates);
+
+  if (
+    templateConfig &&
+    templateConfig.allowedTechs.length > 0 &&
+    !templateConfig.allowedTechs.includes(tech.name)
+  ) {
+    return false;
+  }
+
+  if (tech.currentJobId == null) {
+    return tech.status === "disponible" || tech.status === "supervisor";
+  }
+
+  if (role === "responsable") {
+    return canExtractSupportFromJob(tech, jobs);
+  }
+
+  return false;
+}
+function canSelectTechManuallyForJob(
+  tech: Tech,
+  job: Job,
+  jobsToCheck: Job[],
+  quickTemplatesToCheck: QuickTemplate[],
+  role: AssignmentRole
+) {
+  if (
+    isTechProposedInAnotherValidation(
+      tech.name,
+      job.id,
+      jobsToCheck
+    )
+  ) {
+    return false;
+  }
+
+  return canAssignTechManuallyToJob(
+    tech,
+    job,
+    jobsToCheck,
+    quickTemplatesToCheck,
+    role
+  );
+}
 function getTechStatusLabel(status: TechStatus) {
   if (status === "disponible") return "Disponible";
   if (status === "ocupado") return "Ocupado";
@@ -648,6 +742,36 @@ function isSingleTechTruckTemplate(job?: Partial<Job> | null): boolean {
   );
 }
 
+function getProposedTechNamesFromValidationJobs(jobsToCheck: Job[]) {
+  return new Set(
+    jobsToCheck
+      .filter((job) => job.status === "validacion")
+      .flatMap((job) => job.assignedNames ?? [])
+      .filter(Boolean)
+  );
+}
+
+function isTechProposedInAnotherValidation(
+  techName: string,
+  currentJobId: number,
+  jobsToCheck: Job[]
+) {
+  return jobsToCheck.some((job) => {
+    if (job.id === currentJobId) return false;
+    if (job.status !== "validacion") return false;
+
+    return (job.assignedNames ?? []).includes(techName);
+  });
+}
+
+function getValidationProposalForTech(techName: string, jobsToCheck: Job[]) {
+  return jobsToCheck.find((job) => {
+    if (job.status !== "validacion") return false;
+
+    return (job.assignedNames ?? []).includes(techName);
+  }) ?? null;
+}
+
 function isSingleAssignment(job?: Partial<Job> | null): boolean {
   return job?.quickEntryMode === "single" || isSingleTechTruckTemplate(job);
 }
@@ -849,9 +973,15 @@ function findCandidatesForArea(
     ? getCompetencyTargetKey(job, quickTemplates)
     : area;
 
-  const candidates = techs.filter((t) =>
-    canUseTechForArea(t, area, techs, jobs, role, targetKey, options)
-  );
+  const proposedTechNames = getProposedTechNamesFromValidationJobs(jobs);
+
+const candidates = techs.filter((t) => {
+  if (proposedTechNames.has(t.name)) {
+    return false;
+  }
+
+  return canUseTechForArea(t, area, techs, jobs, role, targetKey, options);
+});
 
   const supportPreference = (t: Tech) =>
     t.competencies.alineacion_camion.apoyo || t.competencies.movil.apoyo ? 0 : 1;
@@ -1052,7 +1182,7 @@ function allocateJobPure(
   const assignedNames = [mainTech.name];
   const needsRamonApproval = mainTech.name === "Ramón";
 
-  let cleanedJobs = removeSupportFromPreviousJob(mainTech, jobs);
+let cleanedJobs = jobs;
 
   if (job.area === "camion" && !isSingleAssignment(job)) {
     const freeSupport = getOrderedCandidatesForJob(
@@ -1086,133 +1216,48 @@ function allocateJobPure(
     const supportPool = freeSupport.length > 0 ? freeSupport : fallbackSupport;
 
     if (supportPool.length > 0) {
-      const supportTech = supportPool[0];
-      cleanedJobs = removeSupportFromPreviousJob(supportTech, cleanedJobs);
+  const supportTech = supportPool[0];
 
-      if (!assignedNames.includes(supportTech.name)) {
-        assignedNames.push(supportTech.name);
-      }
-    }
+  if (!assignedNames.includes(supportTech.name)) {
+    assignedNames.push(supportTech.name);
+  }
+}
   }
 
   const reason = needsRamonApproval
     ? `${getOperationLabel(job)} solo tiene a Ramón disponible como último recurso.`
     : getAssignmentReason(job, assignedNames);
 
-  let releasedTechs = techs.map((tech) => {
-    if (!assignedNames.includes(tech.name)) return tech;
+const validationReason = needsRamonApproval
+  ? `${reason} Pendiente de autorización manual antes de iniciar.`
+  : `${reason} Pendiente de validación manual antes de iniciar.`;
 
-    return {
-      ...tech,
-      currentJobId: null,
-      status:
-        tech.name === "Ramón"
-          ? ("supervisor" as TechStatus)
-          : ("disponible" as TechStatus),
-    };
-  });
-
-  const updatedTechs = applyAssignmentToTechs(assignedNames, job, releasedTechs);
-
-  const updatedJobs: Job[] = cleanedJobs.map((i) =>
-    i.id === job.id
-      ? {
-          ...i,
-          status: "activo" as JobStatus,
-          assignedNames,
-          reason,
-          startedAtMs: nowMs(),
-        }
-      : i
-  );
-
-  return {
-    assigned: true,
+const validationJob = buildValidationJob(
+  {
+    ...job,
+    status: "validacion",
     assignedNames,
-    reason,
-    techs: updatedTechs,
-    jobs: updatedJobs,
-    needsRamonApproval,
-  };
+    reason: validationReason,
+    startedAtMs: null,
+  },
+  assignedNames,
+  reason
+) as Job;
+
+const updatedJobs: Job[] = cleanedJobs.map((item) =>
+  item.id === job.id ? validationJob : item
+);
+
+return {
+  assigned: true,
+  assignedNames,
+  reason: validationJob.reason,
+  techs,
+  jobs: updatedJobs,
+  needsRamonApproval,
+};
 }
 
-function assignAsSupportIfPossible(
-  inputTechs: Tech[],
-  inputJobs: Job[],
-  quickTemplates: QuickTemplate[],
-  techStats: {
-    operation: string;
-    fastestTech: string;
-    bestTime: number;
-    averageMinutes: number;
-  }[],
-  techLoadStats: TechLoadStat[]
-): { techs: Tech[]; jobs: Job[] } {
-  let updatedTechs = [...inputTechs];
-  let updatedJobs = [...inputJobs];
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-
-    const activeCamionJobs = updatedJobs.filter(
-      (j) =>
-        j.status === "activo" &&
-        j.area === "camion" &&
-        !isSingleAssignment(j) &&
-        j.assignedNames.length < 2
-    );
-
-    for (const job of activeCamionJobs) {
-      const candidates = getOrderedCandidatesForJob(
-        job,
-        updatedTechs,
-        updatedJobs,
-        "apoyo",
-        quickTemplates,
-        {
-          includeSupport: false,
-          allowSupervisorManual: false,
-          forSupportRole: true,
-        },
-        techStats,
-        techLoadStats
-      ).filter((t) => {
-        if (job.assignedNames.includes(t.name)) return false;
-        if (t.currentJobId != null) return false;
-        return t.status === "disponible";
-      });
-
-      const support = candidates[0];
-      if (!support) continue;
-
-      updatedJobs = updatedJobs.map((j) =>
-        j.id === job.id
-          ? {
-              ...j,
-              assignedNames: [...j.assignedNames, support.name],
-              reason: "Apoyo añadido automáticamente",
-            }
-          : j
-      );
-
-      updatedTechs = updatedTechs.map((t) =>
-        t.name === support.name
-          ? {
-              ...t,
-              status: "refuerzo" as TechStatus,
-              currentJobId: job.id,
-            }
-          : t
-      );
-
-      changed = true;
-      break;
-    }
-  }
-
-  return { techs: updatedTechs, jobs: updatedJobs };
-}
 
 function runSelfTests(
   techStats: {
@@ -1400,87 +1445,52 @@ function normalizeJobFromApi(job: any): Job {
   };
 }
 
-const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";
 
-function normalizeTechNameKey(name: string) {
-  return name
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
+function syncTechsWithActiveJobs(baseTechs: Tech[], jobsToSync: Job[]): Tech[] {
+  const realActiveJobs = jobsToSync.filter((job) => job.status === "activo");
 
-function getManualTechStatusOverrides(): Record<string, TechStatus> {
-  try {
-    const raw = localStorage.getItem(MANUAL_TECH_STATUS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
+  return baseTechs.map((tech) => {
+    const normalizedStatus = normalizeTechStatusValue(tech.status);
 
-function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
-  const overrides = getManualTechStatusOverrides();
-
-  return techsToApply.map((tech): Tech => {
-    const key = normalizeTechNameKey(tech.name);
-    const forcedStatus = overrides[key];
-
-    if (!forcedStatus) return tech;
-
-    return {
-      ...tech,
-      status: forcedStatus as TechStatus,
-      blocked: isManualUnavailableStatus(forcedStatus),
-      currentJobId: null,
-    };
-  });
-}
-
-function syncTechsWithActiveJobs(baseTechs: Tech[], jobs: Job[]): Tech[] {
-  const activeJobs = jobs.filter((job) => job.status === "activo");
-
-  const synced: Tech[] = baseTechs.map((tech): Tech => {
-    if (isManualUnavailableStatus(tech.status)) {
+    // 1) Estados protegidos: nunca se pisan al refrescar.
+    if (isUnavailableTechStatus(normalizedStatus)) {
       return {
         ...tech,
+        status: normalizedStatus as TechStatus,
         blocked: true,
         currentJobId: null,
       };
     }
 
-    const activeJob = activeJobs.find((job) =>
+    // 2) Solo los trabajos activos ocupan técnicos.
+    // Los trabajos en validacion NO ocupan.
+    const activeJob = realActiveJobs.find((job) =>
       (job.assignedNames ?? []).includes(tech.name)
     );
 
     if (!activeJob) {
-      const nextStatus: TechStatus =
-        tech.name === "Ramón" ? "supervisor" : "disponible";
-
       return {
         ...tech,
-        status: nextStatus,
+        status: tech.name === "Ramón" ? "supervisor" : "disponible",
+        blocked: false,
         currentJobId: null,
       };
     }
 
-    const index = (activeJob.assignedNames ?? []).indexOf(tech.name);
-
-    const nextStatus: TechStatus =
-      index === 0
-        ? tech.name === "Ramón"
-          ? "supervisor"
-          : "ocupado"
-        : "refuerzo";
+    const assignedIndex = (activeJob.assignedNames ?? []).indexOf(tech.name);
 
     return {
       ...tech,
       currentJobId: activeJob.id,
-      status: nextStatus,
+      blocked: false,
+      status:
+        assignedIndex === 0
+          ? tech.name === "Ramón"
+            ? "supervisor"
+            : "ocupado"
+          : "refuerzo",
     };
   });
-
-  return applyManualTechStatusOverrides(synced);
 }
 
 
@@ -2197,16 +2207,32 @@ useEffect(() => {
   setInitialAutoAssignDone(true);
 }, [jobs, techs, initialAutoAssignDone]);
 
-  const activeJobs = useMemo(
+const activeJobs = useMemo(
   () =>
     jobs.filter(
       (job) =>
         job.status === "activo" ||
+        job.status === "validacion" ||
         job.status === "espera" ||
         job.status === "parado"
     ),
   [jobs]
 );
+
+const validationJobs = useMemo(
+  () =>
+    [...activeJobs]
+      .filter((job) => job.status === "validacion")
+      .sort((a, b) =>
+        a.urgent !== b.urgent
+          ? a.urgent
+            ? -1
+            : 1
+          : a.createdAtMs - b.createdAtMs
+      ),
+  [activeJobs]
+);
+
   const closedJobs = useMemo(
     () => jobs.filter((job) => job.status === "cerrado"),
     [jobs]
@@ -2768,6 +2794,16 @@ const dueScheduledJobs = useMemo(() => {
       return aMs - bMs;
     });
 }, [scheduledJobs]);
+const arrivedPendingValidationScheduledJobs = useMemo(() => {
+  return scheduledJobs
+    .filter((job) => job.status === "en_cola")
+    .sort((a, b) => {
+      const aMs = a.arrivedAtMs ?? new Date(`${a.date}T${a.startTime}`).getTime();
+      const bMs = b.arrivedAtMs ?? new Date(`${b.date}T${b.startTime}`).getTime();
+
+      return aMs - bMs;
+    });
+}, [scheduledJobs]);
 
 function getRecommendedTechForJob(
   job: Pick<Job, "area" | "template" | "quickEntryLabel">,
@@ -2968,23 +3004,25 @@ async function reloadTechsFromBackend(currentJobs = jobs) {
           Object.keys(found.priorities).length > 0;
 
         return found
-          ? {
-              ...baseTech,
-              status: found.status as TechStatus,
-              blocked: !!found.blocked,
-              currentJobId: found.currentJobId ?? null,
-              competencies: hasCompetencies
-                ? found.competencies
-                : baseTech.competencies,
-              priorities: hasPriorities
-                ? found.priorities
-                : baseTech.priorities,
-              avatar: found.avatar ?? baseTech.avatar ?? null,
-              statusChangedAtMs:
-                found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? null,
-              statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
-            }
-          : baseTech;
+  ? {
+      ...baseTech,
+      status: (found.status ?? baseTech.status) as TechStatus,
+      blocked:
+        isUnavailableTechStatus((found.status ?? baseTech.status) as TechStatus) ||
+        !!found.blocked,
+      currentJobId: found.currentJobId ?? null,
+      competencies: hasCompetencies
+        ? found.competencies
+        : baseTech.competencies,
+      priorities: hasPriorities
+        ? found.priorities
+        : baseTech.priorities,
+      avatar: found.avatar ?? baseTech.avatar ?? null,
+      statusChangedAtMs:
+        found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
+      statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
+    }
+  : baseTech;
       });
 
       return syncTechsWithActiveJobs(merged, currentJobs);
@@ -3033,7 +3071,119 @@ async function saveJobToBackend(job: Job) {
     appendLog(`Error guardando trabajo ${job.plate}.`);
   }
 }
+function getScheduledJobCurrentPhaseLabel(scheduled: ScheduledJob, jobsToCheck: Job[]) {
+  const firstJob =
+    scheduled.jobId != null
+      ? jobsToCheck.find((job) => job.id === scheduled.jobId)
+      : null;
 
+  const secondJob =
+    scheduled.secondJobId != null
+      ? jobsToCheck.find((job) => job.id === scheduled.secondJobId)
+      : null;
+
+  if (!scheduled.secondJobId) {
+    if (!firstJob) return "Trabajo pendiente";
+    if (firstJob.status === "validacion") return "Pendiente de validar";
+    if (firstJob.status === "activo") return "Trabajo en curso";
+    if (firstJob.status === "espera") return "En cola";
+    if (firstJob.status === "cerrado") return "Trabajo cerrado";
+    return "Trabajo pendiente";
+  }
+
+  if (firstJob && firstJob.status !== "cerrado") {
+    if (firstJob.status === "validacion") {
+      return "1º trabajo pendiente de validar";
+    }
+
+    if (firstJob.status === "activo") {
+      return "1º trabajo en curso";
+    }
+
+    if (firstJob.status === "espera") {
+      return "1º trabajo en cola";
+    }
+
+    return "1º trabajo pendiente";
+  }
+
+  if (secondJob) {
+    if (secondJob.status === "parado") {
+      return "2º trabajo bloqueado";
+    }
+
+    if (secondJob.status === "validacion") {
+      return "2º trabajo pendiente de validar";
+    }
+
+    if (secondJob.status === "activo") {
+      return "2º trabajo en curso";
+    }
+
+    if (secondJob.status === "espera") {
+      return "2º trabajo en cola";
+    }
+
+    if (secondJob.status === "cerrado") {
+      return "Cita completada";
+    }
+  }
+
+  return "Trabajo vinculado pendiente";
+}
+function getScheduledJobByRelatedJobId(jobId: number) {
+  return (
+    scheduledJobs.find(
+      (scheduled) =>
+        scheduled.jobId === jobId || scheduled.secondJobId === jobId
+    ) ?? null
+  );
+}
+
+function shouldCloseScheduledJobForFinishedJob(jobId: number) {
+  const scheduled = getScheduledJobByRelatedJobId(jobId);
+
+  if (!scheduled) return false;
+
+  // Cita normal: solo tiene jobId. Al cerrar ese trabajo, cerramos la cita.
+  if (!scheduled.secondJobId) {
+    return scheduled.jobId === jobId;
+  }
+
+  // Cita vinculada:
+  // Si se cierra el primer trabajo, NO cerramos la cita.
+  // Solo se cierra cuando se cierra el segundo trabajo.
+  return scheduled.secondJobId === jobId;
+}
+
+async function updateScheduledJobStatusByJobId(
+  jobId: number,
+  status: ScheduledJob["status"]
+) {
+  const updatedScheduledJobs = scheduledJobs.map((scheduled) =>
+  scheduled.jobId === jobId || scheduled.secondJobId === jobId
+    ? {
+        ...scheduled,
+        status,
+      }
+    : scheduled
+);
+
+  setScheduledJobs(updatedScheduledJobs);
+
+  try {
+    await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
+      method: "PUT",
+      headers: getAdminHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(updatedScheduledJobs),
+    });
+  } catch (error) {
+    console.error("Error actualizando estado de agenda:", error);
+    appendLog("Error actualizando estado de una cita en agenda.");
+  }
+}
 async function reloadQuickTemplatesFromBackend() {
   try {
     const response = await fetch(`${API_BASE}/api/quick-templates`);
@@ -3055,18 +3205,19 @@ async function reloadQuickTemplatesFromBackend() {
 
 function saveTechToBackend(tech: Tech) {
   fetch(`${API_BASE}/api/techs/${encodeURIComponent(tech.name)}`, {
-  method: "PUT",
-  headers: getAdminHeaders({
-    "Content-Type": "application/json",
-  }),
-  body: JSON.stringify({
+    method: "PUT",
+    headers: getAdminHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
       status: tech.status,
-      blocked: tech.blocked,
-      currentJobId: tech.currentJobId,
+      blocked:
+        isUnavailableTechStatus(tech.status) || Boolean(tech.blocked),
+      currentJobId: tech.currentJobId ?? null,
       competencies: tech.competencies,
       priorities: tech.priorities,
       avatar: tech.avatar ?? null,
-      statusChangedAtMs: tech.statusChangedAtMs ?? null,
+      statusChangedAtMs: tech.statusChangedAtMs ?? nowMs(),
       statusTotals: tech.statusTotals ?? {},
     }),
   }).catch((error) => {
@@ -3316,41 +3467,16 @@ function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
     changed = true;
 
     appendLog(
-      `Auto-asignado ${job.plate} → ${result.assignedNames.join(" + ")}`
-    );
+  `Propuesta automática para ${job.plate}: ${result.assignedNames.join(
+    " + "
+  )}. Pendiente de validar.`
+);
   }
 
-  const supported = assignAsSupportIfPossible(
-    currentTechs,
-    currentJobs,
-    quickTemplates,
-    techStats,
-    techLoadStats
-  );
-
-  const protectedSupportTechs = supported.techs.map((tech) => {
-    const protectedStatus = protectedStatusesByName.get(tech.name);
-
-    if (protectedStatus) {
-      return {
-        ...tech,
-        status: protectedStatus,
-        currentJobId: null,
-      };
-    }
-
-    return tech;
-  });
-
-  const supportChanged =
-    JSON.stringify(protectedSupportTechs) !== JSON.stringify(currentTechs) ||
-    JSON.stringify(supported.jobs) !== JSON.stringify(currentJobs);
-
-  if (supportChanged) {
-    currentTechs = protectedSupportTechs;
-    currentJobs = supported.jobs;
-    changed = true;
-  }
+  // Validación manual activada:
+// no añadimos apoyos automáticamente ni movemos técnicos sin autorización.
+// El sistema puede proponer responsable/apoyo, pero el cambio real se hace
+// solo cuando Ramón/supervisor autoriza o reasigna manualmente.
 
   currentTechs = currentTechs.map((tech) => {
     const protectedStatus = protectedStatusesByName.get(tech.name);
@@ -3498,18 +3624,19 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
   setTechs(result.techs);
   setNextJobId((value) => value + jobsToSave.length);
 
-  setScheduledJobs((prev) =>
-    prev.map((item) =>
-      item.id === scheduled.id
-        ? {
-            ...item,
-            status: result.assigned ? "activo" : "en_cola",
-            arrivedAtMs: nowMs(),
-            jobId: firstJob.id,
-          }
-        : item
-    )
-  );
+setScheduledJobs((prev) =>
+  prev.map((item) =>
+    item.id === scheduled.id
+      ? {
+          ...item,
+          status: "en_cola",
+          arrivedAtMs: nowMs(),
+          jobId: firstJob.id,
+          secondJobId: isLinkedJob ? nextJobId + 1 : null,
+        }
+      : item
+  )
+);
 
   try {
     for (const job of jobsToSave) {
@@ -3520,15 +3647,17 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
       saveTechToBackend(tech);
     }
 
-    appendLog(
-      scheduledIncludedTasks.length > 0
-        ? `Llegada confirmada: ${scheduled.plate} · ${
-            firstTemplate.label
-          } + ${scheduledIncludedTasks.map((task) => task.label).join(" + ")}.`
-        : isLinkedJob
-        ? `Llegada confirmada: ${scheduled.plate} · ${scheduled.linkedTemplateLabel}. Segundo trabajo bloqueado hasta finalizar el primero.`
-        : `Llegada confirmada: ${scheduled.plate}.`
-    );
+appendLog(
+  scheduledIncludedTasks.length > 0
+    ? `Llegada confirmada: ${scheduled.plate} · ${
+        firstTemplate.label
+      } + ${scheduledIncludedTasks
+        .map((task) => task.label)
+        .join(" + ")}. Pendiente de validar antes de iniciar.`
+    : isLinkedJob
+    ? `Llegada confirmada: ${scheduled.plate} · ${scheduled.linkedTemplateLabel}. Queda pendiente de validar antes de iniciar.`
+    : `Llegada confirmada: ${scheduled.plate}. Queda pendiente de validar antes de iniciar.`
+);
 
     await reloadJobsFromBackend();
   } catch (error) {
@@ -3553,20 +3682,16 @@ async function createJob() {
   };
 
   const result = allocateJob(baseJob, techs, [baseJob, ...jobs], true, true);
-const supported = assignAsSupportIfPossible(
-  result.techs,
-  result.jobs,
-  quickTemplates,
-  techStats,
-  techLoadStats
-);  const finalJob = supported.jobs.find((j) => j.id === baseJob.id) ?? baseJob;
 
-  // UI rápida
-  setTechs(supported.techs);
-  setJobs(supported.jobs);
-  setNextJobId((v) => v + 1);
-  setDraft({ area: draft.area, plate: "", urgent: false, template: "" });
-  setFormOpen(false);
+const finalJob = result.jobs.find((j) => j.id === baseJob.id) ?? baseJob;
+
+// UI rápida: ahora solo crea propuesta en validación.
+// No movemos técnicos ni apoyos automáticamente.
+setTechs(result.techs);
+setJobs(result.jobs);
+setNextJobId((v) => v + 1);
+setDraft({ area: draft.area, plate: "", urgent: false, template: "" });
+setFormOpen(false);
 
   try {
    await fetchWithTimeout(`${API_BASE}/api/jobs`, {
@@ -3577,12 +3702,12 @@ const supported = assignAsSupportIfPossible(
   body: JSON.stringify(finalJob),
 });
 
-    for (const tech of supported.techs) {
-      saveTechToBackend(tech);
-    }
+ for (const tech of result.techs) {
+  saveTechToBackend(tech);
+}
 
-    await reloadJobsFromBackend();
-    recalcWaitingQueue(supported.techs, supported.jobs);
+await reloadJobsFromBackend();
+recalcWaitingQueue(result.techs, result.jobs);
   } catch (error) {
     console.error("Error guardando trabajo:", error);
   }
@@ -3745,14 +3870,14 @@ const selectedIncludedTasks = getIncludedTasksByIds(
 
   setQuickEntryOpen(false);
 
-  appendLog(
+appendLog(
   isLinkedEntry && secondTemplate
-    ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}.`
+    ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}. Pendiente de validar antes de iniciar.`
     : selectedIncludedTasks.length > 0
     ? `Nueva entrada creada: ${firstTemplate.label} (${plate}) con tareas: ${selectedIncludedTasks
         .map((task) => task.label)
-        .join(" + ")}.`
-    : `Nueva entrada creada: ${firstTemplate.label} (${plate}).`
+        .join(" + ")}. Pendiente de validar antes de iniciar.`
+    : `Nueva entrada creada: ${firstTemplate.label} (${plate}). Pendiente de validar antes de iniciar.`
 );
 
   try {
@@ -3810,7 +3935,36 @@ function removeCustomExtraTask(id: string) {
 }
 async function addQuickTemplate() {
   const label = newQuickTemplate.label.trim();
-  if (!label) return;
+
+  if (!label) {
+    alert("Escribe un nombre para la entrada rápida.");
+    return;
+  }
+
+  if (!newQuickTemplate.area) {
+    alert("Selecciona un área.");
+    return;
+  }
+
+  if (newQuickTemplate.allowedTechs.length === 0) {
+    alert("Marca al menos un técnico capacitado.");
+    return;
+  }
+
+  const standardMinutesValue = String(
+    newQuickTemplate.standardMinutes ?? ""
+  ).trim();
+
+  const standardMinutes =
+    standardMinutesValue === "" ? null : Number(standardMinutesValue);
+
+  if (
+    standardMinutes !== null &&
+    (!Number.isFinite(standardMinutes) || standardMinutes < 0)
+  ) {
+    alert("El tiempo estándar debe ser un número válido.");
+    return;
+  }
 
   const keyBase = label
     .toLowerCase()
@@ -3819,11 +3973,14 @@ async function addQuickTemplate() {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
 
-  const finalAllowedTechs = newQuickTemplate.allowedTechs;
+  const finalAllowedTechs = [...newQuickTemplate.allowedTechs];
+
   const finalPriorityOrder =
     newQuickTemplate.priorityOrder.length > 0
-      ? newQuickTemplate.priorityOrder
-      : newQuickTemplate.allowedTechs;
+      ? newQuickTemplate.priorityOrder.filter((name) =>
+          finalAllowedTechs.includes(name)
+        )
+      : finalAllowedTechs;
 
   const template: QuickTemplate = {
     key: `${keyBase || "entrada"}_${Date.now()}`,
@@ -3831,10 +3988,9 @@ async function addQuickTemplate() {
     area: newQuickTemplate.area,
     mode: newQuickTemplate.mode,
     allowedTechs: finalAllowedTechs,
-    priorityOrder: finalPriorityOrder,
-    standardMinutes: newQuickTemplate.standardMinutes
-      ? Number(newQuickTemplate.standardMinutes)
-      : null,
+    priorityOrder:
+      finalPriorityOrder.length > 0 ? finalPriorityOrder : finalAllowedTechs,
+    standardMinutes,
   };
 
   try {
@@ -3846,17 +4002,55 @@ async function addQuickTemplate() {
       body: JSON.stringify(template),
     });
 
+    const responseText = await response.text();
+
     if (!response.ok) {
-      throw new Error("No se pudo crear la entrada rápida");
+      console.error("Error creando entrada rápida:", {
+        status: response.status,
+        responseText,
+        template,
+      });
+
+      alert(
+        `No se pudo crear la entrada rápida.\n\nCódigo: ${response.status}\n${responseText}`
+      );
+
+      appendLog(`Error al crear la entrada rápida: ${label}.`);
+      return;
     }
 
-    const savedTemplate = await response.json();
+    let savedTemplate: QuickTemplate;
 
-    setQuickTemplates((prev) => [...prev, savedTemplate]);
+    try {
+      savedTemplate = responseText ? JSON.parse(responseText) : template;
+    } catch {
+      savedTemplate = template;
+    }
+
+    setQuickTemplates((prev) => {
+      const exists = prev.some((item) => item.key === savedTemplate.key);
+
+      if (exists) {
+        return prev.map((item) =>
+          item.key === savedTemplate.key ? savedTemplate : item
+        );
+      }
+
+      return [...prev, savedTemplate];
+    });
+
+    setQuickSelectedArea(savedTemplate.area);
+
+    setQuickDraft((prev) => ({
+      ...prev,
+      templateKey: savedTemplate.key,
+      linkedTemplateKey: "",
+      includedTaskIds: prev.includedTaskIds ?? [],
+    }));
 
     setNewQuickTemplate({
       label: "",
-      area: "camion",
+      area: savedTemplate.area,
       mode: "single",
       allowedTechs: [],
       priorityOrder: [],
@@ -3866,7 +4060,12 @@ async function addQuickTemplate() {
     appendLog(`Entrada rápida creada: ${label}.`);
   } catch (error) {
     console.error("Error guardando entrada rápida:", error);
-    appendLog("Error al crear la entrada rápida.");
+
+    alert(
+      "Error de conexión al crear la entrada rápida. Revisa que el servidor esté arrancado en el puerto 4000."
+    );
+
+    appendLog(`Error al crear la entrada rápida: ${label}.`);
   }
 }
 
@@ -4046,22 +4245,296 @@ async function reactivatePausedJob(jobId: number) {
   }
 }
 
-async function assignWaitingJobManually(jobId: number, techName: string) {
+function updateValidationResponsible(jobId: number, responsibleName: string) {
   const job = jobs.find((item) => item.id === jobId);
-  if (!job || job.status !== "espera") return;
+  if (!job || job.status !== "validacion") return;
 
-  const tech = techs.find((item) => item.name === techName);
-  if (!tech || tech.blocked) return;
+  const tech = techs.find((item) => item.name === responsibleName);
+  if (!tech) return;
 
-  if (tech.currentJobId != null) {
-    appendLog(`${tech.name} ya está asignado a otro trabajo activo.`);
+  if (
+    !canSelectTechManuallyForJob(
+  tech,
+  job,
+  jobs,
+  quickTemplates,
+  "responsable"
+)
+  ) {
+    alert(
+      `${tech.name} no se puede proponer como responsable.\n\nNo está disponible, ya está ocupado o no tiene competencia.`
+    );
+
+    appendLog(
+      `${tech.name} no se puede proponer como responsable para ${job.plate}.`
+    );
+
     return;
   }
 
-  const targetKey = getCompetencyTargetKey(job, quickTemplates);
+  const currentAssigned = job.assignedNames ?? [];
+  const currentSupport = currentAssigned[1] ?? "";
 
-  if (!tech.competencies[targetKey]?.responsable) {
-    appendLog(`${tech.name} no tiene competencia para ${getOperationLabel(job)}.`);
+  const nextAssignedNames =
+    currentSupport && currentSupport !== responsibleName
+      ? [responsibleName, currentSupport]
+      : [responsibleName];
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: nextAssignedNames,
+    reason: `Propuesta modificada manualmente. Responsable propuesto: ${responsibleName}${
+      nextAssignedNames[1] ? `. Apoyo propuesto: ${nextAssignedNames[1]}` : ""
+    }. Pendiente de autorización.`,
+  };
+
+  setJobs((prev) =>
+    prev.map((item) => (item.id === jobId ? updatedJob : item))
+  );
+
+  saveJobToBackend(updatedJob);
+
+  appendLog(
+    `Propuesta modificada para ${job.plate}: responsable ${responsibleName}.`
+  );
+}
+
+function updateValidationSupport(jobId: number, supportName: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "validacion") return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const responsibleName = assignedNames[0] ?? "";
+
+  if (!responsibleName) {
+    alert("Primero selecciona un responsable propuesto.");
+    return;
+  }
+
+  if (supportName === responsibleName) {
+    alert("El apoyo no puede ser el mismo que el responsable.");
+    return;
+  }
+
+  const tech = techs.find((item) => item.name === supportName);
+  if (!tech) return;
+
+  if (
+  !canSelectTechManuallyForJob(
+  tech,
+  job,
+  jobs,
+  quickTemplates,
+  "apoyo"
+)
+  ) {
+    alert(
+      `${tech.name} no se puede proponer como apoyo.\n\nNo está disponible, ya está ocupado o no tiene competencia.`
+    );
+
+    appendLog(`${tech.name} no se puede proponer como apoyo para ${job.plate}.`);
+
+    return;
+  }
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: [responsibleName, supportName],
+    reason: `Propuesta modificada manualmente. Responsable propuesto: ${responsibleName}. Apoyo propuesto: ${supportName}. Pendiente de autorización.`,
+  };
+
+  setJobs((prev) =>
+    prev.map((item) => (item.id === jobId ? updatedJob : item))
+  );
+
+  saveJobToBackend(updatedJob);
+
+  appendLog(`Propuesta modificada para ${job.plate}: apoyo ${supportName}.`);
+}
+
+function removeValidationSupport(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "validacion") return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const responsibleName = assignedNames[0] ?? "";
+
+  if (!responsibleName) {
+    alert("La propuesta no tiene responsable.");
+    return;
+  }
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: [responsibleName],
+    reason: `Propuesta modificada manualmente. Responsable propuesto: ${responsibleName}. Sin apoyo propuesto. Pendiente de autorización.`,
+  };
+
+  setJobs((prev) =>
+    prev.map((item) => (item.id === jobId ? updatedJob : item))
+  );
+
+  saveJobToBackend(updatedJob);
+
+  appendLog(`Apoyo propuesto quitado para ${job.plate}.`);
+}
+
+async function authorizeProposedJob(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+
+  if (!job || job.status !== "validacion") return;
+
+  const assignedNames = job.assignedNames ?? [];
+
+  if (assignedNames.length === 0) {
+    alert("No hay técnicos propuestos para iniciar este trabajo.");
+    appendLog(`No se puede iniciar ${job.plate}: no hay técnicos propuestos.`);
+    return;
+  }
+
+  for (const techName of assignedNames) {
+    const tech = techs.find((item) => item.name === techName);
+
+    if (!tech) {
+      alert(`No se puede iniciar: ${techName} ya no existe como técnico.`);
+      appendLog(`No se puede iniciar ${job.plate}: ${techName} no existe.`);
+      return;
+    }
+
+    if (isTechUnavailableForAssignment(tech)) {
+      alert(
+        `No se puede iniciar el trabajo.\n\n${tech.name} no está disponible.`
+      );
+      appendLog(
+        `No se puede iniciar ${job.plate}: ${tech.name} no está disponible.`
+      );
+      return;
+    }
+
+    if (tech.currentJobId != null) {
+      alert(
+        `No se puede iniciar el trabajo.\n\n${tech.name} ya está asignado a otro trabajo.`
+      );
+      appendLog(
+        `No se puede iniciar ${job.plate}: ${tech.name} ya está asignado.`
+      );
+      return;
+    }
+
+    if (tech.status !== "disponible" && tech.status !== "supervisor") {
+      alert(
+        `No se puede iniciar el trabajo.\n\n${tech.name} no está libre actualmente.`
+      );
+      appendLog(
+        `No se puede iniciar ${job.plate}: ${tech.name} no está libre.`
+      );
+      return;
+    }
+  }
+
+  const startedJob = buildAuthorizedJob(job, nowMs()) as Job;
+
+  const updatedJobs: Job[] = jobs.map((item) =>
+    item.id === jobId ? startedJob : item
+  );
+
+  const updatedTechs: Tech[] = techs.map((tech) => {
+    const index = assignedNames.indexOf(tech.name);
+
+    if (index === -1) return tech;
+
+    const isResponsible = index === 0;
+
+    return {
+      ...tech,
+      status: tech.name === "Ramón"
+        ? ("supervisor" as TechStatus)
+        : isResponsible
+        ? ("ocupado" as TechStatus)
+        : ("refuerzo" as TechStatus),
+      currentJobId: jobId,
+      blocked: isUnavailableTechStatus(tech.status),
+    };
+  });
+
+  setJobs(updatedJobs);
+  setTechs(updatedTechs);
+
+void updateScheduledJobStatusByJobId(jobId, "activo");
+
+  appendLog(
+    `Inicio autorizado: ${job.plate} asignado a ${assignedNames.join(" + ")}.`
+  );
+
+  try {
+    await saveJobToBackend(startedJob);
+
+    for (const tech of updatedTechs) {
+      if (assignedNames.includes(tech.name)) {
+        saveTechToBackend(tech);
+      }
+    }
+
+    recalcWaitingQueue(updatedTechs, updatedJobs);
+  } catch (error) {
+    console.error("Error autorizando inicio:", error);
+    appendLog(`Error al autorizar inicio de ${job.plate}.`);
+  }
+}
+
+async function rejectProposedJob(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+
+  if (!job || job.status !== "validacion") return;
+
+  const updatedJob = buildRejectedValidationJob(job) as Job;
+
+  const updatedJobs: Job[] = jobs.map((item) =>
+    item.id === jobId ? updatedJob : item
+  );
+
+setJobs(updatedJobs);
+void updateScheduledJobStatusByJobId(jobId, "en_cola");
+
+  appendLog(
+    `Propuesta rechazada para ${job.plate}. El trabajo vuelve a cola y queda pendiente de nueva validación.`
+  );
+
+  try {
+    await saveJobToBackend(updatedJob);
+
+        recalcWaitingQueue(techs, updatedJobs);
+  } catch (error) {
+    console.error("Error rechazando propuesta:", error);
+    appendLog(`Error al rechazar propuesta de ${job.plate}.`);
+  }
+}
+async function assignWaitingJobManually(jobId: number, techName: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || (job.status !== "espera" && job.status !== "validacion")) return;
+
+  const tech = techs.find((item) => item.name === techName);
+  if (!tech) return;
+
+  if (
+    !canAssignTechManuallyToJob(
+      tech,
+      job,
+      jobs,
+      quickTemplates,
+      "responsable"
+    )
+  ) {
+    appendLog(
+      `${tech.name} no se puede asignar a ${getOperationLabel(
+        job
+      )}: no está disponible, ya está ocupado o no tiene competencia.`
+    );
+
+    alert(
+      `${tech.name} no se puede asignar.\n\nNo está disponible, ya está ocupado o no tiene competencia.`
+    );
+
     return;
   }
 
@@ -4072,14 +4545,17 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
     status: "activo",
     assignedNames,
     startedAtMs: nowMs(),
-    reason: `Asignación manual desde cola. Responsable: ${techName}.`,
+    reason:
+      job.status === "validacion"
+        ? `Propuesta reasignada y autorizada manualmente. Responsable: ${techName}.`
+        : `Asignación manual desde cola. Responsable: ${techName}.`,
   };
 
-  const updatedJobs = jobs.map((item) =>
+  const updatedJobs: Job[] = jobs.map((item) =>
     item.id === jobId ? updatedJob : item
   );
 
-  const updatedTechs = techs.map((item) =>
+  const updatedTechs: Tech[] = techs.map((item) =>
     item.name === techName
       ? {
           ...item,
@@ -4088,6 +4564,7 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
               ? ("supervisor" as TechStatus)
               : ("ocupado" as TechStatus),
           currentJobId: jobId,
+          blocked: isUnavailableTechStatus(item.status),
         }
       : item
   );
@@ -4095,14 +4572,25 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
   setJobs(updatedJobs);
   setTechs(updatedTechs);
 
-  appendLog(`Trabajo en cola ${job.plate} asignado manualmente a ${techName}.`);
+if (job.status === "validacion") {
+  void updateScheduledJobStatusByJobId(jobId, "activo");
+}
+
+  appendLog(
+    job.status === "validacion"
+      ? `Trabajo ${job.plate} reasignado y autorizado manualmente a ${techName}.`
+      : `Trabajo en cola ${job.plate} asignado manualmente a ${techName}.`
+  );
 
   try {
     await saveJobToBackend(updatedJob);
 
-    for (const tech of updatedTechs) {
-      saveTechToBackend(tech);
+    const changedTech = updatedTechs.find((item) => item.name === techName);
+    if (changedTech) {
+      saveTechToBackend(changedTech);
     }
+
+    recalcWaitingQueue(updatedTechs, updatedJobs);
   } catch (error) {
     console.error("Error asignando trabajo en cola:", error);
     appendLog(`Error al asignar ${job.plate}.`);
@@ -4181,45 +4669,51 @@ async function finishJob(jobId: number) {
   let reactivatedLinkedJob: Job | null = null;
 
   if (linkedJobToReactivate) {
-    const reopenedLinkedJob: Job = {
-      ...linkedJobToReactivate,
-      status: "espera",
-      assignedNames: [],
-      startedAtMs: null,
-      pausedAtMs: null,
-      dependsOnJobId: null,
-      blockedReason: null,
-      reason: `Trabajo vinculado desbloqueado tras finalizar ${getOperationLabel(
-        target
-      )}.`,
-    };
+  const reopenedLinkedJob: Job = {
+    ...linkedJobToReactivate,
+    status: "espera",
+    assignedNames: [],
+    startedAtMs: null,
+    pausedAtMs: null,
+    dependsOnJobId: null,
+    blockedReason: null,
+    reason: `Trabajo vinculado desbloqueado tras finalizar ${getOperationLabel(
+      target
+    )}. Pendiente de validación manual antes de iniciar.`,
+  };
 
-    const jobsWithReopened = jobsAfterClose.map((job) =>
-      job.id === reopenedLinkedJob.id ? reopenedLinkedJob : job
-    );
+  const jobsWithReopened = jobsAfterClose.map((job) =>
+    job.id === reopenedLinkedJob.id ? reopenedLinkedJob : job
+  );
 
-    const result = allocateJob(
-      reopenedLinkedJob,
-      freedTechs,
-      jobsWithReopened,
-      true,
-      true
-    );
+  const result = allocateJob(
+    reopenedLinkedJob,
+    freedTechs,
+    jobsWithReopened,
+    true,
+    true
+  );
 
-    finalJobs = result.jobs.map((job) =>
-      job.id === closedJob.id ? closedJob : job
-    );
+  finalJobs = result.jobs;
+  finalTechs = result.techs;
 
-    finalTechs = result.techs;
-
-    reactivatedLinkedJob =
-      result.jobs.find((job) => job.id === reopenedLinkedJob.id) ??
-      reopenedLinkedJob;
-  }
+  reactivatedLinkedJob =
+    result.jobs.find((job) => job.id === reopenedLinkedJob.id) ??
+    reopenedLinkedJob;
+}
 
   setJobs(finalJobs);
   setTechs(finalTechs);
 
+if (shouldCloseScheduledJobForFinishedJob(jobId)) {
+  if (shouldCloseScheduledJobForFinishedJob(jobId)) {
+  void updateScheduledJobStatusByJobId(jobId, "cerrado");
+} else {
+  void updateScheduledJobStatusByJobId(jobId, "en_cola");
+}
+} else {
+  void updateScheduledJobStatusByJobId(jobId, "en_cola");
+}
   appendLog(
     `Trabajo ${target.plate} finalizado. Trabajado: ${formatMinutes(
       actualMinutes
@@ -4227,12 +4721,14 @@ async function finishJob(jobId: number) {
   );
 
   if (reactivatedLinkedJob) {
-    appendLog(
-      `Trabajo vinculado desbloqueado y reasignado: ${
-        reactivatedLinkedJob.plate
-      } · ${getOperationLabel(reactivatedLinkedJob)}.`
-    );
-  }
+  appendLog(
+    `Trabajo vinculado desbloqueado: ${
+      reactivatedLinkedJob.plate
+    } · ${getOperationLabel(
+      reactivatedLinkedJob
+    )}. Queda pendiente de validar antes de iniciar.`
+  );
+}
 
   try {
     const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
@@ -4315,26 +4811,6 @@ function getManualTechStatusOverrides(): Record<string, TechStatus> {
   }
 }
 
-function saveManualTechStatusOverride(name: string, status: TechStatus) {
-  try {
-    const current = getManualTechStatusOverrides();
-    const key = normalizeTechNameKey(name);
-
-    if (
-      status === "disponible" ||
-      status === "supervisor" ||
-      status === "ocupado" ||
-      status === "refuerzo"
-    ) {
-      delete current[key];
-    } else {
-      current[key] = status;
-    }
-
-    localStorage.setItem(MANUAL_TECH_STATUS_KEY, JSON.stringify(current));
-  } catch {}
-}
-
 function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
   const overrides = getManualTechStatusOverrides();
 
@@ -4353,84 +4829,125 @@ function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
   });
 }
 async function setTechManual(name: string, nextStatus: TechStatus) {
-  saveManualTechStatusOverride(name, nextStatus);
+  const tech = techs.find((item) => item.name === name);
+  if (!tech) return;
 
-  const isManualUnavailable = isManualUnavailableStatus(nextStatus);
+  const currentJob =
+    tech.currentJobId != null
+      ? jobs.find((job) => job.id === tech.currentJobId)
+      : null;
 
-  const updatedTechs: Tech[] = techs.map((tech) => {
-    if (tech.name !== name) return tech;
+  const isGoingUnavailable = isUnavailableTechStatus(nextStatus);
+  const isGoingFree =
+    nextStatus === "disponible" || nextStatus === "supervisor";
 
-    const nextTech = updateTechStatusTotals(tech, nextStatus);
+  if (currentJob && currentJob.status === "activo") {
+    const assignedNames = currentJob.assignedNames ?? [];
+    const isResponsible = assignedNames[0] === name;
+    const isSupport = assignedNames.slice(1).includes(name);
 
-    return {
-      ...nextTech,
-      status: nextStatus,
-      blocked: isManualUnavailable,
-      currentJobId:
-        isManualUnavailable ||
-        nextStatus === "disponible" ||
-        nextStatus === "supervisor"
-          ? null
-          : nextTech.currentJobId,
-    };
-  });
+    if (isResponsible) {
+      alert(
+        `${name} está como responsable en ${currentJob.plate}.\n\nPrimero reasigna el responsable o finaliza/pon en stand by el trabajo.`
+      );
 
-  const updatedJobs: Job[] = jobs.map((job) => {
-    if (!isManualUnavailable) return job;
+      appendLog(
+        `No se cambió el estado de ${name}: es responsable activo en ${currentJob.plate}.`
+      );
 
-    const previousAssignedNames = job.assignedNames ?? [];
+      return;
+    }
 
-    if (!previousAssignedNames.includes(name)) return job;
+    if (isSupport && (isGoingUnavailable || isGoingFree)) {
+      const ok = window.confirm(
+        `${name} está como apoyo en ${currentJob.plate}.\n\n¿Quieres quitarlo de apoyo y cambiar su estado a ${getTechStatusLabel(
+          nextStatus
+        )}?`
+      );
 
-    const assignedNames = previousAssignedNames.filter(
-      (techName) => techName !== name
+      if (!ok) return;
+
+      const responsibleName = assignedNames[0];
+
+      const updatedJob: Job = {
+        ...currentJob,
+        assignedNames: responsibleName ? [responsibleName] : [],
+        reason: `Apoyo ${name} quitado manualmente por cambio de estado.`,
+      };
+
+      const changedAtMs = nowMs();
+
+      const updatedTechs: Tech[] = techs.map((item) => {
+        if (item.name === name) {
+          return updateTechStatusTotals(
+            {
+              ...item,
+              currentJobId: null,
+            },
+            nextStatus,
+            changedAtMs
+          );
+        }
+
+        return item;
+      });
+
+      const updatedJobs: Job[] = jobs.map((job) =>
+        job.id === currentJob.id ? updatedJob : job
+      );
+
+      setTechs(updatedTechs);
+      setJobs(updatedJobs);
+
+      appendLog(
+        `${name} quitado como apoyo de ${currentJob.plate} y cambia a ${getTechStatusLabel(
+          nextStatus
+        )}.`
+      );
+
+      try {
+        await saveJobToBackend(updatedJob);
+
+        const changedTech = updatedTechs.find((item) => item.name === name);
+        if (changedTech) {
+          saveTechToBackend(changedTech);
+        }
+
+        recalcWaitingQueue(updatedTechs, updatedJobs);
+      } catch (error) {
+        console.error("Error cambiando estado de apoyo:", error);
+        appendLog(`Error al cambiar estado de ${name}.`);
+      }
+
+      return;
+    }
+
+    alert(
+      `${name} está asignado a ${currentJob.plate}.\n\nPrimero libera el técnico desde el trabajo.`
     );
 
-    if (assignedNames.length === 0 && job.status === "activo") {
-      return {
-        ...job,
-        status: "espera" as JobStatus,
-        assignedNames: [],
-        reason: `${name} no disponible. Trabajo devuelto a cola.`,
-        startedAtMs: null,
-      };
-    }
+    return;
+  }
 
-    return {
-      ...job,
-      assignedNames,
-      reason: `${name} no disponible. Se mantiene con el resto de técnicos.`,
-    };
+  const changedAtMs = nowMs();
+
+  const updated: Tech[] = techs.map((item) => {
+    if (item.name !== name) return item;
+
+    return updateTechStatusTotals(item, nextStatus, changedAtMs);
   });
 
-  const protectedTechs = applyManualTechStatusOverrides(updatedTechs);
+  setTechs(updated);
+  appendLog(`${name} cambia a estado: ${getTechStatusLabel(nextStatus)}.`);
 
-  setTechs(protectedTechs);
-  setJobs(updatedJobs);
-
-  const changed = protectedTechs.find((tech) => tech.name === name);
-
-  appendLog(`Ramón marca a ${name} como ${nextStatus}.`);
+  const changed = updated.find((item) => item.name === name);
 
   if (changed) {
-    try {
-      await saveTechToBackend(changed);
-    } catch (error) {
-      console.error("Error guardando técnico:", error);
-      appendLog(`Error guardando estado de ${name}.`);
-    }
+    saveTechToBackend(changed);
   }
 
-  for (const job of updatedJobs) {
-    const previousJob = jobs.find((item) => item.id === job.id);
-
-    if (previousJob && JSON.stringify(previousJob) !== JSON.stringify(job)) {
-      saveJobToBackend(job);
-    }
-  }
-
-  if (nextStatus === "disponible" || nextStatus === "supervisor") {
-    recalcWaitingQueue(protectedTechs, updatedJobs);
+  if (isGoingFree) {
+    recalcWaitingQueue(updated, jobs);
   }
 }
 
@@ -4470,22 +4987,27 @@ async function resetAllSystem() {
         const found = techsData.find((t: any) => t.name === baseTech.name);
 
         return found
-          ? {
-              ...baseTech,
-              status: found.status as TechStatus,
-              blocked: !!found.blocked,
-              currentJobId: found.currentJobId ?? null,
-              competencies:
-                found.competencies && Object.keys(found.competencies).length > 0
-                  ? found.competencies
-                  : baseTech.competencies,
-              priorities:
-                found.priorities && Object.keys(found.priorities).length > 0
-                  ? found.priorities
-                  : baseTech.priorities,
-              avatar: found.avatar ?? baseTech.avatar ?? null,
-            }
-          : baseTech;
+  ? {
+      ...baseTech,
+      status: (found.status ?? baseTech.status) as TechStatus,
+      blocked:
+        isUnavailableTechStatus((found.status ?? baseTech.status) as TechStatus) ||
+        !!found.blocked,
+      currentJobId: found.currentJobId ?? null,
+      competencies:
+        found.competencies && Object.keys(found.competencies).length > 0
+          ? found.competencies
+          : baseTech.competencies,
+      priorities:
+        found.priorities && Object.keys(found.priorities).length > 0
+          ? found.priorities
+          : baseTech.priorities,
+      avatar: found.avatar ?? baseTech.avatar ?? null,
+      statusChangedAtMs:
+        found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
+      statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
+    }
+  : baseTech;
       });
 
       setTechs(merged);
@@ -4503,47 +5025,55 @@ function reassignJob(jobId: number, techName: string) {
   if (!job || job.status !== "activo") return;
 
   const tech = techs.find((item) => item.name === techName);
-  if (!tech || tech.blocked) return;
+  if (!tech) return;
 
-  const targetKey: CompetencyKey = getCompetencyTargetKey(job, quickTemplates);
+  const previousAssignedNames = job.assignedNames ?? [];
+  const previousResponsibleName = previousAssignedNames[0] ?? "";
+  const previousSupportName = previousAssignedNames[1] ?? "";
 
-  if (!tech.competencies[targetKey]?.responsable) {
-    appendLog(`${tech.name} no tiene competencia para ${getOperationLabel(job)}.`);
+  if (techName === previousResponsibleName) {
+    appendLog(`${tech.name} ya es el responsable de ${job.plate}.`);
     return;
   }
 
-  const templateConfig = getQuickTemplateForJob(job, quickTemplates);
-
   if (
-    templateConfig &&
-    templateConfig.allowedTechs.length > 0 &&
-    !templateConfig.allowedTechs.includes(tech.name)
+    !canSelectTechManuallyForJob(
+      tech,
+      job,
+      jobs,
+      quickTemplates,
+      "responsable"
+    )
   ) {
-    appendLog(`${tech.name} no está permitido para ${templateConfig.label}.`);
+    appendLog(
+      `${tech.name} no se puede poner como responsable de ${job.plate}: no está disponible, está ocupado, bloqueado o reservado.`
+    );
+
+    alert(
+      `${tech.name} no se puede poner como responsable.\n\nNo está disponible, está ocupado, bloqueado o reservado.`
+    );
+
     return;
   }
 
   const canReuseAsSupport = canExtractSupportFromJob(tech, jobs);
 
-  // Si ya está ocupado en otro trabajo como responsable, no se puede mover
-  if (tech.currentJobId != null && !canReuseAsSupport) {
-    appendLog(`${tech.name} ya está asignado a otro trabajo activo.`);
-    return;
-  }
-
   let cleanedJobs = [...jobs];
 
-  // Si era refuerzo en otro trabajo, quitarlo primero de allí
+  // Si el nuevo responsable era apoyo en otro trabajo, se quita de allí.
+  // Esto solo pasa por acción manual.
   if (canReuseAsSupport && tech.currentJobId != null) {
     cleanedJobs = removeSupportFromPreviousJob(tech, cleanedJobs);
   }
 
-  // Liberar a los técnicos del trabajo actual
+  // Liberar a los técnicos que estaban en este trabajo antes de reasignar.
   const releasedTechs: Tech[] = techs.map((item) => {
-    if (job.assignedNames.includes(item.name)) {
+    if (previousAssignedNames.includes(item.name)) {
       return {
         ...item,
-        status: (item.name === "Ramón" ? "supervisor" : "disponible") as TechStatus,
+        status: (item.name === "Ramón"
+          ? "supervisor"
+          : "disponible") as TechStatus,
         currentJobId: null,
       };
     }
@@ -4561,46 +5091,26 @@ function reassignJob(jobId: number, techName: string) {
 
   const reassignedNames = [techName];
 
-  // Si el trabajo necesita apoyo, buscarlo entre técnicos libres
-  if (job.area === "camion" && !isSingleAssignment(job)) {
-    const support = getOrderedCandidatesForJob(
-      job,
-      releasedTechs,
-      cleanedJobs,
-      "apoyo",
-      quickTemplates,
-      {
-        includeSupport: false,
-        allowSupervisorManual: true,
-        forSupportRole: true,
-      },
-      techStats,
-      techLoadStats
-    ).find((candidate) => {
-      if (candidate.name === techName) return false;
-      if (candidate.currentJobId != null) return false;
+  // Mantener el apoyo anterior solo si sigue siendo válido y no es el nuevo responsable.
+  // No buscamos un apoyo nuevo automáticamente: eso se hace con el selector de apoyo.
+  if (previousSupportName && previousSupportName !== techName) {
+    const previousSupport = releasedTechs.find(
+      (item) => item.name === previousSupportName
+    );
 
-      if (
-        templateConfig &&
-        templateConfig.allowedTechs.length > 0 &&
-        !templateConfig.allowedTechs.includes(candidate.name)
-      ) {
-        return false;
-      }
-
-      return true;
-    });
-
-    if (support) {
-      reassignedNames.push(support.name);
+    if (
+      previousSupport &&
+      canSelectTechManuallyForJob(
+        previousSupport,
+        job,
+        cleanedJobs,
+        quickTemplates,
+        "apoyo"
+      )
+    ) {
+      reassignedNames.push(previousSupportName);
     }
   }
-
-  const reassignedTechs = applyAssignmentToTechs(
-    reassignedNames,
-    job,
-    releasedTechs
-  );
 
   const updatedJobs: Job[] = cleanedJobs.map((item) =>
     item.id !== job.id
@@ -4619,25 +5129,32 @@ function reassignJob(jobId: number, techName: string) {
         }
   );
 
-  const supported = assignAsSupportIfPossible(
-    reassignedTechs,
-    updatedJobs,
-    quickTemplates,
-    techStats,
-    techLoadStats
+  const updatedJob = updatedJobs.find((item) => item.id === job.id) ?? job;
+
+  const reassignedTechs = applyAssignmentToTechs(
+    reassignedNames,
+    updatedJob,
+    releasedTechs
   );
 
-  setTechs(supported.techs);
-  setJobs(supported.jobs);
+  setTechs(reassignedTechs);
+  setJobs(updatedJobs);
 
-  for (const t of supported.techs) {
-    saveTechToBackend(t);
+  for (const item of reassignedTechs) {
+    saveTechToBackend(item);
   }
 
-  appendLog(`Ramón reasigna ${job.plate} a ${reassignedNames.join(" + ")}.`);
+  saveJobToBackend(updatedJob);
 
-  // Después de reasignar, intentar sacar adelante la cola de espera
-  recalcWaitingQueue(supported.techs, supported.jobs);
+  appendLog(
+    `Ramón reasigna ${job.plate}: responsable ${techName}${
+      reassignedNames[1] ? `, apoyo ${reassignedNames[1]}` : ", sin apoyo"
+    }.`
+  );
+
+  // Después de reasignar, solo recalculamos propuestas.
+  // No añadimos apoyos automáticos.
+  recalcWaitingQueue(reassignedTechs, updatedJobs);
 }
   
   function addTech() {
@@ -4649,36 +5166,183 @@ function reassignJob(jobId: number, techName: string) {
     setNewTechName("");
     appendLog(`Técnico añadido: ${name}.`);
   }
-
-function addSupportToJob(jobId: number) {
+function changeSupportForJob(jobId: number, newSupportName: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "activo") return;
-  if ((job.assignedNames ?? []).length >= 2) return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const responsibleName = assignedNames[0] ?? null;
+  const currentSupportNames = assignedNames.slice(1);
+
+  if (!responsibleName) {
+    appendLog(`No se puede cambiar apoyo en ${job.plate}: no tiene responsable.`);
+    return;
+  }
+
+  if (!newSupportName) return;
+
+  if (newSupportName === responsibleName) {
+    appendLog(`No se puede poner al responsable como apoyo en ${job.plate}.`);
+    return;
+  }
+
+  const newSupport = techs.find((tech) => tech.name === newSupportName);
+  if (!newSupport) return;
+
+  if (
+    !canAssignTechManuallyToJob(
+      newSupport,
+      job,
+      jobs,
+      quickTemplates,
+      "apoyo"
+    )
+  ) {
+    appendLog(
+      `${newSupport.name} no se puede poner como apoyo en ${job.plate}: no está disponible, ya está ocupado o no tiene competencia.`
+    );
+    return;
+  }
+
+  const previousSupportNames = currentSupportNames.filter(
+    (name) => name !== newSupportName
+  );
+
+  const nextAssignedNames = [responsibleName, newSupportName];
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: nextAssignedNames,
+    reason: `Apoyo cambiado manualmente. Responsable: ${responsibleName}. Apoyo: ${newSupportName}.`,
+  };
+
+  const updatedJobs: Job[] = jobs.map((item) =>
+    item.id === jobId ? updatedJob : item
+  );
+
+  const updatedTechs: Tech[] = techs.map((tech) => {
+    if (previousSupportNames.includes(tech.name)) {
+      return {
+        ...tech,
+        status: "disponible" as TechStatus,
+        currentJobId: null,
+      };
+    }
+
+    if (tech.name === newSupportName) {
+      return {
+        ...tech,
+        status: "refuerzo" as TechStatus,
+        currentJobId: jobId,
+      };
+    }
+
+    return tech;
+  });
+
+  setJobs(updatedJobs);
+  setTechs(updatedTechs);
+
+  saveJobToBackend(updatedJob);
+
+  for (const tech of updatedTechs) {
+    if (
+      previousSupportNames.includes(tech.name) ||
+      tech.name === newSupportName
+    ) {
+      saveTechToBackend(tech);
+    }
+  }
+
+  appendLog(`Apoyo cambiado en ${job.plate}: ${newSupportName}.`);
+}
+
+function removeSupportFromJobManually(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "activo") return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const responsibleName = assignedNames[0] ?? null;
+  const supportNames = assignedNames.slice(1);
+
+  if (!responsibleName) {
+    appendLog(`No se puede quitar apoyo en ${job.plate}: no tiene responsable.`);
+    return;
+  }
+
+  if (supportNames.length === 0) {
+    appendLog(`El trabajo ${job.plate} no tiene apoyo asignado.`);
+    return;
+  }
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: [responsibleName],
+    reason: `Apoyo quitado manualmente. Responsable: ${responsibleName}. Sin apoyo activo.`,
+  };
+
+  const updatedJobs: Job[] = jobs.map((item) =>
+    item.id === jobId ? updatedJob : item
+  );
+
+  const updatedTechs: Tech[] = techs.map((tech) => {
+    if (supportNames.includes(tech.name)) {
+      return {
+        ...tech,
+        status: "disponible" as TechStatus,
+        currentJobId: null,
+      };
+    }
+
+    return tech;
+  });
+
+  setJobs(updatedJobs);
+  setTechs(updatedTechs);
+
+  saveJobToBackend(updatedJob);
+
+  for (const tech of updatedTechs) {
+    if (supportNames.includes(tech.name)) {
+      saveTechToBackend(tech);
+    }
+  }
+
+  appendLog(
+    `Apoyo quitado en ${job.plate}: ${supportNames.join(
+      " + "
+    )} queda disponible.`
+  );
+}
+
+function addSupportToJob(jobId: number, forcedSupportName?: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "activo") return;
+
+  const assignedNames = job.assignedNames ?? [];
+
+  if (assignedNames.length >= 2 && !forcedSupportName) {
+    appendLog(`El trabajo ${job.plate} ya tiene apoyo asignado.`);
+    return;
+  }
 
   const templateConfig = getQuickTemplateForJob(job, quickTemplates);
 
-  const support = getOrderedCandidatesForJob(
+  const candidates = techs.filter((candidate) => {
+    if (assignedNames.includes(candidate.name)) return false;
+
+  if (
+  !canSelectTechManuallyForJob(
+    candidate,
     job,
-    techs,
     jobs,
-    "apoyo",
     quickTemplates,
-    {
-      includeSupport: false,
-      allowSupervisorManual: true,
-      forSupportRole: true,
-    },
-    techStats,
-    techLoadStats
-  ).find((candidate) => {
-    // no repetir técnico ya asignado al trabajo
-    if ((job.assignedNames ?? []).includes(candidate.name)) return false;
+    "apoyo"
+  )
+) {
+  return false;
+}
 
-    // el apoyo debe estar libre de verdad
-    if (candidate.currentJobId != null) return false;
-    if (candidate.status !== "disponible") return false;
-
-    // respetar restricciones de plantilla si existen
     if (
       templateConfig &&
       templateConfig.allowedTechs.length > 0 &&
@@ -4690,27 +5354,114 @@ function addSupportToJob(jobId: number) {
     return true;
   });
 
+  const support = forcedSupportName
+    ? candidates.find((candidate) => candidate.name === forcedSupportName)
+    : candidates[0];
+
   if (!support) {
     appendLog(`No hay apoyo disponible para ${job.plate}.`);
+    alert("No hay apoyo disponible válido para este trabajo.");
     return;
   }
 
+  const responsibleName = assignedNames[0];
+
+  if (!responsibleName) {
+    appendLog(`No se puede añadir apoyo a ${job.plate}: falta responsable.`);
+    return;
+  }
+
+  const nextAssignedNames = [responsibleName, support.name];
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: nextAssignedNames,
+    reason: assignedNames[1]
+      ? `Apoyo cambiado manualmente: ${support.name}.`
+      : `Apoyo añadido manualmente: ${support.name}.`,
+  };
+
   const updatedJobs: Job[] = jobs.map((item) =>
-    item.id !== job.id
-      ? item
-      : {
-          ...item,
-          assignedNames: [...(item.assignedNames ?? []), support.name],
-          reason: `Apoyo añadido manualmente: ${support.name}.`,
-        }
+    item.id === job.id ? updatedJob : item
+  );
+
+  const updatedTechs: Tech[] = techs.map((tech) => {
+    if (tech.name === assignedNames[1] && tech.name !== support.name) {
+      return {
+        ...tech,
+        status: tech.name === "Ramón" ? ("supervisor" as TechStatus) : ("disponible" as TechStatus),
+        currentJobId: null,
+      };
+    }
+
+    if (tech.name === support.name) {
+      return {
+        ...tech,
+        status: "refuerzo" as TechStatus,
+        currentJobId: job.id,
+      };
+    }
+
+    return tech;
+  });
+
+  setJobs(updatedJobs);
+  setTechs(updatedTechs);
+
+  const oldSupportName = assignedNames[1];
+
+  appendLog(
+    oldSupportName
+      ? `Apoyo cambiado en ${job.plate}: ${oldSupportName} → ${support.name}.`
+      : `Apoyo manual añadido en ${job.plate}: ${support.name}.`
+  );
+
+  try {
+    saveJobToBackend(updatedJob);
+
+    for (const tech of updatedTechs) {
+      if (tech.name === support.name || tech.name === oldSupportName) {
+        saveTechToBackend(tech);
+      }
+    }
+  } catch (error) {
+    console.error("Error cambiando apoyo:", error);
+    appendLog(`Error al cambiar apoyo en ${job.plate}.`);
+  }
+}
+
+function removeSupportFromActiveJob(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "activo") return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const responsibleName = assignedNames[0];
+  const supportName = assignedNames[1];
+
+  if (!responsibleName || !supportName) {
+    appendLog(`El trabajo ${job.plate} no tiene apoyo para quitar.`);
+    return;
+  }
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: [responsibleName],
+    reason: `Apoyo quitado manualmente. Responsable activo: ${responsibleName}.`,
+  };
+
+  const updatedJobs: Job[] = jobs.map((item) =>
+    item.id === job.id ? updatedJob : item
   );
 
   const updatedTechs: Tech[] = techs.map((tech) =>
-    tech.name === support.name
+    tech.name === supportName
       ? {
           ...tech,
-          status: "refuerzo" as TechStatus,
-          currentJobId: job.id,
+          status:
+            tech.name === "Ramón"
+              ? ("supervisor" as TechStatus)
+              : ("disponible" as TechStatus),
+          currentJobId: null,
         }
       : tech
   );
@@ -4718,12 +5469,21 @@ function addSupportToJob(jobId: number) {
   setJobs(updatedJobs);
   setTechs(updatedTechs);
 
-  const savedSupport = updatedTechs.find((tech) => tech.name === support.name);
-  if (savedSupport) {
-    saveTechToBackend(savedSupport);
-  }
+  appendLog(`Apoyo quitado en ${job.plate}: ${supportName} queda disponible.`);
 
-  appendLog(`Apoyo manual añadido en ${job.plate}: ${support.name}.`);
+  try {
+    saveJobToBackend(updatedJob);
+
+    const releasedTech = updatedTechs.find((tech) => tech.name === supportName);
+    if (releasedTech) {
+      saveTechToBackend(releasedTech);
+    }
+
+    recalcWaitingQueue(updatedTechs, updatedJobs);
+  } catch (error) {
+    console.error("Error quitando apoyo:", error);
+    appendLog(`Error al quitar apoyo en ${job.plate}.`);
+  }
 }
 
   function removeTech(name: string) {
@@ -5274,6 +6034,103 @@ setIsAuthenticated(false);
         </button>
       );
     })}
+  </div>
+)}
+
+{arrivedPendingValidationScheduledJobs.length > 0 && (
+  <div className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="text-sm font-semibold text-violet-900">
+        Citas llegadas pendientes de validar
+      </div>
+
+      <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700">
+        {arrivedPendingValidationScheduledJobs.length}
+      </span>
+    </div>
+
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {arrivedPendingValidationScheduledJobs.map((scheduled) => {
+        const relatedJob =
+  scheduled.jobId != null
+    ? jobs.find((job) => job.id === scheduled.jobId)
+    : null;
+
+const secondRelatedJob =
+  scheduled.secondJobId != null
+    ? jobs.find((job) => job.id === scheduled.secondJobId)
+    : null;
+
+const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
+
+        return (
+          <div
+            key={scheduled.id}
+            className="rounded-2xl border border-violet-200 bg-white p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold text-violet-950">
+                  {scheduled.plate || "Sin matrícula"}
+                </div>
+
+                <div className="mt-1 text-sm text-violet-700">
+                  {scheduled.date} · {scheduled.startTime}
+                </div>
+              </div>
+
+              <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-bold uppercase text-violet-700">
+  {phaseLabel}
+</span>
+            </div>
+
+            <div className="mt-2 text-sm text-violet-800">
+              {scheduled.linkedTemplateLabel ||
+                relatedJob?.quickEntryLabel ||
+                "Trabajo pendiente de validar"}
+            </div>
+
+            {relatedJob && (
+              <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs text-violet-900">
+                {relatedJob.assignedNames?.length
+                  ? `Propuesta: ${relatedJob.assignedNames.join(" + ")}`
+                  : "Sin propuesta todavía"}
+              </div>
+            )}
+
+            {secondRelatedJob && (
+  <div className="mt-2 rounded-xl border border-fuchsia-100 bg-fuchsia-50 px-3 py-2 text-xs text-fuchsia-900">
+    <div className="font-semibold">
+      2º trabajo: {getOperationLabel(secondRelatedJob)}
+    </div>
+
+    <div className="mt-1">
+      Estado: {secondRelatedJob.status}
+    </div>
+
+    {secondRelatedJob.assignedNames?.length > 0 && (
+      <div className="mt-1">
+        Propuesta: {secondRelatedJob.assignedNames.join(" + ")}
+      </div>
+    )}
+  </div>
+)}
+
+            <div className="mt-2 text-xs text-slate-500">
+              Cliente: {scheduled.customerName || "Sin nombre"}
+            </div>
+
+            <div className="mt-1 text-xs text-slate-500">
+              Teléfono: {scheduled.customerPhone || "Sin teléfono"}
+            </div>
+
+            <div className="mt-3 text-xs text-violet-700">
+              Autoriza el inicio desde el bloque “Pendientes de validar”.
+            </div>
+          </div>
+        );
+      })}
+    </div>
   </div>
 )}
 
@@ -6193,7 +7050,167 @@ setIsAuthenticated(false);
     </div>
   )}
 </div>
+{validationJobs.length > 0 && (
+  <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
+    <div className="mb-4 flex items-center justify-between">
+      <h2 className="text-lg font-semibold text-violet-900">
+        Pendientes de validar
+      </h2>
 
+      <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700">
+        {validationJobs.length}
+      </span>
+    </div>
+
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {validationJobs.map((job) => {
+        const Icon = AREA_META[job.area].icon;
+        const assignedNames = job.assignedNames ?? [];
+
+        return (
+          <div
+            key={job.id}
+            className="rounded-2xl border border-violet-200 bg-white p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`rounded-xl border p-2 ${AREA_META[job.area].color}`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </div>
+
+                  <div>
+                    <div className="font-semibold text-violet-950">
+                      {job.plate}
+                    </div>
+
+                    <div className="text-sm text-violet-700">
+                      {getOperationLabel(job)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-900">
+                  {getValidationLabel(job)}
+                </div>
+
+                {assignedNames.length > 0 && (
+                  <div className="mt-2 text-xs text-slate-500">
+                    Técnicos propuestos: {assignedNames.join(" + ")}
+                  </div>
+                )}
+
+                {job.reason && (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {job.reason}
+                  </div>
+                )}
+              </div>
+
+              {job.urgent && (
+                <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-700">
+                  URGENTE
+                </span>
+              )}
+            </div>
+
+            <div className="mt-4 grid gap-2">
+  <button
+    type="button"
+    onClick={() => authorizeProposedJob(job.id)}
+    disabled={assignedNames.length === 0}
+    className="rounded-2xl bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-40"
+  >
+    Autorizar inicio
+  </button>
+
+  <select
+    value={assignedNames[0] ?? ""}
+    onChange={(event) => {
+      if (event.target.value) {
+        updateValidationResponsible(job.id, event.target.value);
+      }
+    }}
+    className="rounded-xl border border-violet-200 bg-white px-2 py-2 text-sm"
+  >
+    <option value="">Cambiar responsable propuesto</option>
+    {techs
+      .filter(
+        (tech) =>
+          canSelectTechManuallyForJob(
+  tech,
+  job,
+  jobs,
+  quickTemplates,
+  "responsable"
+) || tech.name === assignedNames[0]
+      )
+      .map((tech) => (
+        <option key={tech.name} value={tech.name}>
+          {tech.name}
+        </option>
+      ))}
+  </select>
+
+  {["camion", "movil"].includes(job.area) && (
+    <>
+      <select
+        value={assignedNames[1] ?? ""}
+        onChange={(event) => {
+          if (event.target.value) {
+            updateValidationSupport(job.id, event.target.value);
+          }
+        }}
+        className="rounded-xl border border-amber-200 bg-amber-50 px-2 py-2 text-sm font-medium text-amber-800"
+      >
+        <option value="">Cambiar apoyo propuesto</option>
+        {techs
+          .filter((tech) => tech.name !== assignedNames[0])
+          .filter(
+            (tech) =>
+              canSelectTechManuallyForJob(
+  tech,
+  job,
+  jobs,
+  quickTemplates,
+  "apoyo"
+) || tech.name === assignedNames[1]
+          )
+          .map((tech) => (
+            <option key={tech.name} value={tech.name}>
+              {tech.name}
+            </option>
+          ))}
+      </select>
+
+      {assignedNames.length > 1 && (
+        <button
+          type="button"
+          onClick={() => removeValidationSupport(job.id)}
+          className="rounded-2xl border border-amber-200 bg-white px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50"
+        >
+          Quitar apoyo propuesto
+        </button>
+      )}
+    </>
+  )}
+
+  <button
+    type="button"
+    onClick={() => rejectProposedJob(job.id)}
+    className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+  >
+    Rechazar propuesta
+  </button>
+</div>
+          </div>
+        );
+      })}
+    </div>
+  </section>
+)}
       <div className="grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr]">
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
@@ -6215,13 +7232,22 @@ setIsAuthenticated(false);
               </thead>
               <tbody>
                 {techs.map((tech) => {
-                  const currentJob = jobs.find(
-                    (job) => job.id === tech.currentJobId
-                  );
-                  const rowColor = getTechStatusColor(tech.status);
-                  const textColor = "";
+  const currentJob = jobs.find(
+    (job) => job.id === tech.currentJobId
+  );
 
-                  return (
+  const validationProposal = getValidationProposalForTech(
+    tech.name,
+    jobs
+  );
+
+  const rowColor = validationProposal
+    ? "bg-violet-50 border-violet-200 text-violet-700"
+    : getTechStatusColor(tech.status);
+
+  const textColor = "";
+
+  return (
                     <tr key={tech.name} className={`border-t ${rowColor}`}>
                       <td className={`py-2 font-medium ${textColor}`}>
   <div className="flex items-center gap-2">
@@ -6254,12 +7280,22 @@ setIsAuthenticated(false);
 )}
                         </select>
                       </td>
-                      <td className={`py-2 text-xs ${textColor}`}>
+<td className={`py-2 text-xs ${textColor}`}>
   <div>
     {currentJob
       ? `${AREA_META[currentJob.area].label} · ${currentJob.plate}`
+      : validationProposal
+      ? `Propuesto en ${validationProposal.plate} · ${getOperationLabel(
+          validationProposal
+        )}`
       : "-"}
   </div>
+
+  {validationProposal && !currentJob && (
+    <div className="mt-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+      Pendiente de autorizar
+    </div>
+  )}
 
   {isUnavailableTechStatus(tech.status) && (
     <div className="mt-1 text-[10px] font-medium text-slate-500">
@@ -6586,38 +7622,145 @@ setIsAuthenticated(false);
             Stand by
           </button>
 
-          {["camion", "movil"].includes(job.area) && assignedNames.length < 2 && (
-            <button
-              onClick={() => addSupportToJob(job.id)}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
-            >
-              Añadir apoyo
-            </button>
-          )}
+{["camion", "movil"].includes(job.area) && (
+  <>
+    {assignedNames.length < 2 ? (
+      <button
+        type="button"
+        onClick={() => addSupportToJob(job.id)}
+        className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
+      >
+        Añadir apoyo
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={() => removeSupportFromActiveJob(job.id)}
+        className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700"
+      >
+        Quitar apoyo
+      </button>
+    )}
 
-          <select
-            defaultValue=""
-            onChange={(event) => {
-              if (event.target.value) {
-                reassignJob(job.id, event.target.value);
-                event.currentTarget.value = "";
-              }
-            }}
-            className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
-          >
-            <option value="">Reasignar manualmente</option>
-            {techs
-              .filter((tech) => AREA_META[job.area].order.includes(tech.name))
-              .map((tech) => {
-                const recommended = recommendedTechByJobId[job.id] === tech.name;
+    <select
+      defaultValue=""
+      onChange={(event) => {
+        if (event.target.value) {
+          addSupportToJob(job.id, event.target.value);
+          event.currentTarget.value = "";
+        }
+      }}
+      className="rounded-xl border border-amber-200 bg-white px-2 py-2 text-sm"
+    >
+      <option value="">
+        {assignedNames.length >= 2 ? "Cambiar apoyo" : "Elegir apoyo"}
+      </option>
 
-                return (
-                  <option key={tech.name} value={tech.name}>
-                    {recommended ? `⭐ ${tech.name} (IA)` : tech.name}
-                  </option>
-                );
-              })}
-          </select>
+      {techs
+  .filter((tech) => tech.name !== assignedNames[0])
+  .filter((tech) =>
+    canSelectTechManuallyForJob(
+      tech,
+      job,
+      jobs,
+      quickTemplates,
+      "apoyo"
+    )
+  )
+  .map((tech) => (
+    <option key={tech.name} value={tech.name}>
+      {tech.name}
+    </option>
+  ))}
+    </select>
+  </>
+)}
+
+<select
+  defaultValue=""
+  onChange={(event) => {
+    if (event.target.value) {
+      reassignJob(job.id, event.target.value);
+      event.currentTarget.value = "";
+    }
+  }}
+  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm"
+>
+  <option value="">Cambiar responsable</option>
+
+  {techs
+    .filter((tech) => AREA_META[job.area].order.includes(tech.name))
+    .filter((tech) => {
+      const currentResponsible = assignedNames[0];
+
+      if (tech.name === currentResponsible) return true;
+
+      return canSelectTechManuallyForJob(
+        tech,
+        job,
+        jobs,
+        quickTemplates,
+        "responsable"
+      );
+    })
+    .map((tech) => {
+      const recommended = recommendedTechByJobId[job.id] === tech.name;
+      const currentResponsible = assignedNames[0] === tech.name;
+
+      return (
+        <option key={tech.name} value={tech.name}>
+          {currentResponsible
+            ? `${tech.name} (actual)`
+            : recommended
+            ? `⭐ ${tech.name} (IA)`
+            : tech.name}
+        </option>
+      );
+    })}
+</select>
+
+{["camion", "movil"].includes(job.area) && (
+  <>
+    <select
+      value={assignedNames[1] ?? ""}
+      onChange={(event) => {
+        if (event.target.value) {
+          changeSupportForJob(job.id, event.target.value);
+        }
+      }}
+      className="rounded-xl border border-amber-200 bg-amber-50 px-2 py-2 text-sm font-medium text-amber-800"
+    >
+      <option value="">Cambiar apoyo</option>
+      {techs
+        .filter((tech) => tech.name !== assignedNames[0])
+        .filter(
+          (tech) =>
+            canAssignTechManuallyToJob(
+              tech,
+              job,
+              jobs,
+              quickTemplates,
+              "apoyo"
+            ) || tech.name === assignedNames[1]
+        )
+        .map((tech) => (
+          <option key={tech.name} value={tech.name}>
+            {tech.name}
+          </option>
+        ))}
+    </select>
+
+    {assignedNames.length > 1 && (
+      <button
+        type="button"
+        onClick={() => removeSupportFromJobManually(job.id)}
+        className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+      >
+        Quitar apoyo
+      </button>
+    )}
+  </>
+)}
         </div>
       </div>
     </div>

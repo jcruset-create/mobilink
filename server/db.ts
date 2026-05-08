@@ -42,7 +42,9 @@ export async function initDb() {
       "currentJobId" INTEGER,
       competencies TEXT NOT NULL DEFAULT '{}',
       priorities TEXT NOT NULL DEFAULT '{}',
-      avatar TEXT
+      avatar TEXT,
+      "statusChangedAtMs" BIGINT,
+      "statusTotals" TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS jobs (
@@ -82,6 +84,16 @@ export async function initDb() {
   await pool.query(`
     ALTER TABLE quick_templates
     ADD COLUMN IF NOT EXISTS "standardMinutes" INTEGER;
+  `);
+
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "statusChangedAtMs" BIGINT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "statusTotals" TEXT NOT NULL DEFAULT '{}';
   `);
 
   console.log("PostgreSQL/Supabase inicializado correctamente");

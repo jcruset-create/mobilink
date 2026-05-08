@@ -43,7 +43,8 @@ export type ScheduledJob = {
   status: ScheduledJobStatus;
   arrivedAtMs?: number | null;
   jobId?: number | null;
-  googleEventId?: string | null;
+secondJobId?: number | null;
+googleEventId?: string | null;
   linkedTemplateId?: string | null;
   linkedTemplateLabel?: string | null;
   firstTemplateKey?: string | null;
@@ -238,7 +239,36 @@ function getSolidAreaClass(area: AreaKey) {
   if (area === "turismo") return "bg-sky-500 text-white border-sky-600";
   return "bg-emerald-500 text-white border-emerald-600";
 }
+function getScheduledJobCardClass(job: ScheduledJob) {
+  if (job.status === "en_cola") {
+    return "bg-violet-600 text-white border-violet-700";
+  }
 
+  if (job.status === "activo") {
+    return "bg-emerald-600 text-white border-emerald-700";
+  }
+
+  if (job.status === "cerrado") {
+    return "bg-slate-500 text-white border-slate-600 opacity-80";
+  }
+
+  if (job.status === "cancelado") {
+    return "bg-red-900 text-white border-red-950 opacity-70";
+  }
+
+  return getSolidAreaClass(job.area);
+}
+
+function getScheduledJobStatusLabel(status: ScheduledJobStatus) {
+  if (status === "programado") return "Programado";
+  if (status === "en_cola") return "Pendiente validar";
+  if (status === "activo") return "Activo";
+  if (status === "cerrado") return "Cerrado";
+  if (status === "cancelado") return "Cancelado";
+  if (status === "llego") return "Llegó";
+
+  return status;
+}
 function layoutOverlappingJobs(jobs: ScheduledJob[]) {
   const sorted = [...jobs].sort(
     (a, b) =>
@@ -892,12 +922,17 @@ export default function AgendaView({
                       <div
                         key={job.id}
                         onClick={(e) => {
-                          e.stopPropagation();
-                          openEditAppointment(job);
-                        }}
-                        className={`absolute z-40 cursor-pointer overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getSolidAreaClass(
-                          job.area
-                        )}`}
+  e.stopPropagation();
+
+  if (job.status === "cerrado" || job.status === "cancelado") {
+    return;
+  }
+
+  openEditAppointment(job);
+}}
+                        className={`absolute z-40 cursor-pointer overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getScheduledJobCardClass(
+  job
+)}`}
                         style={{
                           top,
                           height,
@@ -905,9 +940,15 @@ export default function AgendaView({
                           width: `calc(${width}% - 8px)`,
                         }}
                       >
-                        <div className="truncate uppercase">
-                          {job.linkedTemplateLabel || template?.label || "Operación"}
-                        </div>
+                        <div className="flex items-center justify-between gap-2">
+  <div className="truncate uppercase">
+    {job.linkedTemplateLabel || template?.label || "Operación"}
+  </div>
+
+  <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
+    {getScheduledJobStatusLabel(job.status)}
+  </span>
+</div>
 
                         {job.includedTasks && job.includedTasks.length > 0 && (
                           <div className="truncate text-[10px] font-normal opacity-90">
