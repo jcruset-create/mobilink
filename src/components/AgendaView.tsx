@@ -1003,411 +1003,419 @@ export default function AgendaView({
         </div>
 
         {modalOpen && selectedSlot && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-            <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-              <div className="mb-4">
-                <h3 className="text-xl font-semibold">
-                  {editingJobId != null ? "Editar cita" : "Nueva cita"}
-                </h3>
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+    <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
+        <h3 className="text-xl font-semibold">
+          {editingJobId != null ? "Editar cita" : "Nueva cita"}
+        </h3>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">
-                      Día
-                    </label>
+        <p className="mt-1 text-sm text-slate-500">
+          Selecciona día, hora, operación y datos del cliente.
+        </p>
+      </div>
 
-                    <select
-                      value={selectedSlot.date}
-                      onChange={(e) => {
-                        const nextDate = e.target.value;
-                        const day = days.find((d) => d.date === nextDate);
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="mb-4 grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">
+              Día
+            </label>
 
-                        if (!day) return;
+            <select
+              value={selectedSlot.date}
+              onChange={(e) => {
+                const nextDate = e.target.value;
+                const day = days.find((d) => d.date === nextDate);
 
-                        const validSlots = getValidSlotsForDate(nextDate, day.index);
+                if (!day) return;
 
-                        if (validSlots.length === 0) {
-                          alert("Este día no tiene horas disponibles.");
-                          return;
-                        }
+                const validSlots = getValidSlotsForDate(nextDate, day.index);
 
-                        setSelectedSlot({
-                          date: nextDate,
-                          startTime: validSlots[0],
-                        });
+                if (validSlots.length === 0) {
+                  alert("Este día no tiene horas disponibles.");
+                  return;
+                }
+
+                setSelectedSlot({
+                  date: nextDate,
+                  startTime: validSlots[0],
+                });
+              }}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              {days.map((day) => (
+                <option
+                  key={day.date}
+                  value={day.date}
+                  disabled={isPastDate(day.date)}
+                >
+                  {day.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">
+              Hora
+            </label>
+
+            <select
+              value={selectedSlot.startTime}
+              onChange={(e) =>
+                setSelectedSlot((prev) =>
+                  prev ? { ...prev, startTime: e.target.value } : prev
+                )
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              {(() => {
+                const selectedDay = days.find(
+                  (d) => d.date === selectedSlot.date
+                );
+                const slots = selectedDay
+                  ? getValidSlotsForDate(selectedSlot.date, selectedDay.index)
+                  : [];
+
+                return slots.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slot}
+                  </option>
+                ));
+              })()}
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="space-y-3">
+            <div className="grid grid-cols-5 gap-2">
+              {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
+                (area) => {
+                  const areaTemplates = quickTemplates
+                    .filter((template) => template.area === area)
+                    .slice()
+                    .sort((a, b) =>
+                      a.label.localeCompare(b.label, "es", {
+                        sensitivity: "base",
+                      })
+                    );
+
+                  const areaLinkedTemplates = linkedTemplates
+                    .filter((linked) => {
+                      const firstTemplate = quickTemplates.find(
+                        (template) => template.key === linked.firstTemplateKey
+                      );
+
+                      return firstTemplate?.area === area;
+                    })
+                    .slice()
+                    .sort((a, b) =>
+                      a.label.localeCompare(b.label, "es", {
+                        sensitivity: "base",
+                      })
+                    );
+
+                  const meta = AREA_META[area];
+                  const Icon = meta.icon;
+                  const active = selectedArea === area;
+                  const totalEntries =
+                    areaTemplates.length + areaLinkedTemplates.length;
+
+                  return (
+                    <button
+                      key={area}
+                      type="button"
+                      onClick={() => {
+                        const firstLinked = areaLinkedTemplates[0];
+                        const firstTemplate = areaTemplates[0];
+
+                        setSelectedArea(area);
+
+                        setDraft((prev) => ({
+                          ...prev,
+                          templateKey: firstLinked
+                            ? firstLinked.firstTemplateKey
+                            : firstTemplate?.key ?? "",
+                          linkedTemplateKey: firstLinked
+                            ? firstLinked.secondTemplateKey
+                            : "",
+                          includedTaskIds: [],
+                        }));
                       }}
-                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      className={`rounded-2xl border px-2 py-2 text-xs font-semibold transition ${meta.color} ${
+                        active
+                          ? "ring-2 ring-slate-900 ring-offset-2"
+                          : "opacity-80 hover:opacity-100"
+                      }`}
+                      title={meta.label}
                     >
-                      {days.map((day) => (
+                      <Icon className="mx-auto mb-1 h-4 w-4" />
+
+                      <span className="block truncate font-bold">
+                        {meta.label}
+                      </span>
+
+                      <span className="mt-1 block text-[10px] font-medium opacity-70">
+                        {totalEntries} entradas
+                      </span>
+                    </button>
+                  );
+                }
+              )}
+            </div>
+
+            {(() => {
+              const linkedTemplatesForSelectedArea = linkedTemplates
+                .filter((linked) => {
+                  const firstTemplate = quickTemplates.find(
+                    (template) => template.key === linked.firstTemplateKey
+                  );
+
+                  return firstTemplate?.area === selectedArea;
+                })
+                .slice()
+                .sort((a, b) =>
+                  a.label.localeCompare(b.label, "es", {
+                    sensitivity: "base",
+                  })
+                );
+
+              const templatesForSelectedAreaSorted = quickTemplates
+                .filter((template) => template.area === selectedArea)
+                .slice()
+                .sort((a, b) =>
+                  a.label.localeCompare(b.label, "es", {
+                    sensitivity: "base",
+                  })
+                );
+
+              const hasEntries =
+                linkedTemplatesForSelectedArea.length > 0 ||
+                templatesForSelectedAreaSorted.length > 0;
+
+              const selectedValue = draft.linkedTemplateKey
+                ? `${draft.templateKey}|||${draft.linkedTemplateKey}`
+                : draft.templateKey;
+
+              return (
+                <select
+                  value={hasEntries ? selectedValue : ""}
+                  disabled={!hasEntries}
+                  onChange={(e) => {
+                    const [templateKey, linkedTemplateKey] =
+                      e.target.value.split("|||");
+
+                    setDraft((prev) => ({
+                      ...prev,
+                      templateKey,
+                      linkedTemplateKey: linkedTemplateKey || "",
+                      includedTaskIds: [],
+                    }));
+                  }}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-3 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {!hasEntries && (
+                    <option value="">
+                      Sin entradas rápidas para {AREA_META[selectedArea].label}
+                    </option>
+                  )}
+
+                  {linkedTemplatesForSelectedArea.length > 0 && (
+                    <optgroup label="Trabajos vinculados">
+                      {linkedTemplatesForSelectedArea.map((linked) => (
                         <option
-                          key={day.date}
-                          value={day.date}
-                          disabled={isPastDate(day.date)}
+                          key={linked.id}
+                          value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
                         >
-                          {day.label}
+                          {linked.label}
                         </option>
                       ))}
-                    </select>
-                  </div>
+                    </optgroup>
+                  )}
 
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">
-                      Hora
-                    </label>
+                  {templatesForSelectedAreaSorted.length > 0 && (
+                    <optgroup label="Entradas rápidas">
+                      {templatesForSelectedAreaSorted.map((template) => (
+                        <option key={template.key} value={template.key}>
+                          {template.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              );
+            })()}
+          </div>
 
-                    <select
-                      value={selectedSlot.startTime}
-                      onChange={(e) =>
-                        setSelectedSlot((prev) =>
-                          prev ? { ...prev, startTime: e.target.value } : prev
-                        )
-                      }
-                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    >
-                      {(() => {
-                        const selectedDay = days.find(
-                          (d) => d.date === selectedSlot.date
-                        );
-                        const slots = selectedDay
-                          ? getValidSlotsForDate(selectedSlot.date, selectedDay.index)
-                          : [];
-
-                        return slots.map((slot) => (
-                          <option key={slot} value={slot}>
-                            {slot}
-                          </option>
-                        ));
-                      })()}
-                    </select>
-                  </div>
-                </div>
+          {availableIncludedTasks.length > 0 && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+              <div className="mb-2 text-sm font-semibold text-emerald-900">
+                Añadir tareas al mismo trabajo
               </div>
 
-              <div className="space-y-4">
-                <div className="space-y-3">
-                  <div className="grid grid-cols-5 gap-2">
-                    {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
-                      (area) => {
-                        const areaTemplates = quickTemplates
-                          .filter((template) => template.area === area)
-                          .slice()
-                          .sort((a, b) =>
-                            a.label.localeCompare(b.label, "es", {
-                              sensitivity: "base",
-                            })
-                          );
+              <div className="space-y-2">
+                {availableIncludedTasks.map((task) => {
+                  const checked = draft.includedTaskIds.includes(task.id);
 
-                        const areaLinkedTemplates = linkedTemplates
-                          .filter((linked) => {
-                            const firstTemplate = quickTemplates.find(
-                              (template) =>
-                                template.key === linked.firstTemplateKey
-                            );
+                  return (
+                    <label
+                      key={task.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                    >
+                      <span className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setDraft((prev) => ({
+                              ...prev,
+                              includedTaskIds: e.target.checked
+                                ? [...prev.includedTaskIds, task.id]
+                                : prev.includedTaskIds.filter(
+                                    (id) => id !== task.id
+                                  ),
+                            }));
+                          }}
+                        />
 
-                            return firstTemplate?.area === area;
-                          })
-                          .slice()
-                          .sort((a, b) =>
-                            a.label.localeCompare(b.label, "es", {
-                              sensitivity: "base",
-                            })
-                          );
-
-                        const meta = AREA_META[area];
-                        const Icon = meta.icon;
-                        const active = selectedArea === area;
-                        const totalEntries =
-                          areaTemplates.length + areaLinkedTemplates.length;
-
-                        return (
-                          <button
-                            key={area}
-                            type="button"
-                            onClick={() => {
-                              const firstLinked = areaLinkedTemplates[0];
-                              const firstTemplate = areaTemplates[0];
-
-                              setSelectedArea(area);
-
-                              setDraft((prev) => ({
-                                ...prev,
-                                templateKey: firstLinked
-                                  ? firstLinked.firstTemplateKey
-                                  : firstTemplate?.key ?? "",
-                                linkedTemplateKey: firstLinked
-                                  ? firstLinked.secondTemplateKey
-                                  : "",
-                                includedTaskIds: [],
-                              }));
-                            }}
-                            className={`rounded-2xl border px-2 py-2 text-xs font-semibold transition ${meta.color} ${
-                              active
-                                ? "ring-2 ring-slate-900 ring-offset-2"
-                                : "opacity-80 hover:opacity-100"
-                            }`}
-                            title={meta.label}
-                          >
-                            <Icon className="mx-auto mb-1 h-4 w-4" />
-
-                            <span className="block truncate font-bold">
-                              {meta.label}
-                            </span>
-
-                            <span className="mt-1 block text-[10px] font-medium opacity-70">
-                              {totalEntries} entradas
-                            </span>
-                          </button>
-                        );
-                      }
-                    )}
-                  </div>
-
-                  {(() => {
-                    const linkedTemplatesForSelectedArea = linkedTemplates
-                      .filter((linked) => {
-                        const firstTemplate = quickTemplates.find(
-                          (template) =>
-                            template.key === linked.firstTemplateKey
-                        );
-
-                        return firstTemplate?.area === selectedArea;
-                      })
-                      .slice()
-                      .sort((a, b) =>
-                        a.label.localeCompare(b.label, "es", {
-                          sensitivity: "base",
-                        })
-                      );
-
-                    const templatesForSelectedAreaSorted = quickTemplates
-                      .filter((template) => template.area === selectedArea)
-                      .slice()
-                      .sort((a, b) =>
-                        a.label.localeCompare(b.label, "es", {
-                          sensitivity: "base",
-                        })
-                      );
-
-                    const hasEntries =
-                      linkedTemplatesForSelectedArea.length > 0 ||
-                      templatesForSelectedAreaSorted.length > 0;
-
-                    const selectedValue = draft.linkedTemplateKey
-                      ? `${draft.templateKey}|||${draft.linkedTemplateKey}`
-                      : draft.templateKey;
-
-                    return (
-                      <select
-                        value={hasEntries ? selectedValue : ""}
-                        disabled={!hasEntries}
-                        onChange={(e) => {
-                          const [templateKey, linkedTemplateKey] =
-                            e.target.value.split("|||");
-
-                          setDraft((prev) => ({
-                            ...prev,
-                            templateKey,
-                            linkedTemplateKey: linkedTemplateKey || "",
-                            includedTaskIds: [],
-                          }));
-                        }}
-                        className="w-full rounded-2xl border border-slate-200 px-3 py-3 disabled:bg-slate-100 disabled:text-slate-400"
-                      >
-                        {!hasEntries && (
-                          <option value="">
-                            Sin entradas rápidas para {AREA_META[selectedArea].label}
-                          </option>
-                        )}
-
-                        {linkedTemplatesForSelectedArea.length > 0 && (
-                          <optgroup label="Trabajos vinculados">
-                            {linkedTemplatesForSelectedArea.map((linked) => (
-                              <option
-                                key={linked.id}
-                                value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
-                              >
-                                {linked.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-
-                        {templatesForSelectedAreaSorted.length > 0 && (
-                          <optgroup label="Entradas rápidas">
-                            {templatesForSelectedAreaSorted.map((template) => (
-                              <option key={template.key} value={template.key}>
-                                {template.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                      </select>
-                    );
-                  })()}
-                </div>
-
-                {availableIncludedTasks.length > 0 && (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-                    <div className="mb-2 text-sm font-semibold text-emerald-900">
-                      Añadir tareas al mismo trabajo
-                    </div>
-
-                    <div className="space-y-2">
-                      {availableIncludedTasks.map((task) => {
-                        const checked = draft.includedTaskIds.includes(task.id);
-
-                        return (
-                          <label
-                            key={task.id}
-                            className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                          >
-                            <span className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(e) => {
-                                  setDraft((prev) => ({
-                                    ...prev,
-                                    includedTaskIds: e.target.checked
-                                      ? [...prev.includedTaskIds, task.id]
-                                      : prev.includedTaskIds.filter(
-                                          (id) => id !== task.id
-                                        ),
-                                  }));
-                                }}
-                              />
-
-                              <span className="font-medium text-emerald-900">
-                                {task.label}
-                              </span>
-                            </span>
-
-                            {task.standardMinutes != null && (
-                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                                {task.standardMinutes} min
-                              </span>
-                            )}
-                          </label>
-                        );
-                      })}
-                    </div>
-
-                    {selectedIncludedTasks.length > 0 && (
-                      <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
-                        Se añadirán al mismo trabajo:{" "}
-                        <span className="font-semibold">
-                          {selectedIncludedTasks
-                            .map((task) => task.label)
-                            .join(" + ")}
+                        <span className="font-medium text-emerald-900">
+                          {task.label}
                         </span>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      </span>
 
-                <input
-                  value={draft.plate}
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, plate: e.target.value }))
-                  }
-                  placeholder="Matrícula"
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
-                />
+                      {task.standardMinutes != null && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          {task.standardMinutes} min
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
 
-                <input
-                  value={draft.customerName}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      customerName: e.target.value,
-                    }))
-                  }
-                  placeholder="Nombre cliente"
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-                />
-
-                <input
-                  value={draft.customerPhone}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      customerPhone: e.target.value,
-                    }))
-                  }
-                  placeholder="Teléfono móvil"
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-                />
-
-                <input
-                  type="number"
-                  min={15}
-                  step={15}
-                  value={draft.estimatedMinutes}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      estimatedMinutes: Number(e.target.value) || 45,
-                    }))
-                  }
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-                  placeholder="Duración prevista en minutos"
-                />
-
-                <div className="rounded-2xl border border-slate-200 px-3 py-3 text-sm text-slate-500">
-                  Fin previsto:{" "}
-                  <span className="font-medium text-slate-900">
-                    {addMinutesToTime(
-                      selectedSlot.startTime,
-                      draft.estimatedMinutes
-                    )}
+              {selectedIncludedTasks.length > 0 && (
+                <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
+                  Se añadirán al mismo trabajo:{" "}
+                  <span className="font-semibold">
+                    {selectedIncludedTasks
+                      .map((task) => task.label)
+                      .join(" + ")}
                   </span>
                 </div>
-
-                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
-                  <input
-                    type="checkbox"
-                    checked={draft.urgent}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        urgent: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span className="text-sm font-medium">Urgente</span>
-                </label>
-              </div>
-
-              <div className="mt-6 flex gap-3">
-                <button
-                  onClick={() => {
-                    setModalOpen(false);
-                    setEditingJobId(null);
-                    setSelectedSlot(null);
-                    resetDraft();
-                  }}
-                  className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  onClick={createScheduledJob}
-                  disabled={
-                    !draft.plate.trim() ||
-                    !draft.templateKey ||
-                    quickTemplates.length === 0 ||
-                    !selectedSlot ||
-                    isPastDateTime(selectedSlot.date, selectedSlot.startTime)
-                  }
-                  className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
-                >
-                  {editingJobId != null ? "Guardar cambios" : "Guardar cita"}
-                </button>
-              </div>
+              )}
             </div>
+          )}
+
+          <input
+            value={draft.plate}
+            onChange={(e) =>
+              setDraft((prev) => ({ ...prev, plate: e.target.value }))
+            }
+            placeholder="Matrícula"
+            className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+          />
+
+          <input
+            value={draft.customerName}
+            onChange={(e) =>
+              setDraft((prev) => ({
+                ...prev,
+                customerName: e.target.value,
+              }))
+            }
+            placeholder="Nombre cliente"
+            className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+          />
+
+          <input
+            value={draft.customerPhone}
+            onChange={(e) =>
+              setDraft((prev) => ({
+                ...prev,
+                customerPhone: e.target.value,
+              }))
+            }
+            placeholder="Teléfono móvil"
+            className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+          />
+
+          <input
+            type="number"
+            min={15}
+            step={15}
+            value={draft.estimatedMinutes}
+            onChange={(e) =>
+              setDraft((prev) => ({
+                ...prev,
+                estimatedMinutes: Number(e.target.value) || 45,
+              }))
+            }
+            className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+            placeholder="Duración prevista en minutos"
+          />
+
+          <div className="rounded-2xl border border-slate-200 px-3 py-3 text-sm text-slate-500">
+            Fin previsto:{" "}
+            <span className="font-medium text-slate-900">
+              {addMinutesToTime(
+                selectedSlot.startTime,
+                draft.estimatedMinutes
+              )}
+            </span>
           </div>
-        )}
+
+          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
+            <input
+              type="checkbox"
+              checked={draft.urgent}
+              onChange={(e) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  urgent: e.target.checked,
+                }))
+              }
+            />
+            <span className="text-sm font-medium">Urgente</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setModalOpen(false);
+              setEditingJobId(null);
+              setSelectedSlot(null);
+              resetDraft();
+            }}
+            className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            onClick={createScheduledJob}
+            disabled={
+              !draft.plate.trim() ||
+              !draft.templateKey ||
+              quickTemplates.length === 0 ||
+              !selectedSlot ||
+              isPastDateTime(selectedSlot.date, selectedSlot.startTime)
+            }
+            className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
+          >
+            {editingJobId != null ? "Guardar cambios" : "Guardar cita"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
       </div>
     </div>
   );
