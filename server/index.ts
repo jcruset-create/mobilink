@@ -34,51 +34,15 @@ function safeJsonParse<T>(value: unknown, fallback: T): T {
   }
 }
 
-function safeJson(value: any, fallback: any) {
-  if (value == null) return fallback;
-
-  if (typeof value === "object") {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return fallback;
-    }
-  }
-
-  return fallback;
-}
-
-function normalizeTechRow(row: any) {
-  if (!row) return null;
-
-  const status = row.status ?? "disponible";
-
-  const protectedStatuses = new Set([
-    "nodisponible",
-    "vacaciones",
-    "baja",
-    "permiso",
-    "otro_taller",
-  ]);
-
+function normalizeTechRow(t: any) {
   return {
-    name: row.name,
-    status,
-    blocked: protectedStatuses.has(status) || Boolean(row.blocked),
-    currentJobId: row.currentJobId ?? row.currentjobid ?? null,
-    competencies: safeJson(row.competencies, {}),
-    priorities: safeJson(row.priorities, {}),
-    avatar: row.avatar ?? null,
-    statusChangedAtMs:
-      row.statusChangedAtMs ?? row.statuschangedatms ?? Date.now(),
-    statusTotals: safeJson(
-      row.statusTotals ?? row.statustotals,
-      {}
-    ),
+    name: t.name,
+    status: t.status,
+    blocked: !!t.blocked,
+    currentJobId: t.currentJobId ?? null,
+    competencies: safeJsonParse(t.competencies, {}),
+    priorities: safeJsonParse(t.priorities, {}),
+    avatar: t.avatar ?? null,
   };
 }
 
@@ -145,7 +109,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 
   next();
 }
-type UserRole = "admin" | "supervisor" | "pantallas";
+type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 function getRoleFromRequest(req: express.Request): UserRole | null {
   const token = String(req.headers["x-admin-token"] ?? "");
@@ -167,7 +131,12 @@ if (
 ) {
   return "pantallas";
 }
-
+if (
+  process.env.TV75_PASSWORD &&
+  token === process.env.TV75_PASSWORD
+) {
+  return "tv75";
+}
   return null;
 }
 

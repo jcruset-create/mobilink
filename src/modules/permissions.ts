@@ -1,43 +1,69 @@
-export type UserRole = "admin" | "supervisor" | "pantallas";
+export type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 export type AppView =
   | "operativo"
   | "agenda"
   | "ajustes"
-  | "pantalla"
-  | "informes"
-  | "operarios";
+  | "operarios"
+  | "workshop_tv_75"
+  | "pantalla";
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Administrador",
   supervisor: "Supervisor",
   pantallas: "Pantallas",
+  tv75: "TV 75",
 };
 
 export const DEFAULT_VIEW_BY_ROLE: Record<UserRole, AppView> = {
   admin: "operativo",
   supervisor: "operativo",
   pantallas: "operarios",
+  tv75: "workshop_tv_75",
 };
 
 export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
-  admin: ["operativo", "agenda", "ajustes", "pantalla", "informes", "operarios"],
-  supervisor: ["operativo", "agenda", "ajustes", "pantalla", "informes", "operarios"],
-  pantallas: ["pantalla", "operarios"],
+  admin: [
+    "operativo",
+    "agenda",
+    "ajustes",
+    "operarios",
+    "workshop_tv_75",
+    "pantalla",
+  ],
+  supervisor: [
+    "operativo",
+    "agenda",
+    "operarios",
+    "workshop_tv_75",
+    "pantalla",
+  ],
+  pantallas: [
+    "operarios",
+    "pantalla",
+  ],
+  tv75: [
+    "workshop_tv_75",
+  ],
 };
 
-export function isValidUserRole(value: string | null): value is UserRole {
-  return value === "admin" || value === "supervisor" || value === "pantallas";
-}
-
-export function canAccessView(role: UserRole | null, view: AppView) {
-  if (!role) return false;
-  return VIEWS_BY_ROLE[role].includes(view);
+export function isValidUserRole(role: string | null): role is UserRole {
+  return (
+    role === "admin" ||
+    role === "supervisor" ||
+    role === "pantallas" ||
+    role === "tv75"
+  );
 }
 
 export function getDefaultViewForRole(role: UserRole | null): AppView {
   if (!role) return "operativo";
   return DEFAULT_VIEW_BY_ROLE[role];
+}
+
+export function canAccessView(role: UserRole | null, view: AppView) {
+  if (!role) return false;
+  return VIEWS_BY_ROLE[role].includes(view);
 }
 
 export function canUseAdminTools(role: UserRole | null) {

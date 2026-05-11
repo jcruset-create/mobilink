@@ -31,3 +31,8 @@ select {
 table {
   border-collapse: collapse;
 }
+.tv75-scale {
+  zoom: 0.78;
+  width: 128%;
+  height: 128vh;
+}

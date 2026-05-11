@@ -3,6 +3,7 @@ import AgendaView from "./components/AgendaView";
 import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import OperariosTVView from "./components/OperariosTVView";
+import WorkshopTV75View from "./components/WorkshopTV75View";
 import {
   buildAuthorizedJob,
   buildRejectedValidationJob,
@@ -514,9 +515,8 @@ function updateTechStatusTotals(
 
   const shouldClearCurrentJob =
     nextStatus === "disponible" ||
-    nextStatus === "nodisponible" ||
     nextStatus === "supervisor" ||
-    isManualUnavailableStatus(nextStatus);
+    isUnavailableTechStatus(nextStatus);
 
   return {
     ...tech,
@@ -1075,7 +1075,7 @@ function applyAssignmentToTechs(
 }
 function isManualUnavailableStatus(status: string) {
   return (
-       status === "nodisponible" ||
+    status === "nodisponible" ||
     status === "permiso" ||
     status === "vacaciones" ||
     status === "baja" ||
@@ -1445,52 +1445,49 @@ function normalizeJobFromApi(job: any): Job {
   };
 }
 
+function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
+  return techsToApply;
+}
 
-function syncTechsWithActiveJobs(baseTechs: Tech[], jobsToSync: Job[]): Tech[] {
-  const realActiveJobs = jobsToSync.filter((job) => job.status === "activo");
+function syncTechsWithActiveJobs(baseTechs: Tech[], jobs: Job[]): Tech[] {
+  const activeJobs = jobs.filter((job) => job.status === "activo");
 
-  return baseTechs.map((tech) => {
-    const normalizedStatus = normalizeTechStatusValue(tech.status);
-
-    // 1) Estados protegidos: nunca se pisan al refrescar.
-    if (isUnavailableTechStatus(normalizedStatus)) {
+  const synced: Tech[] = baseTechs.map((tech): Tech => {
+    if (isManualUnavailableStatus(tech.status)) {
       return {
         ...tech,
-        status: normalizedStatus as TechStatus,
         blocked: true,
         currentJobId: null,
       };
     }
 
-    // 2) Solo los trabajos activos ocupan técnicos.
-    // Los trabajos en validacion NO ocupan.
-    const activeJob = realActiveJobs.find((job) =>
+    const activeJob = activeJobs.find((job) =>
       (job.assignedNames ?? []).includes(tech.name)
     );
 
     if (!activeJob) {
       return {
         ...tech,
-        status: tech.name === "Ramón" ? "supervisor" : "disponible",
-        blocked: false,
+        status:
+          tech.status === "supervisor"
+            ? "supervisor"
+            : "disponible",
         currentJobId: null,
+        blocked: tech.status === "supervisor",
       };
     }
 
-    const assignedIndex = (activeJob.assignedNames ?? []).indexOf(tech.name);
+    const index = (activeJob.assignedNames ?? []).indexOf(tech.name);
 
     return {
       ...tech,
       currentJobId: activeJob.id,
+      status: index === 0 ? "ocupado" : "refuerzo",
       blocked: false,
-      status:
-        assignedIndex === 0
-          ? tech.name === "Ramón"
-            ? "supervisor"
-            : "ocupado"
-          : "refuerzo",
     };
   });
+
+  return applyManualTechStatusOverrides(synced);
 }
 
 
@@ -1956,7 +1953,22 @@ const [externalAIAnswer, setExternalAIAnswer] = useState("");
 const [externalAILoading, setExternalAILoading] = useState(false);
 const [newTechName, setNewTechName] = useState("");
 const [, setTick] = useState(0);
-const [view, setView] = useState<AppView>("operativo");
+const [view, setView] = useState<AppView>(() => {
+  const storedRole = localStorage.getItem("sea-role");
+
+  if (isValidUserRole(storedRole)) {
+    return getDefaultViewForRole(storedRole);
+  }
+
+  return "operativo";
+});
+useEffect(() => {
+  if (!userRole) return;
+
+  if (!canAccessView(userRole, view)) {
+    setView(getDefaultViewForRole(userRole));
+  }
+}, [userRole, view]);
   useEffect(() => {
     async function loadRules() {
       try {
@@ -4831,6 +4843,41 @@ function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
 async function setTechManual(name: string, nextStatus: TechStatus) {
   const tech = techs.find((item) => item.name === name);
   if (!tech) return;
+  const validationProposal = getValidationProposalForTech(name, jobs);
+
+if (validationProposal && tech.currentJobId == null) {
+  const ok = window.confirm(
+    `${name} está propuesto para ${validationProposal.plate}.\n\nSi cambias su estado, se quitará de la propuesta pendiente. ¿Continuar?`
+  );
+
+  if (!ok) return;
+
+  const updatedJobs: Job[] = jobs.map((job) =>
+    job.id === validationProposal.id
+      ? {
+          ...job,
+          assignedNames: (job.assignedNames ?? []).filter(
+            (assignedName) => assignedName !== name
+          ),
+          reason: `Propuesta actualizada manualmente. ${name} quitado por cambio de estado.`,
+        }
+      : job
+  );
+
+  setJobs(updatedJobs);
+
+  const updatedProposal = updatedJobs.find(
+    (job) => job.id === validationProposal.id
+  );
+
+  if (updatedProposal) {
+    saveJobToBackend(updatedProposal);
+  }
+
+  appendLog(
+    `${name} quitado de la propuesta ${validationProposal.plate} por cambio de estado.`
+  );
+}
 
   const currentJob =
     tech.currentJobId != null
@@ -5545,6 +5592,29 @@ function updateTechPriority(
     return updated;
   });
 }
+
+if (userRole === "tv75") {
+  return (
+    <WorkshopTV75View
+      jobs={jobs}
+      techs={techs}
+      finishJob={finishJob}
+      moveJobToStandBy={pauseJob}
+      getOperationLabel={getOperationLabel}
+      onBack={undefined}
+      onLogout={() => {
+        localStorage.removeItem("sea-authenticated");
+        localStorage.removeItem("sea-admin-token");
+        localStorage.removeItem("sea-role");
+
+        setUserRole(null);
+        setIsAuthenticated(false);
+        setView("operativo");
+      }}
+    />
+  );
+}
+
 if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
   return (
     <WorkshopWallScreen
@@ -5556,6 +5626,8 @@ if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
 />
   );
 }
+
+
 if (view === "operarios" && canAccessView(userRole, "operarios")) {
   return (
     <OperariosTVView
@@ -5567,6 +5639,31 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
       onBack={() => setView("operativo")}
       onGoWorkshopScreen={() => setView("pantalla")}
       canGoBack={canAccessView(userRole, "operativo")}
+      onLogout={() => {
+        localStorage.removeItem("sea-authenticated");
+        localStorage.removeItem("sea-admin-token");
+        localStorage.removeItem("sea-role");
+
+        setUserRole(null);
+        setIsAuthenticated(false);
+        setView("operativo");
+      }}
+    />
+  );
+}
+if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
+  return (
+    <WorkshopTV75View
+      jobs={jobs}
+      techs={techs}
+      finishJob={finishJob}
+      moveJobToStandBy={pauseJob}
+      getOperationLabel={getOperationLabel}
+      onBack={
+        canAccessView(userRole, "operativo")
+          ? () => setView("operativo")
+          : undefined
+      }
       onLogout={() => {
         localStorage.removeItem("sea-authenticated");
         localStorage.removeItem("sea-admin-token");
@@ -5667,70 +5764,107 @@ return (
           </div>
         </div>
 
-        <div className="flex gap-2">
-          {canAccessView(userRole, "operativo") && (
-  <button
-    onClick={() => setView("operativo")}
-    className={`rounded-2xl px-4 py-2 text-sm font-medium ${
-      view === "operativo"
-        ? "bg-slate-900 text-white"
-        : "border border-slate-200 bg-white text-slate-700"
-    }`}
-  >
-    Operativo
-  </button>
-)}
-          <button
-  type="button"
-  onClick={() => {
-    localStorage.removeItem("sea-authenticated");
-localStorage.removeItem("sea-admin-token");
-localStorage.removeItem("sea-role");
+       <div className="flex flex-wrap gap-2">
+  {canAccessView(userRole, "operativo") && (
+    <button
+      type="button"
+      onClick={() => setView("operativo")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "operativo"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Operativo
+    </button>
+  )}
 
-setUserRole(null);
-setIsAuthenticated(false);
-  }}
-  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
->
-  Salir
-</button>
-{canAccessView(userRole, "agenda") && (
+  {canAccessView(userRole, "agenda") && (
+    <button
+      type="button"
+      onClick={() => setView("agenda")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "agenda"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Agenda
+    </button>
+  )}
+
+  {userCanUseScreens && canAccessView(userRole, "operarios") && (
+    <button
+      type="button"
+      onClick={() => setView("operarios")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "operarios"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Pantalla técnicos
+    </button>
+  )}
+
+  {canAccessView(userRole, "workshop_tv_75") && (
+    <button
+      type="button"
+      onClick={() => setView("workshop_tv_75")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "workshop_tv_75"
+          ? "bg-slate-900 text-white"
+          : "border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100"
+      }`}
+    >
+      Pantalla taller TV 75"
+    </button>
+  )}
+
+  {userCanUseScreens && canAccessView(userRole, "pantalla") && (
+    <button
+      type="button"
+      onClick={() => setView("pantalla")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "pantalla"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Pantalla taller
+    </button>
+  )}
+
+  {canAccessView(userRole, "ajustes") && (
+    <button
+      type="button"
+      onClick={() => setView("ajustes")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "ajustes"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Ajustes
+    </button>
+  )}
+
   <button
-    onClick={() => setView("agenda")}
-    className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
+    type="button"
+    onClick={() => {
+      localStorage.removeItem("sea-authenticated");
+      localStorage.removeItem("sea-admin-token");
+      localStorage.removeItem("sea-role");
+
+      setUserRole(null);
+      setIsAuthenticated(false);
+      setView("operativo");
+    }}
+    className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
   >
-    Agenda
+    Salir
   </button>
-)}
-{userCanUseScreens && canAccessView(userRole, "operarios") && (
-  <button
-    onClick={() => setView("operarios")}
-    className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
-  >
-    Pantalla Técnicos
-  </button>
-)}
-          {canAccessView(userRole, "ajustes") && (
-  <button
-    onClick={() => setView("ajustes")}
-    className={`rounded-2xl px-4 py-2 text-sm font-medium ${
-      view === "ajustes"
-        ? "bg-slate-900 text-white"
-        : "border border-slate-200 bg-white text-slate-700"
-    }`}
-  >
-    Ajustes
-  </button>
-)}
-{userCanUseScreens && canAccessView(userRole, "pantalla") && (
-  <button
-    onClick={() => setView("pantalla")}
-    className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
-  >
-    Pantalla taller
-  </button>
-)}
-        </div>
+</div>
       </div>
 
       {view === "ajustes" && (
@@ -7233,20 +7367,21 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <tbody>
                 {techs.map((tech) => {
   const currentJob = jobs.find(
-    (job) => job.id === tech.currentJobId
-  );
+  (job) => job.id === tech.currentJobId
+);
 
-  const validationProposal = getValidationProposalForTech(
-    tech.name,
-    jobs
-  );
+const validationProposal = getValidationProposalForTech(
+  tech.name,
+  jobs
+);
 
-  const rowColor = validationProposal
-    ? "bg-violet-50 border-violet-200 text-violet-700"
-    : getTechStatusColor(tech.status);
+const isReservedForValidation = Boolean(validationProposal && !currentJob);
 
-  const textColor = "";
+const rowColor = isReservedForValidation
+  ? "bg-violet-50 border-violet-200 text-violet-800"
+  : getTechStatusColor(tech.status);
 
+const textColor = "";
   return (
                     <tr key={tech.name} className={`border-t ${rowColor}`}>
                       <td className={`py-2 font-medium ${textColor}`}>
@@ -7260,13 +7395,19 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 </td>
                       <td className={`py-2 ${textColor}`}>
-                        <select
-                          value={tech.status}
-                          onChange={(e) =>
-                            setTechManual(tech.name, e.target.value as TechStatus)
-                          }
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1"
-                        >
+  {isReservedForValidation && validationProposal && (
+    <div className="mb-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase text-violet-700">
+      Reservado · {validationProposal.plate}
+    </div>
+  )}
+
+  <select
+    value={tech.status}
+    onChange={(e) =>
+      setTechManual(tech.name, e.target.value as TechStatus)
+    }
+    className="rounded-lg border border-slate-200 bg-white px-2 py-1"
+  >
                           <option value="disponible">disponible</option>
 <option value="refuerzo">refuerzo</option>
 <option value="ocupado">ocupado</option>

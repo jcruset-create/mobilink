@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "supervisor" | "pantallas";
+export type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 type AppUser = {
   role: UserRole;
@@ -19,6 +19,10 @@ export function getUsers(): AppUser[] {
       role: "pantallas",
       password: process.env.SCREENS_PASSWORD,
     },
+    {
+  role: "tv75",
+  password: process.env.TV75_PASSWORD,
+},
   ];
 }
 
