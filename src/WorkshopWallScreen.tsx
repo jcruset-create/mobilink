@@ -1,3 +1,4 @@
+import ScaleToFit from "./components/ScaleToFit";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { ScheduledJob } from "./components/AgendaView";
@@ -326,8 +327,9 @@ function getScheduledPhaseLabel(job: ScheduledJobForWall) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 p-6 text-white">
-      <div className="mx-auto max-w-[1800px] space-y-6">
+  <ScaleToFit width={2620} height={1600}>
+    <div className="h-[1600px] w-[2620px] overflow-hidden bg-slate-950 text-white">
+      <div className="mx-auto max-w-[2620px] space-y-6">
         <header className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl">
           <div className="flex items-center justify-between gap-4 p-6">
             <div className="flex items-center gap-4">
@@ -775,6 +777,7 @@ const phaseLabel = getScheduledPhaseLabel(job);
           </div>
         </section>
       </div>
-    </div>
-  );
+      </div>
+  </ScaleToFit>
+);
 }
