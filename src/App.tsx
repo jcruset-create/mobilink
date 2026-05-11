@@ -41,6 +41,7 @@ import {
   XCircle,
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
+const APP_VERSION = "v1.2.2";
 type TechStatus =
   | "disponible"
   | "ocupado"
@@ -3517,6 +3518,23 @@ function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
     saveJobToBackend(job);
   }
 }
+function updateScheduledJobField(
+  scheduledId: number,
+  field: "plate" | "customerName" | "customerPhone",
+  value: string
+) {
+  setScheduledJobs((prev) =>
+    prev.map((item) =>
+      item.id === scheduledId
+        ? {
+            ...item,
+            [field]: field === "plate" ? value.toUpperCase() : value,
+          }
+        : item
+    )
+  );
+}
+
 function cancelScheduledJob(id: number) {
   const scheduled = scheduledJobs.find((item) => item.id === id);
   if (!scheduled) return;
@@ -5742,8 +5760,9 @@ return (
         <div className="flex items-center gap-3">
           <UserCog className="h-8 w-8" />
           <div>
-            <h1 className="text-2xl font-semibold">SEA Tarragona · Panel V1</h1>
-           <p className="text-sm text-slate-600">
+<h1 className="text-2xl font-semibold">
+  SEA Tarragona · Panel {APP_VERSION}
+</h1>           <p className="text-sm text-slate-600">
   Pantalla dividida en Operativo y Ajustes
 </p>
 
@@ -6326,9 +6345,14 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
           >
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <div className="text-3xl font-black tracking-wide text-slate-950">
-                  {job.plate}
-                </div>
+                <input
+  value={job.plate}
+  onChange={(e) =>
+    updateScheduledJobField(job.id, "plate", e.target.value)
+  }
+  placeholder="Matrícula"
+  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-3xl font-black uppercase tracking-wide text-slate-950"
+/>
 
                 <div className="mt-1 text-lg font-bold text-amber-900">
                   {job.date} · {job.startTime}
@@ -6376,18 +6400,34 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
             <div className="mt-3 grid gap-2 text-sm">
               <div className="rounded-xl bg-slate-50 px-3 py-2">
-                <span className="font-bold text-slate-700">Cliente:</span>{" "}
-                <span className="text-slate-700">
-                  {job.customerName || "Cliente sin nombre"}
-                </span>
-              </div>
+  <label className="mb-1 block text-xs font-bold text-slate-700">
+    Cliente
+  </label>
+
+  <input
+    value={job.customerName || ""}
+    onChange={(e) =>
+      updateScheduledJobField(job.id, "customerName", e.target.value)
+    }
+    placeholder="Nombre del cliente"
+    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+  />
+</div>
 
               <div className="rounded-xl bg-slate-50 px-3 py-2">
-                <span className="font-bold text-slate-700">Teléfono:</span>{" "}
-                <span className="text-slate-700">
-                  {job.customerPhone || "Sin teléfono"}
-                </span>
-              </div>
+  <label className="mb-1 block text-xs font-bold text-slate-700">
+    Teléfono
+  </label>
+
+  <input
+    value={job.customerPhone || ""}
+    onChange={(e) =>
+      updateScheduledJobField(job.id, "customerPhone", e.target.value)
+    }
+    placeholder="Teléfono móvil"
+    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+  />
+</div>
 
               {job.urgent && (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-black text-red-700">
