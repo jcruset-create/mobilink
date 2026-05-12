@@ -2445,7 +2445,12 @@ useAutoSync({
   onSync: async () => {
     await reloadJobsFromBackend();
     await reloadQuickTemplatesFromBackend();
-    await reloadScheduledJobsFromBackend();
+
+    // IMPORTANTE:
+    // No recargamos agenda en autosync para no pisar citas recién creadas.
+    // La agenda se guarda al crear/editar/cancelar.
+    // await reloadScheduledJobsFromBackend();
+
     await reloadLogsFromBackend();
     await reloadTechsFromBackend();
   },
@@ -2462,6 +2467,11 @@ useEffect(() => {
     setView(getDefaultViewForRole(userRole));
   }
 }, [isAuthenticated, userRole, view]);
+useEffect(() => {
+  if (!isAuthenticated) return;
+
+  reloadScheduledJobsFromBackend();
+}, [isAuthenticated]);
 
 useEffect(() => {
   if (!scheduledJobsLoaded) return;
