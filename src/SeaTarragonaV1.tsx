@@ -48,7 +48,7 @@ import {
   XCircle,
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
-const APP_VERSION = "v1.2.3";
+const APP_VERSION = "v1.2.5";
 type TechStatus =
   | "disponible"
   | "ocupado"
@@ -1786,6 +1786,8 @@ export default function SeaTarragonaV1() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const scheduledJobsLoadedRef = useRef(false);
+  const scheduledJobsDirtyRef = useRef(false);
+  const scheduledJobsSaveVersionRef = useRef(0);
   const [scheduledJobsLoaded, setScheduledJobsLoaded] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
   return localStorage.getItem("sea-authenticated") === "true";
@@ -3044,6 +3046,11 @@ async function reloadTechsFromBackend(currentJobs = jobs) {
 
 async function reloadScheduledJobsFromBackend() {
   try {
+    if (scheduledJobsDirtyRef.current) {
+      console.log("Agenda con cambios pendientes. No se recarga para no pisar datos locales.");
+      return;
+    }
+
     const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
 
     if (!response.ok) {
@@ -3065,7 +3072,10 @@ async function reloadScheduledJobsFromBackend() {
   }
 }
 
-async function saveScheduledJobsToBackend(items: ScheduledJob[]) {
+async function saveScheduledJobsToBackend(
+  items: ScheduledJob[],
+  saveVersion: number
+) {
   try {
     const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
       method: "PUT",
@@ -3079,6 +3089,11 @@ async function saveScheduledJobsToBackend(items: ScheduledJob[]) {
       const text = await response.text();
       console.error("Error guardando agenda:", response.status, text);
       appendLog("Error guardando agenda.");
+      return;
+    }
+
+    if (scheduledJobsSaveVersionRef.current === saveVersion) {
+      scheduledJobsDirtyRef.current = false;
     }
   } catch (error) {
     console.error("Error guardando agenda:", error);
@@ -3094,7 +3109,12 @@ function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
         : action;
 
     if (scheduledJobsLoadedRef.current) {
-      void saveScheduledJobsToBackend(next);
+      scheduledJobsDirtyRef.current = true;
+      scheduledJobsSaveVersionRef.current += 1;
+
+      const saveVersion = scheduledJobsSaveVersionRef.current;
+
+      void saveScheduledJobsToBackend(next, saveVersion);
     }
 
     return next;
