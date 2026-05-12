@@ -48,7 +48,7 @@ import {
   XCircle,
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
-const APP_VERSION = "v1.2.5";
+const APP_VERSION = "v1.2.6";
 type TechStatus =
   | "disponible"
   | "ocupado"

@@ -913,7 +913,20 @@ app.put("/api/scheduled-jobs", async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
-    await db.query(`DELETE FROM scheduled_jobs`);
+    if (items.length === 0) {
+      console.warn(
+        "PUT /api/scheduled-jobs recibido vacío. No se borra la agenda por seguridad."
+      );
+
+      const current = await db.query(`
+        SELECT data
+        FROM scheduled_jobs
+        ORDER BY id ASC
+      `);
+
+      res.json(current.rows.map((row) => row.data));
+      return;
+    }
 
     for (const item of items) {
       if (!item || item.id == null) continue;
@@ -931,7 +944,13 @@ app.put("/api/scheduled-jobs", async (req, res) => {
       );
     }
 
-    res.json(items);
+    const current = await db.query(`
+      SELECT data
+      FROM scheduled_jobs
+      ORDER BY id ASC
+    `);
+
+    res.json(current.rows.map((row) => row.data));
   } catch (error) {
     console.error("PUT /api/scheduled-jobs error:", error);
     res.status(500).json({ error: "Error guardando citas programadas" });
