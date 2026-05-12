@@ -79,6 +79,12 @@ export async function initDb() {
       time TEXT NOT NULL,
       text TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+      id BIGINT PRIMARY KEY,
+      data JSONB NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
   `);
 
   await pool.query(`
@@ -94,6 +100,14 @@ export async function initDb() {
   await pool.query(`
     ALTER TABLE techs
     ADD COLUMN IF NOT EXISTS "statusTotals" TEXT NOT NULL DEFAULT '{}';
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+      id BIGINT PRIMARY KEY,
+      data JSONB NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
   `);
 
   console.log("PostgreSQL/Supabase inicializado correctamente");

@@ -894,47 +894,48 @@ app.delete("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
   }
 });
 
-const scheduledJobsFile = path.join(
-  process.cwd(),
-  "server",
-  "scheduled-jobs.json"
-);
-
-function readScheduledJobs() {
+app.get("/api/scheduled-jobs", async (_req, res) => {
   try {
-    if (!fs.existsSync(scheduledJobsFile)) {
-      fs.writeFileSync(scheduledJobsFile, "[]", "utf-8");
-      return [];
-    }
+    const result = await db.query(`
+      SELECT data
+      FROM scheduled_jobs
+      ORDER BY id ASC
+    `);
 
-    const raw = fs.readFileSync(scheduledJobsFile, "utf-8");
-    return JSON.parse(raw || "[]");
+    res.json(result.rows.map((row) => row.data));
   } catch (error) {
-    console.error("Error leyendo scheduled-jobs:", error);
-    return [];
+    console.error("GET /api/scheduled-jobs error:", error);
+    res.status(500).json({ error: "Error obteniendo citas programadas" });
   }
-}
-
-function writeScheduledJobs(items: any[]) {
-  try {
-    fs.writeFileSync(
-      scheduledJobsFile,
-      JSON.stringify(items, null, 2),
-      "utf-8"
-    );
-  } catch (error) {
-    console.error("Error guardando scheduled-jobs:", error);
-  }
-}
-
-app.get("/api/scheduled-jobs", (_req, res) => {
-  res.json(readScheduledJobs());
 });
 
-app.put("/api/scheduled-jobs", (req, res) => {
-  const items = Array.isArray(req.body) ? req.body : [];
-  writeScheduledJobs(items);
-  res.json(items);
+app.put("/api/scheduled-jobs", async (req, res) => {
+  try {
+    const items = Array.isArray(req.body) ? req.body : [];
+
+    await db.query(`DELETE FROM scheduled_jobs`);
+
+    for (const item of items) {
+      if (!item || item.id == null) continue;
+
+      await db.query(
+        `
+          INSERT INTO scheduled_jobs (id, data, "updatedAtMs")
+          VALUES ($1, $2, $3)
+          ON CONFLICT (id)
+          DO UPDATE SET
+            data = EXCLUDED.data,
+            "updatedAtMs" = EXCLUDED."updatedAtMs"
+        `,
+        [item.id, JSON.stringify(item), Date.now()]
+      );
+    }
+
+    res.json(items);
+  } catch (error) {
+    console.error("PUT /api/scheduled-jobs error:", error);
+    res.status(500).json({ error: "Error guardando citas programadas" });
+  }
 });
 
 /* =========================================================
