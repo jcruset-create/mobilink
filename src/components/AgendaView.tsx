@@ -37,6 +37,7 @@ export type ScheduledJob = {
   plate: string;
   customerName: string;
   customerPhone: string;
+  notes?: string;
   urgent: boolean;
   includedTasks?: IncludedTask[];
   assignedTech?: string | null;
@@ -370,16 +371,17 @@ export default function AgendaView({
 
   const [selectedArea, setSelectedArea] = useState<AreaKey>("camion");
 
-  const [draft, setDraft] = useState({
-    templateKey: quickTemplates[0]?.key ?? "",
-    plate: "",
-    customerName: "",
-    customerPhone: "",
-    urgent: false,
-    estimatedMinutes: 45,
-    linkedTemplateKey: "",
-    includedTaskIds: [] as string[],
-  });
+const [draft, setDraft] = useState({
+  templateKey: quickTemplates[0]?.key ?? "",
+  plate: "",
+  customerName: "",
+  customerPhone: "",
+  notes: "",
+  urgent: false,
+  estimatedMinutes: 45,
+  linkedTemplateKey: "",
+  includedTaskIds: [] as string[],
+});
 
   const templatesForSelectedArea = quickTemplates.filter(
     (template) => template.area === selectedArea
@@ -415,18 +417,19 @@ export default function AgendaView({
 
   const todayKey = formatLocalDate(new Date());
 
-  function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
-    setDraft({
-      templateKey,
-      plate: "",
-      customerName: "",
-      customerPhone: "",
-      urgent: false,
-      estimatedMinutes: 45,
-      linkedTemplateKey: "",
-      includedTaskIds: [],
-    });
-  }
+ function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
+  setDraft({
+    templateKey,
+    plate: "",
+    customerName: "",
+    customerPhone: "",
+    notes: "",
+    urgent: false,
+    estimatedMinutes: 45,
+    linkedTemplateKey: "",
+    includedTaskIds: [],
+  });
+}
 
   function getFirstTemplateForArea(area: AreaKey) {
     return (
@@ -458,15 +461,16 @@ export default function AgendaView({
     setSelectedSlot({ date, startTime });
 
     setDraft({
-      templateKey: firstTemplateKey,
-      plate: "",
-      customerName: "",
-      customerPhone: "",
-      urgent: false,
-      estimatedMinutes: 45,
-      linkedTemplateKey: "",
-      includedTaskIds: [],
-    });
+  templateKey: firstTemplateKey,
+  plate: "",
+  customerName: "",
+  customerPhone: "",
+  notes: "",
+  urgent: false,
+  estimatedMinutes: 45,
+  linkedTemplateKey: "",
+  includedTaskIds: [],
+});
 
     setModalOpen(true);
   }
@@ -493,15 +497,16 @@ export default function AgendaView({
     setSelectedArea(firstTemplate?.area ?? "camion");
 
     setDraft({
-      templateKey: firstTemplate?.key ?? "",
-      plate: "",
-      customerName: "",
-      customerPhone: "",
-      urgent: false,
-      estimatedMinutes: 45,
-      linkedTemplateKey: "",
-      includedTaskIds: [],
-    });
+  templateKey: firstTemplate?.key ?? "",
+  plate: "",
+  customerName: "",
+  customerPhone: "",
+  notes: "",
+  urgent: false,
+  estimatedMinutes: 45,
+  linkedTemplateKey: "",
+  includedTaskIds: [],
+});
 
     setModalOpen(true);
   }
@@ -516,13 +521,14 @@ export default function AgendaView({
     });
 
     setDraft({
-      templateKey: job.firstTemplateKey || job.templateKey,
-      linkedTemplateKey: job.secondTemplateKey || "",
-      plate: job.plate,
-      customerName: job.customerName,
-      customerPhone: job.customerPhone,
-      urgent: job.urgent,
-      estimatedMinutes: Math.max(
+  templateKey: job.firstTemplateKey || job.templateKey,
+  linkedTemplateKey: job.secondTemplateKey || "",
+  plate: job.plate,
+  customerName: job.customerName,
+  customerPhone: job.customerPhone,
+  notes: job.notes || "",
+  urgent: job.urgent,
+  estimatedMinutes: Math.max(
         15,
         timeToMinutes(getScheduledEndTime(job)) -
           timeToMinutes(getScheduledStartTime(job))
@@ -583,12 +589,13 @@ export default function AgendaView({
       firstTemplateKey: selectedLinkedTemplate?.firstTemplateKey ?? null,
       secondTemplateKey: selectedLinkedTemplate?.secondTemplateKey ?? null,
 
-      plate: draft.plate.trim().toUpperCase(),
-      customerName: draft.customerName.trim(),
-      customerPhone: draft.customerPhone.trim(),
-      urgent: draft.urgent,
-      includedTasks,
-      estimatedMinutes: draft.estimatedMinutes,
+     plate: draft.plate.trim().toUpperCase(),
+customerName: draft.customerName.trim(),
+customerPhone: draft.customerPhone.trim(),
+notes: draft.notes.trim(),
+urgent: draft.urgent,
+includedTasks,
+estimatedMinutes: draft.estimatedMinutes,
     };
 
     const logLabel = selectedLinkedTemplate
@@ -968,6 +975,12 @@ export default function AgendaView({
                           </div>
                         )}
 
+                        {job.notes && (
+  <div className="truncate text-[10px] font-normal opacity-90">
+    Obs: {job.notes}
+  </div>
+)}
+
                         <div className="absolute bottom-1 left-1 right-1 flex gap-1">
                           {job.status === "programado" && (
                             <button
@@ -1214,8 +1227,7 @@ export default function AgendaView({
                       includedTaskIds: [],
                     }));
                   }}
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3 disabled:bg-slate-100 disabled:text-slate-400"
-                >
+className="w-full rounded-2xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 font-black text-red-700 shadow-sm disabled:bg-slate-100 disabled:text-slate-400"                >
                   {!hasEntries && (
                     <option value="">
                       Sin entradas rápidas para {AREA_META[selectedArea].label}
@@ -1226,11 +1238,12 @@ export default function AgendaView({
                     <optgroup label="Trabajos vinculados">
                       {linkedTemplatesForSelectedArea.map((linked) => (
                         <option
-                          key={linked.id}
-                          value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
-                        >
-                          {linked.label}
-                        </option>
+  key={linked.id}
+  value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
+  className="bg-yellow-100 font-bold text-red-700"
+>
+  {linked.label}
+</option>
                       ))}
                     </optgroup>
                   )}
@@ -1238,9 +1251,13 @@ export default function AgendaView({
                   {templatesForSelectedAreaSorted.length > 0 && (
                     <optgroup label="Entradas rápidas">
                       {templatesForSelectedAreaSorted.map((template) => (
-                        <option key={template.key} value={template.key}>
-                          {template.label}
-                        </option>
+                        <option
+  key={template.key}
+  value={template.key}
+  className="bg-yellow-100 font-bold text-red-700"
+>
+  {template.label}
+</option>
                       ))}
                     </optgroup>
                   )}
@@ -1340,6 +1357,19 @@ export default function AgendaView({
             placeholder="Teléfono móvil"
             className="w-full rounded-2xl border border-slate-200 px-3 py-3"
           />
+
+          <textarea
+  value={draft.notes}
+  onChange={(e) =>
+    setDraft((prev) => ({
+      ...prev,
+      notes: e.target.value,
+    }))
+  }
+  placeholder="Observaciones"
+  rows={3}
+  className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-3"
+/>
 
           <input
             type="number"
