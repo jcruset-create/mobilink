@@ -40,12 +40,13 @@ export type ScheduledJob = {
   notes?: string;
   urgent: boolean;
   includedTasks?: IncludedTask[];
+  estimatedMinutes?: number;
   assignedTech?: string | null;
   status: ScheduledJobStatus;
   arrivedAtMs?: number | null;
   jobId?: number | null;
-secondJobId?: number | null;
-googleEventId?: string | null;
+  secondJobId?: number | null;
+  googleEventId?: string | null;
   linkedTemplateId?: string | null;
   linkedTemplateLabel?: string | null;
   firstTemplateKey?: string | null;
@@ -73,6 +74,7 @@ type Props = {
 
 const SLOT_MINUTES = 15;
 const SLOT_HEIGHT = 24;
+const DEFAULT_ESTIMATED_MINUTES = 45;
 
 function timeToMinutes(time: string) {
   const [h, m] = time.split(":").map(Number);
@@ -230,7 +232,7 @@ function getScheduledEndTime(job: any): string {
     return String(job.end).slice(11, 16);
   }
 
-  return addMinutesToTime(getScheduledStartTime(job), 45);
+  return addMinutesToTime(getScheduledStartTime(job), DEFAULT_ESTIMATED_MINUTES);
 }
 
 function getSolidAreaClass(area: AreaKey) {
@@ -240,6 +242,7 @@ function getSolidAreaClass(area: AreaKey) {
   if (area === "turismo") return "bg-sky-500 text-white border-sky-600";
   return "bg-emerald-500 text-white border-emerald-600";
 }
+
 function getScheduledJobCardClass(job: ScheduledJob) {
   if (job.status === "en_cola") {
     return "bg-violet-600 text-white border-violet-700";
@@ -270,6 +273,7 @@ function getScheduledJobStatusLabel(status: ScheduledJobStatus) {
 
   return status;
 }
+
 function layoutOverlappingJobs(jobs: ScheduledJob[]) {
   const sorted = [...jobs].sort(
     (a, b) =>
@@ -371,17 +375,17 @@ export default function AgendaView({
 
   const [selectedArea, setSelectedArea] = useState<AreaKey>("camion");
 
-const [draft, setDraft] = useState({
-  templateKey: quickTemplates[0]?.key ?? "",
-  plate: "",
-  customerName: "",
-  customerPhone: "",
-  notes: "",
-  urgent: false,
-  estimatedMinutes: 45,
-  linkedTemplateKey: "",
-  includedTaskIds: [] as string[],
-});
+  const [draft, setDraft] = useState({
+    templateKey: quickTemplates[0]?.key ?? "",
+    plate: "",
+    customerName: "",
+    customerPhone: "",
+    notes: "",
+    urgent: false,
+    estimatedMinutes: DEFAULT_ESTIMATED_MINUTES,
+    linkedTemplateKey: "",
+    includedTaskIds: [] as string[],
+  });
 
   const templatesForSelectedArea = quickTemplates.filter(
     (template) => template.area === selectedArea
@@ -417,19 +421,51 @@ const [draft, setDraft] = useState({
 
   const todayKey = formatLocalDate(new Date());
 
- function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
-  setDraft({
-    templateKey,
-    plate: "",
-    customerName: "",
-    customerPhone: "",
-    notes: "",
-    urgent: false,
-    estimatedMinutes: 45,
-    linkedTemplateKey: "",
-    includedTaskIds: [],
-  });
-}
+  function getTemplateEstimatedMinutes(templateKey: string) {
+    const template = quickTemplates.find((item) => item.key === templateKey);
+    return template?.standardMinutes ?? DEFAULT_ESTIMATED_MINUTES;
+  }
+
+  function getEstimatedMinutesWithIncludedTasks(
+    templateKey: string,
+    includedTaskIds: string[]
+  ) {
+    const baseMinutes = getTemplateEstimatedMinutes(templateKey);
+
+    const template = quickTemplates.find((item) => item.key === templateKey);
+
+    if (!template) return baseMinutes;
+
+    const availableTasks = buildSelectableIncludedTasks(
+      template.area,
+      quickTemplates,
+      customExtraTasks,
+      template.key
+    );
+
+    const selectedTasks = getIncludedTasksByIds(includedTaskIds, availableTasks);
+
+    const extraMinutes = selectedTasks.reduce(
+      (total, task) => total + (task.standardMinutes ?? 0),
+      0
+    );
+
+    return baseMinutes + extraMinutes;
+  }
+
+  function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
+    setDraft({
+      templateKey,
+      plate: "",
+      customerName: "",
+      customerPhone: "",
+      notes: "",
+      urgent: false,
+      estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+    });
+  }
 
   function getFirstTemplateForArea(area: AreaKey) {
     return (
@@ -461,16 +497,19 @@ const [draft, setDraft] = useState({
     setSelectedSlot({ date, startTime });
 
     setDraft({
-  templateKey: firstTemplateKey,
-  plate: "",
-  customerName: "",
-  customerPhone: "",
-  notes: "",
-  urgent: false,
-  estimatedMinutes: 45,
-  linkedTemplateKey: "",
-  includedTaskIds: [],
-});
+      templateKey: firstTemplateKey,
+      plate: "",
+      customerName: "",
+      customerPhone: "",
+      notes: "",
+      urgent: false,
+      estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
+        firstTemplateKey,
+        []
+      ),
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+    });
 
     setModalOpen(true);
   }
@@ -493,20 +532,24 @@ const [draft, setDraft] = useState({
     });
 
     const firstTemplate = getFirstTemplateForArea("camion");
+    const firstTemplateKey = firstTemplate?.key ?? "";
 
     setSelectedArea(firstTemplate?.area ?? "camion");
 
     setDraft({
-  templateKey: firstTemplate?.key ?? "",
-  plate: "",
-  customerName: "",
-  customerPhone: "",
-  notes: "",
-  urgent: false,
-  estimatedMinutes: 45,
-  linkedTemplateKey: "",
-  includedTaskIds: [],
-});
+      templateKey: firstTemplateKey,
+      plate: "",
+      customerName: "",
+      customerPhone: "",
+      notes: "",
+      urgent: false,
+      estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
+        firstTemplateKey,
+        []
+      ),
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+    });
 
     setModalOpen(true);
   }
@@ -521,14 +564,14 @@ const [draft, setDraft] = useState({
     });
 
     setDraft({
-  templateKey: job.firstTemplateKey || job.templateKey,
-  linkedTemplateKey: job.secondTemplateKey || "",
-  plate: job.plate,
-  customerName: job.customerName,
-  customerPhone: job.customerPhone,
-  notes: job.notes || "",
-  urgent: job.urgent,
-  estimatedMinutes: Math.max(
+      templateKey: job.firstTemplateKey || job.templateKey,
+      linkedTemplateKey: job.secondTemplateKey || "",
+      plate: job.plate,
+      customerName: job.customerName,
+      customerPhone: job.customerPhone,
+      notes: job.notes || "",
+      urgent: job.urgent,
+      estimatedMinutes: Math.max(
         15,
         timeToMinutes(getScheduledEndTime(job)) -
           timeToMinutes(getScheduledStartTime(job))
@@ -576,10 +619,15 @@ const [draft, setDraft] = useState({
       availableTasksForSave
     );
 
+    const estimatedMinutes = getEstimatedMinutesWithIncludedTasks(
+      template.key,
+      draft.includedTaskIds
+    );
+
     const nextData = {
       date: selectedSlot.date,
       startTime: selectedSlot.startTime,
-      endTime: addMinutesToTime(selectedSlot.startTime, draft.estimatedMinutes),
+      endTime: addMinutesToTime(selectedSlot.startTime, estimatedMinutes),
 
       templateKey: template.key,
       area: template.area,
@@ -589,19 +637,21 @@ const [draft, setDraft] = useState({
       firstTemplateKey: selectedLinkedTemplate?.firstTemplateKey ?? null,
       secondTemplateKey: selectedLinkedTemplate?.secondTemplateKey ?? null,
 
-     plate: draft.plate.trim().toUpperCase(),
-customerName: draft.customerName.trim(),
-customerPhone: draft.customerPhone.trim(),
-notes: draft.notes.trim(),
-urgent: draft.urgent,
-includedTasks,
-estimatedMinutes: draft.estimatedMinutes,
+      plate: draft.plate.trim().toUpperCase(),
+      customerName: draft.customerName.trim(),
+      customerPhone: draft.customerPhone.trim(),
+      notes: draft.notes.trim(),
+      urgent: draft.urgent,
+      includedTasks,
+      estimatedMinutes,
     };
 
     const logLabel = selectedLinkedTemplate
       ? selectedLinkedTemplate.label
       : includedTasks.length > 0
-      ? `${template.label} + ${includedTasks.map((task) => task.label).join(" + ")}`
+      ? `${template.label} + ${includedTasks
+          .map((task) => task.label)
+          .join(" + ")}`
       : template.label;
 
     if (editingJobId != null) {
@@ -684,7 +734,6 @@ estimatedMinutes: draft.estimatedMinutes,
     const expiredIds = new Set(expiredJobs.map((job) => job.id));
 
     setScheduledJobs((prev) => prev.filter((job) => !expiredIds.has(job.id)));
-
     appendLog(`Agenda limpiada: ${expiredJobs.length} citas vencidas eliminadas.`);
   }
 
@@ -863,7 +912,8 @@ estimatedMinutes: draft.estimatedMinutes,
                     let cellClass = "bg-slate-200/70";
 
                     if (working && !past) {
-                      cellClass = "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
+                      cellClass =
+                        "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
                     }
 
                     if (working && past) {
@@ -929,17 +979,20 @@ estimatedMinutes: draft.estimatedMinutes,
                       <div
                         key={job.id}
                         onClick={(e) => {
-  e.stopPropagation();
+                          e.stopPropagation();
 
-  if (job.status === "cerrado" || job.status === "cancelado") {
-    return;
-  }
+                          if (
+                            job.status === "cerrado" ||
+                            job.status === "cancelado"
+                          ) {
+                            return;
+                          }
 
-  openEditAppointment(job);
-}}
+                          openEditAppointment(job);
+                        }}
                         className={`absolute z-40 cursor-pointer overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getScheduledJobCardClass(
-  job
-)}`}
+                          job
+                        )}`}
                         style={{
                           top,
                           height,
@@ -948,18 +1001,23 @@ estimatedMinutes: draft.estimatedMinutes,
                         }}
                       >
                         <div className="flex items-center justify-between gap-2">
-  <div className="truncate uppercase">
-    {job.linkedTemplateLabel || template?.label || "Operación"}
-  </div>
+                          <div className="truncate uppercase">
+                            {job.linkedTemplateLabel ||
+                              template?.label ||
+                              "Operación"}
+                          </div>
 
-  <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
-    {getScheduledJobStatusLabel(job.status)}
-  </span>
-</div>
+                          <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
+                            {getScheduledJobStatusLabel(job.status)}
+                          </span>
+                        </div>
 
                         {job.includedTasks && job.includedTasks.length > 0 && (
                           <div className="truncate text-[10px] font-normal opacity-90">
-                            + {job.includedTasks.map((task) => task.label).join(" + ")}
+                            +{" "}
+                            {job.includedTasks
+                              .map((task) => task.label)
+                              .join(" + ")}
                           </div>
                         )}
 
@@ -976,10 +1034,10 @@ estimatedMinutes: draft.estimatedMinutes,
                         )}
 
                         {job.notes && (
-  <div className="truncate text-[10px] font-normal opacity-90">
-    Obs: {job.notes}
-  </div>
-)}
+                          <div className="truncate text-[10px] font-normal opacity-90">
+                            Obs: {job.notes}
+                          </div>
+                        )}
 
                         <div className="absolute bottom-1 left-1 right-1 flex gap-1">
                           {job.status === "programado" && (
@@ -1016,436 +1074,479 @@ estimatedMinutes: draft.estimatedMinutes,
         </div>
 
         {modalOpen && selectedSlot && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-    <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
-      <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
-        <h3 className="text-xl font-semibold">
-          {editingJobId != null ? "Editar cita" : "Nueva cita"}
-        </h3>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
+                <h3 className="text-xl font-semibold">
+                  {editingJobId != null ? "Editar cita" : "Nueva cita"}
+                </h3>
 
-        <p className="mt-1 text-sm text-slate-500">
-          Selecciona día, hora, operación y datos del cliente.
-        </p>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <div className="mb-4 grid gap-3 md:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-500">
-              Día
-            </label>
-
-            <select
-              value={selectedSlot.date}
-              onChange={(e) => {
-                const nextDate = e.target.value;
-                const day = days.find((d) => d.date === nextDate);
-
-                if (!day) return;
-
-                const validSlots = getValidSlotsForDate(nextDate, day.index);
-
-                if (validSlots.length === 0) {
-                  alert("Este día no tiene horas disponibles.");
-                  return;
-                }
-
-                setSelectedSlot({
-                  date: nextDate,
-                  startTime: validSlots[0],
-                });
-              }}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            >
-              {days.map((day) => (
-                <option
-                  key={day.date}
-                  value={day.date}
-                  disabled={isPastDate(day.date)}
-                >
-                  {day.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-500">
-              Hora
-            </label>
-
-            <select
-              value={selectedSlot.startTime}
-              onChange={(e) =>
-                setSelectedSlot((prev) =>
-                  prev ? { ...prev, startTime: e.target.value } : prev
-                )
-              }
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            >
-              {(() => {
-                const selectedDay = days.find(
-                  (d) => d.date === selectedSlot.date
-                );
-                const slots = selectedDay
-                  ? getValidSlotsForDate(selectedSlot.date, selectedDay.index)
-                  : [];
-
-                return slots.map((slot) => (
-                  <option key={slot} value={slot}>
-                    {slot}
-                  </option>
-                ));
-              })()}
-            </select>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="space-y-3">
-            <div className="grid grid-cols-5 gap-2">
-              {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
-                (area) => {
-                  const areaTemplates = quickTemplates
-                    .filter((template) => template.area === area)
-                    .slice()
-                    .sort((a, b) =>
-                      a.label.localeCompare(b.label, "es", {
-                        sensitivity: "base",
-                      })
-                    );
-
-                  const areaLinkedTemplates = linkedTemplates
-                    .filter((linked) => {
-                      const firstTemplate = quickTemplates.find(
-                        (template) => template.key === linked.firstTemplateKey
-                      );
-
-                      return firstTemplate?.area === area;
-                    })
-                    .slice()
-                    .sort((a, b) =>
-                      a.label.localeCompare(b.label, "es", {
-                        sensitivity: "base",
-                      })
-                    );
-
-                  const meta = AREA_META[area];
-                  const Icon = meta.icon;
-                  const active = selectedArea === area;
-                  const totalEntries =
-                    areaTemplates.length + areaLinkedTemplates.length;
-
-                  return (
-                    <button
-                      key={area}
-                      type="button"
-                      onClick={() => {
-                        const firstLinked = areaLinkedTemplates[0];
-                        const firstTemplate = areaTemplates[0];
-
-                        setSelectedArea(area);
-
-                        setDraft((prev) => ({
-                          ...prev,
-                          templateKey: firstLinked
-                            ? firstLinked.firstTemplateKey
-                            : firstTemplate?.key ?? "",
-                          linkedTemplateKey: firstLinked
-                            ? firstLinked.secondTemplateKey
-                            : "",
-                          includedTaskIds: [],
-                        }));
-                      }}
-                      className={`rounded-2xl border px-2 py-2 text-xs font-semibold transition ${meta.color} ${
-                        active
-                          ? "ring-2 ring-slate-900 ring-offset-2"
-                          : "opacity-80 hover:opacity-100"
-                      }`}
-                      title={meta.label}
-                    >
-                      <Icon className="mx-auto mb-1 h-4 w-4" />
-
-                      <span className="block truncate font-bold">
-                        {meta.label}
-                      </span>
-
-                      <span className="mt-1 block text-[10px] font-medium opacity-70">
-                        {totalEntries} entradas
-                      </span>
-                    </button>
-                  );
-                }
-              )}
-            </div>
-
-            {(() => {
-              const linkedTemplatesForSelectedArea = linkedTemplates
-                .filter((linked) => {
-                  const firstTemplate = quickTemplates.find(
-                    (template) => template.key === linked.firstTemplateKey
-                  );
-
-                  return firstTemplate?.area === selectedArea;
-                })
-                .slice()
-                .sort((a, b) =>
-                  a.label.localeCompare(b.label, "es", {
-                    sensitivity: "base",
-                  })
-                );
-
-              const templatesForSelectedAreaSorted = quickTemplates
-                .filter((template) => template.area === selectedArea)
-                .slice()
-                .sort((a, b) =>
-                  a.label.localeCompare(b.label, "es", {
-                    sensitivity: "base",
-                  })
-                );
-
-              const hasEntries =
-                linkedTemplatesForSelectedArea.length > 0 ||
-                templatesForSelectedAreaSorted.length > 0;
-
-              const selectedValue = draft.linkedTemplateKey
-                ? `${draft.templateKey}|||${draft.linkedTemplateKey}`
-                : draft.templateKey;
-
-              return (
-                <select
-                  value={hasEntries ? selectedValue : ""}
-                  disabled={!hasEntries}
-                  onChange={(e) => {
-                    const [templateKey, linkedTemplateKey] =
-                      e.target.value.split("|||");
-
-                    setDraft((prev) => ({
-                      ...prev,
-                      templateKey,
-                      linkedTemplateKey: linkedTemplateKey || "",
-                      includedTaskIds: [],
-                    }));
-                  }}
-className="w-full rounded-2xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 font-black text-red-700 shadow-sm disabled:bg-slate-100 disabled:text-slate-400"                >
-                  {!hasEntries && (
-                    <option value="">
-                      Sin entradas rápidas para {AREA_META[selectedArea].label}
-                    </option>
-                  )}
-
-                  {linkedTemplatesForSelectedArea.length > 0 && (
-                    <optgroup label="Trabajos vinculados">
-                      {linkedTemplatesForSelectedArea.map((linked) => (
-                        <option
-  key={linked.id}
-  value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
-  className="bg-yellow-100 font-bold text-red-700"
->
-  {linked.label}
-</option>
-                      ))}
-                    </optgroup>
-                  )}
-
-                  {templatesForSelectedAreaSorted.length > 0 && (
-                    <optgroup label="Entradas rápidas">
-                      {templatesForSelectedAreaSorted.map((template) => (
-                        <option
-  key={template.key}
-  value={template.key}
-  className="bg-yellow-100 font-bold text-red-700"
->
-  {template.label}
-</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-              );
-            })()}
-          </div>
-
-          {availableIncludedTasks.length > 0 && (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-              <div className="mb-2 text-sm font-semibold text-emerald-900">
-                Añadir tareas al mismo trabajo
+                <p className="mt-1 text-sm text-slate-500">
+                  Selecciona día, hora, operación y datos del cliente.
+                </p>
               </div>
 
-              <div className="space-y-2">
-                {availableIncludedTasks.map((task) => {
-                  const checked = draft.includedTaskIds.includes(task.id);
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">
+                      Día
+                    </label>
 
-                  return (
-                    <label
-                      key={task.id}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                    <select
+                      value={selectedSlot.date}
+                      onChange={(e) => {
+                        const nextDate = e.target.value;
+                        const day = days.find((d) => d.date === nextDate);
+
+                        if (!day) return;
+
+                        const validSlots = getValidSlotsForDate(
+                          nextDate,
+                          day.index
+                        );
+
+                        if (validSlots.length === 0) {
+                          alert("Este día no tiene horas disponibles.");
+                          return;
+                        }
+
+                        setSelectedSlot({
+                          date: nextDate,
+                          startTime: validSlots[0],
+                        });
+                      }}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     >
-                      <span className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={checked}
+                      {days.map((day) => (
+                        <option
+                          key={day.date}
+                          value={day.date}
+                          disabled={isPastDate(day.date)}
+                        >
+                          {day.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">
+                      Hora
+                    </label>
+
+                    <select
+                      value={selectedSlot.startTime}
+                      onChange={(e) =>
+                        setSelectedSlot((prev) =>
+                          prev ? { ...prev, startTime: e.target.value } : prev
+                        )
+                      }
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    >
+                      {(() => {
+                        const selectedDay = days.find(
+                          (d) => d.date === selectedSlot.date
+                        );
+                        const slots = selectedDay
+                          ? getValidSlotsForDate(
+                              selectedSlot.date,
+                              selectedDay.index
+                            )
+                          : [];
+
+                        return slots.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {slot}
+                          </option>
+                        ));
+                      })()}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-5 gap-2">
+                      {(
+                        [
+                          "camion",
+                          "movil",
+                          "tacografo",
+                          "turismo",
+                          "mecanica",
+                        ] as AreaKey[]
+                      ).map((area) => {
+                        const areaTemplates = quickTemplates
+                          .filter((template) => template.area === area)
+                          .slice()
+                          .sort((a, b) =>
+                            a.label.localeCompare(b.label, "es", {
+                              sensitivity: "base",
+                            })
+                          );
+
+                        const areaLinkedTemplates = linkedTemplates
+                          .filter((linked) => {
+                            const firstTemplate = quickTemplates.find(
+                              (template) =>
+                                template.key === linked.firstTemplateKey
+                            );
+
+                            return firstTemplate?.area === area;
+                          })
+                          .slice()
+                          .sort((a, b) =>
+                            a.label.localeCompare(b.label, "es", {
+                              sensitivity: "base",
+                            })
+                          );
+
+                        const meta = AREA_META[area];
+                        const Icon = meta.icon;
+                        const active = selectedArea === area;
+                        const totalEntries =
+                          areaTemplates.length + areaLinkedTemplates.length;
+
+                        return (
+                          <button
+                            key={area}
+                            type="button"
+                            onClick={() => {
+                              const firstLinked = areaLinkedTemplates[0];
+                              const firstTemplate = areaTemplates[0];
+
+                              const nextTemplateKey = firstLinked
+                                ? firstLinked.firstTemplateKey
+                                : firstTemplate?.key ?? "";
+
+                              setSelectedArea(area);
+
+                              setDraft((prev) => ({
+                                ...prev,
+                                templateKey: nextTemplateKey,
+                                linkedTemplateKey: firstLinked
+                                  ? firstLinked.secondTemplateKey
+                                  : "",
+                                includedTaskIds: [],
+                                estimatedMinutes:
+                                  getEstimatedMinutesWithIncludedTasks(
+                                    nextTemplateKey,
+                                    []
+                                  ),
+                              }));
+                            }}
+                            className={`rounded-2xl border px-2 py-2 text-xs font-semibold transition ${meta.color} ${
+                              active
+                                ? "ring-2 ring-slate-900 ring-offset-2"
+                                : "opacity-80 hover:opacity-100"
+                            }`}
+                            title={meta.label}
+                          >
+                            <Icon className="mx-auto mb-1 h-4 w-4" />
+
+                            <span className="block truncate font-bold">
+                              {meta.label}
+                            </span>
+
+                            <span className="mt-1 block text-[10px] font-medium opacity-70">
+                              {totalEntries} entradas
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {(() => {
+                      const linkedTemplatesForSelectedArea = linkedTemplates
+                        .filter((linked) => {
+                          const firstTemplate = quickTemplates.find(
+                            (template) =>
+                              template.key === linked.firstTemplateKey
+                          );
+
+                          return firstTemplate?.area === selectedArea;
+                        })
+                        .slice()
+                        .sort((a, b) =>
+                          a.label.localeCompare(b.label, "es", {
+                            sensitivity: "base",
+                          })
+                        );
+
+                      const templatesForSelectedAreaSorted = quickTemplates
+                        .filter((template) => template.area === selectedArea)
+                        .slice()
+                        .sort((a, b) =>
+                          a.label.localeCompare(b.label, "es", {
+                            sensitivity: "base",
+                          })
+                        );
+
+                      const hasEntries =
+                        linkedTemplatesForSelectedArea.length > 0 ||
+                        templatesForSelectedAreaSorted.length > 0;
+
+                      const selectedValue = draft.linkedTemplateKey
+                        ? `${draft.templateKey}|||${draft.linkedTemplateKey}`
+                        : draft.templateKey;
+
+                      return (
+                        <select
+                          value={hasEntries ? selectedValue : ""}
+                          disabled={!hasEntries}
                           onChange={(e) => {
+                            const [templateKey, linkedTemplateKey] =
+                              e.target.value.split("|||");
+
                             setDraft((prev) => ({
                               ...prev,
-                              includedTaskIds: e.target.checked
-                                ? [...prev.includedTaskIds, task.id]
-                                : prev.includedTaskIds.filter(
-                                    (id) => id !== task.id
-                                  ),
+                              templateKey,
+                              linkedTemplateKey: linkedTemplateKey || "",
+                              includedTaskIds: [],
+                              estimatedMinutes:
+                                getEstimatedMinutesWithIncludedTasks(
+                                  templateKey,
+                                  []
+                                ),
                             }));
                           }}
-                        />
+                          className="w-full rounded-2xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 font-black text-red-700 shadow-sm disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          {!hasEntries && (
+                            <option value="">
+                              Sin entradas rápidas para{" "}
+                              {AREA_META[selectedArea].label}
+                            </option>
+                          )}
 
-                        <span className="font-medium text-emerald-900">
-                          {task.label}
-                        </span>
-                      </span>
+                          {linkedTemplatesForSelectedArea.length > 0 && (
+                            <optgroup label="Trabajos vinculados">
+                              {linkedTemplatesForSelectedArea.map((linked) => (
+                                <option
+                                  key={linked.id}
+                                  value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
+                                  className="bg-yellow-100 font-bold text-red-700"
+                                >
+                                  {linked.label}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
 
-                      {task.standardMinutes != null && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          {task.standardMinutes} min
-                        </span>
+                          {templatesForSelectedAreaSorted.length > 0 && (
+                            <optgroup label="Entradas rápidas">
+                              {templatesForSelectedAreaSorted.map(
+                                (template) => (
+                                  <option
+                                    key={template.key}
+                                    value={template.key}
+                                    className="bg-yellow-100 font-bold text-red-700"
+                                  >
+                                    {template.label}
+                                  </option>
+                                )
+                              )}
+                            </optgroup>
+                          )}
+                        </select>
+                      );
+                    })()}
+                  </div>
+
+                  {availableIncludedTasks.length > 0 && (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                      <div className="mb-2 text-sm font-semibold text-emerald-900">
+                        Añadir tareas al mismo trabajo
+                      </div>
+
+                      <div className="space-y-2">
+                        {availableIncludedTasks.map((task) => {
+                          const checked = draft.includedTaskIds.includes(
+                            task.id
+                          );
+
+                          return (
+                            <label
+                              key={task.id}
+                              className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+                            >
+                              <span className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    setDraft((prev) => {
+                                      const nextIncludedTaskIds = e.target
+                                        .checked
+                                        ? [...prev.includedTaskIds, task.id]
+                                        : prev.includedTaskIds.filter(
+                                            (id) => id !== task.id
+                                          );
+
+                                      return {
+                                        ...prev,
+                                        includedTaskIds: nextIncludedTaskIds,
+                                        estimatedMinutes:
+                                          getEstimatedMinutesWithIncludedTasks(
+                                            prev.templateKey,
+                                            nextIncludedTaskIds
+                                          ),
+                                      };
+                                    });
+                                  }}
+                                />
+
+                                <span className="font-medium text-emerald-900">
+                                  {task.label}
+                                </span>
+                              </span>
+
+                              {task.standardMinutes != null && (
+                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                  {task.standardMinutes} min
+                                </span>
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      {selectedIncludedTasks.length > 0 && (
+                        <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
+                          Se añadirán al mismo trabajo:{" "}
+                          <span className="font-semibold">
+                            {selectedIncludedTasks
+                              .map((task) => task.label)
+                              .join(" + ")}
+                          </span>
+                        </div>
                       )}
-                    </label>
-                  );
-                })}
+                    </div>
+                  )}
+
+                  <input
+                    value={draft.plate}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, plate: e.target.value }))
+                    }
+                    placeholder="Matrícula"
+                    className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+                  />
+
+                  <input
+                    value={draft.customerName}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        customerName: e.target.value,
+                      }))
+                    }
+                    placeholder="Nombre cliente"
+                    className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+                  />
+
+                  <input
+                    value={draft.customerPhone}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        customerPhone: e.target.value,
+                      }))
+                    }
+                    placeholder="Teléfono móvil"
+                    className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+                  />
+
+                  <textarea
+                    value={draft.notes}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        notes: e.target.value,
+                      }))
+                    }
+                    placeholder="Observaciones"
+                    rows={3}
+                    className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-3"
+                  />
+
+                  <input
+                    type="number"
+                    min={15}
+                    step={15}
+                    value={draft.estimatedMinutes}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        estimatedMinutes:
+                          Number(e.target.value) || DEFAULT_ESTIMATED_MINUTES,
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+                    placeholder="Duración prevista en minutos"
+                  />
+
+                  <div className="rounded-2xl border border-slate-200 px-3 py-3 text-sm text-slate-500">
+                    Fin previsto:{" "}
+                    <span className="font-medium text-slate-900">
+                      {addMinutesToTime(
+                        selectedSlot.startTime,
+                        draft.estimatedMinutes
+                      )}
+                    </span>
+                  </div>
+
+                  <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
+                    <input
+                      type="checkbox"
+                      checked={draft.urgent}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          urgent: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span className="text-sm font-medium">Urgente</span>
+                  </label>
+                </div>
               </div>
 
-              {selectedIncludedTasks.length > 0 && (
-                <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
-                  Se añadirán al mismo trabajo:{" "}
-                  <span className="font-semibold">
-                    {selectedIncludedTasks
-                      .map((task) => task.label)
-                      .join(" + ")}
-                  </span>
+              <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalOpen(false);
+                      setEditingJobId(null);
+                      setSelectedSlot(null);
+                      resetDraft();
+                    }}
+                    className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+                  >
+                    Cancelar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={createScheduledJob}
+                    disabled={
+                      !draft.plate.trim() ||
+                      !draft.templateKey ||
+                      quickTemplates.length === 0 ||
+                      !selectedSlot ||
+                      isPastDateTime(selectedSlot.date, selectedSlot.startTime)
+                    }
+                    className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
+                  >
+                    {editingJobId != null ? "Guardar cambios" : "Guardar cita"}
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
-          )}
-
-          <input
-            value={draft.plate}
-            onChange={(e) =>
-              setDraft((prev) => ({ ...prev, plate: e.target.value }))
-            }
-            placeholder="Matrícula"
-            className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
-          />
-
-          <input
-            value={draft.customerName}
-            onChange={(e) =>
-              setDraft((prev) => ({
-                ...prev,
-                customerName: e.target.value,
-              }))
-            }
-            placeholder="Nombre cliente"
-            className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-          />
-
-          <input
-            value={draft.customerPhone}
-            onChange={(e) =>
-              setDraft((prev) => ({
-                ...prev,
-                customerPhone: e.target.value,
-              }))
-            }
-            placeholder="Teléfono móvil"
-            className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-          />
-
-          <textarea
-  value={draft.notes}
-  onChange={(e) =>
-    setDraft((prev) => ({
-      ...prev,
-      notes: e.target.value,
-    }))
-  }
-  placeholder="Observaciones"
-  rows={3}
-  className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-3"
-/>
-
-          <input
-            type="number"
-            min={15}
-            step={15}
-            value={draft.estimatedMinutes}
-            onChange={(e) =>
-              setDraft((prev) => ({
-                ...prev,
-                estimatedMinutes: Number(e.target.value) || 45,
-              }))
-            }
-            className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-            placeholder="Duración prevista en minutos"
-          />
-
-          <div className="rounded-2xl border border-slate-200 px-3 py-3 text-sm text-slate-500">
-            Fin previsto:{" "}
-            <span className="font-medium text-slate-900">
-              {addMinutesToTime(
-                selectedSlot.startTime,
-                draft.estimatedMinutes
-              )}
-            </span>
           </div>
-
-          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
-            <input
-              type="checkbox"
-              checked={draft.urgent}
-              onChange={(e) =>
-                setDraft((prev) => ({
-                  ...prev,
-                  urgent: e.target.checked,
-                }))
-              }
-            />
-            <span className="text-sm font-medium">Urgente</span>
-          </label>
-        </div>
-      </div>
-
-      <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              setModalOpen(false);
-              setEditingJobId(null);
-              setSelectedSlot(null);
-              resetDraft();
-            }}
-            className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
-          >
-            Cancelar
-          </button>
-
-          <button
-            type="button"
-            onClick={createScheduledJob}
-            disabled={
-              !draft.plate.trim() ||
-              !draft.templateKey ||
-              quickTemplates.length === 0 ||
-              !selectedSlot ||
-              isPastDateTime(selectedSlot.date, selectedSlot.startTime)
-            }
-            className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
-          >
-            {editingJobId != null ? "Guardar cambios" : "Guardar cita"}
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
+        )}
       </div>
     </div>
   );
