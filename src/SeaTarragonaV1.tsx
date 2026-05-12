@@ -367,6 +367,19 @@ function nowMs(): number {
   return Date.now();
 }
 
+function timeToMinutesValue(time: string) {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function addMinutesToTime(time: string, minutes: number) {
+  const total = timeToMinutesValue(time) + minutes;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 function normalizeTechStatusValue(status?: string | null) {
   return String(status || "")
     .toLowerCase()
@@ -3617,10 +3630,10 @@ function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
 }
 function updateScheduledJobField(
   scheduledId: number,
-  field: "plate" | "customerName" | "customerPhone",
+  field: "plate" | "customerName" | "customerPhone" | "notes",
   value: string
 ) {
-  setScheduledJobs((prev) =>
+  setScheduledJobsAndSave((prev) =>
     prev.map((item) =>
       item.id === scheduledId
         ? {
@@ -3629,6 +3642,34 @@ function updateScheduledJobField(
           }
         : item
     )
+  );
+}
+
+function updateScheduledJobTemplate(
+  scheduledId: number,
+  nextTemplateKey: string
+) {
+  const template = quickTemplates.find((item) => item.key === nextTemplateKey);
+
+  if (!template) return;
+
+  setScheduledJobsAndSave((prev) =>
+    prev.map((item) => {
+      if (item.id !== scheduledId) return item;
+
+      const standardMinutes = template.standardMinutes ?? 45;
+
+      return {
+        ...item,
+        templateKey: template.key,
+        area: template.area,
+        linkedTemplateId: null,
+        linkedTemplateLabel: null,
+        firstTemplateKey: null,
+        secondTemplateKey: null,
+        endTime: addMinutesToTime(item.startTime, standardMinutes),
+      };
+    })
   );
 }
 
@@ -3673,6 +3714,25 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     ? scheduled.includedTasks
     : [];
 
+  const customerInfo = [
+    scheduled.customerName ? `Cliente: ${scheduled.customerName}` : "",
+    scheduled.customerPhone ? `Teléfono: ${scheduled.customerPhone}` : "",
+    scheduled.notes ? `Observaciones: ${scheduled.notes}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const firstJobReasonBase =
+    scheduledIncludedTasks.length > 0
+      ? `Llegada confirmada desde agenda con tareas incluidas: ${scheduledIncludedTasks
+          .map((task) => task.label)
+          .join(" + ")}.`
+      : isLinkedJob
+      ? `Trabajo combinado iniciado desde agenda: ${scheduled.linkedTemplateLabel}.`
+      : `Llegada confirmada desde agenda: ${
+          scheduled.customerName || "cliente"
+        }.`;
+
   const firstJob: Job = {
     id: nextJobId,
     area: firstTemplate.area,
@@ -3680,16 +3740,9 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     urgent: scheduled.urgent,
     status: "espera",
     assignedNames: [],
-    reason:
-      scheduledIncludedTasks.length > 0
-        ? `Llegada confirmada desde agenda con tareas incluidas: ${scheduledIncludedTasks
-            .map((task) => task.label)
-            .join(" + ")}.`
-        : isLinkedJob
-        ? `Trabajo combinado iniciado desde agenda: ${scheduled.linkedTemplateLabel}`
-        : `Llegada confirmada desde agenda: ${
-            scheduled.customerName || "cliente"
-          }`,
+    reason: customerInfo
+      ? `${firstJobReasonBase} ${customerInfo}.`
+      : firstJobReasonBase,
     createdAtMs: createdAt,
     startedAtMs: null,
     template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
@@ -3716,6 +3769,8 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     );
 
     if (secondTemplate) {
+      const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${scheduled.linkedTemplateLabel}.`;
+
       const secondJob: Job = {
         id: nextJobId + 1,
         area: secondTemplate.area,
@@ -3723,7 +3778,9 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
         urgent: scheduled.urgent,
         status: "parado",
         assignedNames: [],
-        reason: `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${scheduled.linkedTemplateLabel}`,
+        reason: customerInfo
+          ? `${secondJobReasonBase} ${customerInfo}.`
+          : secondJobReasonBase,
         createdAtMs: createdAt + 1,
         startedAtMs: null,
         pausedAtMs: nowMs(),
@@ -3751,19 +3808,19 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
   setTechs(result.techs);
   setNextJobId((value) => value + jobsToSave.length);
 
-setScheduledJobs((prev) =>
-  prev.map((item) =>
-    item.id === scheduled.id
-      ? {
-          ...item,
-          status: "en_cola",
-          arrivedAtMs: nowMs(),
-          jobId: firstJob.id,
-          secondJobId: isLinkedJob ? nextJobId + 1 : null,
-        }
-      : item
-  )
-);
+  setScheduledJobsAndSave((prev) =>
+    prev.map((item) =>
+      item.id === scheduled.id
+        ? {
+            ...item,
+            status: "en_cola",
+            arrivedAtMs: nowMs(),
+            jobId: firstJob.id,
+            secondJobId: isLinkedJob ? nextJobId + 1 : null,
+          }
+        : item
+    )
+  );
 
   try {
     for (const job of jobsToSave) {
@@ -3774,17 +3831,25 @@ setScheduledJobs((prev) =>
       saveTechToBackend(tech);
     }
 
-appendLog(
-  scheduledIncludedTasks.length > 0
-    ? `Llegada confirmada: ${scheduled.plate} · ${
-        firstTemplate.label
-      } + ${scheduledIncludedTasks
-        .map((task) => task.label)
-        .join(" + ")}. Pendiente de validar antes de iniciar.`
-    : isLinkedJob
-    ? `Llegada confirmada: ${scheduled.plate} · ${scheduled.linkedTemplateLabel}. Queda pendiente de validar antes de iniciar.`
-    : `Llegada confirmada: ${scheduled.plate}. Queda pendiente de validar antes de iniciar.`
-);
+    appendLog(
+      scheduledIncludedTasks.length > 0
+        ? `Llegada confirmada: ${scheduled.plate} · ${
+            firstTemplate.label
+          } + ${scheduledIncludedTasks
+            .map((task) => task.label)
+            .join(" + ")}${
+            scheduled.notes ? ` · Obs: ${scheduled.notes}` : ""
+          }. Pendiente de validar antes de iniciar.`
+        : isLinkedJob
+        ? `Llegada confirmada: ${scheduled.plate} · ${
+            scheduled.linkedTemplateLabel
+          }${
+            scheduled.notes ? ` · Obs: ${scheduled.notes}` : ""
+          }. Queda pendiente de validar antes de iniciar.`
+        : `Llegada confirmada: ${scheduled.plate}${
+            scheduled.notes ? ` · Obs: ${scheduled.notes}` : ""
+          }. Queda pendiente de validar antes de iniciar.`
+    );
 
     await reloadJobsFromBackend();
   } catch (error) {
@@ -6435,22 +6500,14 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
     <div className="grid gap-4 md:grid-cols-2">
       {dueScheduledJobs.map((job) => {
-        const firstTemplate = quickTemplates.find(
-          (template) =>
-            template.key === (job.firstTemplateKey || job.templateKey)
-        );
-
+        
         const secondTemplate = job.secondTemplateKey
           ? quickTemplates.find(
               (template) => template.key === job.secondTemplateKey
             )
           : null;
 
-        const mainLabel =
-          job.linkedTemplateLabel ||
-          firstTemplate?.label ||
-          "Trabajo programado";
-
+        
         const includedTasks = Array.isArray(job.includedTasks)
           ? job.includedTasks
           : [];
@@ -6500,12 +6557,29 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
               <div className="text-xs font-bold uppercase text-amber-600">
-                Trabajo principal
-              </div>
+  Trabajo principal
+</div>
 
-              <div className="mt-1 text-lg font-black text-amber-950">
-                {mainLabel}
-              </div>
+<select
+  value={job.firstTemplateKey || job.templateKey}
+  onChange={(e) => updateScheduledJobTemplate(job.id, e.target.value)}
+  className="mt-1 w-full rounded-xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 text-sm font-black text-red-700"
+>
+  {quickTemplates
+    .slice()
+    .sort((a, b) =>
+      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+    )
+    .map((template) => (
+      <option
+        key={template.key}
+        value={template.key}
+        className="bg-yellow-100 font-bold text-red-700"
+      >
+        {template.label}
+      </option>
+    ))}
+</select>
 
               {secondTemplate && (
                 <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800">
@@ -6554,6 +6628,22 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     }
     placeholder="Teléfono móvil"
     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+  />
+</div>
+
+<div className="rounded-xl bg-slate-50 px-3 py-2">
+  <label className="mb-1 block text-xs font-bold text-slate-700">
+    Observaciones
+  </label>
+
+  <textarea
+    value={job.notes || ""}
+    onChange={(e) =>
+      updateScheduledJobField(job.id, "notes", e.target.value)
+    }
+    placeholder="Observaciones de la cita"
+    rows={3}
+    className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
   />
 </div>
 

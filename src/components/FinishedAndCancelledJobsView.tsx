@@ -16,9 +16,9 @@ type JobForHistory = {
   status: JobStatus | string;
   assignedNames?: string[];
   reason?: string;
-  createdAtMs?: number | null;
-  startedAtMs?: number | null;
-  closedAtMs?: number | null;
+  createdAtMs?: number | string | null;
+startedAtMs?: number | string | null;
+closedAtMs?: number | string | null;
   actualMinutes?: number | null;
   workedAccumulatedMinutes?: number | null;
   pausedAccumulatedMinutes?: number | null;
@@ -42,10 +42,33 @@ type Props = {
   onBack: () => void;
 };
 
-function formatClock(ms?: number | null) {
-  if (!ms) return "-";
+type TimestampValue = number | string | null | undefined;
 
-  return new Date(ms).toLocaleString("es-ES", {
+function normalizeTimestamp(value?: number | string | null) {
+  if (value == null || value === "") return null;
+
+  const numericValue =
+    typeof value === "string" ? Number(value) : value;
+
+  if (!Number.isFinite(numericValue)) return null;
+
+  return numericValue;
+}
+
+function getTimestampForSort(value: TimestampValue) {
+  return normalizeTimestamp(value) ?? 0;
+}
+
+function formatClock(value?: number | string | null) {
+  const timestamp = normalizeTimestamp(value);
+
+  if (timestamp == null) return "-";
+
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("es-ES", {
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -167,17 +190,21 @@ function HistoryCard({
     </div>
   );
 }
-function getDayKeyFromMs(value?: number | null) {
-  if (!value) return "sin-fecha";
+function getDayKeyFromMs(value?: number | string | null) {
+  const timestamp = normalizeTimestamp(value);
 
-  const date = new Date(value);
+  if (timestamp == null) return "sin-fecha";
+
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) return "sin-fecha";
+
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
-
 function formatDayLabel(dayKey: string) {
   if (dayKey === "sin-fecha") return "Sin fecha";
 
@@ -193,8 +220,12 @@ function formatDayLabel(dayKey: string) {
 }
 
 function groupJobsByDay<
-  T extends { closedAtMs?: number | null; createdAtMs?: number | null }
->(jobs: T[], useClosedDate: boolean) {
+  T extends {
+    closedAtMs?: number | string | null;
+    createdAtMs?: number | string | null;
+  }
+>
+(jobs: T[], useClosedDate: boolean) {
   const groups = new Map<string, T[]>();
 
   for (const job of jobs) {
@@ -225,15 +256,24 @@ export default function FinishedAndCancelledJobsView({
   getOperationLabel,
   onBack,
 }: Props) {
-  const finishedJobs = jobs
-    .filter((job) => job.status === "cerrado")
-    .slice()
-    .sort((a, b) => (b.closedAtMs ?? 0) - (a.closedAtMs ?? 0));
+ const finishedJobs = jobs
+  .filter((job) => job.status === "cerrado")
+  .slice()
+  .sort(
+    (a, b) =>
+      getTimestampForSort(b.closedAtMs ?? b.createdAtMs) -
+      getTimestampForSort(a.closedAtMs ?? a.createdAtMs)
+  );
+  
 
   const cancelledJobs = jobs
-    .filter((job) => job.status === "cancelado")
-    .slice()
-    .sort((a, b) => (b.closedAtMs ?? b.createdAtMs ?? 0) - (a.closedAtMs ?? a.createdAtMs ?? 0));
+  .filter((job) => job.status === "cancelado")
+  .slice()
+  .sort(
+    (a, b) =>
+      getTimestampForSort(b.closedAtMs ?? b.createdAtMs) -
+      getTimestampForSort(a.closedAtMs ?? a.createdAtMs)
+  );
   const finishedGroups = groupJobsByDay(finishedJobs, true);
   const cancelledGroups = groupJobsByDay(cancelledJobs, false);
   return (
