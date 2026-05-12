@@ -533,6 +533,47 @@ app.post("/api/jobs", requireSupervisorRole, async (req, res) => {
   try {
     const job = req.body ?? {};
 
+    const safeJobId = job.id ?? Date.now();
+    const incomingPlate = String(job.plate ?? "").trim().toUpperCase();
+
+    if (!incomingPlate) {
+      res.status(400).json({ error: "La matrícula es obligatoria" });
+      return;
+    }
+
+    const existingResult = await db.query(
+      `
+        SELECT id, plate, status
+        FROM jobs
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [safeJobId]
+    );
+
+    if (existingResult.rows.length > 0) {
+      const existingJob = existingResult.rows[0];
+      const existingPlate = String(existingJob.plate ?? "").trim().toUpperCase();
+
+      if (existingPlate && existingPlate !== incomingPlate) {
+        console.error("Intento de sobrescribir trabajo bloqueado:", {
+          id: safeJobId,
+          existingPlate,
+          incomingPlate,
+          existingStatus: existingJob.status,
+        });
+
+        res.status(409).json({
+          error:
+            "Conflicto de ID: se ha evitado sobrescribir un trabajo existente",
+          id: safeJobId,
+          existingPlate,
+          incomingPlate,
+        });
+        return;
+      }
+    }
+
     const result = await db.query(
       `
         INSERT INTO jobs (
@@ -578,9 +619,9 @@ app.post("/api/jobs", requireSupervisorRole, async (req, res) => {
         RETURNING *
       `,
       [
-        job.id,
+        safeJobId,
         job.area,
-        job.plate,
+        incomingPlate,
         !!job.urgent,
         job.status ?? "espera",
         JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),

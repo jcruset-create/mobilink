@@ -3687,16 +3687,20 @@ function cancelScheduledJob(id: number) {
 }
 
 async function confirmScheduledArrival(scheduled: ScheduledJob) {
-  if (scheduled.status !== "programado") return;
+  const currentScheduled =
+    scheduledJobs.find((item) => item.id === scheduled.id) ?? scheduled;
+
+  if (currentScheduled.status !== "programado") return;
+  if (currentScheduled.jobId != null) return;
 
   const isLinkedJob =
-    !!scheduled.firstTemplateKey &&
-    !!scheduled.secondTemplateKey &&
-    !!scheduled.linkedTemplateLabel;
+    !!currentScheduled.firstTemplateKey &&
+    !!currentScheduled.secondTemplateKey &&
+    !!currentScheduled.linkedTemplateLabel;
 
   const firstTemplateKey = isLinkedJob
-    ? scheduled.firstTemplateKey
-    : scheduled.templateKey;
+    ? currentScheduled.firstTemplateKey
+    : currentScheduled.templateKey;
 
   const firstTemplate = quickTemplates.find(
     (item) => item.key === firstTemplateKey
@@ -3706,18 +3710,32 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 
   const createdAt = nowMs();
 
+  const maxExistingJobId = jobs.reduce(
+    (max, job) => Math.max(max, Number(job.id) || 0),
+    0
+  );
+
+  const firstJobId = Math.max(nextJobId, maxExistingJobId + 1);
+  const secondJobId = firstJobId + 1;
+
   const linkedGroupId = isLinkedJob
-    ? `linked-${scheduled.id}-${createdAt}`
+    ? `linked-${currentScheduled.id}-${createdAt}`
     : null;
 
-  const scheduledIncludedTasks = Array.isArray(scheduled.includedTasks)
-    ? scheduled.includedTasks
+  const scheduledIncludedTasks = Array.isArray(currentScheduled.includedTasks)
+    ? currentScheduled.includedTasks
     : [];
 
   const customerInfo = [
-    scheduled.customerName ? `Cliente: ${scheduled.customerName}` : "",
-    scheduled.customerPhone ? `Teléfono: ${scheduled.customerPhone}` : "",
-    scheduled.notes ? `Observaciones: ${scheduled.notes}` : "",
+    currentScheduled.customerName
+      ? `Cliente: ${currentScheduled.customerName}`
+      : "",
+    currentScheduled.customerPhone
+      ? `Teléfono: ${currentScheduled.customerPhone}`
+      : "",
+    currentScheduled.notes
+      ? `Observaciones: ${currentScheduled.notes}`
+      : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -3728,16 +3746,16 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
           .map((task) => task.label)
           .join(" + ")}.`
       : isLinkedJob
-      ? `Trabajo combinado iniciado desde agenda: ${scheduled.linkedTemplateLabel}.`
+      ? `Trabajo combinado iniciado desde agenda: ${currentScheduled.linkedTemplateLabel}.`
       : `Llegada confirmada desde agenda: ${
-          scheduled.customerName || "cliente"
+          currentScheduled.customerName || "cliente"
         }.`;
 
   const firstJob: Job = {
-    id: nextJobId,
+    id: firstJobId,
     area: firstTemplate.area,
-    plate: scheduled.plate.trim().toUpperCase(),
-    urgent: scheduled.urgent,
+    plate: currentScheduled.plate.trim().toUpperCase(),
+    urgent: currentScheduled.urgent,
     status: "espera",
     assignedNames: [],
     reason: customerInfo
@@ -3765,17 +3783,17 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 
   if (isLinkedJob) {
     const secondTemplate = quickTemplates.find(
-      (item) => item.key === scheduled.secondTemplateKey
+      (item) => item.key === currentScheduled.secondTemplateKey
     );
 
     if (secondTemplate) {
-      const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${scheduled.linkedTemplateLabel}.`;
+      const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${currentScheduled.linkedTemplateLabel}.`;
 
       const secondJob: Job = {
-        id: nextJobId + 1,
+        id: secondJobId,
         area: secondTemplate.area,
-        plate: scheduled.plate.trim().toUpperCase(),
-        urgent: scheduled.urgent,
+        plate: currentScheduled.plate.trim().toUpperCase(),
+        urgent: currentScheduled.urgent,
         status: "parado",
         assignedNames: [],
         reason: customerInfo
@@ -3806,17 +3824,20 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 
   setJobs(jobsToSet);
   setTechs(result.techs);
-  setNextJobId((value) => value + jobsToSave.length);
+
+  setNextJobId((value) =>
+    Math.max(value, firstJobId + jobsToSave.length)
+  );
 
   setScheduledJobsAndSave((prev) =>
     prev.map((item) =>
-      item.id === scheduled.id
+      item.id === currentScheduled.id
         ? {
             ...item,
             status: "en_cola",
             arrivedAtMs: nowMs(),
             jobId: firstJob.id,
-            secondJobId: isLinkedJob ? nextJobId + 1 : null,
+            secondJobId: isLinkedJob ? secondJobId : null,
           }
         : item
     )
@@ -3833,30 +3854,31 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 
     appendLog(
       scheduledIncludedTasks.length > 0
-        ? `Llegada confirmada: ${scheduled.plate} · ${
+        ? `Llegada confirmada: ${currentScheduled.plate} · ${
             firstTemplate.label
           } + ${scheduledIncludedTasks
             .map((task) => task.label)
             .join(" + ")}${
-            scheduled.notes ? ` · Obs: ${scheduled.notes}` : ""
+            currentScheduled.notes ? ` · Obs: ${currentScheduled.notes}` : ""
           }. Pendiente de validar antes de iniciar.`
         : isLinkedJob
-        ? `Llegada confirmada: ${scheduled.plate} · ${
-            scheduled.linkedTemplateLabel
+        ? `Llegada confirmada: ${currentScheduled.plate} · ${
+            currentScheduled.linkedTemplateLabel
           }${
-            scheduled.notes ? ` · Obs: ${scheduled.notes}` : ""
+            currentScheduled.notes ? ` · Obs: ${currentScheduled.notes}` : ""
           }. Queda pendiente de validar antes de iniciar.`
-        : `Llegada confirmada: ${scheduled.plate}${
-            scheduled.notes ? ` · Obs: ${scheduled.notes}` : ""
+        : `Llegada confirmada: ${currentScheduled.plate}${
+            currentScheduled.notes ? ` · Obs: ${currentScheduled.notes}` : ""
           }. Queda pendiente de validar antes de iniciar.`
     );
 
     await reloadJobsFromBackend();
   } catch (error) {
     console.error("Error confirmando llegada:", error);
-    appendLog(`Error guardando trabajo ${scheduled.plate}.`);
+    appendLog(`Error guardando trabajo ${currentScheduled.plate}.`);
   }
 }
+
 async function createJob() {
   if (!draft.plate.trim()) return;
 

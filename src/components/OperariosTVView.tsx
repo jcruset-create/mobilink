@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
+
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
+
 type TemplateKey = "alineacion_camion" | "pinchazo_camion";
 
 type JobForOperarios = {
@@ -9,7 +12,14 @@ type JobForOperarios = {
   assignedNames?: string[];
   template?: TemplateKey | null;
   quickEntryLabel?: string | null;
+  quickEntryMode?: string | null;
   reason?: string;
+  createdAtMs?: number | string | null;
+  startedAtMs?: number | string | null;
+  closedAtMs?: number | string | null;
+  workedAccumulatedMinutes?: number | null;
+  pausedAccumulatedMinutes?: number | null;
+  pausedAtMs?: number | string | null;
   linkedGroupId?: string | null;
   linkedOrder?: 1 | 2 | null;
   dependsOnJobId?: number | null;
@@ -52,6 +62,39 @@ const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 
 function normalizeTechStatus(status?: string) {
   return (status || "").toLowerCase().trim();
+}
+
+function normalizeTimestamp(value?: number | string | null) {
+  if (value == null || value === "") return null;
+
+  const numericValue = typeof value === "string" ? Number(value) : value;
+
+  if (!Number.isFinite(numericValue)) return null;
+
+  return numericValue;
+}
+
+function formatWorkedTime(minutes: number) {
+  const safeMinutes = Math.max(0, Math.floor(minutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+
+  if (hours <= 0) return `${mins} min`;
+
+  return `${hours} h ${mins} min`;
+}
+
+function getLiveWorkedMinutes(job: JobForOperarios, nowMs: number) {
+  const baseMinutes = job.workedAccumulatedMinutes ?? 0;
+  const startedAtMs = normalizeTimestamp(job.startedAtMs);
+
+  if (!startedAtMs || job.status !== "activo") {
+    return baseMinutes;
+  }
+
+  const liveMinutes = Math.floor((nowMs - startedAtMs) / 60000);
+
+  return baseMinutes + Math.max(0, liveMinutes);
 }
 
 function getTechStatusLabel(status: string) {
@@ -179,9 +222,9 @@ function SmallJobCard({
   getOperationLabel: (job: OperationLabelJob) => string;
 }) {
   const assignedNames = job.assignedNames || [];
-const linkedPhaseLabel = getLinkedPhaseLabel(job);
+  const linkedPhaseLabel = getLinkedPhaseLabel(job);
 
-return (
+  return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="mb-1 flex items-center gap-2">
         <span
@@ -202,23 +245,18 @@ return (
       <div className="text-xs font-semibold text-slate-700">
         {getOperationLabel(job)}
       </div>
+
       {linkedPhaseLabel && (
-  <div className="mt-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase text-violet-700">
-    {linkedPhaseLabel}
-  </div>
-)}
+        <div className="mt-1 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase text-violet-700">
+          {linkedPhaseLabel}
+        </div>
+      )}
+
       {job.includedTasks && job.includedTasks.length > 0 && (
-  <div className="mt-2 space-y-1">
-    {job.includedTasks.map((task) => (
-      <div
-        key={task.id}
-        className="rounded-lg bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-800"
-      >
-        ✓ {task.label}
-      </div>
-    ))}
-  </div>
-)}
+        <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+          + {job.includedTasks.map((task) => task.label).join(" + ")}
+        </div>
+      )}
 
       {assignedNames.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
@@ -237,11 +275,6 @@ return (
           })}
         </div>
       )}
-      {job.includedTasks && job.includedTasks.length > 0 && (
-  <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
-    + {job.includedTasks.map((task) => task.label).join(" + ")}
-  </div>
-)}
     </div>
   );
 }
@@ -257,10 +290,20 @@ export default function OperariosTVView({
   canGoBack = true,
   onLogout,
 }: Props) {
+  const [nowTick, setNowTick] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 30000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
   const activeJobs = jobs.filter((job) => job.status === "activo");
-const validationJobs = jobs.filter((job) => job.status === "validacion");
-const standByJobs = jobs.filter((job) => job.status === "parado");
-const waitingJobs = jobs.filter((job) => job.status === "espera");
+  const validationJobs = jobs.filter((job) => job.status === "validacion");
+  const standByJobs = jobs.filter((job) => job.status === "parado");
+  const waitingJobs = jobs.filter((job) => job.status === "espera");
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 text-slate-900">
@@ -272,37 +315,37 @@ const waitingJobs = jobs.filter((job) => job.status === "espera");
           </p>
         </div>
 
-<div className="flex flex-wrap gap-2">
-  {onGoWorkshopScreen && (
-    <button
-      type="button"
-      onClick={onGoWorkshopScreen}
-      className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
-    >
-      Pantalla taller
-    </button>
-  )}
+        <div className="flex flex-wrap gap-2">
+          {onGoWorkshopScreen && (
+            <button
+              type="button"
+              onClick={onGoWorkshopScreen}
+              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+            >
+              Pantalla taller
+            </button>
+          )}
 
-  {canGoBack && (
-    <button
-      type="button"
-      onClick={onBack}
-      className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium"
-    >
-      Volver a operativo
-    </button>
-  )}
+          {canGoBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium"
+            >
+              Volver a operativo
+            </button>
+          )}
 
-  {onLogout && (
-    <button
-      type="button"
-      onClick={onLogout}
-      className="rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50"
-    >
-      Salir
-    </button>
-  )}
-</div>
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50"
+            >
+              Salir
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[2fr_0.9fr_0.7fr]">
@@ -322,6 +365,7 @@ const waitingJobs = jobs.filter((job) => job.status === "espera");
             <div className="grid gap-3 2xl:grid-cols-2">
               {activeJobs.slice(0, 6).map((job) => {
                 const assignedNames = job.assignedNames || [];
+                const workedMinutes = getLiveWorkedMinutes(job, nowTick);
 
                 return (
                   <div
@@ -375,30 +419,35 @@ const waitingJobs = jobs.filter((job) => job.status === "espera");
                         <div className="mt-1 text-xl font-bold text-slate-700">
                           {getOperationLabel(job)}
                         </div>
+
+                        <div className="mt-3 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-lg font-black text-white shadow-sm">
+                          Tiempo trabajando: {formatWorkedTime(workedMinutes)}
+                        </div>
+
                         {job.includedTasks && job.includedTasks.length > 0 && (
-  <div className="mt-3 rounded-2xl border border-emerald-200 bg-white p-3">
-    <div className="mb-2 text-xs font-black uppercase tracking-wide text-emerald-700">
-      Tareas incluidas
-    </div>
+                          <div className="mt-3 rounded-2xl border border-emerald-200 bg-white p-3">
+                            <div className="mb-2 text-xs font-black uppercase tracking-wide text-emerald-700">
+                              Tareas incluidas
+                            </div>
 
-    <div className="grid gap-1">
-      {job.includedTasks.map((task) => (
-        <div
-          key={task.id}
-          className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-900"
-        >
-          <span>✓ {task.label}</span>
+                            <div className="grid gap-1">
+                              {job.includedTasks.map((task) => (
+                                <div
+                                  key={task.id}
+                                  className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-900"
+                                >
+                                  <span>✓ {task.label}</span>
 
-          {task.standardMinutes != null && (
-            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
-              {task.standardMinutes} min
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+                                  {task.standardMinutes != null && (
+                                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                      {task.standardMinutes} min
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="grid min-w-[190px] gap-2">
@@ -427,78 +476,80 @@ const waitingJobs = jobs.filter((job) => job.status === "espera");
         </section>
 
         <div className="space-y-4">
+          <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-black text-violet-900">
+                Pendientes de validar
+              </h2>
+
+              <span className="rounded-full bg-violet-100 px-3 py-1 text-sm font-bold text-violet-700">
+                {validationJobs.length}
+              </span>
+            </div>
+
+            {validationJobs.length === 0 ? (
+              <div className="rounded-2xl bg-white/60 p-4 text-center text-sm text-violet-700">
+                Sin trabajos pendientes de validar.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {validationJobs.map((job) => {
+                  const linkedPhaseLabel = getLinkedPhaseLabel(job);
+
+                  return (
+                    <div
+                      key={job.id}
+                      className="rounded-2xl border border-violet-200 bg-white p-3"
+                    >
+                      <div className="mb-1 flex items-center gap-2">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${getAreaClass(
+                            job.area
+                          )}`}
+                        >
+                          {job.area}
+                        </span>
+
+                        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700">
+                          PENDIENTE
+                        </span>
+                      </div>
+
+                      <div className="text-xl font-black text-slate-950">
+                        {job.plate}
+                      </div>
+
+                      <div className="text-xs font-semibold text-violet-800">
+                        {getOperationLabel(job)}
+                      </div>
+
+                      {linkedPhaseLabel && (
+                        <div className="mt-2 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase text-violet-700">
+                          {linkedPhaseLabel}
+                        </div>
+                      )}
+
+                      {job.assignedNames && job.assignedNames.length > 0 && (
+                        <div className="mt-2 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900">
+                          Propuesto: {job.assignedNames.join(" + ")}
+                        </div>
+                      )}
+
+                      {job.reason && (
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          {job.reason}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
           <section className="rounded-3xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-orange-900">
-                <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
-  <div className="mb-3 flex items-center justify-between">
-    <h2 className="text-lg font-black text-violet-900">
-      Pendientes de validar
-    </h2>
-
-    <span className="rounded-full bg-violet-100 px-3 py-1 text-sm font-bold text-violet-700">
-      {validationJobs.length}
-    </span>
-  </div>
-
-  {validationJobs.length === 0 ? (
-    <div className="rounded-2xl bg-white/60 p-4 text-center text-sm text-violet-700">
-      Sin trabajos pendientes de validar.
-    </div>
-  ) : (
-    <div className="space-y-2">
-      {validationJobs.map((job) => {
-  const linkedPhaseLabel = getLinkedPhaseLabel(job);
-
-  return (
-        <div
-          key={job.id}
-          className="rounded-2xl border border-violet-200 bg-white p-3"
-        >
-          <div className="mb-1 flex items-center gap-2">
-            <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${getAreaClass(
-                job.area
-              )}`}
-            >
-              {job.area}
-            </span>
-
-            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700">
-              PENDIENTE
-            </span>
-          </div>
-
-          <div className="text-xl font-black text-slate-950">
-            {job.plate}
-          </div>
-
-          <div className="text-xs font-semibold text-violet-800">
-            {getOperationLabel(job)}
-          </div>
-          {linkedPhaseLabel && (
-  <div className="mt-2 inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase text-violet-700">
-    {linkedPhaseLabel}
-  </div>
-)}
-
-          {job.assignedNames && job.assignedNames.length > 0 && (
-            <div className="mt-2 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-900">
-              Propuesto: {job.assignedNames.join(" + ")}
-            </div>
-          )}
-
-          {job.reason && (
-            <div className="mt-2 text-[11px] text-slate-500">
-              {job.reason}
-            </div>
-          )}
-        </div>
-        );
-})}
-    </div>
-  )}
-</section>
                 Trabajos en Stand by
               </h2>
 
