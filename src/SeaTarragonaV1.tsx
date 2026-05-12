@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+} from "react";
 import AgendaView from "./components/AgendaView";
 import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
@@ -1779,6 +1785,7 @@ export default function SeaTarragonaV1() {
   const [techs, setTechs] = useState<Tech[]>(INITIAL_TECHS);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
+  const scheduledJobsLoadedRef = useRef(false);
   const [scheduledJobsLoaded, setScheduledJobsLoaded] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
   return localStorage.getItem("sea-authenticated") === "true";
@@ -3051,10 +3058,47 @@ async function reloadScheduledJobsFromBackend() {
       return;
     }
 
+    scheduledJobsLoadedRef.current = true;
     setScheduledJobs(data);
   } catch (error) {
     console.error("Error recargando agenda:", error);
   }
+}
+
+async function saveScheduledJobsToBackend(items: ScheduledJob[]) {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
+      method: "PUT",
+      headers: getAdminHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(items),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("Error guardando agenda:", response.status, text);
+      appendLog("Error guardando agenda.");
+    }
+  } catch (error) {
+    console.error("Error guardando agenda:", error);
+    appendLog("Error guardando agenda.");
+  }
+}
+
+function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
+  setScheduledJobs((prev) => {
+    const next =
+      typeof action === "function"
+        ? (action as (previous: ScheduledJob[]) => ScheduledJob[])(prev)
+        : action;
+
+    if (scheduledJobsLoadedRef.current) {
+      void saveScheduledJobsToBackend(next);
+    }
+
+    return next;
+  });
 }
 
 async function reloadJobsFromBackend() {
@@ -5721,7 +5765,7 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
   return (
     <AgendaView
       scheduledJobs={scheduledJobs}
-      setScheduledJobs={setScheduledJobs}
+      setScheduledJobs={setScheduledJobsAndSave}
       quickTemplates={quickTemplates}
       customExtraTasks={customExtraTasks}
       linkedTemplates={linkedTemplates}
