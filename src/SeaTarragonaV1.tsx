@@ -373,7 +373,11 @@ function getNextSafeJobId(currentJobs: Job[], preferredId: number) {
     0
   );
 
-  return Math.max(preferredId, maxExistingJobId + 1, Date.now());
+  return Math.max(
+    Number(preferredId) || 0,
+    maxExistingJobId + 1,
+    Date.now() + Math.floor(Math.random() * 1000)
+  );
 }
 
 function timeToMinutesValue(time: string) {
@@ -3195,25 +3199,20 @@ async function saveJobToBackend(job: Job) {
       body: JSON.stringify(job),
     });
 
-    if (!response.ok) {
-      const responseText = await response.text();
+    const responseText = await response.text();
 
+    if (!response.ok) {
       console.error("Error guardando trabajo:", {
         status: response.status,
         responseText,
         job,
       });
 
-      appendLog(
-        `Error guardando trabajo ${job.plate}. Código ${response.status}.`
-      );
-
       throw new Error(
-        `No se pudo guardar el trabajo ${job.plate}. Código ${response.status}. ${responseText}`
+        responseText ||
+          `No se pudo guardar el trabajo ${job.plate}. Código ${response.status}.`
       );
     }
-
-    const responseText = await response.text();
 
     if (!responseText) {
       return null;
@@ -3226,7 +3225,6 @@ async function saveJobToBackend(job: Job) {
     }
   } catch (error) {
     console.error("Error guardando trabajo:", error);
-    appendLog(`Error guardando trabajo ${job.plate}.`);
     throw error;
   }
 }
@@ -4015,7 +4013,15 @@ async function createTemplateEntry() {
     (item) => item.key === quickDraft.templateKey
   );
 
-  if (!firstTemplate || !quickDraft.plate.trim()) return;
+  if (!firstTemplate) {
+    alert("No se encuentra la entrada rápida seleccionada.");
+    return;
+  }
+
+  if (!quickDraft.plate.trim()) {
+    alert("Escribe una matrícula.");
+    return;
+  }
 
   const secondTemplate = quickDraft.linkedTemplateKey
     ? quickTemplates.find((item) => item.key === quickDraft.linkedTemplateKey)
@@ -4147,8 +4153,19 @@ async function createTemplateEntry() {
     );
 
     await reloadJobsFromBackend();
+    await reloadTechsFromBackend();
   } catch (error) {
     console.error("Error guardando entrada rápida:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Error desconocido guardando la entrada rápida.";
+
+    alert(
+      `No se ha podido guardar la entrada rápida.\n\nMatrícula: ${plate}\n\n${message}`
+    );
+
     appendLog(`Error guardando entrada rápida ${plate}.`);
   }
 }
@@ -4851,6 +4868,62 @@ if (job.status === "validacion") {
   } catch (error) {
     console.error("Error asignando trabajo en cola:", error);
     appendLog(`Error al asignar ${job.plate}.`);
+  }
+}
+
+async function deleteValidationJob(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+
+  if (!job) return;
+
+  const ok = window.confirm(
+    `¿Eliminar la tarea pendiente de validar ${job.plate}?`
+  );
+
+  if (!ok) return;
+
+  const closedAtMs = nowMs();
+
+  const deletedJob: Job = {
+    ...job,
+    status: "cerrado",
+    closedAtMs,
+    reason: job.reason
+      ? `${job.reason} Eliminado desde pendientes de validar.`
+      : "Eliminado desde pendientes de validar.",
+  };
+
+  const nextJobs = jobs.map((item) =>
+    item.id === jobId ? deletedJob : item
+  );
+
+  const nextTechs = techs.map((tech) => {
+    if (tech.currentJobId !== jobId) return tech;
+
+    return {
+      ...tech,
+      currentJobId: null,
+      status: tech.status === "ocupado" ? "disponible" : tech.status,
+    };
+  });
+
+  setJobs(nextJobs);
+  setTechs(nextTechs);
+
+  try {
+    await saveJobToBackend(deletedJob);
+
+    for (const tech of nextTechs) {
+      await saveTechToBackend(tech);
+    }
+
+    appendLog(`Tarea pendiente eliminada: ${job.plate}.`);
+
+    await reloadJobsFromBackend();
+    await reloadTechsFromBackend();
+  } catch (error) {
+    console.error("Error eliminando tarea pendiente:", error);
+    appendLog(`Error eliminando tarea pendiente ${job.plate}.`);
   }
 }
 
@@ -7659,6 +7732,13 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   >
     Rechazar propuesta
   </button>
+  <button
+  type="button"
+  onClick={() => deleteValidationJob(job.id)}
+  className="mt-2 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
+>
+  Eliminar tarea
+</button>
 </div>
           </div>
         );
@@ -8797,11 +8877,12 @@ return (
                 Cancelar
               </button>
               <button
-                onClick={createTemplateEntry}
-                className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white"
-              >
-                Guardar y asignar
-              </button>
+  type="button"
+  onClick={createTemplateEntry}
+  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
+>
+  Guardar y asignar
+</button>
             </div>
           </div>
         </div>
