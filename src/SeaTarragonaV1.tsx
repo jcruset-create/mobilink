@@ -373,11 +373,11 @@ function getNextSafeJobId(currentJobs: Job[], preferredId: number) {
     0
   );
 
-  return Math.max(
-    Number(preferredId) || 0,
-    maxExistingJobId + 1,
-    Date.now() + Math.floor(Math.random() * 1000)
-  );
+  const safePreferredId = Number.isFinite(Number(preferredId))
+    ? Number(preferredId)
+    : 1;
+
+  return Math.max(safePreferredId, maxExistingJobId + 1, 1);
 }
 
 function timeToMinutesValue(time: string) {
@@ -4129,8 +4129,8 @@ async function createTemplateEntry() {
     setJobs(finalJobs);
 
     setNextJobId((value) =>
-      Math.max(value, isLinkedEntry ? secondSafeJobId + 1 : safeJobId + 1)
-    );
+  Math.max(value, isLinkedEntry ? secondSafeJobId + 1 : safeJobId + 1)
+);
 
     setQuickDraft((prev) => ({
       ...prev,
@@ -7732,7 +7732,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   >
     Rechazar propuesta
   </button>
-  <button
+ <button
   type="button"
   onClick={() => deleteValidationJob(job.id)}
   className="mt-2 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
