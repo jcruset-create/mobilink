@@ -421,38 +421,52 @@ export default function AgendaView({
 
   const todayKey = formatLocalDate(new Date());
 
-  function getTemplateEstimatedMinutes(templateKey: string) {
-    const template = quickTemplates.find((item) => item.key === templateKey);
-    return template?.standardMinutes ?? DEFAULT_ESTIMATED_MINUTES;
+  function normalizeMinutes(value: unknown, fallback = 0) {
+  if (value === null || value === undefined || value === "") return fallback;
+
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue) || numberValue < 0) {
+    return fallback;
   }
 
-  function getEstimatedMinutesWithIncludedTasks(
-    templateKey: string,
-    includedTaskIds: string[]
-  ) {
-    const baseMinutes = getTemplateEstimatedMinutes(templateKey);
+  return numberValue;
+}
 
-    const template = quickTemplates.find((item) => item.key === templateKey);
+function getTemplateEstimatedMinutes(templateKey: string) {
+  const template = quickTemplates.find((item) => item.key === templateKey);
 
-    if (!template) return baseMinutes;
+  return normalizeMinutes(template?.standardMinutes, DEFAULT_ESTIMATED_MINUTES);
+}
 
-    const availableTasks = buildSelectableIncludedTasks(
-      template.area,
-      quickTemplates,
-      customExtraTasks,
-      template.key
-    );
+function getEstimatedMinutesWithIncludedTasks(
+  templateKey: string,
+  includedTaskIds: string[]
+) {
+  const baseMinutes = getTemplateEstimatedMinutes(templateKey);
 
-    const selectedTasks = getIncludedTasksByIds(includedTaskIds, availableTasks);
+  const template = quickTemplates.find((item) => item.key === templateKey);
 
-    const extraMinutes = selectedTasks.reduce(
-      (total, task) => total + (task.standardMinutes ?? 0),
-      0
-    );
+  if (!template) return baseMinutes;
 
-    return baseMinutes + extraMinutes;
-  }
+  const availableTasks = buildSelectableIncludedTasks(
+    template.area,
+    quickTemplates,
+    customExtraTasks,
+    template.key
+  );
 
+  const selectedTasks = getIncludedTasksByIds(includedTaskIds, availableTasks);
+
+  const extraMinutes = selectedTasks.reduce(
+    (total, task) => total + normalizeMinutes(task.standardMinutes, 0),
+    0
+  );
+
+  return baseMinutes + extraMinutes;
+}
+
+ 
   function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
     setDraft({
       templateKey,
@@ -620,15 +634,19 @@ export default function AgendaView({
     );
 
     const estimatedMinutes = getEstimatedMinutesWithIncludedTasks(
-      template.key,
-      draft.includedTaskIds
-    );
+  template.key,
+  draft.includedTaskIds
+);
+
+const safeEstimatedMinutes = Math.max(
+  15,
+  normalizeMinutes(estimatedMinutes, DEFAULT_ESTIMATED_MINUTES)
+);
 
     const nextData = {
       date: selectedSlot.date,
       startTime: selectedSlot.startTime,
-      endTime: addMinutesToTime(selectedSlot.startTime, estimatedMinutes),
-
+endTime: addMinutesToTime(selectedSlot.startTime, safeEstimatedMinutes),
       templateKey: template.key,
       area: template.area,
 
@@ -643,8 +661,7 @@ export default function AgendaView({
       notes: draft.notes.trim(),
       urgent: draft.urgent,
       includedTasks,
-      estimatedMinutes,
-    };
+estimatedMinutes: safeEstimatedMinutes,    };
 
     const logLabel = selectedLinkedTemplate
       ? selectedLinkedTemplate.label
@@ -1296,21 +1313,20 @@ export default function AgendaView({
                           value={hasEntries ? selectedValue : ""}
                           disabled={!hasEntries}
                           onChange={(e) => {
-                            const [templateKey, linkedTemplateKey] =
-                              e.target.value.split("|||");
+  const [templateKey, linkedTemplateKey] = e.target.value.split("|||");
+  const nextIncludedTaskIds: string[] = [];
 
-                            setDraft((prev) => ({
-                              ...prev,
-                              templateKey,
-                              linkedTemplateKey: linkedTemplateKey || "",
-                              includedTaskIds: [],
-                              estimatedMinutes:
-                                getEstimatedMinutesWithIncludedTasks(
-                                  templateKey,
-                                  []
-                                ),
-                            }));
-                          }}
+  setDraft((prev) => ({
+    ...prev,
+    templateKey,
+    linkedTemplateKey: linkedTemplateKey || "",
+    includedTaskIds: nextIncludedTaskIds,
+    estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
+      templateKey,
+      nextIncludedTaskIds
+    ),
+  }));
+}}
                           className="w-full rounded-2xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 font-black text-red-700 shadow-sm disabled:bg-slate-100 disabled:text-slate-400"
                         >
                           {!hasEntries && (
@@ -1372,30 +1388,26 @@ export default function AgendaView({
                               className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
                             >
                               <span className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) => {
-                                    setDraft((prev) => {
-                                      const nextIncludedTaskIds = e.target
-                                        .checked
-                                        ? [...prev.includedTaskIds, task.id]
-                                        : prev.includedTaskIds.filter(
-                                            (id) => id !== task.id
-                                          );
+                               <input
+  type="checkbox"
+  checked={checked}
+  onChange={(e) => {
+    setDraft((prev) => {
+      const nextIncludedTaskIds = e.target.checked
+        ? Array.from(new Set([...prev.includedTaskIds, task.id]))
+        : prev.includedTaskIds.filter((id) => id !== task.id);
 
-                                      return {
-                                        ...prev,
-                                        includedTaskIds: nextIncludedTaskIds,
-                                        estimatedMinutes:
-                                          getEstimatedMinutesWithIncludedTasks(
-                                            prev.templateKey,
-                                            nextIncludedTaskIds
-                                          ),
-                                      };
-                                    });
-                                  }}
-                                />
+      return {
+        ...prev,
+        includedTaskIds: nextIncludedTaskIds,
+        estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
+          prev.templateKey,
+          nextIncludedTaskIds
+        ),
+      };
+    });
+  }}
+/>
 
                                 <span className="font-medium text-emerald-900">
                                   {task.label}

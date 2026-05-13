@@ -64,11 +64,24 @@ function normalizeJobRow(job: any) {
 }
 
 function normalizeQuickTemplateRow(t: any) {
+  const rawStandardMinutes =
+    t.standardMinutes ?? t.standardminutes ?? t.standard_minutes ?? null;
+
+  const standardMinutes =
+    rawStandardMinutes === null ||
+    rawStandardMinutes === undefined ||
+    rawStandardMinutes === ""
+      ? null
+      : Number(rawStandardMinutes);
+
   return {
     ...t,
     allowedTechs: safeJsonParse(t.allowedTechs, [] as string[]),
     priorityOrder: safeJsonParse(t.priorityOrder, [] as string[]),
-    standardMinutes: t.standardMinutes ?? null,
+    standardMinutes:
+      standardMinutes === null || !Number.isFinite(standardMinutes)
+        ? null
+        : standardMinutes,
   };
 }
 
@@ -881,41 +894,63 @@ app.post("/api/quick-templates", requireSupervisorRole, async (req, res) => {
 
 app.put("/api/quick-templates/:key", requireSupervisorRole, async (req, res) => {
   try {
-    const key = String(req.params.key);
-    const { label, area, mode, allowedTechs, priorityOrder, standardMinutes } =
-      req.body ?? {};
+    const key = String(req.params.key ?? "");
+    const template = req.body ?? {};
+
+    if (!key) {
+      res.status(400).json({ error: "Falta la clave de la entrada rápida" });
+      return;
+    }
+
+    const standardMinutesValue =
+      template.standardMinutes === "" ||
+      template.standardMinutes === null ||
+      template.standardMinutes === undefined
+        ? null
+        : Number(template.standardMinutes);
+
+    if (
+      standardMinutesValue !== null &&
+      (!Number.isFinite(standardMinutesValue) || standardMinutesValue < 0)
+    ) {
+      res.status(400).json({ error: "standardMinutes no es válido" });
+      return;
+    }
 
     const result = await db.query(
       `
         UPDATE quick_templates
         SET
-          label = $1,
-          area = $2,
-          mode = $3,
-          "allowedTechs" = $4,
-          "priorityOrder" = $5,
-          "standardMinutes" = $6
-        WHERE key = $7
+          label = $2,
+          area = $3,
+          mode = $4,
+          "allowedTechs" = $5,
+          "priorityOrder" = $6,
+          "standardMinutes" = $7
+        WHERE key = $1
         RETURNING *
       `,
       [
-        label,
-        area,
-        mode,
-        JSON.stringify(Array.isArray(allowedTechs) ? allowedTechs : []),
-        JSON.stringify(Array.isArray(priorityOrder) ? priorityOrder : []),
-        standardMinutes ?? null,
         key,
+        template.label ?? "",
+        template.area ?? "",
+        template.mode ?? "single",
+        JSON.stringify(
+          Array.isArray(template.allowedTechs) ? template.allowedTechs : []
+        ),
+        JSON.stringify(
+          Array.isArray(template.priorityOrder) ? template.priorityOrder : []
+        ),
+        standardMinutesValue,
       ]
     );
 
-    const template = result.rows[0];
-
-    if (!template) {
-      return res.status(404).json({ error: "Entrada rápida no encontrada" });
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: "Entrada rápida no encontrada" });
+      return;
     }
 
-    res.json(normalizeQuickTemplateRow(template));
+    res.json(normalizeQuickTemplateRow(result.rows[0]));
   } catch (error) {
     console.error("PUT /api/quick-templates/:key error:", error);
     res.status(500).json({ error: "Error actualizando entrada rápida" });

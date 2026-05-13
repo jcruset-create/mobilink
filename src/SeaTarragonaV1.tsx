@@ -1648,103 +1648,132 @@ function QuickTemplateEditor({
   onSave,
 }: {
   template: QuickTemplate;
-  techs: Tech[];
+  techs: { name: string }[];
   onSave: (template: QuickTemplate) => void;
 }) {
-  const [draft, setDraft] = useState<QuickTemplate>(template);
+  const [draft, setDraft] = useState<QuickTemplate>({
+    ...template,
+    allowedTechs: Array.isArray(template.allowedTechs)
+      ? template.allowedTechs
+      : [],
+    priorityOrder: Array.isArray(template.priorityOrder)
+      ? template.priorityOrder
+      : [],
+    standardMinutes:
+      template.standardMinutes === null ||
+      template.standardMinutes === undefined
+        ? null
+        : Number(template.standardMinutes),
+  });
 
-  useEffect(() => {
-    setDraft(template);
-  }, [template]);
+  const priorityOrder =
+    draft.priorityOrder.length > 0 ? draft.priorityOrder : draft.allowedTechs;
 
   return (
     <div className="space-y-4">
       <input
         value={draft.label}
-        onChange={(e) => setDraft((p) => ({ ...p, label: e.target.value }))}
-        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-        placeholder="Nombre"
+        onChange={(e) =>
+          setDraft((prev) => ({
+            ...prev,
+            label: e.target.value,
+          }))
+        }
+        placeholder="Nombre entrada rápida"
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
       />
-<input
-  type="number"
-  min="0"
-  value={draft.standardMinutes ?? ""}
-  onChange={(e) =>
-    setDraft((prev) => ({
-      ...prev,
-      standardMinutes: e.target.value ? Number(e.target.value) : null,
-    }))
-  }
-  placeholder="Tiempo estándar en minutos"
-  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-/>
-      <div className="grid gap-3 md:grid-cols-2">
-        <select
-          value={draft.area}
-          onChange={(e) =>
-            setDraft((p) => ({ ...p, area: e.target.value as AreaKey }))
-          }
-          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-        >
-          {Object.entries(AREA_META).map(([key, meta]) => (
-            <option key={key} value={key}>
-              {meta.label}
-            </option>
-          ))}
-        </select>
 
-        <select
-          value={draft.mode}
-          onChange={(e) =>
-            setDraft((p) => ({ ...p, mode: e.target.value as QuickEntryMode }))
-          }
-          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-        >
-          <option value="single">1 técnico</option>
-          <option value="team">técnico + refuerzo</option>
-        </select>
-      </div>
+      <input
+        type="number"
+        min="0"
+        value={draft.standardMinutes ?? ""}
+        onChange={(e) => {
+          const value = e.target.value;
+
+          setDraft((prev) => ({
+            ...prev,
+            standardMinutes: value === "" ? null : Number(value),
+          }));
+        }}
+        placeholder="Tiempo estándar en minutos"
+        className="w-full max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+      />
+
+      <select
+        value={draft.area}
+        onChange={(e) =>
+          setDraft((prev) => ({
+            ...prev,
+            area: e.target.value as AreaKey,
+          }))
+        }
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+      >
+        <option value="camion">Camión</option>
+        <option value="movil">Móvil</option>
+        <option value="tacografo">Tacógrafo</option>
+        <option value="turismo">Turismo</option>
+        <option value="mecanica">Mecánica</option>
+      </select>
+
+      <select
+        value={draft.mode}
+        onChange={(e) =>
+          setDraft((prev) => ({
+            ...prev,
+            mode: e.target.value as QuickEntryMode,
+          }))
+        }
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+      >
+        <option value="single">1 técnico</option>
+        <option value="team">técnico + refuerzo</option>
+      </select>
 
       <div>
         <div className="mb-2 text-sm font-medium text-slate-700">
           Técnicos competentes
         </div>
+
         <div className="grid gap-2 md:grid-cols-3">
           {techs.map((tech) => {
-              const checked = draft.allowedTechs.includes(tech.name);
+            const checked = draft.allowedTechs.includes(tech.name);
 
-              return (
-                <label
-                  key={`${template.key}-${tech.name}`}
-                  className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => {
-                      const nextAllowed = e.target.checked
-                        ? [...draft.allowedTechs, tech.name]
-                        : draft.allowedTechs.filter((name) => name !== tech.name);
+            return (
+              <label
+                key={`edit-allowed-${template.key}-${tech.name}`}
+                className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    const nextAllowed = e.target.checked
+                      ? [...draft.allowedTechs, tech.name]
+                      : draft.allowedTechs.filter(
+                          (name) => name !== tech.name
+                        );
 
-                      const filteredPriority = draft.priorityOrder.filter((name) =>
-                        nextAllowed.includes(name)
-                      );
+                    const filteredPriority = draft.priorityOrder.filter(
+                      (name) => nextAllowed.includes(name)
+                    );
 
-                      const missing = nextAllowed.filter(
-                        (name) => !filteredPriority.includes(name)
-                      );
+                    const missing = nextAllowed.filter(
+                      (name) => !filteredPriority.includes(name)
+                    );
 
-                      setDraft((prev) => ({
-                        ...prev,
-                        allowedTechs: nextAllowed,
-                        priorityOrder: [...filteredPriority, ...missing],
-                      }));
-                    }}
-                  />
-                  <span>{tech.name}</span>
-                </label>
-              );
-            })}
+                    setDraft((prev) => ({
+                      ...prev,
+                      allowedTechs: nextAllowed,
+                      priorityOrder: [...filteredPriority, ...missing],
+                    }));
+                  }}
+                />
+
+                <span>{tech.name}</span>
+              </label>
+            );
+          })}
         </div>
       </div>
 
@@ -1752,51 +1781,85 @@ function QuickTemplateEditor({
         <div className="mb-2 text-sm font-medium text-slate-700">
           Orden de prioridad
         </div>
+
         <div className="space-y-2">
-          {draft.priorityOrder.map((techName, index) => (
-            <div
-              key={`${template.key}-priority-${techName}`}
-              className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm"
-            >
-              <span>
-                {index + 1}. {techName}
-              </span>
-
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (index <= 0) return;
-                    const arr = [...draft.priorityOrder];
-                    [arr[index - 1], arr[index]] = [arr[index], arr[index - 1]];
-                    setDraft((prev) => ({ ...prev, priorityOrder: arr }));
-                  }}
-                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                >
-                  ↑
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (index >= draft.priorityOrder.length - 1) return;
-                    const arr = [...draft.priorityOrder];
-                    [arr[index], arr[index + 1]] = [arr[index + 1], arr[index]];
-                    setDraft((prev) => ({ ...prev, priorityOrder: arr }));
-                  }}
-                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                >
-                  ↓
-                </button>
-              </div>
+          {draft.allowedTechs.length === 0 ? (
+            <div className="text-sm text-slate-500">
+              Si no marcas ningún técnico, se usarán las reglas generales del
+              programa.
             </div>
-          ))}
+          ) : (
+            priorityOrder.map((techName, index) => (
+              <div
+                key={`edit-priority-${template.key}-${techName}`}
+                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                <span>
+                  {index + 1}. {techName}
+                </span>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const arr = [...priorityOrder];
+                      const currentIndex = arr.indexOf(techName);
+
+                      if (currentIndex <= 0) return;
+
+                      [arr[currentIndex - 1], arr[currentIndex]] = [
+                        arr[currentIndex],
+                        arr[currentIndex - 1],
+                      ];
+
+                      setDraft((prev) => ({
+                        ...prev,
+                        priorityOrder: arr,
+                      }));
+                    }}
+                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                  >
+                    ↑
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const arr = [...priorityOrder];
+                      const currentIndex = arr.indexOf(techName);
+
+                      if (
+                        currentIndex === -1 ||
+                        currentIndex >= arr.length - 1
+                      ) {
+                        return;
+                      }
+
+                      [arr[currentIndex], arr[currentIndex + 1]] = [
+                        arr[currentIndex + 1],
+                        arr[currentIndex],
+                      ];
+
+                      setDraft((prev) => ({
+                        ...prev,
+                        priorityOrder: arr,
+                      }));
+                    }}
+                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                  >
+                    ↓
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
       <button
+        type="button"
         onClick={() => onSave(draft)}
-        className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white"
+        className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
       >
         Guardar cambios
       </button>
@@ -5105,21 +5168,123 @@ if (shouldCloseScheduledJobForFinishedJob(jobId)) {
   }
 }
 
-async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
-  try {
-    await fetch(`${API_BASE}/api/quick-templates/${updatedTemplate.key}`, {
-  method: "PUT",
-  headers: getAdminHeaders({
-    "Content-Type": "application/json",
-  }),
-  body: JSON.stringify(updatedTemplate),
-});
+async function updateQuickTemplate(templateToEdit: QuickTemplate) {
+  if (!templateToEdit) return;
 
-    await reloadQuickTemplatesFromBackend();
+  const label = String(templateToEdit.label ?? "").trim();
+
+  if (!label) {
+    alert("La entrada rápida no tiene nombre.");
+    return;
+  }
+
+  if (!templateToEdit.area) {
+    alert("Selecciona un área.");
+    return;
+  }
+
+  const standardMinutesValue = String(
+    templateToEdit.standardMinutes ?? ""
+  ).trim();
+
+  const standardMinutes =
+    standardMinutesValue === "" ? null : Number(standardMinutesValue);
+
+  if (
+    standardMinutes !== null &&
+    (!Number.isFinite(standardMinutes) || standardMinutes < 0)
+  ) {
+    alert("El tiempo estándar debe ser un número válido.");
+    return;
+  }
+
+  const finalAllowedTechs = Array.isArray(templateToEdit.allowedTechs)
+    ? [...templateToEdit.allowedTechs]
+    : [];
+
+  const finalPriorityOrder =
+    finalAllowedTechs.length === 0
+      ? []
+      : Array.isArray(templateToEdit.priorityOrder) &&
+        templateToEdit.priorityOrder.length > 0
+      ? templateToEdit.priorityOrder.filter((name: string) =>
+          finalAllowedTechs.includes(name)
+        )
+      : finalAllowedTechs;
+
+  const updatedTemplate: QuickTemplate = {
+    ...templateToEdit,
+    label,
+    area: templateToEdit.area,
+    mode: templateToEdit.mode,
+    allowedTechs: finalAllowedTechs,
+    priorityOrder: finalPriorityOrder,
+    standardMinutes,
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE}/api/quick-templates/${encodeURIComponent(
+        updatedTemplate.key
+      )}`,
+      {
+        method: "PUT",
+        headers: getAdminHeaders({
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify(updatedTemplate),
+      }
+    );
+
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      console.error("Error actualizando entrada rápida:", {
+        status: response.status,
+        responseText,
+        updatedTemplate,
+      });
+
+      alert(
+        `No se pudo actualizar la entrada rápida.\n\nCódigo: ${response.status}\n${responseText}`
+      );
+
+      appendLog(`Error al actualizar entrada rápida: ${label}.`);
+      return;
+    }
+
+    let savedTemplate: QuickTemplate;
+
+    try {
+      savedTemplate = responseText ? JSON.parse(responseText) : updatedTemplate;
+    } catch {
+      savedTemplate = updatedTemplate;
+    }
+
+    savedTemplate = {
+      ...savedTemplate,
+      standardMinutes:
+        savedTemplate.standardMinutes == null
+          ? null
+          : Number(savedTemplate.standardMinutes),
+    };
+
+    setQuickTemplates((prev) =>
+      prev.map((item) =>
+        item.key === savedTemplate.key ? savedTemplate : item
+      )
+    );
+
+    setQuickSelectedArea(savedTemplate.area);
     setEditingQuickTemplateKey(null);
-    appendLog(`Entrada rápida actualizada: ${updatedTemplate.label}.`);
+
+    appendLog(`Entrada rápida actualizada: ${label}.`);
   } catch (error) {
     console.error("Error actualizando entrada rápida:", error);
+
+    alert("Error de conexión al actualizar la entrada rápida.");
+
+    appendLog(`Error al actualizar entrada rápida: ${label}.`);
   }
 }
 const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";
