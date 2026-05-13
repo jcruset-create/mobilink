@@ -8821,241 +8821,268 @@ const textColor = "";
       )}
 
       {quickEntryOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-xl font-semibold">Nueva entrada rápida</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Plantilla + matrícula + urgencia
-                </p>
-              </div>
-              <button
-                onClick={() => setQuickEntryOpen(false)}
-                className="rounded-xl p-2 hover:bg-slate-100"
-              >
-                <XCircle className="h-5 w-5 text-slate-500" />
-              </button>
-            </div>
-            <div className="mt-5 space-y-4">
-              {(() => {
-  const selectedTemplate = quickTemplates.find(
-    (template) => template.key === quickDraft.templateKey
-  );
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
+    <div className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-xl font-semibold">Nueva entrada rápida</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Plantilla + matrícula + urgencia
+            </p>
+          </div>
 
-  if (!selectedTemplate) return null;
-
- const availableIncludedTasks = buildSelectableIncludedTasks(
-  selectedTemplate.area,
-  quickTemplates,
-  customExtraTasks,
-  selectedTemplate.key
-);
-
-  const selectedIncludedTasks = getIncludedTasksByIds(
-    quickDraft.includedTaskIds,
-    availableIncludedTasks
-  );
-
-  if (availableIncludedTasks.length === 0) return null;
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-      <div className="mb-2 text-sm font-semibold text-slate-700">
-        Añadir tareas al mismo trabajo
-      </div>
-
-      <div className="space-y-2">
-        {availableIncludedTasks.map((task) => {
-          const checked = quickDraft.includedTaskIds.includes(task.id);
-
-          return (
-            <label
-              key={task.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-            >
-              <span className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(e) => {
-                    setQuickDraft((prev) => ({
-                      ...prev,
-                      includedTaskIds: e.target.checked
-                        ? [...prev.includedTaskIds, task.id]
-                        : prev.includedTaskIds.filter((id) => id !== task.id),
-                    }));
-                  }}
-                />
-
-                <span className="font-medium text-slate-700">
-                  {task.label}
-                </span>
-              </span>
-
-              {task.standardMinutes != null && (
-                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                  {task.standardMinutes} min
-                </span>
-              )}
-            </label>
-          );
-        })}
-      </div>
-
-      {selectedIncludedTasks.length > 0 && (
-        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-          Se añadirán al mismo trabajo:{" "}
-          <span className="font-semibold">
-            {selectedIncludedTasks.map((task) => task.label).join(" + ")}
-          </span>
+          <button
+            type="button"
+            onClick={() => setQuickEntryOpen(false)}
+            className="rounded-xl p-2 hover:bg-slate-100"
+          >
+            <XCircle className="h-5 w-5 text-slate-500" />
+          </button>
         </div>
-      )}
-    </div>
-  );
-})()}
-              <div>
-                <label className="mb-2 block text-sm font-medium">Tipo</label>
-                <select
-  value={
-    quickDraft.linkedTemplateKey
-      ? `${quickDraft.templateKey}|||${quickDraft.linkedTemplateKey}`
-      : quickDraft.templateKey
-  }
-  onChange={(event) => {
-    const [templateKey, linkedTemplateKey] =
-      event.target.value.split("|||");
+      </div>
 
-    setQuickDraft((prev) => ({
-      ...prev,
-      templateKey,
-      linkedTemplateKey: linkedTemplateKey || "",
-    }));
-  }}
-  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
->
-  {linkedTemplates
-    .filter((linked) => {
-      const firstTemplate = quickTemplates.find(
-        (template) => template.key === linked.firstTemplateKey
-      );
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="space-y-4">
+          {(() => {
+            const selectedTemplate = quickTemplates.find(
+              (template) => template.key === quickDraft.templateKey
+            );
 
-      return firstTemplate?.area === quickSelectedArea;
-    })
-    .sort((a, b) =>
-      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-    )
-    .map((linked) => (
-      <option
-        key={linked.id}
-        value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
-      >
-        {linked.label}
-      </option>
-    ))}
+            if (!selectedTemplate) return null;
 
-  {quickTemplates
-    .filter((template) => template.area === quickSelectedArea)
-    .sort((a, b) =>
-      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-    )
-    .map((template) => (
-      <option key={template.key} value={template.key}>
-        {template.label}
-      </option>
-    ))}
-</select>
-                {(() => {
-  const selectedTemplate = quickTemplates.find(
-    (template) => template.key === quickDraft.templateKey
-  );
+            const availableIncludedTasks = buildSelectableIncludedTasks(
+              selectedTemplate.area,
+              quickTemplates,
+              customExtraTasks,
+              selectedTemplate.key
+            );
 
-  if (!selectedTemplate) return null;
+            const selectedIncludedTasks = getIncludedTasksByIds(
+              quickDraft.includedTaskIds,
+              availableIncludedTasks
+            );
 
-  const recommended = getRecommendedTechForJob(
-    {
-      area: selectedTemplate.area,
-      template: isBuiltInTemplateKey(selectedTemplate.key)
-        ? selectedTemplate.key
-        : null,
-      quickEntryLabel: selectedTemplate.label,
-    },
-    techs,
-    quickTemplates,
-    techOperationStats
-  );
+            if (availableIncludedTasks.length === 0) return null;
 
-  if (!recommended) return null;
+            return (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-sm font-semibold text-slate-700">
+                  Añadir tareas al mismo trabajo
+                </div>
 
-  const recommendedTech = techs.find((t) => t.name === recommended);
+                <div className="space-y-2">
+                  {availableIncludedTasks.map((task) => {
+                    const checked = quickDraft.includedTaskIds.includes(task.id);
 
-return (
-  <div className="mt-2 flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
-    <img
-      src={getTechAvatarUrl(recommendedTech)}
-      alt={recommended}
-      className="h-7 w-7 rounded-full border object-cover"
-    />
-    <div>
-      Sugerencia IA: <span className="font-medium">{recommended}</span>
+                    return (
+                      <label
+                        key={task.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setQuickDraft((prev) => ({
+                                ...prev,
+                                includedTaskIds: e.target.checked
+                                  ? [...prev.includedTaskIds, task.id]
+                                  : prev.includedTaskIds.filter(
+                                      (id) => id !== task.id
+                                    ),
+                              }));
+                            }}
+                          />
+
+                          <span className="font-medium text-slate-700">
+                            {task.label}
+                          </span>
+                        </span>
+
+                        {task.standardMinutes != null && (
+                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                            {task.standardMinutes} min
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {selectedIncludedTasks.length > 0 && (
+                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                    Se añadirán al mismo trabajo:{" "}
+                    <span className="font-semibold">
+                      {selectedIncludedTasks
+                        .map((task) => task.label)
+                        .join(" + ")}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <div>
+            <label className="mb-2 block text-sm font-medium">Tipo</label>
+
+            <select
+              value={
+                quickDraft.linkedTemplateKey
+                  ? `${quickDraft.templateKey}|||${quickDraft.linkedTemplateKey}`
+                  : quickDraft.templateKey
+              }
+              onChange={(event) => {
+                const [templateKey, linkedTemplateKey] =
+                  event.target.value.split("|||");
+
+                setQuickDraft((prev) => ({
+                  ...prev,
+                  templateKey,
+                  linkedTemplateKey: linkedTemplateKey || "",
+                  includedTaskIds: [],
+                }));
+              }}
+              className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+            >
+              {linkedTemplates
+                .filter((linked) => {
+                  const firstTemplate = quickTemplates.find(
+                    (template) => template.key === linked.firstTemplateKey
+                  );
+
+                  return firstTemplate?.area === quickSelectedArea;
+                })
+                .sort((a, b) =>
+                  a.label.localeCompare(b.label, "es", {
+                    sensitivity: "base",
+                  })
+                )
+                .map((linked) => (
+                  <option
+                    key={linked.id}
+                    value={`${linked.firstTemplateKey}|||${linked.secondTemplateKey}`}
+                  >
+                    {linked.label}
+                  </option>
+                ))}
+
+              {quickTemplates
+                .filter((template) => template.area === quickSelectedArea)
+                .sort((a, b) =>
+                  a.label.localeCompare(b.label, "es", {
+                    sensitivity: "base",
+                  })
+                )
+                .map((template) => (
+                  <option key={template.key} value={template.key}>
+                    {template.label}
+                  </option>
+                ))}
+            </select>
+
+            {(() => {
+              const selectedTemplate = quickTemplates.find(
+                (template) => template.key === quickDraft.templateKey
+              );
+
+              if (!selectedTemplate) return null;
+
+              const recommended = getRecommendedTechForJob(
+                {
+                  area: selectedTemplate.area,
+                  template: isBuiltInTemplateKey(selectedTemplate.key)
+                    ? selectedTemplate.key
+                    : null,
+                  quickEntryLabel: selectedTemplate.label,
+                },
+                techs,
+                quickTemplates,
+                techOperationStats
+              );
+
+              if (!recommended) return null;
+
+              const recommendedTech = techs.find(
+                (tech) => tech.name === recommended
+              );
+
+              return (
+                <div className="mt-2 flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
+                  <img
+                    src={getTechAvatarUrl(recommendedTech)}
+                    alt={recommended}
+                    className="h-7 w-7 rounded-full border object-cover"
+                  />
+                  <div>
+                    Sugerencia IA:{" "}
+                    <span className="font-medium">{recommended}</span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium">Matrícula</label>
+
+            <input
+              value={quickDraft.plate}
+              onChange={(event) =>
+                setQuickDraft((prev) => ({
+                  ...prev,
+                  plate: event.target.value,
+                }))
+              }
+              placeholder="1234ABC"
+              className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+            />
+          </div>
+
+          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
+            <input
+              type="checkbox"
+              checked={quickDraft.urgent}
+              onChange={(event) =>
+                setQuickDraft((prev) => ({
+                  ...prev,
+                  urgent: event.target.checked,
+                }))
+              }
+            />
+            <span className="text-sm font-medium">Marcar como urgente</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => setQuickEntryOpen(false)}
+            className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            onClick={createTemplateEntry}
+            className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
+          >
+            Guardar y asignar
+          </button>
+        </div>
+      </div>
     </div>
   </div>
-);
-})()}
-
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  Matrícula
-                </label>
-                <input
-                  value={quickDraft.plate}
-                  onChange={(event) =>
-                    setQuickDraft((prev) => ({
-                      ...prev,
-                      plate: event.target.value,
-                    }))
-                  }
-                  placeholder="1234ABC"
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
-                />
-              </div>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
-                <input
-                  type="checkbox"
-                  checked={quickDraft.urgent}
-                  onChange={(event) =>
-                    setQuickDraft((prev) => ({
-                      ...prev,
-                      urgent: event.target.checked,
-                    }))
-                  }
-                />
-                <span className="text-sm font-medium">Marcar como urgente</span>
-              </label>
-            </div>
-            <div className="mt-6 flex gap-3">
-              <button
-                onClick={() => setQuickEntryOpen(false)}
-                className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
-              >
-                Cancelar
-              </button>
-              <button
-  type="button"
-  onClick={createTemplateEntry}
-  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
->
-  Guardar y asignar
-</button>
-            </div>
-          </div>
-        </div>
-      )}
+)}
     </div>
     {resetConfirmOpen && (
-  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4">
-    <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
+  <div className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
       <div className="flex items-start justify-between">
         <div>
           <h3 className="text-xl font-semibold text-red-700">
