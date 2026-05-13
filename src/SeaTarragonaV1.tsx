@@ -367,6 +367,15 @@ function nowMs(): number {
   return Date.now();
 }
 
+function getNextSafeJobId(currentJobs: Job[], preferredId: number) {
+  const maxExistingJobId = currentJobs.reduce(
+    (max, job) => Math.max(max, Number(job.id) || 0),
+    0
+  );
+
+  return Math.max(preferredId, maxExistingJobId + 1, Date.now());
+}
+
 function timeToMinutesValue(time: string) {
   const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
@@ -3187,11 +3196,38 @@ async function saveJobToBackend(job: Job) {
     });
 
     if (!response.ok) {
-      throw new Error("No se pudo guardar el trabajo");
+      const responseText = await response.text();
+
+      console.error("Error guardando trabajo:", {
+        status: response.status,
+        responseText,
+        job,
+      });
+
+      appendLog(
+        `Error guardando trabajo ${job.plate}. Código ${response.status}.`
+      );
+
+      throw new Error(
+        `No se pudo guardar el trabajo ${job.plate}. Código ${response.status}. ${responseText}`
+      );
+    }
+
+    const responseText = await response.text();
+
+    if (!responseText) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(responseText);
+    } catch {
+      return null;
     }
   } catch (error) {
     console.error("Error guardando trabajo:", error);
     appendLog(`Error guardando trabajo ${job.plate}.`);
+    throw error;
   }
 }
 function getScheduledJobCurrentPhaseLabel(scheduled: ScheduledJob, jobsToCheck: Job[]) {
@@ -3882,19 +3918,20 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 async function createJob() {
   if (!draft.plate.trim()) return;
 
-  const baseJob: Job = {
-    id: nextJobId,
-    area: draft.area,
-    plate: draft.plate.trim().toUpperCase(),
-    urgent: draft.urgent,
-    status: "espera",
-    assignedNames: [],
-    reason: "Pendiente de asignación",
-    createdAtMs: nowMs(),
-    startedAtMs: null,
-    template: (draft.template || null) as TemplateKey | null,
-  };
+  const safeJobId = getNextSafeJobId(jobs, nextJobId);
 
+const baseJob: Job = {
+  id: safeJobId,
+  area: draft.area,
+  plate: draft.plate.trim().toUpperCase(),
+  urgent: draft.urgent,
+  status: "espera",
+  assignedNames: [],
+  reason: "Pendiente de asignación",
+  createdAtMs: nowMs(),
+  startedAtMs: null,
+  template: (draft.template || null) as TemplateKey | null,
+};
   const result = allocateJob(baseJob, techs, [baseJob, ...jobs], true, true);
 
 const finalJob = result.jobs.find((j) => j.id === baseJob.id) ?? baseJob;
@@ -3983,55 +4020,57 @@ async function createTemplateEntry() {
   const secondTemplate = quickDraft.linkedTemplateKey
     ? quickTemplates.find((item) => item.key === quickDraft.linkedTemplateKey)
     : null;
- const availableIncludedTasks = buildSelectableIncludedTasks(
-  firstTemplate.area,
-  quickTemplates,
-  customExtraTasks,
-  firstTemplate.key
-);
 
-const selectedIncludedTasks = getIncludedTasksByIds(
-  quickDraft.includedTaskIds,
-  availableIncludedTasks
-);  
+  const availableIncludedTasks = buildSelectableIncludedTasks(
+    firstTemplate.area,
+    quickTemplates,
+    customExtraTasks,
+    firstTemplate.key
+  );
+
+  const selectedIncludedTasks = getIncludedTasksByIds(
+    quickDraft.includedTaskIds,
+    availableIncludedTasks
+  );
 
   const isLinkedEntry = !!secondTemplate;
 
   const plate = quickDraft.plate.trim().toUpperCase();
   const createdAtMs = nowMs();
 
+  const safeJobId = getNextSafeJobId(jobs, nextJobId);
+  const secondSafeJobId = safeJobId + 1;
+
   const linkedGroupId = isLinkedEntry
-    ? `linked-quick-${Date.now()}`
+    ? `linked-quick-${safeJobId}-${createdAtMs}`
     : null;
 
   const firstJob: Job = {
-  id: nextJobId,
-  area: firstTemplate.area,
-  plate,
-  urgent: quickDraft.urgent,
-  status: "espera",
-  assignedNames: [],
-  reason: isLinkedEntry
-    ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
-    : selectedIncludedTasks.length > 0
-    ? `Entrada creada desde plantilla: ${firstTemplate.label}. Tareas incluidas: ${selectedIncludedTasks
-        .map((task) => task.label)
-        .join(" + ")}`
-    : `Entrada creada desde plantilla: ${firstTemplate.label}`,
-  createdAtMs,
-  startedAtMs: null,
-  template: isBuiltInTemplateKey(firstTemplate.key)
-    ? firstTemplate.key
-    : null,
-  quickEntryLabel: firstTemplate.label,
-  quickEntryMode: firstTemplate.mode,
-  includedTasks: selectedIncludedTasks,
+    id: safeJobId,
+    area: firstTemplate.area,
+    plate,
+    urgent: quickDraft.urgent,
+    status: "espera",
+    assignedNames: [],
+    reason: isLinkedEntry
+      ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
+      : selectedIncludedTasks.length > 0
+      ? `Entrada creada desde plantilla: ${firstTemplate.label}. Tareas incluidas: ${selectedIncludedTasks
+          .map((task) => task.label)
+          .join(" + ")}`
+      : `Entrada creada desde plantilla: ${firstTemplate.label}`,
+    createdAtMs,
+    startedAtMs: null,
+    template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
+    quickEntryLabel: firstTemplate.label,
+    quickEntryMode: firstTemplate.mode,
+    includedTasks: selectedIncludedTasks,
 
-  linkedGroupId,
-  linkedOrder: isLinkedEntry ? 1 : null,
-  dependsOnJobId: null,
-  blockedReason: null,
-};
+    linkedGroupId,
+    linkedOrder: isLinkedEntry ? 1 : null,
+    dependsOnJobId: null,
+    blockedReason: null,
+  };
 
   const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true, true);
 
@@ -4042,7 +4081,7 @@ const selectedIncludedTasks = getIncludedTasksByIds(
 
   if (isLinkedEntry && secondTemplate) {
     const secondJob: Job = {
-      id: nextJobId + 1,
+      id: secondSafeJobId,
       area: secondTemplate.area,
       plate,
       urgent: quickDraft.urgent,
@@ -4059,6 +4098,7 @@ const selectedIncludedTasks = getIncludedTasksByIds(
         : null,
       quickEntryLabel: secondTemplate.label,
       quickEntryMode: secondTemplate.mode,
+      includedTasks: [],
 
       linkedGroupId,
       linkedOrder: 2,
@@ -4070,38 +4110,41 @@ const selectedIncludedTasks = getIncludedTasksByIds(
     jobsToSave = [...jobsToSave, secondJob];
   }
 
-  setTechs(result.techs);
-  setJobs(finalJobs);
-  setNextJobId((value) => value + jobsToSave.length);
-
-  setQuickDraft((prev) => ({
-  ...prev,
-  linkedTemplateKey: "",
-  plate: "",
-  urgent: false,
-  includedTaskIds: [],
-}));
-
-  setQuickEntryOpen(false);
-
-appendLog(
-  isLinkedEntry && secondTemplate
-    ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}. Pendiente de validar antes de iniciar.`
-    : selectedIncludedTasks.length > 0
-    ? `Nueva entrada creada: ${firstTemplate.label} (${plate}) con tareas: ${selectedIncludedTasks
-        .map((task) => task.label)
-        .join(" + ")}. Pendiente de validar antes de iniciar.`
-    : `Nueva entrada creada: ${firstTemplate.label} (${plate}). Pendiente de validar antes de iniciar.`
-);
-
   try {
     for (const job of jobsToSave) {
       await saveJobToBackend(job);
     }
 
     for (const tech of result.techs) {
-      saveTechToBackend(tech);
+      await saveTechToBackend(tech);
     }
+
+    setTechs(result.techs);
+    setJobs(finalJobs);
+
+    setNextJobId((value) =>
+      Math.max(value, isLinkedEntry ? secondSafeJobId + 1 : safeJobId + 1)
+    );
+
+    setQuickDraft((prev) => ({
+      ...prev,
+      linkedTemplateKey: "",
+      plate: "",
+      urgent: false,
+      includedTaskIds: [],
+    }));
+
+    setQuickEntryOpen(false);
+
+    appendLog(
+      isLinkedEntry && secondTemplate
+        ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}. Pendiente de validar antes de iniciar.`
+        : selectedIncludedTasks.length > 0
+        ? `Nueva entrada creada: ${firstTemplate.label} (${plate}) con tareas: ${selectedIncludedTasks
+            .map((task) => task.label)
+            .join(" + ")}. Pendiente de validar antes de iniciar.`
+        : `Nueva entrada creada: ${firstTemplate.label} (${plate}). Pendiente de validar antes de iniciar.`
+    );
 
     await reloadJobsFromBackend();
   } catch (error) {
