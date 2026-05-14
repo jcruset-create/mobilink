@@ -975,6 +975,7 @@ app.get("/api/scheduled-jobs", async (_req, res) => {
     const result = await db.query(`
       SELECT data
       FROM scheduled_jobs
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'cancelado'
       ORDER BY id ASC
     `);
 
@@ -1043,9 +1044,38 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
       return res.status(400).json({ error: "ID de cita inválido" });
     }
 
-    await db.query(`DELETE FROM scheduled_jobs WHERE id = $1`, [id]);
+    const deletedAtMs = Date.now();
 
-    res.json({ ok: true });
+    const result = await db.query(
+      `
+      UPDATE scheduled_jobs
+      SET
+        data = jsonb_set(
+          jsonb_set(
+            data::jsonb,
+            '{status}',
+            to_jsonb('cancelado'::text),
+            true
+          ),
+          '{deletedAtMs}',
+          to_jsonb($2::bigint),
+          true
+        ),
+        "updatedAtMs" = $2
+      WHERE id = $1
+      RETURNING data
+      `,
+      [id, deletedAtMs]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Cita no encontrada" });
+    }
+
+    res.json({
+      ok: true,
+      scheduledJob: result.rows[0].data,
+    });
   } catch (error) {
     console.error("DELETE /api/scheduled-jobs/:id error:", error);
     res.status(500).json({ error: "Error eliminando cita programada" });
