@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   type IncludedTask,
@@ -92,6 +92,14 @@ function formatLocalDate(date: Date) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function formatDigitalClock(date: Date) {
+  return date.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function getWeekDays(weekOffset = 0) {
@@ -364,6 +372,15 @@ export default function AgendaView({
 }: Props) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  const [currentClock, setCurrentClock] = useState(() => new Date());
+
+useEffect(() => {
+  const timer = window.setInterval(() => {
+    setCurrentClock(new Date());
+  }, 1000);
+
+  return () => window.clearInterval(timer);
+}, []);
   const [calendarMode, setCalendarMode] = useState<"week" | "day">("week");
   const [selectedDayDate, setSelectedDayDate] = useState<string>("");
   const [editingJobId, setEditingJobId] = useState<number | null>(null);
@@ -758,12 +775,24 @@ estimatedMinutes: safeEstimatedMinutes,    };
     <div className="h-screen overflow-hidden bg-slate-50 p-3 text-slate-900">
       <div className="w-full space-y-4">
         <div className="sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Agenda semanal</h1>
-            <p className="text-sm text-slate-500">
-              Vista tipo Calendar · lunes a sábado
-            </p>
-          </div>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center">
+  <div>
+    <h1 className="text-2xl font-semibold">Agenda semanal</h1>
+    <p className="text-sm text-slate-500">
+      Vista tipo Calendar · lunes a sábado
+    </p>
+  </div>
+
+  <div className="rounded-2xl border border-slate-200 bg-slate-950 px-5 py-3 text-center shadow-sm">
+    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+      Hora actual
+    </div>
+
+    <div className="font-mono text-3xl font-black tabular-nums tracking-wider text-white">
+      {formatDigitalClock(currentClock)}
+    </div>
+  </div>
+</div>
 
           <div className="mt-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
             Citas cargadas: {scheduledJobs.length} · Semana: {days[0]?.date} a{" "}
