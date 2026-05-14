@@ -400,6 +400,23 @@ function normalizeTechStatusValue(status?: string | null) {
     .replace(/\s+/g, "_");
 }
 
+function normalizeTechStatus(status?: string | null): TechStatus {
+  const value = normalizeTechStatusValue(status);
+
+  if (value === "disponible") return "disponible";
+  if (value === "refuerzo") return "refuerzo";
+  if (value === "ocupado") return "ocupado";
+  if (value === "nodisponible") return "nodisponible";
+  if (value === "permiso") return "permiso";
+  if (value === "vacaciones") return "vacaciones";
+  if (value === "baja") return "baja";
+  if (value === "otro_taller") return "otro_taller";
+  if (value === "en_otro_taller") return "otro_taller";
+  if (value === "supervisor") return "supervisor";
+
+  return "disponible";
+}
+
 const HARD_BLOCKED_TECH_STATUSES = [
   "vacaciones",
   "baja",
@@ -2951,14 +2968,27 @@ const dueScheduledJobs = useMemo(() => {
 }, [scheduledJobs]);
 const arrivedPendingValidationScheduledJobs = useMemo(() => {
   return scheduledJobs
-    .filter((job) => job.status === "en_cola")
+    .filter((scheduled) => {
+      if (scheduled.status !== "en_cola") return false;
+
+      const linkedJob = scheduled.jobId
+        ? jobs.find((job) => job.id === scheduled.jobId)
+        : null;
+
+      if (!linkedJob) return true;
+
+      return linkedJob.status === "validacion";
+    })
     .sort((a, b) => {
-      const aMs = a.arrivedAtMs ?? new Date(`${a.date}T${a.startTime}`).getTime();
-      const bMs = b.arrivedAtMs ?? new Date(`${b.date}T${b.startTime}`).getTime();
+      const aMs =
+        a.arrivedAtMs ?? new Date(`${a.date}T${a.startTime}`).getTime();
+
+      const bMs =
+        b.arrivedAtMs ?? new Date(`${b.date}T${b.startTime}`).getTime();
 
       return aMs - bMs;
     });
-}, [scheduledJobs]);
+}, [scheduledJobs, jobs]);
 
 function getRecommendedTechForJob(
   job: Pick<Job, "area" | "template" | "quickEntryLabel">,
@@ -3458,26 +3488,57 @@ async function reloadQuickTemplatesFromBackend() {
   }
 }
 
-function saveTechToBackend(tech: Tech) {
-  fetch(`${API_BASE}/api/techs/${encodeURIComponent(tech.name)}`, {
-    method: "PUT",
-    headers: getAdminHeaders({
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      status: tech.status,
-      blocked:
-        isUnavailableTechStatus(tech.status) || Boolean(tech.blocked),
-      currentJobId: tech.currentJobId ?? null,
-      competencies: tech.competencies,
-      priorities: tech.priorities,
-      avatar: tech.avatar ?? null,
-      statusChangedAtMs: tech.statusChangedAtMs ?? nowMs(),
-      statusTotals: tech.statusTotals ?? {},
-    }),
-  }).catch((error) => {
+async function saveTechToBackend(tech: Tech) {
+  try {
+    const normalizedStatus = normalizeTechStatus(tech.status);
+
+    const response = await fetchWithTimeout(
+      `${API_BASE}/api/techs/${encodeURIComponent(tech.name)}`,
+      {
+        method: "PUT",
+        headers: getAdminHeaders({
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          status: normalizedStatus,
+          blocked:
+            isHardBlockedTechStatus(normalizedStatus) ||
+            isUnavailableTechStatus(normalizedStatus) ||
+            Boolean(tech.blocked),
+          currentJobId:
+            isHardBlockedTechStatus(normalizedStatus) ||
+            isUnavailableTechStatus(normalizedStatus)
+              ? null
+              : tech.currentJobId ?? null,
+          competencies: tech.competencies,
+          priorities: tech.priorities,
+          avatar: tech.avatar ?? null,
+          statusChangedAtMs: tech.statusChangedAtMs ?? nowMs(),
+          statusTotals: tech.statusTotals ?? {},
+        }),
+      }
+    );
+
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      console.error("Error guardando técnico:", {
+        status: response.status,
+        responseText,
+        tech,
+      });
+
+      throw new Error(
+        responseText ||
+          `No se pudo guardar el técnico ${tech.name}. Código ${response.status}.`
+      );
+    }
+
+    return responseText ? JSON.parse(responseText) : null;
+  } catch (error) {
     console.error("Error guardando técnico:", error);
-  });
+    throw error;
+  }
 }
 
 async function uploadTechAvatar(file: File, techName: string) {
@@ -3921,6 +3982,34 @@ function cancelScheduledJob(id: number) {
   );
 
   appendLog(`Cita cancelada: ${scheduled.plate}.`);
+}
+
+function deleteArrivedScheduledJob(scheduledId: number) {
+  const scheduled = scheduledJobs.find((item) => item.id === scheduledId);
+
+  if (!scheduled) return;
+
+  const linkedJob = scheduled.jobId
+    ? jobs.find((job) => job.id === scheduled.jobId)
+    : null;
+
+  const ok = window.confirm(
+    `¿Eliminar esta cita llegada pendiente?\n\nMatrícula: ${
+      scheduled.plate
+    }\n\nEsto solo quitará la tarjeta de "Citas llegadas pendientes de validar".${
+      linkedJob
+        ? `\n\nEl trabajo operativo ${linkedJob.plate} seguirá en su estado actual: ${linkedJob.status}.`
+        : ""
+    }`
+  );
+
+  if (!ok) return;
+
+  setScheduledJobsAndSave((prev) =>
+    prev.filter((item) => item.id !== scheduledId)
+  );
+
+  appendLog(`Cita llegada eliminada: ${scheduled.plate}.`);
 }
 
 async function confirmScheduledArrival(scheduled: ScheduledJob) {
@@ -5170,7 +5259,7 @@ function sendValidationJobToQueue(jobId: number) {
     return {
       ...tech,
       currentJobId: null,
-      status: "disponible" as TechStatus,
+      status: normalizeTechStatus(tech.status),
     };
   });
 
@@ -5524,50 +5613,55 @@ function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
 async function setTechManual(name: string, nextStatus: TechStatus) {
   const tech = techs.find((item) => item.name === name);
   if (!tech) return;
+
+  const changedAtMs = nowMs();
+  const isGoingUnavailable = isUnavailableTechStatus(nextStatus);
+  const isGoingHardBlocked = isHardBlockedTechStatus(nextStatus);
+  const isGoingFree =
+    nextStatus === "disponible" || nextStatus === "supervisor";
+
   const validationProposal = getValidationProposalForTech(name, jobs);
 
-if (validationProposal && tech.currentJobId == null) {
-  const ok = window.confirm(
-    `${name} está propuesto para ${validationProposal.plate}.\n\nSi cambias su estado, se quitará de la propuesta pendiente. ¿Continuar?`
-  );
+  let workingJobs: Job[] = jobs;
 
-  if (!ok) return;
+  if (validationProposal && tech.currentJobId == null) {
+    const ok = window.confirm(
+      `${name} está propuesto para ${validationProposal.plate}.\n\nSi cambias su estado, se quitará de la propuesta pendiente. ¿Continuar?`
+    );
 
-  const updatedJobs: Job[] = jobs.map((job) =>
-    job.id === validationProposal.id
-      ? {
-          ...job,
-          assignedNames: (job.assignedNames ?? []).filter(
-            (assignedName) => assignedName !== name
-          ),
-          reason: `Propuesta actualizada manualmente. ${name} quitado por cambio de estado.`,
-        }
-      : job
-  );
+    if (!ok) return;
 
-  setJobs(updatedJobs);
+    workingJobs = jobs.map((job) =>
+      job.id === validationProposal.id
+        ? {
+            ...job,
+            assignedNames: (job.assignedNames ?? []).filter(
+              (assignedName) => assignedName !== name
+            ),
+            reason: `Propuesta actualizada manualmente. ${name} quitado por cambio de estado.`,
+          }
+        : job
+    );
 
-  const updatedProposal = updatedJobs.find(
-    (job) => job.id === validationProposal.id
-  );
+    setJobs(workingJobs);
 
-  if (updatedProposal) {
-    saveJobToBackend(updatedProposal);
+    const updatedProposal = workingJobs.find(
+      (job) => job.id === validationProposal.id
+    );
+
+    if (updatedProposal) {
+      await saveJobToBackend(updatedProposal);
+    }
+
+    appendLog(
+      `${name} quitado de la propuesta ${validationProposal.plate} por cambio de estado.`
+    );
   }
-
-  appendLog(
-    `${name} quitado de la propuesta ${validationProposal.plate} por cambio de estado.`
-  );
-}
 
   const currentJob =
     tech.currentJobId != null
-      ? jobs.find((job) => job.id === tech.currentJobId)
+      ? workingJobs.find((job) => job.id === tech.currentJobId)
       : null;
-
-  const isGoingUnavailable = isUnavailableTechStatus(nextStatus);
-  const isGoingFree =
-    nextStatus === "disponible" || nextStatus === "supervisor";
 
   if (currentJob && currentJob.status === "activo") {
     const assignedNames = currentJob.assignedNames ?? [];
@@ -5586,7 +5680,7 @@ if (validationProposal && tech.currentJobId == null) {
       return;
     }
 
-    if (isSupport && (isGoingUnavailable || isGoingFree)) {
+    if (isSupport && (isGoingUnavailable || isGoingFree || isGoingHardBlocked)) {
       const ok = window.confirm(
         `${name} está como apoyo en ${currentJob.plate}.\n\n¿Quieres quitarlo de apoyo y cambiar su estado a ${getTechStatusLabel(
           nextStatus
@@ -5603,24 +5697,20 @@ if (validationProposal && tech.currentJobId == null) {
         reason: `Apoyo ${name} quitado manualmente por cambio de estado.`,
       };
 
-      const changedAtMs = nowMs();
-
       const updatedTechs: Tech[] = techs.map((item) => {
-        if (item.name === name) {
-          return updateTechStatusTotals(
-            {
-              ...item,
-              currentJobId: null,
-            },
-            nextStatus,
-            changedAtMs
-          );
-        }
+        if (item.name !== name) return item;
 
-        return item;
+        return updateTechStatusTotals(
+          {
+            ...item,
+            currentJobId: null,
+          },
+          nextStatus,
+          changedAtMs
+        );
       });
 
-      const updatedJobs: Job[] = jobs.map((job) =>
+      const updatedJobs: Job[] = workingJobs.map((job) =>
         job.id === currentJob.id ? updatedJob : job
       );
 
@@ -5638,10 +5728,12 @@ if (validationProposal && tech.currentJobId == null) {
 
         const changedTech = updatedTechs.find((item) => item.name === name);
         if (changedTech) {
-          saveTechToBackend(changedTech);
+          await saveTechToBackend(changedTech);
         }
 
-        recalcWaitingQueue(updatedTechs, updatedJobs);
+        if (isGoingFree) {
+          recalcWaitingQueue(updatedTechs, updatedJobs);
+        }
       } catch (error) {
         console.error("Error cambiando estado de apoyo:", error);
         appendLog(`Error al cambiar estado de ${name}.`);
@@ -5657,25 +5749,34 @@ if (validationProposal && tech.currentJobId == null) {
     return;
   }
 
-  const changedAtMs = nowMs();
-
   const updated: Tech[] = techs.map((item) => {
     if (item.name !== name) return item;
 
-    return updateTechStatusTotals(item, nextStatus, changedAtMs);
+    const baseTech: Tech = {
+      ...item,
+      currentJobId: isGoingUnavailable || isGoingHardBlocked ? null : item.currentJobId,
+    };
+
+    return updateTechStatusTotals(baseTech, nextStatus, changedAtMs);
   });
 
   setTechs(updated);
-  appendLog(`${name} cambia a estado: ${getTechStatusLabel(nextStatus)}.`);
 
   const changed = updated.find((item) => item.name === name);
 
   if (changed) {
-    saveTechToBackend(changed);
-  }
+    try {
+      await saveTechToBackend(changed);
 
-  if (isGoingFree) {
-    recalcWaitingQueue(updated, jobs);
+      appendLog(`${name} cambia a estado: ${getTechStatusLabel(nextStatus)}.`);
+
+      if (isGoingFree) {
+        recalcWaitingQueue(updated, workingJobs);
+      }
+    } catch (error) {
+      console.error("Error guardando estado del técnico:", error);
+      appendLog(`Error guardando estado de ${name}.`);
+    }
   }
 }
 
@@ -5811,7 +5912,7 @@ function reassignJob(jobId: number, techName: string) {
     if (item.name === techName && canReuseAsSupport) {
       return {
         ...item,
-        status: "disponible" as TechStatus,
+        status: normalizeTechStatus(tech.status),
         currentJobId: null,
       };
     }
@@ -6974,7 +7075,14 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
             <div className="mt-3 text-xs text-violet-700">
               Autoriza el inicio desde el bloque “Pendientes de validar”.
-            </div>
+              <button
+  type="button"
+  onClick={() => deleteArrivedScheduledJob(scheduled.id)}
+  className="mt-3 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
+>
+  Eliminar cita llegada
+</button>
+                    </div>
           </div>
         );
       })}
