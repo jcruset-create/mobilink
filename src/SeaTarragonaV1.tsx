@@ -400,6 +400,39 @@ function normalizeTechStatusValue(status?: string | null) {
     .replace(/\s+/g, "_");
 }
 
+const HARD_BLOCKED_TECH_STATUSES = [
+  "vacaciones",
+  "baja",
+  "otro_taller",
+  "en_otro_taller",
+  "permiso",
+  "nodisponible",
+];
+
+function isHardBlockedTechStatus(status?: string | null) {
+  const normalized = String(status || "").toLowerCase().trim();
+
+  return HARD_BLOCKED_TECH_STATUSES.includes(normalized);
+}
+
+function canTechReceiveAutomaticWork(tech: Tech) {
+  if (isHardBlockedTechStatus(tech.status)) return false;
+  if (tech.blocked) return false;
+  if (tech.currentJobId != null) return false;
+
+  const normalized = String(tech.status || "").toLowerCase().trim();
+
+  return (
+    normalized === "disponible" ||
+    normalized === "refuerzo" ||
+    normalized === "supervisor"
+  );
+}
+
+function canTechBeProposedForJob(tech: Tech) {
+  return canTechReceiveAutomaticWork(tech);
+}
+
 function isUnavailableTechStatus(status?: string | null) {
   const normalized = normalizeTechStatusValue(status);
 
@@ -433,6 +466,7 @@ function canAssignTechManuallyToJob(
   quickTemplates: QuickTemplate[],
   role: AssignmentRole
 ) {
+  if (isHardBlockedTechStatus(tech.status)) return false;
   if (isTechUnavailableForAssignment(tech)) {
     return false;
   }
@@ -470,6 +504,7 @@ function canSelectTechManuallyForJob(
   quickTemplatesToCheck: QuickTemplate[],
   role: AssignmentRole
 ) {
+  if (isHardBlockedTechStatus(tech.status)) return false;
   if (
     isTechProposedInAnotherValidation(
       tech.name,
@@ -3491,34 +3526,45 @@ function allocateJob(
   logResult = true,
   askRamonApproval = false
 ): AllocationResult {
+  const isProtectedTech = (tech: Tech) =>
+    isHardBlockedTechStatus(tech.status) || isManualUnavailableStatus(tech.status);
+
   const protectedStatusesByName = new Map(
     baseTechs
-      .filter((tech) => isManualUnavailableStatus(tech.status))
+      .filter((tech) => isProtectedTech(tech))
       .map((tech) => [tech.name, tech.status])
   );
 
-  const safeBaseTechs = baseTechs.map((tech) => {
-    if (isManualUnavailableStatus(tech.status)) {
-      return {
-        ...tech,
-        currentJobId: null,
-      };
-    }
-
-    return tech;
+  const makeWaitingJob = (reason: string): Job => ({
+    ...job,
+    status: "espera" as JobStatus,
+    assignedNames: [],
+    reason: job.reason ? `${job.reason}. ${reason}` : reason,
+    startedAtMs: null,
   });
 
-  const result = allocateJobPure(
-    job,
-    safeBaseTechs,
-    baseJobs,
-    quickTemplates,
-    techStats,
-    techLoadStats
-  );
+  const upsertJobInList = (jobsToUpdate: Job[], nextJob: Job) => {
+    const exists = jobsToUpdate.some((item) => item.id === nextJob.id);
 
-  const restoreProtectedTechs = (techsToRestore: Tech[]) =>
-    techsToRestore.map((tech) => {
+    if (!exists) {
+      return [nextJob, ...jobsToUpdate];
+    }
+
+    return jobsToUpdate.map((item) =>
+      item.id === nextJob.id ? { ...item, ...nextJob } : item
+    );
+  };
+
+  const restoreProtectedTechs = (techsToRestore: Tech[]) => {
+    const byName = new Map(techsToRestore.map((tech) => [tech.name, tech]));
+
+    for (const originalTech of baseTechs) {
+      if (!byName.has(originalTech.name)) {
+        byName.set(originalTech.name, originalTech);
+      }
+    }
+
+    return Array.from(byName.values()).map((tech) => {
       const protectedStatus = protectedStatusesByName.get(tech.name);
 
       if (protectedStatus) {
@@ -3531,11 +3577,95 @@ function allocateJob(
 
       return tech;
     });
+  };
+
+  const safeBaseTechs = baseTechs.map((tech) => {
+    if (isProtectedTech(tech)) {
+      return {
+        ...tech,
+        status: tech.status,
+        currentJobId: -999999,
+        blocked: true,
+      };
+    }
+
+    return tech;
+  });
+
+  const hasPossibleResponsible = safeBaseTechs.some((tech) => {
+    if (isProtectedTech(tech)) return false;
+    if (!canTechReceiveAutomaticWork(tech)) return false;
+
+    return canSelectTechManuallyForJob(
+      tech,
+      job,
+      baseJobs,
+      quickTemplates,
+      "responsable"
+    );
+  });
+
+  if (!hasPossibleResponsible) {
+    const reason = "Sin técnicos disponibles. Pasa a cola de trabajo.";
+    const waitingJob = makeWaitingJob(reason);
+
+    if (logResult) {
+      appendLog(
+        `${AREA_META[job.area].label} ${job.plate} queda en cola: ${reason}`
+      );
+    }
+
+    return {
+      assigned: false,
+      assignedNames: [],
+      reason,
+      techs: restoreProtectedTechs(safeBaseTechs),
+      jobs: upsertJobInList(baseJobs, waitingJob),
+      needsRamonApproval: false,
+    };
+  }
+
+  const result = allocateJobPure(
+    job,
+    safeBaseTechs,
+    baseJobs,
+    quickTemplates,
+    techStats,
+    techLoadStats
+  );
+
+  const assignedNames = result.assignedNames ?? [];
+  const hasProtectedAssigned = assignedNames.some((name) => {
+    const tech = baseTechs.find((item) => item.name === name);
+    return tech ? isProtectedTech(tech) : false;
+  });
+
+  if (hasProtectedAssigned) {
+    const reason =
+      "Asignación bloqueada: uno de los técnicos propuestos está en vacaciones, baja, permiso, otro taller o no disponible.";
+    const waitingJob = makeWaitingJob(reason);
+
+    if (logResult) {
+      appendLog(
+        `${AREA_META[job.area].label} ${job.plate} queda en cola: ${reason}`
+      );
+    }
+
+    return {
+      assigned: false,
+      assignedNames: [],
+      reason,
+      techs: restoreProtectedTechs(safeBaseTechs),
+      jobs: upsertJobInList(baseJobs, waitingJob),
+      needsRamonApproval: false,
+    };
+  }
 
   if (result.assigned && result.needsRamonApproval) {
     if (!askRamonApproval) {
       const reason =
         "Trabajo enviado a cola: Ramón solo se usará como último recurso con confirmación.";
+      const waitingJob = makeWaitingJob(reason);
 
       if (logResult) {
         appendLog(
@@ -3548,17 +3678,7 @@ function allocateJob(
         assignedNames: [],
         reason,
         techs: restoreProtectedTechs(safeBaseTechs),
-        jobs: baseJobs.map((i) =>
-          i.id === job.id
-            ? {
-                ...i,
-                status: "espera" as JobStatus,
-                assignedNames: [],
-                reason,
-                startedAtMs: null,
-              }
-            : i
-        ),
+        jobs: upsertJobInList(baseJobs, waitingJob),
         needsRamonApproval: true,
       };
     }
@@ -3572,6 +3692,7 @@ function allocateJob(
     if (!confirmRamon) {
       const reason =
         "Pendiente en cola: se esperará al próximo técnico libre antes de usar a Ramón.";
+      const waitingJob = makeWaitingJob(reason);
 
       if (logResult) {
         appendLog(
@@ -3584,17 +3705,7 @@ function allocateJob(
         assignedNames: [],
         reason,
         techs: restoreProtectedTechs(safeBaseTechs),
-        jobs: baseJobs.map((i) =>
-          i.id === job.id
-            ? {
-                ...i,
-                status: "espera" as JobStatus,
-                assignedNames: [],
-                reason,
-                startedAtMs: null,
-              }
-            : i
-        ),
+        jobs: upsertJobInList(baseJobs, waitingJob),
         needsRamonApproval: true,
       };
     }
@@ -3603,15 +3714,44 @@ function allocateJob(
   const safeResult: AllocationResult = {
     ...result,
     techs: restoreProtectedTechs(result.techs),
+    jobs: result.jobs.map((item) => {
+      if (item.id !== job.id) return item;
+
+      const cleanAssignedNames = (item.assignedNames ?? []).filter((name) => {
+        const tech = baseTechs.find((baseTech) => baseTech.name === name);
+        return tech ? !isProtectedTech(tech) : true;
+      });
+
+      if (result.assigned && cleanAssignedNames.length === 0) {
+        return makeWaitingJob(
+          "Sin técnicos disponibles. Pasa a cola de trabajo."
+        );
+      }
+
+      return {
+        ...item,
+        assignedNames: cleanAssignedNames,
+      };
+    }),
   };
+
+  if (!safeResult.assigned) {
+    const reason =
+      safeResult.reason || "Sin técnicos disponibles. Pasa a cola de trabajo.";
+    const waitingJob = makeWaitingJob(reason);
+
+    safeResult.jobs = upsertJobInList(safeResult.jobs, waitingJob);
+  }
 
   if (logResult) {
     appendLog(
       safeResult.assigned
-        ? `${AREA_META[job.area].label} ${job.plate} asignado a ${safeResult.assignedNames.join(
-            " + "
-          )}.`
-        : `${AREA_META[job.area].label} ${job.plate} queda en espera: ${safeResult.reason}`
+        ? `${AREA_META[job.area].label} ${
+            job.plate
+          } asignado a ${safeResult.assignedNames.join(" + ")}.`
+        : `${AREA_META[job.area].label} ${job.plate} queda en espera: ${
+            safeResult.reason || "Sin técnicos disponibles."
+          }`
     );
   }
 
@@ -5481,6 +5621,8 @@ if (validationProposal && tech.currentJobId == null) {
   }
 }
 
+
+
 async function resetAllSystem() {
   try {
     setResetError("");
@@ -5611,7 +5753,9 @@ function reassignJob(jobId: number, techName: string) {
     if (item.name === techName && canReuseAsSupport) {
       return {
         ...item,
-        status: "disponible" as TechStatus,
+        status: isHardBlockedTechStatus(tech.status)
+  ? tech.status
+  : ("disponible" as TechStatus),
         currentJobId: null,
       };
     }
@@ -5754,7 +5898,9 @@ function changeSupportForJob(jobId: number, newSupportName: string) {
     if (previousSupportNames.includes(tech.name)) {
       return {
         ...tech,
-        status: "disponible" as TechStatus,
+        status: isHardBlockedTechStatus(tech.status)
+  ? tech.status
+  : ("disponible" as TechStatus),
         currentJobId: null,
       };
     }
@@ -5819,7 +5965,9 @@ function removeSupportFromJobManually(jobId: number) {
     if (supportNames.includes(tech.name)) {
       return {
         ...tech,
-        status: "disponible" as TechStatus,
+        status: isHardBlockedTechStatus(tech.status)
+  ? tech.status
+  : ("disponible" as TechStatus),
         currentJobId: null,
       };
     }
@@ -5856,33 +6004,10 @@ function addSupportToJob(jobId: number, forcedSupportName?: string) {
     return;
   }
 
-  const templateConfig = getQuickTemplateForJob(job, quickTemplates);
-
-  const candidates = techs.filter((candidate) => {
-    if (assignedNames.includes(candidate.name)) return false;
-
-  if (
-  !canSelectTechManuallyForJob(
-    candidate,
-    job,
-    jobs,
-    quickTemplates,
-    "apoyo"
-  )
-) {
-  return false;
-}
-
-    if (
-      templateConfig &&
-      templateConfig.allowedTechs.length > 0 &&
-      !templateConfig.allowedTechs.includes(candidate.name)
-    ) {
-      return false;
-    }
-
-    return true;
-  });
+  
+  const candidates = techs
+  .filter((tech) => canTechBeProposedForJob(tech))
+  .filter(() => true);
 
   const support = forcedSupportName
     ? candidates.find((candidate) => candidate.name === forcedSupportName)
