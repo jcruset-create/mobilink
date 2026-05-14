@@ -5130,6 +5130,64 @@ async function deleteValidationJob(jobId: number) {
   }
 }
 
+function sendValidationJobToQueue(jobId: number) {
+  const job = jobs.find((item) => item.id === jobId);
+
+  if (!job) return;
+
+  const ok = window.confirm(
+    `¿Enviar ${job.plate} a cola de trabajo?\n\nSe quitará la propuesta actual y quedará pendiente de asignación.`
+  );
+
+  if (!ok) return;
+
+  const assignedNames = job.assignedNames ?? [];
+
+  const updatedJob: Job = {
+    ...job,
+    status: "espera" as JobStatus,
+    assignedNames: [],
+    startedAtMs: null,
+    reason: job.reason
+      ? `${job.reason}. Enviado manualmente a cola de trabajo.`
+      : "Enviado manualmente a cola de trabajo.",
+  };
+
+  const nextJobs = jobs.map((item) =>
+    item.id === jobId ? updatedJob : item
+  );
+
+  const nextTechs = techs.map((tech) => {
+    if (!assignedNames.includes(tech.name)) return tech;
+
+    if (isHardBlockedTechStatus(tech.status)) {
+      return {
+        ...tech,
+        currentJobId: null,
+      };
+    }
+
+    return {
+      ...tech,
+      currentJobId: null,
+      status: "disponible" as TechStatus,
+    };
+  });
+
+  setJobs(nextJobs);
+  setTechs(nextTechs);
+
+  saveJobToBackend(updatedJob);
+
+  for (const tech of nextTechs) {
+    if (assignedNames.includes(tech.name)) {
+      saveTechToBackend(tech);
+    }
+  }
+
+  appendLog(`Trabajo ${job.plate} enviado a cola de trabajo.`);
+}
+
 async function finishJob(jobId: number) {
   const target = jobs.find((job) => job.id === jobId);
   if (!target) return;
@@ -5753,9 +5811,7 @@ function reassignJob(jobId: number, techName: string) {
     if (item.name === techName && canReuseAsSupport) {
       return {
         ...item,
-        status: isHardBlockedTechStatus(tech.status)
-  ? tech.status
-  : ("disponible" as TechStatus),
+        status: "disponible" as TechStatus,
         currentJobId: null,
       };
     }
@@ -8045,13 +8101,22 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     </>
   )}
 
-  <button
-    type="button"
-    onClick={() => rejectProposedJob(job.id)}
-    className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
-  >
-    Rechazar propuesta
-  </button>
+<button
+  type="button"
+  onClick={() => rejectProposedJob(job.id)}
+  className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+>
+  Rechazar propuesta
+</button>
+
+<button
+  type="button"
+  onClick={() => sendValidationJobToQueue(job.id)}
+  className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-800 hover:bg-amber-100"
+>
+  Mandar a cola
+</button>
+
  <button
   type="button"
   onClick={() => deleteValidationJob(job.id)}
