@@ -3998,7 +3998,7 @@ function cancelScheduledJob(id: number) {
   appendLog(`Cita cancelada: ${scheduled.plate}.`);
 }
 
-function deleteArrivedScheduledJob(scheduledId: number) {
+async function deleteArrivedScheduledJob(scheduledId: number) {
   const scheduled = scheduledJobs.find((item) => item.id === scheduledId);
 
   if (!scheduled) return;
@@ -4013,17 +4013,36 @@ function deleteArrivedScheduledJob(scheduledId: number) {
     }\n\nEsto solo quitará la tarjeta de "Citas llegadas pendientes de validar".${
       linkedJob
         ? `\n\nEl trabajo operativo ${linkedJob.plate} seguirá en su estado actual: ${linkedJob.status}.`
-        : ""
+        : "\n\nNo se ha encontrado trabajo operativo vinculado."
     }`
   );
 
   if (!ok) return;
 
-  setScheduledJobsAndSave((prev) =>
+  setScheduledJobs((prev) =>
     prev.filter((item) => item.id !== scheduledId)
   );
 
-  appendLog(`Cita llegada eliminada: ${scheduled.plate}.`);
+  try {
+    if (deleteScheduledJobFromBackend) {
+      await deleteScheduledJobFromBackend(scheduledId);
+    }
+
+    appendLog(`Cita llegada eliminada: ${scheduled.plate}.`);
+  } catch (error) {
+    console.error("Error eliminando cita llegada:", error);
+
+    setScheduledJobs((prev) => {
+      const exists = prev.some((item) => item.id === scheduled.id);
+      return exists ? prev : [...prev, scheduled];
+    });
+
+    appendLog(`Error eliminando cita llegada ${scheduled.plate}.`);
+
+    alert(
+      "No se pudo eliminar la cita llegada del servidor. Se ha restaurado en pantalla."
+    );
+  }
 }
 
 async function confirmScheduledArrival(scheduled: ScheduledJob) {
