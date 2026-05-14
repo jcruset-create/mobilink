@@ -6,6 +6,7 @@ import React, {
   type SetStateAction,
 } from "react";
 import AgendaView from "./components/AgendaView";
+import { APP_VERSION } from "./version";
 import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import OperariosTVView from "./components/OperariosTVView";
@@ -48,7 +49,6 @@ import {
   XCircle,
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
-const APP_VERSION = "v1.3.7";
 type TechStatus =
   | "disponible"
   | "ocupado"
@@ -6274,17 +6274,34 @@ return (
 
   {canAccessView(userRole, "agenda") && (
     <button
-      type="button"
-      onClick={() => setView("agenda")}
-      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
-        view === "agenda"
-          ? "bg-slate-900 text-white"
-          : "border border-slate-200 bg-white text-slate-700"
-      }`}
-    >
-      Agenda
-    </button>
+  type="button"
+  onClick={() => setView("agenda")}
+  className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+    view === "agenda"
+      ? "border border-yellow-300 bg-yellow-200 text-yellow-950 shadow-sm"
+      : "border border-yellow-200 bg-yellow-50 text-yellow-900 hover:bg-yellow-100"
+  }`}
+>
+  Agenda
+</button>
+
+
   )}
+
+{canAccessView(userRole, "entradas") && (
+  <button
+    type="button"
+    onClick={() => setView("entradas")}
+    className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+      view === "entradas"
+        ? "border border-yellow-300 bg-yellow-200 text-yellow-950 shadow-sm"
+        : "border border-yellow-200 bg-yellow-50 text-yellow-900 hover:bg-yellow-100"
+    }`}
+  >
+    Entradas rápidas
+  </button>
+)}
+
   <button
   type="button"
   onClick={() => {
@@ -6381,6 +6398,7 @@ return (
   </button>
 </div>
       </div>
+      
 
       {view === "ajustes" && (
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -6783,7 +6801,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{dueScheduledJobs.length > 0 && (
+{view === "operativo" && dueScheduledJobs.length > 0 && (
   <div className="rounded-3xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
     <div className="mb-4 flex items-center justify-between gap-3">
       <div>
@@ -6803,14 +6821,12 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
     <div className="grid gap-4 md:grid-cols-2">
       {dueScheduledJobs.map((job) => {
-        
         const secondTemplate = job.secondTemplateKey
           ? quickTemplates.find(
               (template) => template.key === job.secondTemplateKey
             )
           : null;
 
-        
         const includedTasks = Array.isArray(job.includedTasks)
           ? job.includedTasks
           : [];
@@ -6826,21 +6842,19 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
           <div
             key={job.id}
             className={`rounded-3xl border-2 bg-white p-5 shadow-sm ${
-              isLate
-                ? "border-red-300"
-                : "border-amber-200"
+              isLate ? "border-red-300" : "border-amber-200"
             }`}
           >
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <input
-  value={job.plate}
-  onChange={(e) =>
-    updateScheduledJobField(job.id, "plate", e.target.value)
-  }
-  placeholder="Matrícula"
-  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-3xl font-black uppercase tracking-wide text-slate-950"
-/>
+                  value={job.plate}
+                  onChange={(e) =>
+                    updateScheduledJobField(job.id, "plate", e.target.value)
+                  }
+                  placeholder="Matrícula"
+                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-3xl font-black uppercase tracking-wide text-slate-950"
+                />
 
                 <div className="mt-1 text-lg font-bold text-amber-900">
                   {job.date} · {job.startTime}
@@ -6860,29 +6874,31 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
               <div className="text-xs font-bold uppercase text-amber-600">
-  Trabajo principal
-</div>
+                Trabajo principal
+              </div>
 
-<select
-  value={job.firstTemplateKey || job.templateKey}
-  onChange={(e) => updateScheduledJobTemplate(job.id, e.target.value)}
-  className="mt-1 w-full rounded-xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 text-sm font-black text-red-700"
->
-  {quickTemplates
-    .slice()
-    .sort((a, b) =>
-      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-    )
-    .map((template) => (
-      <option
-        key={template.key}
-        value={template.key}
-        className="bg-yellow-100 font-bold text-red-700"
-      >
-        {template.label}
-      </option>
-    ))}
-</select>
+              <select
+                value={job.firstTemplateKey || job.templateKey}
+                onChange={(e) => updateScheduledJobTemplate(job.id, e.target.value)}
+                className="mt-1 w-full rounded-xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 text-sm font-black text-red-700"
+              >
+                {quickTemplates
+                  .slice()
+                  .sort((a, b) =>
+                    a.label.localeCompare(b.label, "es", {
+                      sensitivity: "base",
+                    })
+                  )
+                  .map((template) => (
+                    <option
+                      key={template.key}
+                      value={template.key}
+                      className="bg-yellow-100 font-bold text-red-700"
+                    >
+                      {template.label}
+                    </option>
+                  ))}
+              </select>
 
               {secondTemplate && (
                 <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800">
@@ -6905,50 +6921,58 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
             <div className="mt-3 grid gap-2 text-sm">
               <div className="rounded-xl bg-slate-50 px-3 py-2">
-  <label className="mb-1 block text-xs font-bold text-slate-700">
-    Cliente
-  </label>
+                <label className="mb-1 block text-xs font-bold text-slate-700">
+                  Cliente
+                </label>
 
-  <input
-    value={job.customerName || ""}
-    onChange={(e) =>
-      updateScheduledJobField(job.id, "customerName", e.target.value)
-    }
-    placeholder="Nombre del cliente"
-    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-  />
-</div>
+                <input
+                  value={job.customerName || ""}
+                  onChange={(e) =>
+                    updateScheduledJobField(
+                      job.id,
+                      "customerName",
+                      e.target.value
+                    )
+                  }
+                  placeholder="Nombre del cliente"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                />
+              </div>
 
               <div className="rounded-xl bg-slate-50 px-3 py-2">
-  <label className="mb-1 block text-xs font-bold text-slate-700">
-    Teléfono
-  </label>
+                <label className="mb-1 block text-xs font-bold text-slate-700">
+                  Teléfono
+                </label>
 
-  <input
-    value={job.customerPhone || ""}
-    onChange={(e) =>
-      updateScheduledJobField(job.id, "customerPhone", e.target.value)
-    }
-    placeholder="Teléfono móvil"
-    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-  />
-</div>
+                <input
+                  value={job.customerPhone || ""}
+                  onChange={(e) =>
+                    updateScheduledJobField(
+                      job.id,
+                      "customerPhone",
+                      e.target.value
+                    )
+                  }
+                  placeholder="Teléfono móvil"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                />
+              </div>
 
-<div className="rounded-xl bg-slate-50 px-3 py-2">
-  <label className="mb-1 block text-xs font-bold text-slate-700">
-    Observaciones
-  </label>
+              <div className="rounded-xl bg-slate-50 px-3 py-2">
+                <label className="mb-1 block text-xs font-bold text-slate-700">
+                  Observaciones
+                </label>
 
-  <textarea
-    value={job.notes || ""}
-    onChange={(e) =>
-      updateScheduledJobField(job.id, "notes", e.target.value)
-    }
-    placeholder="Observaciones de la cita"
-    rows={3}
-    className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-  />
-</div>
+                <textarea
+                  value={job.notes || ""}
+                  onChange={(e) =>
+                    updateScheduledJobField(job.id, "notes", e.target.value)
+                  }
+                  placeholder="Observaciones de la cita"
+                  rows={3}
+                  className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                />
+              </div>
 
               {job.urgent && (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-black text-red-700">
@@ -6981,32 +7005,35 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-<div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
-  <div className="mb-3 flex items-center justify-between gap-3">
-    <div className="text-sm font-medium text-violet-700">
-      ChatGPT externo
+{view === "operativo" && (
+  <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="text-sm font-medium text-violet-700">
+        ChatGPT externo
+      </div>
+
+      <button
+        type="button"
+        onClick={askExternalAIWorkshop}
+        disabled={externalAILoading}
+        className="rounded-2xl bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+      >
+        {externalAILoading ? "Consultando..." : "Consultar ChatGPT"}
+      </button>
     </div>
 
-    <button
-      onClick={askExternalAIWorkshop}
-      disabled={externalAILoading}
-      className="rounded-2xl bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-    >
-      {externalAILoading ? "Consultando..." : "Consultar ChatGPT"}
-    </button>
+    {externalAIAnswer ? (
+      <pre className="whitespace-pre-wrap rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-900">
+        {externalAIAnswer}
+      </pre>
+    ) : (
+      <div className="text-sm text-slate-500">
+        Pulsa el botón para pedir una recomendación externa.
+      </div>
+    )}
   </div>
-
-  {externalAIAnswer ? (
-    <pre className="whitespace-pre-wrap rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-900">
-      {externalAIAnswer}
-    </pre>
-  ) : (
-    <div className="text-sm text-slate-500">
-      Pulsa el botón para pedir una recomendación externa.
-    </div>
-  )}
-</div>
-
+)}
+{view === "operativo" && (
 <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
   <div className="mb-3 text-sm font-medium text-slate-700">
     Alertas IA del taller
@@ -7029,6 +7056,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     ))}
   </div>
 </div>
+)}
 
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
   <div className="mb-3 flex items-center justify-between gap-3">
@@ -7041,7 +7069,253 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 </div>
   </div>
 
-  {view === "ajustes" && (
+  {view === "entradas" && isSupervisor && (
+    <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="mb-3 text-sm font-medium text-slate-700">
+        Crear entrada rápida
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-4">
+  <input
+    value={newQuickTemplate.label}
+    onChange={(e) =>
+      setNewQuickTemplate((p) => ({
+        ...p,
+        label: e.target.value,
+      }))
+    }
+    placeholder="Nombre entrada rápida"
+    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm md:col-span-2"
+  />
+
+  <input
+    type="number"
+    min="0"
+    value={newQuickTemplate.standardMinutes ?? ""}
+    onChange={(e) =>
+      setNewQuickTemplate((prev) => ({
+        ...prev,
+        standardMinutes: e.target.value,
+      }))
+    }
+    placeholder="Tiempo estándar en minutos"
+    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+  />
+
+  <select
+    value={newQuickTemplate.area}
+    onChange={(e) =>
+      setNewQuickTemplate((p) => ({
+        ...p,
+        area: e.target.value as AreaKey,
+      }))
+    }
+    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+  >
+    {Object.entries(AREA_META).map(([key, meta]) => (
+      <option key={key} value={key}>
+        {meta.label}
+      </option>
+    ))}
+  </select>
+
+  <select
+    value={newQuickTemplate.mode}
+    onChange={(e) =>
+      setNewQuickTemplate((p) => ({
+        ...p,
+        mode: e.target.value as QuickEntryMode,
+      }))
+    }
+    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+  >
+    <option value="single">1 técnico</option>
+    <option value="team">técnico + refuerzo</option>
+  </select>
+</div>
+
+      <div className="mt-4">
+        <div className="mb-2 text-sm font-medium text-slate-700">
+          Técnicos capacitados
+        </div>
+
+        <div className="grid gap-2 md:grid-cols-3">
+          {techs.map((tech) => {
+              const checked = newQuickTemplate.allowedTechs.includes(
+                tech.name
+              );
+
+              return (
+                <label
+                  key={`allowed-${tech.name}`}
+                  className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const nextAllowed = e.target.checked
+                        ? [...newQuickTemplate.allowedTechs, tech.name]
+                        : newQuickTemplate.allowedTechs.filter(
+                            (name) => name !== tech.name
+                          );
+
+                      setNewQuickTemplate((prev) => {
+                        const filteredPriority = prev.priorityOrder.filter(
+                          (name) => nextAllowed.includes(name)
+                        );
+
+                        const missing = nextAllowed.filter(
+                          (name) => !filteredPriority.includes(name)
+                        );
+
+                        return {
+                          ...prev,
+                          allowedTechs: nextAllowed,
+                          priorityOrder: [...filteredPriority, ...missing],
+                        };
+                      });
+                    }}
+                  />
+                  <span>{tech.name}</span>
+                </label>
+              );
+            })}
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-2 text-sm font-medium text-slate-700">
+          Orden de prioridad
+        </div>
+
+        <div className="space-y-2">
+          {newQuickTemplate.allowedTechs.length === 0 ? (
+            <div className="text-sm text-slate-500">
+              Si no marcas ningún técnico, se usarán las reglas generales del programa.
+            </div>
+          ) : (
+            (
+              newQuickTemplate.priorityOrder.length > 0
+                ? newQuickTemplate.priorityOrder
+                : newQuickTemplate.allowedTechs
+            ).map((techName, index) => {
+              const priorityOrder =
+                newQuickTemplate.priorityOrder.length > 0
+                  ? newQuickTemplate.priorityOrder
+                  : newQuickTemplate.allowedTechs;
+
+              return (
+                <div
+                  key={`priority-${techName}`}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <span>
+                    {index + 1}. {techName}
+                    {(() => {
+                      const simulatedTemplate: QuickTemplate = {
+                        key: "preview",
+                        label:
+                          newQuickTemplate.label || "Nueva entrada rápida",
+                        area: newQuickTemplate.area,
+                        mode: newQuickTemplate.mode,
+                        allowedTechs: newQuickTemplate.allowedTechs,
+                        priorityOrder:
+                          newQuickTemplate.priorityOrder.length > 0
+                            ? newQuickTemplate.priorityOrder
+                            : newQuickTemplate.allowedTechs,
+                      };
+
+                      const recommended = getRecommendedTechForJob(
+                        {
+                          area: simulatedTemplate.area,
+                          template: null,
+                          quickEntryLabel: simulatedTemplate.label,
+                        },
+                        techs,
+                        [simulatedTemplate, ...quickTemplates],
+                        techOperationStats
+                      );
+
+                      return recommended === techName ? (
+                        <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                          IA
+                        </span>
+                      ) : null;
+                    })()}
+                  </span>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const arr = [...priorityOrder];
+                        const currentIndex = arr.indexOf(techName);
+                        if (currentIndex <= 0) return;
+
+                        [arr[currentIndex - 1], arr[currentIndex]] = [
+                          arr[currentIndex],
+                          arr[currentIndex - 1],
+                        ];
+
+                        setNewQuickTemplate((prev) => ({
+                          ...prev,
+                          priorityOrder: arr,
+                        }));
+                      }}
+                      className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                    >
+                      ↑
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const arr = [...priorityOrder];
+                        const currentIndex = arr.indexOf(techName);
+
+                        if (
+                          currentIndex === -1 ||
+                          currentIndex >= arr.length - 1
+                        ) {
+                          return;
+                        }
+
+                        [arr[currentIndex], arr[currentIndex + 1]] = [
+                          arr[currentIndex + 1],
+                          arr[currentIndex],
+                        ];
+
+                        setNewQuickTemplate((prev) => ({
+                          ...prev,
+                          priorityOrder: arr,
+                        }));
+                      }}
+                      className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                    >
+                      ↓
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <button
+          type="button"
+          onClick={addQuickTemplate}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+        >
+          Añadir entrada rápida
+        </button>
+      </div>
+    </div>
+  )}
+
+ {view === "entradas" && (
   <div className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 p-4">
     <div className="mb-3">
       <div className="text-sm font-semibold text-violet-900">
@@ -7336,7 +7610,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
             </button>
           </div>
         )}
-{view === "ajustes" && templatesForArea.length > 0 && (
+{view === "entradas" && templatesForArea.length > 0 && (
   <div className="mt-3 flex flex-wrap gap-2">
     {templatesForArea.map((template) => (
       <div
@@ -7372,9 +7646,9 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 
-                {view === "ajustes" &&
-          templatesForArea
-            .filter((template) => editingQuickTemplateKey === template.key)
+          {view === "entradas" &&
+  templatesForArea
+    .filter((template) => editingQuickTemplateKey === template.key)
             .map((template) => (
               <div
                 key={`editor-${template.key}`}
@@ -7395,7 +7669,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     );
   })()}
 </div>
-{view === "ajustes" && isSupervisor && (
+{view === "entradas" && isSupervisor && (
   <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
     <div className="mb-3">
       <div className="text-sm font-semibold text-emerald-900">
@@ -7497,251 +7771,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     )}
   </div>
 )}
-  {view === "ajustes" && isSupervisor && (
-    <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="mb-3 text-sm font-medium text-slate-700">
-        Crear entrada rápida
-      </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-  <input
-    value={newQuickTemplate.label}
-    onChange={(e) =>
-      setNewQuickTemplate((p) => ({
-        ...p,
-        label: e.target.value,
-      }))
-    }
-    placeholder="Nombre entrada rápida"
-    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm md:col-span-2"
-  />
-
-  <input
-    type="number"
-    min="0"
-    value={newQuickTemplate.standardMinutes ?? ""}
-    onChange={(e) =>
-      setNewQuickTemplate((prev) => ({
-        ...prev,
-        standardMinutes: e.target.value,
-      }))
-    }
-    placeholder="Tiempo estándar en minutos"
-    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-  />
-
-  <select
-    value={newQuickTemplate.area}
-    onChange={(e) =>
-      setNewQuickTemplate((p) => ({
-        ...p,
-        area: e.target.value as AreaKey,
-      }))
-    }
-    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-  >
-    {Object.entries(AREA_META).map(([key, meta]) => (
-      <option key={key} value={key}>
-        {meta.label}
-      </option>
-    ))}
-  </select>
-
-  <select
-    value={newQuickTemplate.mode}
-    onChange={(e) =>
-      setNewQuickTemplate((p) => ({
-        ...p,
-        mode: e.target.value as QuickEntryMode,
-      }))
-    }
-    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-  >
-    <option value="single">1 técnico</option>
-    <option value="team">técnico + refuerzo</option>
-  </select>
-</div>
-
-      <div className="mt-4">
-        <div className="mb-2 text-sm font-medium text-slate-700">
-          Técnicos capacitados
-        </div>
-
-        <div className="grid gap-2 md:grid-cols-3">
-          {techs.map((tech) => {
-              const checked = newQuickTemplate.allowedTechs.includes(
-                tech.name
-              );
-
-              return (
-                <label
-                  key={`allowed-${tech.name}`}
-                  className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => {
-                      const nextAllowed = e.target.checked
-                        ? [...newQuickTemplate.allowedTechs, tech.name]
-                        : newQuickTemplate.allowedTechs.filter(
-                            (name) => name !== tech.name
-                          );
-
-                      setNewQuickTemplate((prev) => {
-                        const filteredPriority = prev.priorityOrder.filter(
-                          (name) => nextAllowed.includes(name)
-                        );
-
-                        const missing = nextAllowed.filter(
-                          (name) => !filteredPriority.includes(name)
-                        );
-
-                        return {
-                          ...prev,
-                          allowedTechs: nextAllowed,
-                          priorityOrder: [...filteredPriority, ...missing],
-                        };
-                      });
-                    }}
-                  />
-                  <span>{tech.name}</span>
-                </label>
-              );
-            })}
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <div className="mb-2 text-sm font-medium text-slate-700">
-          Orden de prioridad
-        </div>
-
-        <div className="space-y-2">
-          {newQuickTemplate.allowedTechs.length === 0 ? (
-            <div className="text-sm text-slate-500">
-              Si no marcas ningún técnico, se usarán las reglas generales del programa.
-            </div>
-          ) : (
-            (
-              newQuickTemplate.priorityOrder.length > 0
-                ? newQuickTemplate.priorityOrder
-                : newQuickTemplate.allowedTechs
-            ).map((techName, index) => {
-              const priorityOrder =
-                newQuickTemplate.priorityOrder.length > 0
-                  ? newQuickTemplate.priorityOrder
-                  : newQuickTemplate.allowedTechs;
-
-              return (
-                <div
-                  key={`priority-${techName}`}
-                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                >
-                  <span>
-                    {index + 1}. {techName}
-                    {(() => {
-                      const simulatedTemplate: QuickTemplate = {
-                        key: "preview",
-                        label:
-                          newQuickTemplate.label || "Nueva entrada rápida",
-                        area: newQuickTemplate.area,
-                        mode: newQuickTemplate.mode,
-                        allowedTechs: newQuickTemplate.allowedTechs,
-                        priorityOrder:
-                          newQuickTemplate.priorityOrder.length > 0
-                            ? newQuickTemplate.priorityOrder
-                            : newQuickTemplate.allowedTechs,
-                      };
-
-                      const recommended = getRecommendedTechForJob(
-                        {
-                          area: simulatedTemplate.area,
-                          template: null,
-                          quickEntryLabel: simulatedTemplate.label,
-                        },
-                        techs,
-                        [simulatedTemplate, ...quickTemplates],
-                        techOperationStats
-                      );
-
-                      return recommended === techName ? (
-                        <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
-                          IA
-                        </span>
-                      ) : null;
-                    })()}
-                  </span>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const arr = [...priorityOrder];
-                        const currentIndex = arr.indexOf(techName);
-                        if (currentIndex <= 0) return;
-
-                        [arr[currentIndex - 1], arr[currentIndex]] = [
-                          arr[currentIndex],
-                          arr[currentIndex - 1],
-                        ];
-
-                        setNewQuickTemplate((prev) => ({
-                          ...prev,
-                          priorityOrder: arr,
-                        }));
-                      }}
-                      className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    >
-                      ↑
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const arr = [...priorityOrder];
-                        const currentIndex = arr.indexOf(techName);
-
-                        if (
-                          currentIndex === -1 ||
-                          currentIndex >= arr.length - 1
-                        ) {
-                          return;
-                        }
-
-                        [arr[currentIndex], arr[currentIndex + 1]] = [
-                          arr[currentIndex + 1],
-                          arr[currentIndex],
-                        ];
-
-                        setNewQuickTemplate((prev) => ({
-                          ...prev,
-                          priorityOrder: arr,
-                        }));
-                      }}
-                      className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                    >
-                      ↓
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <button
-          type="button"
-          onClick={addQuickTemplate}
-          className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-        >
-          Añadir entrada rápida
-        </button>
-      </div>
-    </div>
-  )}
 </div>
 {validationJobs.length > 0 && (
   <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
