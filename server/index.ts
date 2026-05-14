@@ -985,6 +985,8 @@ app.get("/api/scheduled-jobs", async (_req, res) => {
   }
 });
 
+
+
 app.put("/api/scheduled-jobs", async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
@@ -1030,6 +1032,23 @@ app.put("/api/scheduled-jobs", async (req, res) => {
   } catch (error) {
     console.error("PUT /api/scheduled-jobs error:", error);
     res.status(500).json({ error: "Error guardando citas programadas" });
+  }
+});
+
+app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de cita inválido" });
+    }
+
+    await db.query(`DELETE FROM scheduled_jobs WHERE id = $1`, [id]);
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/scheduled-jobs/:id error:", error);
+    res.status(500).json({ error: "Error eliminando cita programada" });
   }
 });
 

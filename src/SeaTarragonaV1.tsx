@@ -3265,6 +3265,20 @@ async function saveScheduledJobsToBackend(
   }
 }
 
+async function deleteScheduledJobFromBackend(id: number) {
+  const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs/${id}`, {
+    method: "DELETE",
+    headers: getAdminHeaders({
+      "Content-Type": "application/json",
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "No se pudo eliminar la cita programada");
+  }
+}
+
 function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
   setScheduledJobs((prev) => {
     const next =
@@ -6454,6 +6468,7 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
       appendLog={appendLog}
       confirmScheduledArrival={confirmScheduledArrival}
       cancelScheduledJob={cancelScheduledJob}
+      deleteScheduledJobFromBackend={deleteScheduledJobFromBackend}
     />
   );
 }

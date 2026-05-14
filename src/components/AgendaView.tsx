@@ -63,6 +63,7 @@ type Props = {
   onBack: () => void;
   appendLog: (text: string) => void;
   confirmScheduledArrival: (scheduled: ScheduledJob) => void;
+  deleteScheduledJobFromBackend?: (id: number) => Promise<void>;
   cancelScheduledJob: (id: number) => void;
   linkedTemplates?: {
     id: string;
@@ -369,6 +370,7 @@ export default function AgendaView({
   onBack,
   appendLog,
   cancelScheduledJob,
+  deleteScheduledJobFromBackend,
 }: Props) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
@@ -720,20 +722,39 @@ estimatedMinutes: safeEstimatedMinutes,    };
     setSelectedSlot(null);
   }
 
-  function deleteScheduledJob(id: number) {
-    const job = scheduledJobs.find((item) => item.id === id);
-    if (!job) return;
+  async function deleteScheduledJob(id: number) {
+  const job = scheduledJobs.find((item) => item.id === id);
+  if (!job) return;
 
-    const ok = window.confirm(
-      `¿Eliminar definitivamente la cita ${job.plate} del ${job.date} a las ${job.startTime}?`
-    );
+  const ok = window.confirm(
+    `¿Eliminar definitivamente la cita ${job.plate} del ${job.date} a las ${job.startTime}?`
+  );
 
-    if (!ok) return;
+  if (!ok) return;
 
-    setScheduledJobs((prev) => prev.filter((item) => item.id !== id));
+  setScheduledJobs((prev) => prev.filter((item) => item.id !== id));
+
+  try {
+    if (deleteScheduledJobFromBackend) {
+      await deleteScheduledJobFromBackend(id);
+    }
 
     appendLog(`Cita eliminada: ${job.plate} · ${job.date} · ${job.startTime}.`);
+  } catch (error) {
+    console.error("Error eliminando cita:", error);
+
+    setScheduledJobs((prev) => {
+      const exists = prev.some((item) => item.id === job.id);
+      return exists ? prev : [...prev, job];
+    });
+
+    appendLog(`Error eliminando cita ${job.plate}.`);
+
+    alert(
+      "No se pudo eliminar la cita del servidor. Se ha restaurado en la agenda."
+    );
   }
+}
 
   function cleanExpiredScheduledJobs() {
     const now = new Date();
