@@ -15,6 +15,7 @@ type ScheduledJobStatus =
   | "activo"
   | "cerrado"
   | "cancelado"
+  | "eliminado"
   | "llego";
 
 type QuickTemplate = {
@@ -948,13 +949,14 @@ estimatedMinutes: safeEstimatedMinutes,    };
               const dayHeight = slots.length * SLOT_HEIGHT;
 
               const dayJobs = scheduledJobs
-                .filter((job) => job.status !== "cancelado")
-                .filter((job) => getScheduledDate(job) === day.date)
-                .map((job) => ({
-                  ...job,
-                  startTime: getScheduledStartTime(job),
-                  endTime: getScheduledEndTime(job),
-                }));
+  .filter((job) => job.status !== "cancelado")
+  .filter((job) => job.status !== "eliminado")
+  .filter((job) => getScheduledDate(job) === day.date)
+  .map((job) => ({
+    ...job,
+    startTime: getScheduledStartTime(job),
+    endTime: getScheduledEndTime(job),
+  }));
 
               const laidOutJobs = layoutOverlappingJobs(dayJobs);
 

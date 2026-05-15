@@ -2951,6 +2951,8 @@ const dueScheduledJobs = useMemo(() => {
 
   return scheduledJobs
     .filter((job) => job.status === "programado")
+    .filter((job) => job.status !== "cancelado")
+    .filter((job) => job.status !== "eliminado")
     .filter((job) => job.date === today)
     .filter((job) => {
       const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
@@ -2971,11 +2973,11 @@ const arrivedPendingValidationScheduledJobs = useMemo(() => {
     .filter((scheduled) => {
       if (scheduled.status !== "en_cola") return false;
 
-      const linkedJob = scheduled.jobId
-        ? jobs.find((job) => job.id === scheduled.jobId)
-        : null;
+      if (!scheduled.jobId) return false;
 
-      if (!linkedJob) return true;
+      const linkedJob = jobs.find((job) => job.id === scheduled.jobId);
+
+      if (!linkedJob) return false;
 
       return linkedJob.status === "validacion";
     })

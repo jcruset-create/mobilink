@@ -975,7 +975,10 @@ app.get("/api/scheduled-jobs", async (_req, res) => {
     const result = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') <> 'cancelado'
+      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
+        'cancelado',
+        'eliminado'
+      )
       ORDER BY id ASC
     `);
 
@@ -991,6 +994,7 @@ app.get("/api/scheduled-jobs", async (_req, res) => {
 app.put("/api/scheduled-jobs", async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
+    const now = Date.now();
 
     if (items.length === 0) {
       console.warn(
@@ -1000,6 +1004,10 @@ app.put("/api/scheduled-jobs", async (req, res) => {
       const current = await db.query(`
         SELECT data
         FROM scheduled_jobs
+        WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
+          'cancelado',
+          'eliminado'
+        )
         ORDER BY id ASC
       `);
 
@@ -1010,6 +1018,42 @@ app.put("/api/scheduled-jobs", async (req, res) => {
     for (const item of items) {
       if (!item || item.id == null) continue;
 
+      const incomingStatus = String(item.status || "").toLowerCase().trim();
+
+      const existing = await db.query(
+        `
+        SELECT data
+        FROM scheduled_jobs
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [item.id]
+      );
+
+      const existingData = existing.rows[0]?.data ?? null;
+      const existingStatus = String(existingData?.status || "")
+        .toLowerCase()
+        .trim();
+
+      if (
+        ["cancelado", "eliminado"].includes(existingStatus) &&
+        !["cancelado", "eliminado"].includes(incomingStatus)
+      ) {
+        console.warn(
+          `PUT /api/scheduled-jobs ignorado: intento de reactivar cita eliminada id=${item.id}`
+        );
+        continue;
+      }
+
+      const nextItem =
+        ["cancelado", "eliminado"].includes(incomingStatus)
+          ? {
+              ...item,
+              status: incomingStatus,
+              deletedAtMs: item.deletedAtMs ?? now,
+            }
+          : item;
+
       await db.query(
         `
           INSERT INTO scheduled_jobs (id, data, "updatedAtMs")
@@ -1019,13 +1063,17 @@ app.put("/api/scheduled-jobs", async (req, res) => {
             data = EXCLUDED.data,
             "updatedAtMs" = EXCLUDED."updatedAtMs"
         `,
-        [item.id, JSON.stringify(item), Date.now()]
+        [nextItem.id, JSON.stringify(nextItem), now]
       );
     }
 
     const current = await db.query(`
       SELECT data
       FROM scheduled_jobs
+      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
+        'cancelado',
+        'eliminado'
+      )
       ORDER BY id ASC
     `);
 
@@ -1046,31 +1094,39 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
 
     const deletedAtMs = Date.now();
 
+    const current = await db.query(
+      `
+      SELECT data
+      FROM scheduled_jobs
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (current.rowCount === 0) {
+      return res.status(404).json({ error: "Cita no encontrada" });
+    }
+
+    const currentData = current.rows[0].data ?? {};
+
+    const nextData = {
+      ...currentData,
+      status: "cancelado",
+      deletedAtMs,
+    };
+
     const result = await db.query(
       `
       UPDATE scheduled_jobs
       SET
-        data = jsonb_set(
-          jsonb_set(
-            data::jsonb,
-            '{status}',
-            to_jsonb('cancelado'::text),
-            true
-          ),
-          '{deletedAtMs}',
-          to_jsonb($2::bigint),
-          true
-        ),
-        "updatedAtMs" = $2
+        data = $2,
+        "updatedAtMs" = $3
       WHERE id = $1
       RETURNING data
       `,
-      [id, deletedAtMs]
+      [id, JSON.stringify(nextData), deletedAtMs]
     );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: "Cita no encontrada" });
-    }
 
     res.json({
       ok: true,
