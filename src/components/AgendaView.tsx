@@ -806,7 +806,7 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
       template?.label ||
       "trabajo programado";
 
-    const res = await fetch("http://localhost:4000/api/whatsapp/send-agenda-reminder", {
+    const res = await fetch("/api/whatsapp/send-agenda-reminder", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
