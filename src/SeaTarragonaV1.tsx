@@ -5490,123 +5490,81 @@ if (shouldCloseScheduledJobForFinishedJob(jobId)) {
   }
 }
 
-async function updateQuickTemplate(templateToEdit: QuickTemplate) {
-  if (!templateToEdit) return;
+async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
+  const rawMinutes = updatedTemplate.standardMinutes;
 
-  const label = String(templateToEdit.label ?? "").trim();
+  const parsedMinutes =
+    rawMinutes == null
+      ? null
+      : Number(rawMinutes);
 
-  if (!label) {
-    alert("La entrada rápida no tiene nombre.");
-    return;
-  }
+  const safeStandardMinutes =
+    parsedMinutes != null && Number.isFinite(parsedMinutes)
+      ? Math.max(0, Math.round(parsedMinutes))
+      : null;
 
-  if (!templateToEdit.area) {
-    alert("Selecciona un área.");
-    return;
-  }
-
-  const standardMinutesValue = String(
-    templateToEdit.standardMinutes ?? ""
-  ).trim();
-
-  const standardMinutes =
-    standardMinutesValue === "" ? null : Number(standardMinutesValue);
-
-  if (
-    standardMinutes !== null &&
-    (!Number.isFinite(standardMinutes) || standardMinutes < 0)
-  ) {
-    alert("El tiempo estándar debe ser un número válido.");
-    return;
-  }
-
-  const finalAllowedTechs = Array.isArray(templateToEdit.allowedTechs)
-    ? [...templateToEdit.allowedTechs]
-    : [];
-
-  const finalPriorityOrder =
-    finalAllowedTechs.length === 0
-      ? []
-      : Array.isArray(templateToEdit.priorityOrder) &&
-        templateToEdit.priorityOrder.length > 0
-      ? templateToEdit.priorityOrder.filter((name: string) =>
-          finalAllowedTechs.includes(name)
-        )
-      : finalAllowedTechs;
-
-  const updatedTemplate: QuickTemplate = {
-    ...templateToEdit,
-    label,
-    area: templateToEdit.area,
-    mode: templateToEdit.mode,
-    allowedTechs: finalAllowedTechs,
-    priorityOrder: finalPriorityOrder,
-    standardMinutes,
+  const safeTemplate: QuickTemplate = {
+    ...updatedTemplate,
+    label: updatedTemplate.label.trim(),
+    standardMinutes: safeStandardMinutes,
+    allowedTechs: Array.isArray(updatedTemplate.allowedTechs)
+      ? updatedTemplate.allowedTechs
+      : [],
+    priorityOrder: Array.isArray(updatedTemplate.priorityOrder)
+      ? updatedTemplate.priorityOrder
+      : [],
   };
+
+  if (!safeTemplate.label) {
+    alert("Escribe un nombre para la entrada rápida.");
+    return;
+  }
+
+  setQuickTemplates((prev) =>
+    prev.map((template) =>
+      template.key === safeTemplate.key ? safeTemplate : template
+    )
+  );
 
   try {
     const response = await fetchWithTimeout(
-      `${API_BASE}/api/quick-templates/${encodeURIComponent(
-        updatedTemplate.key
-      )}`,
+      `${API_BASE}/api/quick-templates/${encodeURIComponent(safeTemplate.key)}`,
       {
         method: "PUT",
         headers: getAdminHeaders({
           "Content-Type": "application/json",
         }),
-        body: JSON.stringify(updatedTemplate),
+        body: JSON.stringify({
+          key: safeTemplate.key,
+          label: safeTemplate.label,
+          area: safeTemplate.area,
+          mode: safeTemplate.mode,
+          standardMinutes: safeTemplate.standardMinutes,
+          allowedTechs: safeTemplate.allowedTechs,
+          priorityOrder: safeTemplate.priorityOrder,
+        }),
       }
     );
 
-    const responseText = await response.text();
+    const text = await response.text();
 
     if (!response.ok) {
-      console.error("Error actualizando entrada rápida:", {
-        status: response.status,
-        responseText,
-        updatedTemplate,
-      });
-
-      alert(
-        `No se pudo actualizar la entrada rápida.\n\nCódigo: ${response.status}\n${responseText}`
-      );
-
-      appendLog(`Error al actualizar entrada rápida: ${label}.`);
-      return;
+      throw new Error(text || "No se pudo guardar la entrada rápida");
     }
 
-    let savedTemplate: QuickTemplate;
-
-    try {
-      savedTemplate = responseText ? JSON.parse(responseText) : updatedTemplate;
-    } catch {
-      savedTemplate = updatedTemplate;
-    }
-
-    savedTemplate = {
-      ...savedTemplate,
-      standardMinutes:
-        savedTemplate.standardMinutes == null
-          ? null
-          : Number(savedTemplate.standardMinutes),
-    };
-
-    setQuickTemplates((prev) =>
-      prev.map((item) =>
-        item.key === savedTemplate.key ? savedTemplate : item
-      )
+    appendLog(
+      `Entrada rápida actualizada: ${safeTemplate.label} · ${
+        safeTemplate.standardMinutes ?? "-"
+      } min.`
     );
 
-    setQuickSelectedArea(savedTemplate.area);
     setEditingQuickTemplateKey(null);
 
-    appendLog(`Entrada rápida actualizada: ${label}.`);
+    await reloadQuickTemplatesFromBackend();
   } catch (error) {
     console.error("Error actualizando entrada rápida:", error);
-
-    alert("Error de conexión al actualizar la entrada rápida.");
-
-    appendLog(`Error al actualizar entrada rápida: ${label}.`);
+    appendLog(`Error actualizando entrada rápida ${safeTemplate.label}.`);
+    alert("No se pudo guardar la entrada rápida en el servidor.");
   }
 }
 const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";
