@@ -792,7 +792,48 @@ estimatedMinutes: safeEstimatedMinutes,    };
     setScheduledJobs((prev) => prev.filter((job) => !expiredIds.has(job.id)));
     appendLog(`Agenda limpiada: ${expiredJobs.length} citas vencidas eliminadas.`);
   }
+async function sendAgendaWhatsApp(job: ScheduledJob) {
+  try {
+    if (!job.customerPhone?.trim()) {
+      alert("Esta cita no tiene teléfono de cliente.");
+      return;
+    }
 
+    const template = quickTemplates.find((t) => t.key === job.templateKey);
+
+    const jobDescription =
+      job.linkedTemplateLabel ||
+      template?.label ||
+      "trabajo programado";
+
+    const res = await fetch("http://localhost:4000/api/whatsapp/send-agenda-reminder", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        customerName: job.customerName || "cliente",
+        customerPhone: job.customerPhone,
+        jobDescription,
+        date: job.date,
+        time: job.startTime,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+      alert("Error enviando WhatsApp: " + data.message);
+      return;
+    }
+
+    appendLog(`WhatsApp enviado a ${job.customerName || job.customerPhone} · ${job.plate}.`);
+    alert("WhatsApp enviado correctamente.");
+  } catch (error) {
+    console.error("Error enviando WhatsApp:", error);
+    alert("Error conectando con el servidor de WhatsApp.");
+  }
+}
   return (
     <div className="h-screen overflow-hidden bg-slate-50 p-3 text-slate-900">
       <div className="w-full space-y-4">
@@ -1109,30 +1150,41 @@ estimatedMinutes: safeEstimatedMinutes,    };
                         )}
 
                         <div className="absolute bottom-1 left-1 right-1 flex gap-1">
-                          {job.status === "programado" && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                cancelScheduledJob(job.id);
-                              }}
-                              className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm"
-                            >
-                              Cancelar
-                            </button>
-                          )}
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      sendAgendaWhatsApp(job);
+    }}
+    className="flex-1 rounded-md bg-green-500 px-1 py-0.5 text-[9px] font-semibold text-white shadow-sm"
+  >
+    WhatsApp
+  </button>
 
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteScheduledJob(job.id);
-                            }}
-                            className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-slate-700 shadow-sm"
-                          >
-                            Eliminar
-                          </button>
-                        </div>
+  {job.status === "programado" && (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        cancelScheduledJob(job.id);
+      }}
+      className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm"
+    >
+      Cancelar
+    </button>
+  )}
+
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      deleteScheduledJob(job.id);
+    }}
+    className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-slate-700 shadow-sm"
+  >
+    Eliminar
+  </button>
+</div>
                       </div>
                     );
                   })}

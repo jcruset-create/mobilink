@@ -10,9 +10,56 @@ import db, { initDb } from "./db.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "./supabase.ts";
 import OpenAI from "openai";
 import { findUserByPassword } from "./modules/users";
+import twilio from "twilio";
 
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
 
 const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
+  try {
+    const {
+      customerName,
+      customerPhone,
+      jobDescription,
+      date,
+      time,
+    } = req.body;
+
+    const message = await twilioClient.messages.create({
+  from: "whatsapp:+14155238886",
+  to: `whatsapp:${customerPhone}`,
+  body:
+    `Hola ${customerName}, ` +
+    `te recordamos tu cita para ${jobDescription} ` +
+    `el día ${date} a las ${time}.`,
+});
+
+    res.json({
+      success: true,
+      sid: message.sid,
+    });
+ } catch (error: any) {
+  console.error("ERROR TWILIO:", {
+    message: error.message,
+    code: error.code,
+    status: error.status,
+    moreInfo: error.moreInfo,
+  });
+
+  res.status(500).json({
+    success: false,
+    message: error.message,
+    code: error.code,
+    status: error.status,
+    moreInfo: error.moreInfo,
+  });
+}
+});
 const PORT = process.env.PORT || 4000;
 
 const RESET_PASSWORD = "sea123";

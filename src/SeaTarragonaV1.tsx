@@ -124,6 +124,8 @@ type Job = {
   status: JobStatus;
   assignedNames: string[];
   reason: string;
+  customerName?: string;
+  customerPhone?: string;
   createdAtMs: number;
   startedAtMs: number | null;
   closedAtMs?: number;
@@ -2036,17 +2038,23 @@ useEffect(() => {
   });
 }, [quickTemplates]);
 
-const [quickDraft, setQuickDraft] = useState<{
+type QuickDraftState = {
   templateKey: string;
   linkedTemplateKey: string;
   plate: string;
   urgent: boolean;
+  customerName: string;
+  customerPhone: string;
   includedTaskIds: string[];
-}>({
+};
+
+const [quickDraft, setQuickDraft] = useState<QuickDraftState>({
   templateKey: "",
   linkedTemplateKey: "",
   plate: "",
   urgent: false,
+  customerName: "",
+  customerPhone: "",
   includedTaskIds: [],
 });
 const [quickSelectedArea, setQuickSelectedArea] = useState<AreaKey>("camion");
@@ -4113,27 +4121,31 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
         }.`;
 
   const firstJob: Job = {
-    id: firstJobId,
-    area: firstTemplate.area,
-    plate: currentScheduled.plate.trim().toUpperCase(),
-    urgent: currentScheduled.urgent,
-    status: "espera",
-    assignedNames: [],
-    reason: customerInfo
-      ? `${firstJobReasonBase} ${customerInfo}.`
-      : firstJobReasonBase,
-    createdAtMs: createdAt,
-    startedAtMs: null,
-    template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
-    quickEntryLabel: firstTemplate.label,
-    quickEntryMode: firstTemplate.mode,
-    includedTasks: scheduledIncludedTasks,
+  id: firstJobId,
+  area: firstTemplate.area,
+  plate: currentScheduled.plate.trim().toUpperCase(),
+  urgent: currentScheduled.urgent,
+  status: "espera",
+  assignedNames: [],
+  reason: customerInfo
+    ? `${firstJobReasonBase} ${customerInfo}.`
+    : firstJobReasonBase,
 
-    linkedGroupId,
-    linkedOrder: isLinkedJob ? 1 : null,
-    dependsOnJobId: null,
-    blockedReason: null,
-  };
+  customerName: currentScheduled.customerName || undefined,
+  customerPhone: currentScheduled.customerPhone || undefined,
+
+  createdAtMs: createdAt,
+  startedAtMs: null,
+  template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
+  quickEntryLabel: firstTemplate.label,
+  quickEntryMode: firstTemplate.mode,
+  includedTasks: scheduledIncludedTasks,
+
+  linkedGroupId,
+  linkedOrder: isLinkedJob ? 1 : null,
+  dependsOnJobId: null,
+  blockedReason: null,
+};
 
   const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true, true);
 
@@ -4151,32 +4163,36 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
       const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${currentScheduled.linkedTemplateLabel}.`;
 
       const secondJob: Job = {
-        id: secondJobId,
-        area: secondTemplate.area,
-        plate: currentScheduled.plate.trim().toUpperCase(),
-        urgent: currentScheduled.urgent,
-        status: "parado",
-        assignedNames: [],
-        reason: customerInfo
-          ? `${secondJobReasonBase} ${customerInfo}.`
-          : secondJobReasonBase,
-        createdAtMs: createdAt + 1,
-        startedAtMs: null,
-        pausedAtMs: nowMs(),
-        workedAccumulatedMinutes: 0,
-        pausedAccumulatedMinutes: 0,
-        template: isBuiltInTemplateKey(secondTemplate.key)
-          ? secondTemplate.key
-          : null,
-        quickEntryLabel: secondTemplate.label,
-        quickEntryMode: secondTemplate.mode,
-        includedTasks: [],
+  id: secondJobId,
+  area: secondTemplate.area,
+  plate: currentScheduled.plate.trim().toUpperCase(),
+  urgent: currentScheduled.urgent,
+  status: "parado",
+  assignedNames: [],
+  reason: customerInfo
+    ? `${secondJobReasonBase} ${customerInfo}.`
+    : secondJobReasonBase,
 
-        linkedGroupId,
-        linkedOrder: 2,
-        dependsOnJobId: firstJob.id,
-        blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
-      };
+  customerName: currentScheduled.customerName || undefined,
+  customerPhone: currentScheduled.customerPhone || undefined,
+
+  createdAtMs: createdAt + 1,
+  startedAtMs: null,
+  pausedAtMs: nowMs(),
+  workedAccumulatedMinutes: 0,
+  pausedAccumulatedMinutes: 0,
+  template: isBuiltInTemplateKey(secondTemplate.key)
+    ? secondTemplate.key
+    : null,
+  quickEntryLabel: secondTemplate.label,
+  quickEntryMode: secondTemplate.mode,
+  includedTasks: [],
+
+  linkedGroupId,
+  linkedOrder: 2,
+  dependsOnJobId: firstJob.id,
+  blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
+};
 
       jobsToSet = [secondJob, ...result.jobs];
       jobsToSave = [...jobsToSave, secondJob];
@@ -4370,7 +4386,8 @@ async function createTemplateEntry() {
 
   const plate = quickDraft.plate.trim().toUpperCase();
   const createdAtMs = nowMs();
-
+  const customerName = quickDraft.customerName.trim();
+  const customerPhone = quickDraft.customerPhone.trim();
   const safeJobId = getNextSafeJobId(jobs, nextJobId);
   const secondSafeJobId = safeJobId + 1;
 
@@ -4379,31 +4396,35 @@ async function createTemplateEntry() {
     : null;
 
   const firstJob: Job = {
-    id: safeJobId,
-    area: firstTemplate.area,
-    plate,
-    urgent: quickDraft.urgent,
-    status: "espera",
-    assignedNames: [],
-    reason: isLinkedEntry
-      ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
-      : selectedIncludedTasks.length > 0
-      ? `Entrada creada desde plantilla: ${firstTemplate.label}. Tareas incluidas: ${selectedIncludedTasks
-          .map((task) => task.label)
-          .join(" + ")}`
-      : `Entrada creada desde plantilla: ${firstTemplate.label}`,
-    createdAtMs,
-    startedAtMs: null,
-    template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
-    quickEntryLabel: firstTemplate.label,
-    quickEntryMode: firstTemplate.mode,
-    includedTasks: selectedIncludedTasks,
+  id: safeJobId,
+  area: firstTemplate.area,
+  plate,
+  urgent: quickDraft.urgent,
+  status: "espera",
+  assignedNames: [],
+  reason: isLinkedEntry
+    ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
+    : selectedIncludedTasks.length > 0
+    ? `Entrada creada desde plantilla: ${firstTemplate.label}. Tareas incluidas: ${selectedIncludedTasks
+        .map((task) => task.label)
+        .join(" + ")}`
+    : `Entrada creada desde plantilla: ${firstTemplate.label}`,
 
-    linkedGroupId,
-    linkedOrder: isLinkedEntry ? 1 : null,
-    dependsOnJobId: null,
-    blockedReason: null,
-  };
+  customerName: customerName || undefined,
+  customerPhone: customerPhone || undefined,
+
+  createdAtMs,
+  startedAtMs: null,
+  template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
+  quickEntryLabel: firstTemplate.label,
+  quickEntryMode: firstTemplate.mode,
+  includedTasks: selectedIncludedTasks,
+
+  linkedGroupId,
+  linkedOrder: isLinkedEntry ? 1 : null,
+  dependsOnJobId: null,
+  blockedReason: null,
+};
 
   const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true, true);
 
@@ -4414,30 +4435,34 @@ async function createTemplateEntry() {
 
   if (isLinkedEntry && secondTemplate) {
     const secondJob: Job = {
-      id: secondSafeJobId,
-      area: secondTemplate.area,
-      plate,
-      urgent: quickDraft.urgent,
-      status: "parado",
-      assignedNames: [],
-      reason: `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo vinculado: ${firstTemplate.label} → ${secondTemplate.label}`,
-      createdAtMs: createdAtMs + 1,
-      startedAtMs: null,
-      pausedAtMs: nowMs(),
-      workedAccumulatedMinutes: 0,
-      pausedAccumulatedMinutes: 0,
-      template: isBuiltInTemplateKey(secondTemplate.key)
-        ? secondTemplate.key
-        : null,
-      quickEntryLabel: secondTemplate.label,
-      quickEntryMode: secondTemplate.mode,
-      includedTasks: [],
+  id: secondSafeJobId,
+  area: secondTemplate.area,
+  plate,
+  urgent: quickDraft.urgent,
+  status: "parado",
+  assignedNames: [],
+  reason: `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo vinculado: ${firstTemplate.label} → ${secondTemplate.label}`,
 
-      linkedGroupId,
-      linkedOrder: 2,
-      dependsOnJobId: firstJob.id,
-      blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
-    };
+  customerName: customerName || undefined,
+  customerPhone: customerPhone || undefined,
+
+  createdAtMs: createdAtMs + 1,
+  startedAtMs: null,
+  pausedAtMs: nowMs(),
+  workedAccumulatedMinutes: 0,
+  pausedAccumulatedMinutes: 0,
+  template: isBuiltInTemplateKey(secondTemplate.key)
+    ? secondTemplate.key
+    : null,
+  quickEntryLabel: secondTemplate.label,
+  quickEntryMode: secondTemplate.mode,
+  includedTasks: [],
+
+  linkedGroupId,
+  linkedOrder: 2,
+  dependsOnJobId: firstJob.id,
+  blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
+};
 
     finalJobs = [secondJob, ...result.jobs];
     jobsToSave = [...jobsToSave, secondJob];
@@ -4460,12 +4485,14 @@ async function createTemplateEntry() {
 );
 
     setQuickDraft((prev) => ({
-      ...prev,
-      linkedTemplateKey: "",
-      plate: "",
-      urgent: false,
-      includedTaskIds: [],
-    }));
+  ...prev,
+  linkedTemplateKey: "",
+  plate: "",
+  customerName: "",
+  customerPhone: "",
+  urgent: false,
+  includedTaskIds: [],
+}));
 
     setQuickEntryOpen(false);
 
@@ -4686,17 +4713,15 @@ async function removeQuickTemplate(key: string) {
 
     setQuickTemplates((prev) => prev.filter((t) => t.key !== key));
 
-setQuickDraft((prev) =>
-  prev.templateKey === key
-    ? {
-        templateKey: "",
-        linkedTemplateKey: "",
-        plate: "",
-        urgent: false,
-        includedTaskIds: [],
-      }
-    : prev
-);
+setQuickDraft((prev) => ({
+  ...prev,
+  linkedTemplateKey: "",
+  plate: "",
+  urgent: false,
+  customerName: "",
+  customerPhone: "",
+  includedTaskIds: [] as string[],
+}));
 
     appendLog("Entrada rápida eliminada.");
   } catch (error) {
@@ -8543,6 +8568,12 @@ const textColor = "";
 
             <div>
               <div className="font-semibold">{job.plate}</div>
+              {(job.customerName || job.customerPhone) && (
+  <div className="mt-1 text-xs text-slate-500">
+    {job.customerName && <div>Cliente: {job.customerName}</div>}
+    {job.customerPhone && <div>Teléfono: {job.customerPhone}</div>}
+  </div>
+)}
               <div className="text-sm text-slate-500">
                 {getOperationLabel(job)}
               </div>
@@ -9115,6 +9146,7 @@ const textColor = "";
                 </label>
                 <input
                   value={draft.plate}
+                  
                   onChange={(event) =>
                     setDraft((prev) => ({ ...prev, plate: event.target.value }))
                   }
@@ -9360,20 +9392,56 @@ const textColor = "";
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium">Matrícula</label>
+  <label className="mb-2 block text-sm font-medium">Matrícula</label>
 
-            <input
-              value={quickDraft.plate}
-              onChange={(event) =>
-                setQuickDraft((prev) => ({
-                  ...prev,
-                  plate: event.target.value,
-                }))
-              }
-              placeholder="1234ABC"
-              className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
-            />
-          </div>
+  <input
+    value={quickDraft.plate}
+    onChange={(event) =>
+      setQuickDraft((prev) => ({
+        ...prev,
+        plate: event.target.value,
+      }))
+    }
+    placeholder="1234ABC"
+    className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+  />
+</div>
+
+<div>
+  <label className="mb-2 block text-sm font-medium">
+    Cliente
+  </label>
+
+  <input
+    value={quickDraft.customerName ?? ""}
+    onChange={(event) =>
+      setQuickDraft((prev) => ({
+        ...prev,
+        customerName: event.target.value,
+      }))
+    }
+    placeholder="Nombre del cliente"
+    className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+  />
+</div>
+
+<div>
+  <label className="mb-2 block text-sm font-medium">
+    Teléfono
+  </label>
+
+  <input
+    value={quickDraft.customerPhone ?? ""}
+    onChange={(event) =>
+      setQuickDraft((prev) => ({
+        ...prev,
+        customerPhone: event.target.value,
+      }))
+    }
+    placeholder="Teléfono móvil"
+    className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+  />
+</div>
 
           <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-3 py-3">
             <input
