@@ -5549,8 +5549,16 @@ async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
     const text = await response.text();
 
     if (!response.ok) {
-      throw new Error(text || "No se pudo guardar la entrada rápida");
-    }
+  console.error("Error servidor guardando entrada rápida:", {
+    status: response.status,
+    text,
+    safeTemplate,
+  });
+
+  throw new Error(
+    text || `No se pudo guardar la entrada rápida. Código ${response.status}`
+  );
+}
 
     appendLog(
       `Entrada rápida actualizada: ${safeTemplate.label} · ${
@@ -5564,7 +5572,11 @@ async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
   } catch (error) {
     console.error("Error actualizando entrada rápida:", error);
     appendLog(`Error actualizando entrada rápida ${safeTemplate.label}.`);
-    alert("No se pudo guardar la entrada rápida en el servidor.");
+    alert(
+  error instanceof Error
+    ? error.message
+    : "No se pudo guardar la entrada rápida en el servidor."
+);
   }
 }
 const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";

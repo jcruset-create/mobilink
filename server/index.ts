@@ -906,10 +906,9 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
         mode,
         "standardMinutes",
         "allowedTechs",
-        "priorityOrder",
-        "updatedAtMs"
+        "priorityOrder"
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (key)
       DO UPDATE SET
         label = EXCLUDED.label,
@@ -917,8 +916,7 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
         mode = EXCLUDED.mode,
         "standardMinutes" = EXCLUDED."standardMinutes",
         "allowedTechs" = EXCLUDED."allowedTechs",
-        "priorityOrder" = EXCLUDED."priorityOrder",
-        "updatedAtMs" = EXCLUDED."updatedAtMs"
+        "priorityOrder" = EXCLUDED."priorityOrder"
       `,
       [
         key,
@@ -928,7 +926,6 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
         Number.isFinite(standardMinutes) ? standardMinutes : null,
         JSON.stringify(body.allowedTechs ?? []),
         JSON.stringify(body.priorityOrder ?? []),
-        Date.now(),
       ]
     );
 
