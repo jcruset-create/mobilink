@@ -1327,15 +1327,28 @@ function getScheduledJobLabel(job: any) {
   );
 }
 
+function formatSpanishDate(dateValue: string) {
+  if (!dateValue || !dateValue.includes("-")) return dateValue;
+
+  const [year, month, day] = dateValue.split("-");
+
+  return `${day}/${month}/${year}`;
+}
+
 function buildReminderMessage(job: any, reminderLabel: string) {
   const customerName = job.customerName || "cliente";
   const jobDescription = getScheduledJobLabel(job);
-  const date = job.date || "";
+  const date = formatSpanishDate(job.date || "");
   const time = job.startTime || "";
 
   return (
-    `Hola ${customerName}, te recordamos tu cita para ${jobDescription} ` +
-    `el día ${date} a las ${time}. ${reminderLabel}`
+    `Hola ${customerName},\n\n` +
+    `Te recordamos tu cita:\n\n` +
+    `Trabajo: ${jobDescription}\n` +
+    `Fecha: ${date}\n` +
+    `Hora: ${time}\n\n` +
+    `${reminderLabel}\n\n` +
+    `Gracias.`
   );
 }
 
