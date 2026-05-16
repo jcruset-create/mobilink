@@ -1214,7 +1214,55 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
                             {job.customerName}
                           </div>
                         )}
+                        <div className="mt-1 flex flex-wrap gap-1 text-[9px] font-black">
+  {job.sendWhatsAppOnSave && (
+    <span className="rounded-full bg-white/90 px-1.5 py-0.5 text-green-700">
+      WA guardar
+    </span>
+  )}
 
+  {job.manualReminderEnabled && (
+    <span className="rounded-full bg-white/90 px-1.5 py-0.5 text-emerald-700">
+      WA manual
+    </span>
+  )}
+
+  {job.sendReminder24h && (
+    <span className="rounded-full bg-white/90 px-1.5 py-0.5 text-blue-700">
+      WA 24h
+    </span>
+  )}
+
+  {job.sendReminder1h && (
+    <span className="rounded-full bg-white/90 px-1.5 py-0.5 text-violet-700">
+      WA 1h
+    </span>
+  )}
+</div><div className="mt-1 flex flex-wrap gap-1 text-[10px] font-black">
+  {job.sendWhatsAppOnSave && (
+    <span className="rounded-md bg-green-100 px-1.5 py-0.5 text-green-800">
+      WhatsApp guardar
+    </span>
+  )}
+
+  {job.manualReminderEnabled && (
+    <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
+      Manual
+    </span>
+  )}
+
+  {job.sendReminder24h && (
+    <span className="rounded-md bg-blue-100 px-1.5 py-0.5 text-blue-800">
+      24h
+    </span>
+  )}
+
+  {job.sendReminder1h && (
+    <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-violet-800">
+      1h
+    </span>
+  )}
+</div>
                         {job.notes && (
                           <div className="truncate text-[10px] font-normal opacity-90">
                             Obs: {job.notes}
