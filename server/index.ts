@@ -31,13 +31,13 @@ app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
     } = req.body;
 
     const message = await twilioClient.messages.create({
-  from: "whatsapp:+14155238886",
-  to: `whatsapp:${customerPhone}`,
-  body:
-    `Hola ${customerName}, ` +
-    `te recordamos tu cita para ${jobDescription} ` +
-    `el día ${date} a las ${time}.`,
-});
+      from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+14155238886",
+      to: `whatsapp:${customerPhone}`,
+      body:
+        `Hola ${customerName}, ` +
+        `te recordamos tu cita para ${jobDescription} ` +
+        `el día ${date} a las ${time}.`,
+    });
 
     res.json({
       success: true,
@@ -1250,6 +1250,238 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
   }
 });
 
+
+/* =========================================================
+   WHATSAPP AGENDA REMINDERS
+========================================================= */
+
+const AGENDA_TIME_ZONE = process.env.AGENDA_TIME_ZONE || "Europe/Madrid";
+const REMINDER_CHECK_INTERVAL_MS = 60 * 1000;
+const REMINDER_GRACE_MS = 12 * 60 * 60 * 1000;
+
+let reminderCheckerRunning = false;
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const values: Record<string, string> = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+
+  const asUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  );
+
+  return asUtc - date.getTime();
+}
+
+function zonedDateTimeToUtcMs(dateValue: string, timeValue: string, timeZone: string) {
+  if (!dateValue || !timeValue) return null;
+
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const [hour, minute] = timeValue.split(":").map(Number);
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute)
+  ) {
+    return null;
+  }
+
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let utcMs = localAsUtc - getTimeZoneOffsetMs(new Date(localAsUtc), timeZone);
+
+  utcMs = localAsUtc - getTimeZoneOffsetMs(new Date(utcMs), timeZone);
+
+  return utcMs;
+}
+
+function getScheduledJobLabel(job: any) {
+  if (job.linkedTemplateLabel) return job.linkedTemplateLabel;
+  if (job.quickEntryLabel) return job.quickEntryLabel;
+  if (job.notes) return job.notes;
+  return "trabajo programado";
+}
+
+function buildReminderMessage(job: any, reminderLabel: string) {
+  const customerName = job.customerName || "cliente";
+  const jobDescription = getScheduledJobLabel(job);
+  const date = job.date || "";
+  const time = job.startTime || "";
+
+  return (
+    `Hola ${customerName}, te recordamos tu cita para ${jobDescription} ` +
+    `el día ${date} a las ${time}. ${reminderLabel}`
+  );
+}
+
+async function sendWhatsAppAgendaReminder(job: any, reminderLabel: string) {
+  if (!job.customerPhone || !String(job.customerPhone).trim()) {
+    throw new Error(`La cita ${job.id} no tiene teléfono de cliente.`);
+  }
+
+  return twilioClient.messages.create({
+    from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+14155238886",
+    to: `whatsapp:${String(job.customerPhone).trim()}`,
+    body: buildReminderMessage(job, reminderLabel),
+  });
+}
+
+function shouldSendReminder(triggerAtMs: number | null, appointmentAtMs: number | null, nowMs: number) {
+  if (triggerAtMs == null) return false;
+  if (triggerAtMs > nowMs) return false;
+  if (nowMs - triggerAtMs > REMINDER_GRACE_MS) return false;
+
+  if (appointmentAtMs != null && appointmentAtMs <= nowMs) return false;
+
+  return true;
+}
+
+async function markScheduledJobReminderSent(job: any, sentField: string, sentAtMs: number) {
+  const nextData = {
+    ...job,
+    [sentField]: sentAtMs,
+  };
+
+  await db.query(
+    `
+    UPDATE scheduled_jobs
+    SET
+      data = $2,
+      "updatedAtMs" = $3
+    WHERE id = $1
+    `,
+    [job.id, JSON.stringify(nextData), sentAtMs]
+  );
+}
+
+async function checkAgendaWhatsAppReminders() {
+  if (reminderCheckerRunning) return;
+
+  reminderCheckerRunning = true;
+
+  try {
+    const nowMs = Date.now();
+
+    const result = await db.query(`
+      SELECT data
+      FROM scheduled_jobs
+      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
+        'cancelado',
+        'eliminado',
+        'cerrado'
+      )
+      ORDER BY id ASC
+    `);
+
+    for (const row of result.rows) {
+      const job = row.data;
+      if (!job || job.id == null) continue;
+
+      const appointmentAtMs = zonedDateTimeToUtcMs(
+        String(job.date || ""),
+        String(job.startTime || ""),
+        AGENDA_TIME_ZONE
+      );
+
+      if (appointmentAtMs == null) continue;
+
+      const reminders = [
+        {
+          enabled: !!job.manualReminderEnabled,
+          sentField: "manualReminderSentAtMs",
+          sentAt: job.manualReminderSentAtMs,
+          triggerAtMs: zonedDateTimeToUtcMs(
+            String(job.manualReminderDate || ""),
+            String(job.manualReminderTime || ""),
+            AGENDA_TIME_ZONE
+          ),
+          label: "Recordatorio programado manualmente.",
+        },
+        {
+          enabled: job.sendReminder24h !== false,
+          sentField: "whatsappReminder24hSentAtMs",
+          sentAt: job.whatsappReminder24hSentAtMs,
+          triggerAtMs: appointmentAtMs - 24 * 60 * 60 * 1000,
+          label: "Recordatorio 24h antes.",
+        },
+        {
+          enabled: job.sendReminder1h !== false,
+          sentField: "whatsappReminder1hSentAtMs",
+          sentAt: job.whatsappReminder1hSentAtMs,
+          triggerAtMs: appointmentAtMs - 60 * 60 * 1000,
+          label: "Recordatorio 1h antes.",
+        },
+      ];
+
+      for (const reminder of reminders) {
+        if (!reminder.enabled) continue;
+        if (reminder.sentAt) continue;
+
+        if (!shouldSendReminder(reminder.triggerAtMs, appointmentAtMs, nowMs)) {
+          continue;
+        }
+
+        try {
+          const message = await sendWhatsAppAgendaReminder(job, reminder.label);
+
+          await markScheduledJobReminderSent(job, reminder.sentField, nowMs);
+
+          job[reminder.sentField] = nowMs;
+
+          console.log(
+            `WhatsApp agenda reminder enviado: cita=${job.id} tipo=${reminder.sentField} sid=${message.sid}`
+          );
+        } catch (error: any) {
+          console.error("Error enviando recordatorio WhatsApp agenda:", {
+            jobId: job.id,
+            sentField: reminder.sentField,
+            message: error.message,
+            code: error.code,
+            status: error.status,
+            moreInfo: error.moreInfo,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("checkAgendaWhatsAppReminders error:", error);
+  } finally {
+    reminderCheckerRunning = false;
+  }
+}
+
+function startAgendaWhatsAppReminderChecker() {
+  console.log("Recordatorios WhatsApp agenda activos.");
+
+  void checkAgendaWhatsAppReminders();
+
+  setInterval(() => {
+    void checkAgendaWhatsAppReminders();
+  }, REMINDER_CHECK_INTERVAL_MS);
+}
+
 /* =========================================================
    FRONTEND REACT / VITE
 ========================================================= */
@@ -1287,6 +1519,7 @@ initDb()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
+      startAgendaWhatsAppReminderChecker();
     });
   })
   .catch((error) => {
