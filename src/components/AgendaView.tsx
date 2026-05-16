@@ -899,8 +899,9 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
       return;
     }
 
-    appendLog(`WhatsApp enviado a ${job.customerName || job.customerPhone} · ${job.plate}.`);
-    alert("WhatsApp enviado correctamente.");
+appendLog(
+  `WhatsApp reenviado manualmente a ${job.customerName || job.customerPhone} · ${job.plate}.`
+);    alert("WhatsApp enviado correctamente.");
   } catch (error) {
     console.error("Error enviando WhatsApp:", error);
     alert("Error conectando con el servidor de WhatsApp.");
