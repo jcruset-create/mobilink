@@ -38,6 +38,15 @@ export type ScheduledJob = {
   plate: string;
   customerName: string;
   customerPhone: string;
+  sendWhatsAppOnSave?: boolean;
+  manualReminderEnabled?: boolean;
+  manualReminderDate?: string;
+  manualReminderTime?: string;
+  sendReminder24h?: boolean;
+  sendReminder1h?: boolean;
+  whatsappReminder24hSentAtMs?: number | null;
+  whatsappReminder1hSentAtMs?: number | null;
+  manualReminderSentAtMs?: number | null;
   notes?: string;
   urgent: boolean;
   includedTasks?: IncludedTask[];
@@ -402,6 +411,12 @@ useEffect(() => {
     customerPhone: "",
     notes: "",
     urgent: false,
+    sendWhatsAppOnSave: true,
+    manualReminderEnabled: false,
+    manualReminderDate: "",
+    manualReminderTime: "",
+    sendReminder24h: true,
+    sendReminder1h: true,
     estimatedMinutes: DEFAULT_ESTIMATED_MINUTES,
     linkedTemplateKey: "",
     includedTaskIds: [] as string[],
@@ -495,6 +510,12 @@ function getEstimatedMinutesWithIncludedTasks(
       customerPhone: "",
       notes: "",
       urgent: false,
+      sendWhatsAppOnSave: true,
+      manualReminderEnabled: false,
+      manualReminderDate: "",
+      manualReminderTime: "",
+      sendReminder24h: true,
+      sendReminder1h: true,
       estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
       linkedTemplateKey: "",
       includedTaskIds: [],
@@ -537,6 +558,12 @@ function getEstimatedMinutesWithIncludedTasks(
       customerPhone: "",
       notes: "",
       urgent: false,
+      sendWhatsAppOnSave: true,
+      manualReminderEnabled: false,
+      manualReminderDate: "",
+      manualReminderTime: "",
+      sendReminder24h: true,
+      sendReminder1h: true,
       estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
         firstTemplateKey,
         []
@@ -577,6 +604,12 @@ function getEstimatedMinutesWithIncludedTasks(
       customerPhone: "",
       notes: "",
       urgent: false,
+      sendWhatsAppOnSave: true,
+      manualReminderEnabled: false,
+      manualReminderDate: "",
+      manualReminderTime: "",
+      sendReminder24h: true,
+      sendReminder1h: true,
       estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
         firstTemplateKey,
         []
@@ -605,6 +638,12 @@ function getEstimatedMinutesWithIncludedTasks(
       customerPhone: job.customerPhone,
       notes: job.notes || "",
       urgent: job.urgent,
+      sendWhatsAppOnSave: false,
+      manualReminderEnabled: job.manualReminderEnabled ?? false,
+      manualReminderDate: job.manualReminderDate ?? "",
+      manualReminderTime: job.manualReminderTime ?? "",
+      sendReminder24h: job.sendReminder24h ?? true,
+      sendReminder1h: job.sendReminder1h ?? true,
       estimatedMinutes: Math.max(
         15,
         timeToMinutes(getScheduledEndTime(job)) -
@@ -616,7 +655,7 @@ function getEstimatedMinutesWithIncludedTasks(
     setModalOpen(true);
   }
 
-  function createScheduledJob() {
+  async function createScheduledJob() {
     if (!selectedSlot || !draft.templateKey || !draft.plate.trim()) return;
 
     if (isPastDateTime(selectedSlot.date, selectedSlot.startTime)) {
@@ -680,6 +719,15 @@ endTime: addMinutesToTime(selectedSlot.startTime, safeEstimatedMinutes),
       customerPhone: draft.customerPhone.trim(),
       notes: draft.notes.trim(),
       urgent: draft.urgent,
+      sendWhatsAppOnSave: draft.sendWhatsAppOnSave,
+      manualReminderEnabled: draft.manualReminderEnabled,
+      manualReminderDate: draft.manualReminderDate,
+      manualReminderTime: draft.manualReminderTime,
+      sendReminder24h: draft.sendReminder24h,
+      sendReminder1h: draft.sendReminder1h,
+      whatsappReminder24hSentAtMs: null,
+      whatsappReminder1hSentAtMs: null,
+      manualReminderSentAtMs: null,
       includedTasks,
 estimatedMinutes: safeEstimatedMinutes,    };
 
@@ -715,6 +763,28 @@ estimatedMinutes: safeEstimatedMinutes,    };
 
       setScheduledJobs((prev) => [...prev, scheduled]);
       appendLog(`Cita programada: ${scheduled.plate} · ${logLabel}.`);
+
+      if (draft.sendWhatsAppOnSave && scheduled.customerPhone.trim()) {
+        try {
+          await fetch("/api/whatsapp/send-agenda-reminder", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              customerName: scheduled.customerName,
+              customerPhone: scheduled.customerPhone,
+              jobDescription: logLabel,
+              date: scheduled.date,
+              time: scheduled.startTime,
+            }),
+          });
+
+          appendLog(`WhatsApp enviado a ${scheduled.customerPhone}`);
+        } catch (error) {
+          console.error("Error enviando WhatsApp automático:", error);
+        }
+      }
     }
 
     resetDraft();
@@ -1626,6 +1696,104 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
                     />
                     <span className="text-sm font-medium">Urgente</span>
                   </label>
+
+                  <label className="flex items-center gap-3 rounded-2xl border border-green-200 bg-green-50 px-3 py-3">
+                    <input
+                      type="checkbox"
+                      checked={draft.sendWhatsAppOnSave}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          sendWhatsAppOnSave: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span className="text-sm font-bold text-green-800">
+                      Enviar WhatsApp al guardar cita
+                    </span>
+                  </label>
+
+                  <div className="space-y-3 rounded-2xl border border-green-200 bg-green-50 p-3">
+                    <div className="text-sm font-black text-green-900">
+                      Recordatorios WhatsApp
+                    </div>
+
+                    <label className="flex items-center gap-3 rounded-xl bg-white px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={draft.manualReminderEnabled}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            manualReminderEnabled: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span className="text-sm font-bold text-green-800">
+                        Programar recordatorio manual
+                      </span>
+                    </label>
+
+                    {draft.manualReminderEnabled && (
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <input
+                          type="date"
+                          value={draft.manualReminderDate}
+                          onChange={(e) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              manualReminderDate: e.target.value,
+                            }))
+                          }
+                          className="rounded-xl border border-green-200 px-3 py-2 text-sm"
+                        />
+
+                        <input
+                          type="time"
+                          value={draft.manualReminderTime}
+                          onChange={(e) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              manualReminderTime: e.target.value,
+                            }))
+                          }
+                          className="rounded-xl border border-green-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                    )}
+
+                    <label className="flex items-center gap-3 rounded-xl bg-white px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={draft.sendReminder24h}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            sendReminder24h: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span className="text-sm font-bold text-green-800">
+                        Recordatorio 24h antes
+                      </span>
+                    </label>
+
+                    <label className="flex items-center gap-3 rounded-xl bg-white px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={draft.sendReminder1h}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            sendReminder1h: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span className="text-sm font-bold text-green-800">
+                        Recordatorio 1h antes
+                      </span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
