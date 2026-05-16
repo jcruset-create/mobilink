@@ -34,6 +34,7 @@ export type ScheduledJob = {
   startTime: string;
   endTime: string;
   templateKey: string;
+  templateLabel?: string;
   area: AreaKey;
   plate: string;
   customerName: string;
@@ -707,7 +708,8 @@ const safeEstimatedMinutes = Math.max(
       startTime: selectedSlot.startTime,
 endTime: addMinutesToTime(selectedSlot.startTime, safeEstimatedMinutes),
       templateKey: template.key,
-      area: template.area,
+templateLabel: template.label,
+area: template.area,
 
       linkedTemplateId: selectedLinkedTemplate?.id ?? null,
       linkedTemplateLabel: selectedLinkedTemplate?.label ?? null,

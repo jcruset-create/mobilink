@@ -1320,8 +1320,8 @@ function zonedDateTimeToUtcMs(dateValue: string, timeValue: string, timeZone: st
 function getScheduledJobLabel(job: any) {
   return (
     job.linkedTemplateLabel ||
-    job.quickEntryLabel ||
     job.templateLabel ||
+    job.quickEntryLabel ||
     job.templateKey ||
     "servicio programado"
   );
