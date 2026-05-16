@@ -1340,16 +1340,20 @@ function buildReminderMessage(job: any, reminderLabel: string) {
   const jobDescription = getScheduledJobLabel(job);
   const date = formatSpanishDate(job.date || "");
   const time = job.startTime || "";
+  const plate = job.plate ? `Matrícula: ${job.plate}\n` : "";
+const notes = job.notes ? `Observaciones: ${job.notes}\n` : "";
 
-  return (
-    `Hola ${customerName},\n\n` +
-    `Te recordamos tu cita:\n\n` +
-    `Trabajo: ${jobDescription}\n` +
-    `Fecha: ${date}\n` +
-    `Hora: ${time}\n\n` +
-    `${reminderLabel}\n\n` +
-    `Gracias.`
-  );
+return (
+  `Hola ${customerName},\n\n` +
+  `Te recordamos tu cita:\n\n` +
+  `Trabajo: ${jobDescription}\n` +
+  plate +
+  `Fecha: ${date}\n` +
+  `Hora: ${time}\n` +
+  notes +
+  `\n${reminderLabel}\n\n` +
+  `Gracias.`
+);
 }
 
 async function sendWhatsAppAgendaReminder(job: any, reminderLabel: string) {
