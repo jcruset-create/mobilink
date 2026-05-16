@@ -1318,10 +1318,13 @@ function zonedDateTimeToUtcMs(dateValue: string, timeValue: string, timeZone: st
 }
 
 function getScheduledJobLabel(job: any) {
-  if (job.linkedTemplateLabel) return job.linkedTemplateLabel;
-  if (job.quickEntryLabel) return job.quickEntryLabel;
-  if (job.notes) return job.notes;
-  return "trabajo programado";
+  return (
+    job.linkedTemplateLabel ||
+    job.quickEntryLabel ||
+    job.templateLabel ||
+    job.templateKey ||
+    "servicio programado"
+  );
 }
 
 function buildReminderMessage(job: any, reminderLabel: string) {
