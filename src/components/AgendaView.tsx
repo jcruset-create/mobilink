@@ -1238,7 +1238,8 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
       WA 1h
     </span>
   )}
-</div><div className="mt-1 flex flex-wrap gap-1 text-[10px] font-black">
+</div>
+<div className="mt-1 flex flex-wrap gap-1 text-[10px] font-black">
   {job.sendWhatsAppOnSave && (
     <span className="rounded-md bg-green-100 px-1.5 py-0.5 text-green-800">
       WhatsApp guardar
@@ -1246,20 +1247,38 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
   )}
 
   {job.manualReminderEnabled && (
-    <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
-      Manual
+    <span
+      className={`rounded-md px-1.5 py-0.5 ${
+        job.manualReminderSentAtMs
+          ? "bg-emerald-700 text-white"
+          : "bg-emerald-100 text-emerald-800"
+      }`}
+    >
+      {job.manualReminderSentAtMs ? "Manual enviado" : "Manual"}
     </span>
   )}
 
   {job.sendReminder24h && (
-    <span className="rounded-md bg-blue-100 px-1.5 py-0.5 text-blue-800">
-      24h
+    <span
+      className={`rounded-md px-1.5 py-0.5 ${
+        job.whatsappReminder24hSentAtMs
+          ? "bg-blue-700 text-white"
+          : "bg-blue-100 text-blue-800"
+      }`}
+    >
+      {job.whatsappReminder24hSentAtMs ? "24h enviado" : "24h"}
     </span>
   )}
 
   {job.sendReminder1h && (
-    <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-violet-800">
-      1h
+    <span
+      className={`rounded-md px-1.5 py-0.5 ${
+        job.whatsappReminder1hSentAtMs
+          ? "bg-violet-700 text-white"
+          : "bg-violet-100 text-violet-800"
+      }`}
+    >
+      {job.whatsappReminder1hSentAtMs ? "1h enviado" : "1h"}
     </span>
   )}
 </div>
