@@ -172,3 +172,14 @@ export function getPredictedTimeForJob(
     source: "none",
   };
 }
+export function isLinkedBlockedJob(job: Job) {
+  if (job.status !== "parado") return false;
+
+  return (
+    !!job.dependsOnJobId ||
+    !!job.blockedReason ||
+    job.linkedOrder === 2 ||
+    (job.reason || "").includes("Pendiente del trabajo anterior") ||
+    (job.reason || "").includes("Trabajo vinculado")
+  );
+}

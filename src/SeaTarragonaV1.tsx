@@ -102,6 +102,7 @@ import {
   getWorkedMinutes,
   isBuiltInTemplateKey,
   normalizeJobFromApi,
+  isLinkedBlockedJob,
 } from "./modules/jobHelpers";
 import {
   INITIAL_TECHS,
@@ -831,18 +832,6 @@ const validationJobs = useMemo(
         ),
     [activeJobs]
   );
-
-const isLinkedBlockedJob = (job: Job) => {
-  if (job.status !== "parado") return false;
-
-  return (
-    !!job.dependsOnJobId ||
-    !!job.blockedReason ||
-    job.linkedOrder === 2 ||
-    (job.reason || "").includes("Pendiente del trabajo anterior") ||
-    (job.reason || "").includes("Trabajo vinculado")
-  );
-};
 
 const pausedJobs = useMemo(
   () =>
