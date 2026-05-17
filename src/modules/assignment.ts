@@ -1,28 +1,46 @@
 import type {
+  AllocationResult,
   AreaKey,
   AssignmentRole,
   CandidateOptions,
   CompetencyKey,
   Job,
+  JobStatus,
   QuickTemplate,
   Tech,
   TechLoadStat,
+  TestResult,
 } from "./workshopTypes";
 
-import { AREA_META, MOBILE_MIN_RESERVED } from "./workshopConstants";
-
-import { countReservedMobileCapacity } from "./techConfig";
+import {
+  AREA_META,
+  DEFAULT_QUICK_TEMPLATES,
+  MOBILE_MIN_RESERVED,
+} from "./workshopConstants";
 
 import {
-  isHardBlockedTechStatus,
-  isTechUnavailableForAssignment,
-} from "./techStatus";
+  INITIAL_TECHS,
+  countReservedMobileCapacity,
+} from "./techConfig";
 
 import {
   getCompetencyTargetKey,
   getOperationKey,
+  getOperationLabel,
   getQuickTemplateForJob,
+  isSingleAssignment,
 } from "./jobHelpers";
+
+import { buildValidationJob } from "./jobValidation";
+
+import {
+  getElapsedMinutes,
+  nowMs,
+} from "./time";
+import {
+  isHardBlockedTechStatus,
+  isTechUnavailableForAssignment,
+} from "./techStatus";
 
 export function isTechProposedInAnotherValidation(
   techName: string,
@@ -346,4 +364,345 @@ export function getOrderedCandidatesForJob(
 
     return aScore - bScore;
   });
+}
+
+
+export function getAssignmentReason(
+  job: Job,
+  assignedNames: string[]
+): string {
+  if (job.area === "movil") {
+    return "Móvil asignado a especialista disponible según orden de unidades móviles.";
+  }
+
+  if (isSingleAssignment(job)) {
+    return `${getOperationLabel(job)} asignado con 1 técnico sin apoyo.`;
+  }
+
+  if (job.area === "camion" && assignedNames.length === 2) {
+    return "Camión asignado con 1 responsable y 1 apoyo disponible.";
+  }
+
+  if (job.area === "camion") {
+    return "Camión asignado con 1 responsable.";
+  }
+
+  return `${AREA_META[job.area].label} asignado según orden oficial y disponibilidad.`;
+}
+
+export function allocateJobPure(
+  job: Job,
+  techs: Tech[],
+  jobs: Job[],
+  quickTemplates: QuickTemplate[],
+  techStats: {
+    operation: string;
+    fastestTech: string;
+    bestTime: number;
+    averageMinutes: number;
+  }[],
+  techLoadStats: TechLoadStat[]
+): AllocationResult {
+  const freeMain = getOrderedCandidatesForJob(
+    job,
+    techs,
+    jobs,
+    "responsable",
+    quickTemplates,
+    {
+      includeSupport: false,
+      allowSupervisorManual: false,
+      allowRamonAuto: false,
+    },
+    techStats,
+    techLoadStats
+  );
+
+  const fallbackMain =
+    freeMain.length === 0
+      ? getOrderedCandidatesForJob(
+          job,
+          techs,
+          jobs,
+          "responsable",
+          quickTemplates,
+          {
+            includeSupport: true,
+            allowSupervisorManual: false,
+            allowRamonAuto: false,
+          },
+          techStats,
+          techLoadStats
+        )
+      : [];
+
+  const ramonMain =
+    freeMain.length === 0 && fallbackMain.length === 0
+      ? getOrderedCandidatesForJob(
+          job,
+          techs,
+          jobs,
+          "responsable",
+          quickTemplates,
+          {
+            includeSupport: false,
+            allowSupervisorManual: false,
+            allowRamonAuto: true,
+          },
+          techStats,
+          techLoadStats
+        ).filter((tech) => tech.name === "Ramón")
+      : [];
+
+  const mainPool =
+    freeMain.length > 0
+      ? freeMain
+      : fallbackMain.length > 0
+      ? fallbackMain
+      : ramonMain;
+
+  if (mainPool.length === 0) {
+    const reason = `Sin técnico disponible para ${getOperationLabel(job)}.`;
+
+    return {
+      assigned: false,
+      assignedNames: [],
+      reason,
+      techs,
+      jobs: jobs.map((item) =>
+        item.id === job.id
+          ? {
+              ...item,
+              status: "espera" as JobStatus,
+              assignedNames: [],
+              reason,
+              startedAtMs: null,
+            }
+          : item
+      ),
+    };
+  }
+
+  const mainTech = mainPool[0];
+  const assignedNames = [mainTech.name];
+  const needsRamonApproval = mainTech.name === "Ramón";
+
+  const cleanedJobs = jobs;
+
+  if (job.area === "camion" && !isSingleAssignment(job)) {
+    const freeSupport = getOrderedCandidatesForJob(
+      job,
+      techs,
+      cleanedJobs,
+      "apoyo",
+      quickTemplates,
+      {
+        includeSupport: false,
+        allowSupervisorManual: false,
+        allowRamonAuto: false,
+        forSupportRole: true,
+      },
+      techStats,
+      techLoadStats
+    ).filter((tech) => {
+      if (tech.name === assignedNames[0]) return false;
+      if (tech.name === "Ramón") return false;
+      if (tech.currentJobId != null) return false;
+      if (tech.status !== "disponible") return false;
+
+      return true;
+    });
+
+    const supportPool = freeSupport;
+
+    if (supportPool.length > 0) {
+      const supportTech = supportPool[0];
+
+      if (!assignedNames.includes(supportTech.name)) {
+        assignedNames.push(supportTech.name);
+      }
+    }
+  }
+
+  const reason = needsRamonApproval
+    ? `${getOperationLabel(job)} solo tiene a Ramón disponible como último recurso.`
+    : getAssignmentReason(job, assignedNames);
+
+  const validationReason = needsRamonApproval
+    ? `${reason} Pendiente de autorización manual antes de iniciar.`
+    : `${reason} Pendiente de validación manual antes de iniciar.`;
+
+  const validationJob = buildValidationJob(
+    {
+      ...job,
+      status: "validacion",
+      assignedNames,
+      reason: validationReason,
+      startedAtMs: null,
+    },
+    assignedNames,
+    reason
+  ) as Job;
+
+  const updatedJobs: Job[] = cleanedJobs.map((item) =>
+    item.id === job.id ? validationJob : item
+  );
+
+  return {
+    assigned: true,
+    assignedNames,
+    reason: validationJob.reason,
+    techs,
+    jobs: updatedJobs,
+    needsRamonApproval,
+  };
+}
+
+export function runSelfTests(
+  techStats: {
+    operation: string;
+    fastestTech: string;
+    bestTime: number;
+    averageMinutes: number;
+  }[],
+  techLoadStats: TechLoadStat[]
+): TestResult[] {
+  const tests: TestResult[] = [];
+
+  const camionJob: Job = {
+    id: 1,
+    area: "camion",
+    plate: "1111AAA",
+    urgent: false,
+    status: "espera",
+    assignedNames: [],
+    reason: "",
+    createdAtMs: nowMs(),
+    startedAtMs: null,
+  };
+
+  const camionResult = allocateJobPure(
+    camionJob,
+    INITIAL_TECHS,
+    [camionJob],
+    DEFAULT_QUICK_TEMPLATES,
+    techStats,
+    techLoadStats
+  );
+
+  tests.push({
+    name: "Camión asigna responsable",
+    pass: camionResult.assigned && camionResult.assignedNames[0] === "José",
+  });
+
+  tests.push({
+    name: "Camión asigna apoyo",
+    pass: camionResult.assigned && camionResult.assignedNames[1] === "Iván",
+  });
+
+  const alineacionJob: Job = {
+    id: 2,
+    area: "camion",
+    plate: "ALI123",
+    urgent: false,
+    status: "espera",
+    assignedNames: [],
+    reason: "",
+    createdAtMs: nowMs(),
+    startedAtMs: null,
+    template: "alineacion_camion",
+  };
+
+  const alineacionResult = allocateJobPure(
+    alineacionJob,
+    INITIAL_TECHS,
+    [alineacionJob],
+    DEFAULT_QUICK_TEMPLATES,
+    techStats,
+    techLoadStats
+  );
+
+  tests.push({
+    name: "Alineación solo 1 técnico",
+    pass:
+      alineacionResult.assigned &&
+      alineacionResult.assignedNames.length === 1,
+  });
+
+  const anthoni = INITIAL_TECHS.find((tech) => tech.name === "Anthoni");
+
+  tests.push({
+    name: "Competencia responsable/apoyo",
+    pass:
+      !!anthoni &&
+      anthoni.competencies.camion.responsable &&
+      anthoni.competencies.camion.apoyo,
+  });
+
+  const supportTechs = INITIAL_TECHS.map((tech) =>
+    tech.name === "Iván"
+      ? { ...tech, status: "refuerzo" as const, currentJobId: 10 }
+      : tech.name === "José"
+      ? { ...tech, status: "ocupado" as const, currentJobId: 10 }
+      : [
+          "Alejandro",
+          "Jesús",
+          "Anthoni",
+          "David",
+          "Andrés",
+          "Albert",
+        ].includes(tech.name)
+      ? { ...tech, status: "ocupado" as const, currentJobId: 20 }
+      : tech
+  );
+
+  const supportJobs: Job[] = [
+    {
+      id: 10,
+      area: "camion",
+      plate: "SUP001",
+      urgent: false,
+      status: "activo",
+      assignedNames: ["José", "Iván"],
+      reason: "",
+      createdAtMs: nowMs(),
+      startedAtMs: nowMs() - 10000,
+    },
+    {
+      id: 99,
+      area: "turismo",
+      plate: "NEW999",
+      urgent: false,
+      status: "espera",
+      assignedNames: [],
+      reason: "",
+      createdAtMs: nowMs(),
+      startedAtMs: null,
+    },
+  ];
+
+  const supportPromoted = allocateJobPure(
+    supportJobs[1],
+    supportTechs,
+    supportJobs,
+    DEFAULT_QUICK_TEMPLATES,
+    techStats,
+    techLoadStats
+  );
+
+  tests.push({
+    name: "Un refuerzo puede pasar a responsable",
+    pass:
+      supportPromoted.assigned &&
+      supportPromoted.assignedNames[0] === "Iván",
+  });
+
+  const elapsed = getElapsedMinutes(nowMs() - 30 * 60000, nowMs());
+
+  tests.push({
+    name: "Cálculo de duración",
+    pass: elapsed === 30,
+  });
+
+  return tests;
 }
