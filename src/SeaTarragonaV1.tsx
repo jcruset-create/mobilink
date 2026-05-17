@@ -6,6 +6,7 @@ import React, {
   type SetStateAction,
 } from "react";
 import AgendaView from "./components/AgendaView";
+import EmptyState from "./components/EmptyState";
 import { APP_VERSION } from "./version";
 import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
@@ -254,24 +255,6 @@ function isManualUnavailableStatus(status: string) {
     status === "otro_taller" ||
     status === "en_otro_taller" ||
     status === "en otro taller"
-  );
-}
-
-function EmptyState({
-  icon: Icon,
-  title,
-  text,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  text: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center">
-      <Icon className="mx-auto h-7 w-7 text-slate-400" />
-      <div className="mt-3 font-medium">{title}</div>
-      <div className="mt-1 text-sm text-slate-500">{text}</div>
-    </div>
   );
 }
 
