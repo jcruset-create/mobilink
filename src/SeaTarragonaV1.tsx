@@ -11,6 +11,34 @@ import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import OperariosTVView from "./components/OperariosTVView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
+import type {
+  AISuggestion,
+  AllocationResult,
+  AreaKey,
+  AssignmentRole,
+  CandidateOptions,
+  CompetencyKey,
+  Job,
+  JobPrediction,
+  JobStatus,
+  LinkedTemplate,
+  LogItem,
+  OperationSummary,
+  QuickEntryMode,
+  QuickTemplate,
+  RoleCapability,
+  RolePriority,
+  SavedTechConfig,
+  Tech,
+  TechClosureStat,
+  TechHoursSummary,
+  TechLoadStat,
+  TechOperationStat,
+  TechStatus,
+  TemplateKey,
+  TestResult,
+  WorkshopAlert,
+} from "./modules/workshopTypes";
 import {
   addMinutesToTime,
   formatClock,
@@ -31,7 +59,6 @@ import {
   getValidationLabel,
 } from "./modules/jobValidation";
 import {
-  type IncludedTask,
   type CustomExtraTask,
   buildSelectableIncludedTasks,
   getIncludedTasksByIds,
@@ -61,170 +88,6 @@ import {
   XCircle,
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
-type TechStatus =
-  | "disponible"
-  | "ocupado"
-  | "refuerzo"
-  | "nodisponible"
-  | "supervisor"
-  | "vacaciones"
-  | "baja"
-  | "permiso"
-  | "otro_taller";
-type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
-type JobStatus =
-  | "espera"
-  | "validacion"
-  | "activo"
-  | "parado"
-  | "cerrado"
-  | "bloqueado";type TemplateKey = "alineacion_camion" | "pinchazo_camion";
-type QuickEntryMode = "single" | "team";
-type CompetencyKey = AreaKey | TemplateKey;
-type AssignmentRole = "responsable" | "apoyo";
-
-type QuickTemplate = {
-  key: string;
-  label: string;
-  area: AreaKey;
-  mode: QuickEntryMode;
-  allowedTechs: string[];
-  priorityOrder: string[];
-  standardMinutes?: number | null;
-};
-
-type LinkedTemplate = {
-  id: string;
-  label: string;
-  firstTemplateKey: string;
-  secondTemplateKey: string;
-};
-
-type RoleCapability = {
-  responsable: boolean;
-  apoyo: boolean;
-};
-
-type RolePriority = {
-  responsable: number;
-  apoyo: number;
-};
-
-type Tech = {
-  name: string;
-  status: TechStatus;
-  currentJobId: number | null;
-  blocked: boolean;
-  competencies: Record<CompetencyKey, RoleCapability>;
-  priorities: Record<AreaKey, RolePriority>;
-  avatar?: string;
-  statusChangedAtMs?: number | null;
-statusTotals?: Partial<Record<TechStatus, number>>;
-};
-
-type SavedTechConfig = {
-  name: string;
-  competencies: Record<CompetencyKey, RoleCapability>;
-  priorities: Record<AreaKey, RolePriority>;
-};
-
-type Job = {
-  id: number;
-  area: AreaKey;
-  plate: string;
-  urgent: boolean;
-  status: JobStatus;
-  assignedNames: string[];
-  reason: string;
-  customerName?: string;
-  customerPhone?: string;
-  createdAtMs: number;
-  startedAtMs: number | null;
-  closedAtMs?: number;
-  template?: TemplateKey | null;
-  quickEntryLabel?: string | null;
-  quickEntryMode?: QuickEntryMode | null;
-  includedTasks?: IncludedTask[];
-  actualMinutes?: number | null;
-  workedAccumulatedMinutes?: number | null;
-  pausedAccumulatedMinutes?: number | null;
-  pausedAtMs?: number | null;
-  linkedGroupId?: string | null;
-  dependsOnJobId?: number | null;
-  blockedReason?: string | null;
-  linkedOrder?: 1 | 2 | null;
-  blockedByJobId?: number | null;
-};
-
-type AllocationResult = {
-  assigned: boolean;
-  assignedNames: string[];
-  reason: string;
-  techs: Tech[];
-  jobs: Job[];
-  needsRamonApproval?: boolean;
-};
-
-type CandidateOptions = {
-  includeSupport?: boolean;
-  allowSupervisorManual?: boolean;
-  forSupportRole?: boolean;
-  allowRamonAuto?: boolean;
-};
-
-type LogItem = { id: number; time: string; text: string };
-type TestResult = { name: string; pass: boolean };
-type OperationSummary = {
-  key: string;
-  label: string;
-  count: number;
-  averageMinutes: number;
-  lastMinutes: number | null;
-};
-
-type TechHoursSummary = {
-  name: string;
-  responsable: { daily: number; weekly: number; monthly: number };
-  apoyo: { daily: number; weekly: number; monthly: number };
-};
-
-type TechLoadStat = {
-  techName: string;
-  activeCount: number;
-  totalOpenMinutes: number;
-};
-
-type JobPrediction = {
-  predictedMinutes: number | null;
-  source: "template" | "area" | "none";
-};
-
-type WorkshopAlert = {
-  id: string;
-  level: "info" | "warning" | "danger";
-  text: string;
-};
-
-type TechOperationStat = {
-  techName: string;
-  operationKey: string;
-  operationLabel: string;
-  totalMinutes: number;
-  count: number;
-  averageMinutes: number;
-};
-
-type TechClosureStat = {
-  techName: string;
-  closedCount: number;
-  totalMinutes: number;
-  averageMinutes: number;
-};
-
-type AISuggestion = {
-  id: string;
-  text: string;
-};
 
 const MOBILE_SPECIALISTS = ["David", "Iván", "Jesús", "Anthoni", "Alejandro"];
 const MOBILE_MIN_RESERVED = 2;
