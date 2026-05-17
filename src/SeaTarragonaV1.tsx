@@ -108,6 +108,7 @@ import {
   isManualUnavailableStatus,
   syncTechsWithActiveJobs,
 } from "./modules/techSync";
+import { getTechAvatarUrl } from "./modules/techAvatar";
 import {
   INITIAL_TECHS,
   createTech,
@@ -199,17 +200,6 @@ async function downloadBackup() {
     console.error("Error descargando backup:", error);
     alert("Error descargando backup.");
   }
-}
-
-function getTechAvatarUrl(tech?: Tech | null): string {
-  if (!tech?.avatar) {
-    return `https://ui-avatars.com/api/?name=${encodeURIComponent(
-      tech?.name || "Tecnico"
-    )}`;
-  }
-
-  if (tech.avatar.startsWith("http")) return tech.avatar;
-  return `${API_BASE}${tech.avatar}`;
 }
 
 function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
