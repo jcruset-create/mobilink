@@ -11,6 +11,18 @@ import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import OperariosTVView from "./components/OperariosTVView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
+import {
+  addMinutesToTime,
+  formatClock,
+  formatMinutes,
+  getElapsedMinutes,
+  isSameOrAfter,
+  nowMs,
+  nowTime,
+  startOfDay,
+  startOfMonth,
+  startOfWeek,
+} from "./modules/time";
 import FinishedAndCancelledJobsView from "./components/FinishedAndCancelledJobsView";
 import {
   buildAuthorizedJob,
@@ -365,9 +377,6 @@ async function fetchWithTimeout(
   }
 }
 
-function nowMs(): number {
-  return Date.now();
-}
 
 function getNextSafeJobId(currentJobs: Job[], preferredId: number) {
   const maxExistingJobId = currentJobs.reduce(
@@ -380,19 +389,6 @@ function getNextSafeJobId(currentJobs: Job[], preferredId: number) {
     : 1;
 
   return Math.max(safePreferredId, maxExistingJobId + 1, 1);
-}
-
-function timeToMinutesValue(time: string) {
-  const [h, m] = time.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function addMinutesToTime(time: string, minutes: number) {
-  const total = timeToMinutesValue(time) + minutes;
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 function normalizeTechStatusValue(status?: string | null) {
@@ -689,30 +685,6 @@ function getAdminHeaders(extra?: HeadersInit): HeadersInit {
     "x-admin-token": token,
   };
 }
-function nowTime(): string {
-  return new Date().toLocaleTimeString("es-ES", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatClock(ms?: number | null): string {
-  if (!ms) return "-";
-  return new Date(ms).toLocaleTimeString("es-ES", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatMinutes(minutes?: number | null): string {
-  if (minutes == null || Number.isNaN(minutes)) return "-";
-  const rounded = Math.round(minutes);
-  const h = Math.floor(rounded / 60);
-  const m = rounded % 60;
-  if (h <= 0) return `${m} min`;
-  return `${h} h ${m} min`;
-}
-
 
 function getTechAvatarUrl(tech?: Tech | null): string {
   if (!tech?.avatar) {
@@ -761,36 +733,6 @@ function getPredictedTimeForJob(
     predictedMinutes: null,
     source: "none",
   };
-}
-
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function startOfWeek(date: Date): Date {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function startOfMonth(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function isSameOrAfter(ms: number | undefined, compare: Date): boolean {
-  if (!ms) return false;
-  return ms >= compare.getTime();
-}
-
-function getElapsedMinutes(
-  startedAtMs?: number | null,
-  endMs = nowMs()
-): number | null {
-  if (!startedAtMs) return null;
-  return Math.max(0, Math.round((endMs - startedAtMs) / 60000));
 }
 
 function getWorkedMinutes(job: Job, endMs = nowMs()): number {
