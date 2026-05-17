@@ -101,8 +101,8 @@ import {
   getPredictedTimeForJob,
   getWorkedMinutes,
   isBuiltInTemplateKey,
-  normalizeJobFromApi,
   isLinkedBlockedJob,
+  normalizeJobFromApi,
 } from "./modules/jobHelpers";
 import {
   INITIAL_TECHS,
