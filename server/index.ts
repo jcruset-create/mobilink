@@ -31,13 +31,19 @@ app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
     } = req.body;
 
     const message = await twilioClient.messages.create({
-      from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+14155238886",
-      to: `whatsapp:${customerPhone}`,
-      body:
-        `Hola ${customerName}, ` +
-        `te recordamos tu cita para ${jobDescription} ` +
-        `el día ${date} a las ${time}.`,
-    });
+  from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
+  to: `whatsapp:${customerPhone}`,
+  contentSid:
+    process.env.TWILIO_CONTENT_SID ||
+    "HXdf941b56b6cf5464b5d2b2374171c926",
+  contentVariables: JSON.stringify({
+    "1": customerName || "cliente",
+    "2": jobDescription || "servicio programado",
+    "3": req.body.plate || "-",
+    "4": date,
+    "5": time,
+  }),
+});
 
     res.json({
       success: true,
