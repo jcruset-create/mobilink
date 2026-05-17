@@ -146,3 +146,72 @@ export async function deleteScheduledJobFromBackend(id: number) {
     throw new Error(text || "No se pudo eliminar la cita programada");
   }
 }
+export async function loadJobsFromBackend() {
+  const response = await fetchWithTimeout(`${API_BASE}/api/jobs`);
+
+  if (!response.ok) {
+    throw new Error(`Error cargando trabajos. Código ${response.status}.`);
+  }
+
+  const data = await response.json();
+
+  if (!Array.isArray(data)) {
+    throw new Error("Trabajos recibidos no válidos.");
+  }
+
+  return data;
+}
+
+export async function loadLogsFromBackend() {
+  const response = await fetchWithTimeout(`${API_BASE}/api/logs`);
+
+  if (!response.ok) {
+    throw new Error(`Error cargando logs. Código ${response.status}.`);
+  }
+
+  const data = await response.json();
+
+  return Array.isArray(data) ? data : [];
+}
+
+export async function loadQuickTemplatesFromBackend() {
+  const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`);
+
+  if (!response.ok) {
+    throw new Error(
+      `Error cargando entradas rápidas. Código ${response.status}.`
+    );
+  }
+
+  const data = await response.json();
+
+  return data;
+}
+
+export async function loadScheduledJobsFromBackend() {
+  const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
+
+  if (!response.ok) {
+    throw new Error(`Error cargando agenda. Código ${response.status}.`);
+  }
+
+  const data = await response.json();
+
+  if (!Array.isArray(data)) {
+    throw new Error("Agenda recibida no válida.");
+  }
+
+  return data;
+}
+
+export async function loadTechsFromBackend() {
+  const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
+
+  if (!response.ok) {
+    throw new Error(`Error cargando técnicos. Código ${response.status}.`);
+  }
+
+  const data = await response.json();
+
+  return Array.isArray(data) ? data : [];
+}

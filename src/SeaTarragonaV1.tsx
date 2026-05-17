@@ -124,6 +124,11 @@ import {
   deleteScheduledJobFromBackend,
   fetchWithTimeout,
   getAdminHeaders,
+  loadJobsFromBackend,
+  loadLogsFromBackend,
+  loadQuickTemplatesFromBackend,
+  loadScheduledJobsFromBackend,
+  loadTechsFromBackend,
   saveJobToBackend,
   saveTechToBackend,
 } from "./modules/workshopApi";
@@ -1791,10 +1796,9 @@ function appendLog(text: string) {
  
 async function reloadTechsFromBackend(currentJobs = jobs) {
   try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
-    const data = await response.json();
+   const data = await loadTechsFromBackend();
 
-    if (!Array.isArray(data)) return;
+if (!Array.isArray(data)) return;
 
     setTechs(() => {
       const merged = INITIAL_TECHS.map((baseTech) => {
@@ -1840,23 +1844,13 @@ async function reloadTechsFromBackend(currentJobs = jobs) {
 async function reloadScheduledJobsFromBackend() {
   try {
     if (scheduledJobsDirtyRef.current) {
-      console.log("Agenda con cambios pendientes. No se recarga para no pisar datos locales.");
+      console.log(
+        "Agenda con cambios pendientes. No se recarga para no pisar datos locales."
+      );
       return;
     }
 
-    const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
-
-    if (!response.ok) {
-      console.error("Error recargando agenda:", response.status);
-      return;
-    }
-
-    const data = await response.json();
-
-    if (!Array.isArray(data)) {
-      console.error("Agenda recibida no válida:", data);
-      return;
-    }
+    const data = await loadScheduledJobsFromBackend();
 
     scheduledJobsLoadedRef.current = true;
     setScheduledJobs(data);
@@ -1916,20 +1910,7 @@ function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
 
 async function reloadJobsFromBackend() {
   try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/jobs`);
-
-    if (!response.ok) {
-      console.error("Error recargando trabajos:", response.status);
-      return;
-    }
-
-    const data = await response.json();
-
-    if (!Array.isArray(data)) {
-      console.error("Trabajos recibidos no válidos:", data);
-      return;
-    }
-
+    const data = await loadJobsFromBackend();
     setJobs(data);
   } catch (error) {
     console.error("Error recargando trabajos:", error);
@@ -1938,10 +1919,8 @@ async function reloadJobsFromBackend() {
 
 async function reloadLogsFromBackend() {
   try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/logs`);
-    const data = await response.json();
-
-    setLog(Array.isArray(data) ? data : []);
+    const data = await loadLogsFromBackend();
+    setLog(data);
   } catch (error) {
     console.error("Error recargando logs:", error);
   }
@@ -2062,15 +2041,18 @@ async function updateScheduledJobStatusByJobId(
 }
 async function reloadQuickTemplatesFromBackend() {
   try {
-    const response = await fetch(`${API_BASE}/api/quick-templates`);
-    const data = await response.json();
+    const data = await loadQuickTemplatesFromBackend();
 
     setQuickTemplates(
       Array.isArray(data)
         ? data.map((item: any) => ({
             ...item,
-            allowedTechs: Array.isArray(item.allowedTechs) ? item.allowedTechs : [],
-            priorityOrder: Array.isArray(item.priorityOrder) ? item.priorityOrder : [],
+            allowedTechs: Array.isArray(item.allowedTechs)
+              ? item.allowedTechs
+              : [],
+            priorityOrder: Array.isArray(item.priorityOrder)
+              ? item.priorityOrder
+              : [],
           }))
         : DEFAULT_QUICK_TEMPLATES
     );
