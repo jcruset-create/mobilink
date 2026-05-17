@@ -423,6 +423,8 @@ useEffect(() => {
     includedTaskIds: [] as string[],
   });
 
+  const [includedTasksOpen, setIncludedTasksOpen] = useState(false);
+
   const templatesForSelectedArea = quickTemplates.filter(
     (template) => template.area === selectedArea
   );
@@ -572,7 +574,7 @@ function getEstimatedMinutesWithIncludedTasks(
       linkedTemplateKey: "",
       includedTaskIds: [],
     });
-
+    setIncludedTasksOpen(false);
     setModalOpen(true);
   }
 
@@ -618,7 +620,7 @@ function getEstimatedMinutesWithIncludedTasks(
       linkedTemplateKey: "",
       includedTaskIds: [],
     });
-
+    setIncludedTasksOpen(false);
     setModalOpen(true);
   }
 
@@ -653,7 +655,8 @@ function getEstimatedMinutesWithIncludedTasks(
       includedTaskIds: (job.includedTasks ?? []).map((task) => task.id),
     });
 
-    setModalOpen(true);
+    setIncludedTasksOpen((job.includedTasks ?? []).length > 0);
+    setModalOpen(true);setModalOpen(true);
   }
 
   async function createScheduledJob() {
@@ -1560,6 +1563,8 @@ appendLog(
   const [templateKey, linkedTemplateKey] = e.target.value.split("|||");
   const nextIncludedTaskIds: string[] = [];
 
+  setIncludedTasksOpen(false);
+
   setDraft((prev) => ({
     ...prev,
     templateKey,
@@ -1615,71 +1620,94 @@ appendLog(
                   </div>
 
                   {availableIncludedTasks.length > 0 && (
-                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-                      <div className="mb-2 text-sm font-semibold text-emerald-900">
-                        Añadir tareas al mismo trabajo
-                      </div>
+  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+    <button
+      type="button"
+      onClick={() => setIncludedTasksOpen((prev) => !prev)}
+      className="flex w-full items-center justify-between gap-3 text-left"
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-emerald-900">
+          Añadir tareas al mismo trabajo
+        </div>
 
-                      <div className="space-y-2">
-                        {availableIncludedTasks.map((task) => {
-                          const checked = draft.includedTaskIds.includes(
-                            task.id
-                          );
+        <div className="mt-1 text-xs text-emerald-700">
+          {selectedIncludedTasks.length > 0
+            ? `${selectedIncludedTasks.length} tarea${
+                selectedIncludedTasks.length === 1 ? "" : "s"
+              } seleccionada${
+                selectedIncludedTasks.length === 1 ? "" : "s"
+              }`
+            : "Opcional · pulsa para desplegar la lista"}
+        </div>
+      </div>
 
-                          return (
-                            <label
-                              key={task.id}
-                              className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-                            >
-                              <span className="flex items-center gap-2">
-                               <input
-  type="checkbox"
-  checked={checked}
-  onChange={(e) => {
-    setDraft((prev) => {
-      const nextIncludedTaskIds = e.target.checked
-        ? Array.from(new Set([...prev.includedTaskIds, task.id]))
-        : prev.includedTaskIds.filter((id) => id !== task.id);
+      <span className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-black text-emerald-800 shadow-sm">
+        {includedTasksOpen ? "▲" : "▼"}
+      </span>
+    </button>
 
-      return {
-        ...prev,
-        includedTaskIds: nextIncludedTaskIds,
-        estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
-          prev.templateKey,
-          nextIncludedTaskIds
-        ),
-      };
-    });
-  }}
-/>
+    {selectedIncludedTasks.length > 0 && (
+      <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
+        Se añadirán al mismo trabajo:{" "}
+        <span className="font-semibold">
+          {selectedIncludedTasks.map((task) => task.label).join(" + ")}
+        </span>
+      </div>
+    )}
 
-                                <span className="font-medium text-emerald-900">
-                                  {task.label}
-                                </span>
-                              </span>
+    {includedTasksOpen && (
+      <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+        {availableIncludedTasks.map((task) => {
+          const checked = draft.includedTaskIds.includes(task.id);
 
-                              {task.standardMinutes != null && (
-                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                                  {task.standardMinutes} min
-                                </span>
-                              )}
-                            </label>
-                          );
-                        })}
-                      </div>
+          return (
+            <label
+              key={task.id}
+              className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    setDraft((prev) => {
+                      const nextIncludedTaskIds = e.target.checked
+                        ? Array.from(
+                            new Set([...prev.includedTaskIds, task.id])
+                          )
+                        : prev.includedTaskIds.filter((id) => id !== task.id);
 
-                      {selectedIncludedTasks.length > 0 && (
-                        <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-800">
-                          Se añadirán al mismo trabajo:{" "}
-                          <span className="font-semibold">
-                            {selectedIncludedTasks
-                              .map((task) => task.label)
-                              .join(" + ")}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                      return {
+                        ...prev,
+                        includedTaskIds: nextIncludedTaskIds,
+                        estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
+                          prev.templateKey,
+                          nextIncludedTaskIds
+                        ),
+                      };
+                    });
+                  }}
+                  className="h-4 w-4 shrink-0"
+                />
+
+                <span className="truncate font-medium text-emerald-900">
+                  {task.label}
+                </span>
+              </span>
+
+              {task.standardMinutes != null && (
+                <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                  {task.standardMinutes} min
+                </span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+    )}
+  </div>
+)}
 
                   <input
                     value={draft.plate}
