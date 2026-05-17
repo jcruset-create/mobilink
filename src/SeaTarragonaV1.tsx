@@ -78,7 +78,6 @@ import {
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
 import {
-  API_BASE,
   AREA_META,
   DEFAULT_QUICK_TEMPLATES,
   DEFAULT_RULES,
@@ -120,24 +119,11 @@ import {
   getValidationProposalForTech,
   runSelfTests,
 } from "./modules/assignment";
-async function fetchWithTimeout(
-  url: string,
-  options?: RequestInit,
-  timeoutMs = 8000
-) {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    return response;
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
+import {
+  API_BASE,
+  fetchWithTimeout,
+  getAdminHeaders,
+} from "./modules/workshopApi";
 
 async function downloadBackup() {
   const password = window.prompt("Introduce la contraseña de backup:");
@@ -185,14 +171,6 @@ async function downloadBackup() {
     console.error("Error descargando backup:", error);
     alert("Error descargando backup.");
   }
-}
-function getAdminHeaders(extra?: HeadersInit): HeadersInit {
-  const token = localStorage.getItem("sea-admin-token") ?? "";
-
-  return {
-    ...(extra ?? {}),
-    "x-admin-token": token,
-  };
 }
 
 function getTechAvatarUrl(tech?: Tech | null): string {
