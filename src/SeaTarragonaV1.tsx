@@ -121,8 +121,11 @@ import {
 } from "./modules/assignment";
 import {
   API_BASE,
+  deleteScheduledJobFromBackend,
   fetchWithTimeout,
   getAdminHeaders,
+  saveJobToBackend,
+  saveTechToBackend,
 } from "./modules/workshopApi";
 
 async function downloadBackup() {
@@ -1891,20 +1894,6 @@ async function saveScheduledJobsToBackend(
   }
 }
 
-async function deleteScheduledJobFromBackend(id: number) {
-  const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs/${id}`, {
-    method: "DELETE",
-    headers: getAdminHeaders({
-      "Content-Type": "application/json",
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || "No se pudo eliminar la cita programada");
-  }
-}
-
 function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
   setScheduledJobs((prev) => {
     const next =
@@ -1957,45 +1946,7 @@ async function reloadLogsFromBackend() {
     console.error("Error recargando logs:", error);
   }
 }
-async function saveJobToBackend(job: Job) {
-  try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/jobs`, {
-      method: "POST",
-      headers: getAdminHeaders({
-        "Content-Type": "application/json",
-      }),
-      body: JSON.stringify(job),
-    });
 
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      console.error("Error guardando trabajo:", {
-        status: response.status,
-        responseText,
-        job,
-      });
-
-      throw new Error(
-        responseText ||
-          `No se pudo guardar el trabajo ${job.plate}. Código ${response.status}.`
-      );
-    }
-
-    if (!responseText) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(responseText);
-    } catch {
-      return null;
-    }
-  } catch (error) {
-    console.error("Error guardando trabajo:", error);
-    throw error;
-  }
-}
 function getScheduledJobCurrentPhaseLabel(scheduled: ScheduledJob, jobsToCheck: Job[]) {
   const firstJob =
     scheduled.jobId != null
@@ -2125,59 +2076,6 @@ async function reloadQuickTemplatesFromBackend() {
     );
   } catch (error) {
     console.error("Error recargando entradas rápidas:", error);
-  }
-}
-
-async function saveTechToBackend(tech: Tech) {
-  try {
-    const normalizedStatus = normalizeTechStatus(tech.status);
-
-    const response = await fetchWithTimeout(
-      `${API_BASE}/api/techs/${encodeURIComponent(tech.name)}`,
-      {
-        method: "PUT",
-        headers: getAdminHeaders({
-          "Content-Type": "application/json",
-        }),
-        body: JSON.stringify({
-          status: normalizedStatus,
-          blocked:
-            isHardBlockedTechStatus(normalizedStatus) ||
-            isUnavailableTechStatus(normalizedStatus) ||
-            Boolean(tech.blocked),
-          currentJobId:
-            isHardBlockedTechStatus(normalizedStatus) ||
-            isUnavailableTechStatus(normalizedStatus)
-              ? null
-              : tech.currentJobId ?? null,
-          competencies: tech.competencies,
-          priorities: tech.priorities,
-          avatar: tech.avatar ?? null,
-          statusChangedAtMs: tech.statusChangedAtMs ?? nowMs(),
-          statusTotals: tech.statusTotals ?? {},
-        }),
-      }
-    );
-
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      console.error("Error guardando técnico:", {
-        status: response.status,
-        responseText,
-        tech,
-      });
-
-      throw new Error(
-        responseText ||
-          `No se pudo guardar el técnico ${tech.name}. Código ${response.status}.`
-      );
-    }
-
-    return responseText ? JSON.parse(responseText) : null;
-  } catch (error) {
-    console.error("Error guardando técnico:", error);
-    throw error;
   }
 }
 
