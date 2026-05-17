@@ -116,6 +116,10 @@ import {
   runSelfTests,
 } from "./modules/assignment";
 import {
+  getScheduledJobCurrentPhaseLabel,
+  shouldCloseScheduledJobForFinishedJob as shouldCloseScheduledJobForFinishedJobHelper,
+} from "./modules/scheduledJobHelpers";
+import {
   API_BASE,
   deleteScheduledJobFromBackend,
   fetchWithTimeout,
@@ -1273,66 +1277,6 @@ async function reloadLogsFromBackend() {
   }
 }
 
-function getScheduledJobCurrentPhaseLabel(scheduled: ScheduledJob, jobsToCheck: Job[]) {
-  const firstJob =
-    scheduled.jobId != null
-      ? jobsToCheck.find((job) => job.id === scheduled.jobId)
-      : null;
-
-  const secondJob =
-    scheduled.secondJobId != null
-      ? jobsToCheck.find((job) => job.id === scheduled.secondJobId)
-      : null;
-
-  if (!scheduled.secondJobId) {
-    if (!firstJob) return "Trabajo pendiente";
-    if (firstJob.status === "validacion") return "Pendiente de validar";
-    if (firstJob.status === "activo") return "Trabajo en curso";
-    if (firstJob.status === "espera") return "En cola";
-    if (firstJob.status === "cerrado") return "Trabajo cerrado";
-    return "Trabajo pendiente";
-  }
-
-  if (firstJob && firstJob.status !== "cerrado") {
-    if (firstJob.status === "validacion") {
-      return "1º trabajo pendiente de validar";
-    }
-
-    if (firstJob.status === "activo") {
-      return "1º trabajo en curso";
-    }
-
-    if (firstJob.status === "espera") {
-      return "1º trabajo en cola";
-    }
-
-    return "1º trabajo pendiente";
-  }
-
-  if (secondJob) {
-    if (secondJob.status === "parado") {
-      return "2º trabajo bloqueado";
-    }
-
-    if (secondJob.status === "validacion") {
-      return "2º trabajo pendiente de validar";
-    }
-
-    if (secondJob.status === "activo") {
-      return "2º trabajo en curso";
-    }
-
-    if (secondJob.status === "espera") {
-      return "2º trabajo en cola";
-    }
-
-    if (secondJob.status === "cerrado") {
-      return "Cita completada";
-    }
-  }
-
-  return "Trabajo vinculado pendiente";
-}
 function getScheduledJobByRelatedJobId(jobId: number) {
   return (
     scheduledJobs.find(
@@ -1344,18 +1288,7 @@ function getScheduledJobByRelatedJobId(jobId: number) {
 
 function shouldCloseScheduledJobForFinishedJob(jobId: number) {
   const scheduled = getScheduledJobByRelatedJobId(jobId);
-
-  if (!scheduled) return false;
-
-  // Cita normal: solo tiene jobId. Al cerrar ese trabajo, cerramos la cita.
-  if (!scheduled.secondJobId) {
-    return scheduled.jobId === jobId;
-  }
-
-  // Cita vinculada:
-  // Si se cierra el primer trabajo, NO cerramos la cita.
-  // Solo se cierra cuando se cierra el segundo trabajo.
-  return scheduled.secondJobId === jobId;
+  return shouldCloseScheduledJobForFinishedJobHelper(scheduled, jobId);
 }
 
 async function updateScheduledJobStatusByJobId(
