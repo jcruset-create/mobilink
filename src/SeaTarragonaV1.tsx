@@ -25,8 +25,6 @@ import type {
   OperationSummary,
   QuickEntryMode,
   QuickTemplate,
-  RoleCapability,
-  RolePriority,
   SavedTechConfig,
   Tech,
   TechClosureStat,
@@ -72,7 +70,6 @@ import {
   getDefaultViewForRole,
   isValidUserRole,
 } from "./modules/permissions";
-
 import {
   AlertTriangle,
   CheckCircle2,
@@ -84,14 +81,11 @@ import {
 } from "lucide-react";
 import WorkshopWallScreen from "./WorkshopWallScreen";
 import {
-  ALIGNMENT_SPECIALISTS,
   API_BASE,
   AREA_META,
-  BASE_AREA_ORDER,
   DEFAULT_QUICK_TEMPLATES,
   DEFAULT_RULES,
   MOBILE_MIN_RESERVED,
-  MOBILE_SPECIALISTS,
 } from "./modules/workshopConstants";
 import {
   canTechBeProposedForJob,
@@ -119,7 +113,11 @@ import {
   isSingleAssignment,
   normalizeJobFromApi,
 } from "./modules/jobHelpers";
-
+import {
+  INITIAL_TECHS,
+  countReservedMobileCapacity,
+  createTech,
+} from "./modules/techConfig";
 async function fetchWithTimeout(
   url: string,
   options?: RequestInit,
@@ -310,103 +308,6 @@ function getValidationProposalForTech(techName: string, jobsToCheck: Job[]) {
   }) ?? null;
 }
 
-function makeCapability(enabled: boolean): RoleCapability {
-  return { responsable: enabled, apoyo: enabled };
-}
-
-function defaultCompetencies(
-  name: string
-): Record<CompetencyKey, RoleCapability> {
-  if (name === "Ramón") {
-    return {
-      camion: makeCapability(true),
-      movil: makeCapability(true),
-      tacografo: makeCapability(true),
-      turismo: makeCapability(true),
-      mecanica: makeCapability(true),
-      alineacion_camion: makeCapability(true),
-      pinchazo_camion: makeCapability(true),
-    };
-  }
-
-  return {
-    camion: makeCapability([...BASE_AREA_ORDER.camion].includes(name)),
-    movil: makeCapability(MOBILE_SPECIALISTS.includes(name)),
-    tacografo: makeCapability(["José", "Andrés"].includes(name)),
-    turismo: makeCapability(
-      ["Andrés", "Anthoni", "Alejandro", "José", "Iván", "David", "Jesús"].includes(name)
-    ),
-    mecanica: makeCapability(
-      ["Andrés", "Alejandro", "Anthoni", "José", "Iván", "David", "Jesús", "Albert"].includes(name)
-    ),
-    alineacion_camion: makeCapability(ALIGNMENT_SPECIALISTS.includes(name)),
-    pinchazo_camion: makeCapability([...BASE_AREA_ORDER.camion].includes(name)),
-  };
-}
-
-function defaultPriorities(name: string): Record<AreaKey, RolePriority> {
-  const idx = (arr: string[]) => {
-    const i = arr.indexOf(name);
-    return i >= 0 ? i + 1 : 99;
-  };
-  return {
-    camion: {
-      responsable: idx(AREA_META.camion.order),
-      apoyo: idx(AREA_META.camion.order),
-    },
-    movil: {
-      responsable: idx(AREA_META.movil.order),
-      apoyo: idx(AREA_META.movil.order),
-    },
-    tacografo: {
-      responsable: idx(AREA_META.tacografo.order),
-      apoyo: idx(AREA_META.tacografo.order),
-    },
-    turismo: {
-      responsable: idx(AREA_META.turismo.order),
-      apoyo: idx(AREA_META.turismo.order),
-    },
-    mecanica: {
-      responsable: idx(AREA_META.mecanica.order),
-      apoyo: idx(AREA_META.mecanica.order),
-    },
-  };
-}
-
-function createTech(name: string, status: TechStatus = "disponible"): Tech {
-  return {
-    name,
-    status,
-    currentJobId: null,
-    blocked: isUnavailableTechStatus(status),
-    competencies: defaultCompetencies(name),
-    priorities: defaultPriorities(name),
-    statusChangedAtMs: nowMs(),
-    statusTotals: {},
-  };
-}
-
-const INITIAL_TECHS: Tech[] = [
-  createTech("José"),
-  createTech("Iván"),
-  createTech("Alejandro"),
-  createTech("Jesús"),
-  createTech("Anthoni"),
-  createTech("David"),
-  createTech("Andrés"),
-  createTech("Albert"),
-  createTech("Ramón", "supervisor"),
-];
-
-function countReservedMobileCapacity(techs: Tech[]): number {
-  return techs.filter(
-    (t) =>
-      t.competencies.movil.responsable &&
-      !t.blocked &&
-      t.currentJobId == null &&
-      t.status === "disponible"
-  ).length;
-}
 
 function canExtractSupportFromJob(tech: Tech, jobs: Job[]): boolean {
   if (tech.status !== "refuerzo" || tech.currentJobId == null) return false;
