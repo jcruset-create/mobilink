@@ -352,6 +352,12 @@ export default function OperariosTVView({
   const [editingMaintenanceTaskId, setEditingMaintenanceTaskId] = useState("");
   const [editingMaintenanceTaskLabel, setEditingMaintenanceTaskLabel] =
     useState("");
+  const [selectedMaintenanceTaskId, setSelectedMaintenanceTaskId] = useState(
+  maintenanceTasks[0]?.id ?? ""
+);
+
+const [selectedMaintenanceTechName, setSelectedMaintenanceTechName] =
+  useState("");
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -448,10 +454,42 @@ export default function OperariosTVView({
     }
   }
 
+  function assignMaintenanceTask() {
+  if (!selectedMaintenanceTask) {
+    window.alert("Selecciona una tarea de mantenimiento.");
+    return;
+  }
+
+  if (!selectedMaintenanceTechName) {
+    window.alert("Selecciona un técnico disponible.");
+    return;
+  }
+
+  const ok = window.confirm(
+    `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
+  );
+
+  if (!ok) return;
+
+  window.alert(
+    `Asignación visual creada:\n\nTarea: ${selectedMaintenanceTask.label}\nTécnico: ${selectedMaintenanceTechName}\n\nDe momento no se crea ningún trabajo real.`
+  );
+}
+
   const activeJobs = jobs.filter((job) => job.status === "activo");
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
   const waitingJobs = jobs.filter((job) => job.status === "espera");
+  const availableMaintenanceTechs = techs.filter(
+  (tech) =>
+    normalizeTechStatus(tech.status) === "disponible" &&
+    tech.currentJobId == null
+);
+
+const selectedMaintenanceTask =
+  maintenanceTasks.find((task) => task.id === selectedMaintenanceTaskId) ??
+  maintenanceTasks[0] ??
+  null;
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 text-slate-900">
@@ -780,6 +818,81 @@ export default function OperariosTVView({
                 </tbody>
               </table>
             </div>
+            <div className="mt-3 rounded-2xl border border-emerald-200 bg-white p-3">
+  <div className="mb-3">
+    <h3 className="text-sm font-black text-emerald-950">
+      Asignar tarea a técnico disponible
+    </h3>
+    <p className="text-xs font-semibold text-emerald-700">
+      Asignación visual. No crea trabajos reales todavía.
+    </p>
+  </div>
+
+  <div className="grid gap-2">
+    <div>
+      <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+        Tarea
+      </label>
+
+      <select
+        value={selectedMaintenanceTaskId}
+        onChange={(event) => setSelectedMaintenanceTaskId(event.target.value)}
+        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:border-emerald-400"
+      >
+        {maintenanceTasks.length === 0 ? (
+          <option value="">No hay tareas</option>
+        ) : (
+          maintenanceTasks.map((task) => (
+            <option key={task.id} value={task.id}>
+              {task.label}
+            </option>
+          ))
+        )}
+      </select>
+    </div>
+
+    <div>
+      <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+        Técnico disponible
+      </label>
+
+      <select
+        value={selectedMaintenanceTechName}
+        onChange={(event) =>
+          setSelectedMaintenanceTechName(event.target.value)
+        }
+        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:border-emerald-400"
+      >
+        <option value="">Seleccionar técnico</option>
+
+        {availableMaintenanceTechs.map((tech) => (
+          <option key={tech.name} value={tech.name}>
+            {tech.name}
+          </option>
+        ))}
+      </select>
+
+      {availableMaintenanceTechs.length === 0 && (
+        <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+          No hay técnicos disponibles ahora mismo.
+        </div>
+      )}
+    </div>
+
+    <button
+      type="button"
+      onClick={assignMaintenanceTask}
+      disabled={
+        !selectedMaintenanceTask ||
+        !selectedMaintenanceTechName ||
+        availableMaintenanceTechs.length === 0
+      }
+      className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+    >
+      Asignar tarea visual
+    </button>
+  </div>
+</div>
           </section>
 
           <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
