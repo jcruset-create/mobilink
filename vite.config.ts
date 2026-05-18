@@ -7,6 +7,12 @@ export default defineConfig({
   server: {
     host: true,
     port: 5174,
+    proxy: {
+      "/api": {
+        target: "http://localhost:4000",
+        changeOrigin: true,
+      },
+    },
     watch: {
       ignored: ["**/server/*.json", "**/server/**/*.json"],
     },

@@ -142,6 +142,53 @@ if (!amountCents || amountCents < 100) {
   }
 });
 
+app.get("/api/payments/deposit-status/:jobId", async (req, res) => {
+  try {
+    const jobId = Number(req.params.jobId);
+
+    if (!Number.isFinite(jobId)) {
+      return res.status(400).json({
+        success: false,
+        message: "ID asistencia no válido",
+      });
+    }
+
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          plate,
+          "depositStatus",
+          "depositAmount",
+          "depositPaidAtMs",
+          "stripeSessionId",
+          "stripePaymentIntentId"
+        FROM jobs
+        WHERE id = $1
+      `,
+      [jobId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Asistencia no encontrada",
+      });
+    }
+
+    res.json({
+      success: true,
+      job: result.rows[0],
+    });
+  } catch (error: any) {
+    console.error("ERROR CONSULTANDO ESTADO PAGO:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
   try {
     const {
