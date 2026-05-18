@@ -657,6 +657,17 @@ export default function OperariosTVView({
       return;
     }
 
+    const existingPendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
+  (task) => task.techName === selectedMaintenanceTechName
+);
+
+if (existingPendingMaintenanceTask) {
+  window.alert(
+    `${selectedMaintenanceTechName} ya tiene una tarea de mantenimiento pendiente:\n\n${existingPendingMaintenanceTask.taskLabel}`
+  );
+  return;
+}
+
     const ok = window.confirm(
       `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
     );
@@ -677,6 +688,7 @@ export default function OperariosTVView({
     setAssignedMaintenanceTasks((prev) => [assignedTask, ...prev]);
     setSelectedMaintenanceTechName("");
   }
+
 
   function finishAssignedMaintenanceTask(assignedTaskId: string) {
   setAssignedMaintenanceTasks((prev) =>
@@ -820,16 +832,16 @@ export default function OperariosTVView({
   );
 
   const availableMaintenanceTechs = techs.filter((tech) => {
-    const hasPendingOutsideMaintenanceTask = pendingOutsideMaintenanceTasks.some(
-      (task) => task.techName === tech.name
-    );
+  const hasAnyPendingMaintenanceTask = pendingAssignedMaintenanceTasks.some(
+    (task) => task.techName === tech.name
+  );
 
-    return (
-      normalizeTechStatus(tech.status) === "disponible" &&
-      tech.currentJobId == null &&
-      !hasPendingOutsideMaintenanceTask
-    );
-  });
+  return (
+    normalizeTechStatus(tech.status) === "disponible" &&
+    tech.currentJobId == null &&
+    !hasAnyPendingMaintenanceTask
+  );
+});
 
   const selectedMaintenanceTask =
     maintenanceTasks.find((task) => task.id === selectedMaintenanceTaskId) ??
@@ -1275,8 +1287,7 @@ export default function OperariosTVView({
                   Asignar tarea a técnico disponible
                 </h3>
                 <p className="text-xs font-semibold text-emerald-700">
-                  Si es en taller, el técnico seguirá pudiendo recibir trabajo
-                  real. Si es fuera de taller, queda bloqueado visualmente.
+                  Cada técnico puede tener una tarea de mantenimiento pendiente. En taller no bloquea trabajos reales; fuera de taller sí bloquea.
                 </p>
               </div>
 
