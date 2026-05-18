@@ -585,6 +585,13 @@ function removeAssignedMaintenanceTask(assignedTaskId: string) {
 const pendingAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
   (task) => task.status === "pendiente"
 );
+const finishedAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
+  (task) => task.status === "finalizada"
+);
+
+const maintenanceTechNames = Array.from(
+  new Set(pendingAssignedMaintenanceTasks.map((task) => task.techName))
+);
 
 const availableMaintenanceTechs = techs.filter((tech) => {
   const hasPendingMaintenanceTask = pendingAssignedMaintenanceTasks.some(
@@ -789,6 +796,61 @@ const selectedMaintenanceTask =
                 {maintenanceTasks.length}
               </span>
             </div>
+
+            <div className="mb-3 grid gap-2 sm:grid-cols-3">
+  <div className="rounded-2xl border border-amber-200 bg-white px-3 py-3">
+    <div className="text-[10px] font-black uppercase tracking-wide text-amber-700">
+      Pendientes
+    </div>
+    <div className="text-2xl font-black text-amber-900">
+      {pendingAssignedMaintenanceTasks.length}
+    </div>
+  </div>
+
+  <div className="rounded-2xl border border-emerald-200 bg-white px-3 py-3">
+    <div className="text-[10px] font-black uppercase tracking-wide text-emerald-700">
+      Finalizadas
+    </div>
+    <div className="text-2xl font-black text-emerald-900">
+      {finishedAssignedMaintenanceTasks.length}
+    </div>
+  </div>
+
+  <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+    <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+      Técnicos en mantenimiento
+    </div>
+    <div className="text-2xl font-black text-slate-900">
+      {maintenanceTechNames.length}
+    </div>
+  </div>
+</div>
+
+{maintenanceTechNames.length > 0 && (
+  <div className="mb-3 rounded-2xl border border-emerald-200 bg-white p-3">
+    <div className="mb-2 text-xs font-black uppercase tracking-wide text-emerald-800">
+      Ahora en mantenimiento
+    </div>
+
+    <div className="flex flex-wrap gap-2">
+      {maintenanceTechNames.map((name) => {
+        const task = pendingAssignedMaintenanceTasks.find(
+          (item) => item.techName === name
+        );
+
+        return (
+          <div
+            key={name}
+            className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800"
+          >
+            {name}
+            {task ? ` · ${task.taskLabel}` : ""}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+)}
 
             <div className="mb-3 rounded-2xl border border-emerald-200 bg-white p-3">
               <label className="mb-2 block text-xs font-black uppercase tracking-wide text-emerald-800">
