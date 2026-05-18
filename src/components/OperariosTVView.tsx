@@ -704,6 +704,42 @@ if (existingPendingMaintenanceTask) {
   );
 }
 
+function interruptAssignedMaintenanceTask(assignedTaskId: string) {
+  const task = assignedMaintenanceTasks.find(
+    (item) => item.id === assignedTaskId
+  );
+
+  if (!task) return;
+
+  if (task.status !== "pendiente") {
+    window.alert("Solo se pueden interrumpir tareas pendientes.");
+    return;
+  }
+
+  if (task.taskType !== "en_taller") {
+    window.alert("Solo se pueden interrumpir tareas de mantenimiento en taller.");
+    return;
+  }
+
+  const ok = window.confirm(
+    `¿Interrumpir "${task.taskLabel}" de ${task.techName}?`
+  );
+
+  if (!ok) return;
+
+  setAssignedMaintenanceTasks((prev) =>
+    prev.map((item) =>
+      item.id === assignedTaskId
+        ? {
+            ...item,
+            status: "interrumpida",
+            statusChangedAtMs: Date.now(),
+          }
+        : item
+    )
+  );
+}
+
   function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
   const task = assignedMaintenanceTasks.find(
     (item) => item.id === assignedTaskId
@@ -1461,7 +1497,18 @@ if (existingPendingMaintenanceTask) {
 
 <td className="px-3 py-3">
                               <div className="flex justify-end gap-2">
-  {task.status === "pendiente" && (
+ {task.status === "pendiente" && (
+  <>
+    {task.taskType === "en_taller" && (
+      <button
+        type="button"
+        onClick={() => interruptAssignedMaintenanceTask(task.id)}
+        className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 hover:bg-sky-100"
+      >
+        Interrumpir
+      </button>
+    )}
+
     <button
       type="button"
       onClick={() => finishAssignedMaintenanceTask(task.id)}
@@ -1469,8 +1516,8 @@ if (existingPendingMaintenanceTask) {
     >
       Finalizar
     </button>
-  )}
-
+  </>
+)}
   {task.status === "interrumpida" && (
     <button
       type="button"
