@@ -43,6 +43,38 @@ app.post(
           paymentStatus: session.payment_status,
         });
 
+        const jobId = Number(session.metadata?.jobId);
+
+if (Number.isFinite(jobId)) {
+  await db.query(
+    `
+      UPDATE jobs
+      SET
+        "depositStatus" = 'paid',
+        "depositAmount" = $1,
+        "depositPaidAtMs" = $2,
+        "stripeSessionId" = $3,
+        "stripePaymentIntentId" = $4
+      WHERE id = $5
+    `,
+    [
+      session.amount_total ?? 0,
+      Date.now(),
+      session.id,
+      typeof session.payment_intent === "string"
+        ? session.payment_intent
+        : null,
+      jobId,
+    ]
+  );
+
+  console.log("✅ SEÑAL GUARDADA EN JOB:", {
+    jobId,
+    amount: session.amount_total,
+    sessionId: session.id,
+  });
+}
+
         // Aquí después actualizaremos la asistencia como señal pagada
       }
 
@@ -218,6 +250,11 @@ function normalizeJobRow(job: any) {
     workedAccumulatedMinutes: job.workedAccumulatedMinutes ?? 0,
     pausedAccumulatedMinutes: job.pausedAccumulatedMinutes ?? 0,
     pausedAtMs: job.pausedAtMs ?? null,
+    depositStatus: job.depositStatus ?? "none",
+depositAmount: job.depositAmount ?? 0,
+depositPaidAtMs: job.depositPaidAtMs ?? null,
+stripeSessionId: job.stripeSessionId ?? null,
+stripePaymentIntentId: job.stripePaymentIntentId ?? null,
   };
 }
 
