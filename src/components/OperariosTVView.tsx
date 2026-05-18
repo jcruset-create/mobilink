@@ -58,6 +58,34 @@ type Props = {
   onLogout?: () => void;
 };
 
+type MaintenanceTask = {
+  id: string;
+  label: string;
+};
+
+const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
+  {
+    id: "limpieza_zona_trabajo",
+    label: "Limpieza zona trabajo",
+  },
+  {
+    id: "ordenar_almacen",
+    label: "Ordenar almacén",
+  },
+  {
+    id: "revisar_herramientas",
+    label: "Revisar herramientas",
+  },
+  {
+    id: "cargar_baterias",
+    label: "Cargar baterías",
+  },
+  {
+    id: "revisar_compresor",
+    label: "Revisar compresor",
+  },
+];
+
 const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 
 function normalizeTechStatus(status?: string) {
@@ -292,6 +320,39 @@ export default function OperariosTVView({
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
 
+  const [maintenanceTasks, setMaintenanceTasks] = useState<MaintenanceTask[]>(
+    () => {
+      try {
+        const saved = window.localStorage.getItem("maintenanceTasks");
+
+        if (saved) {
+          const parsed = JSON.parse(saved);
+
+          if (
+            Array.isArray(parsed) &&
+            parsed.every(
+              (item) =>
+                item &&
+                typeof item.id === "string" &&
+                typeof item.label === "string"
+            )
+          ) {
+            return parsed;
+          }
+        }
+
+        return DEFAULT_MAINTENANCE_TASKS;
+      } catch {
+        return DEFAULT_MAINTENANCE_TASKS;
+      }
+    }
+  );
+
+  const [newMaintenanceTaskLabel, setNewMaintenanceTaskLabel] = useState("");
+  const [editingMaintenanceTaskId, setEditingMaintenanceTaskId] = useState("");
+  const [editingMaintenanceTaskLabel, setEditingMaintenanceTaskLabel] =
+    useState("");
+
   useEffect(() => {
     const interval = window.setInterval(() => {
       setNowTick(Date.now());
@@ -299,6 +360,93 @@ export default function OperariosTVView({
 
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "maintenanceTasks",
+        JSON.stringify(maintenanceTasks)
+      );
+    } catch {
+      // Si localStorage falla, no rompemos la pantalla.
+    }
+  }, [maintenanceTasks]);
+
+  function addMaintenanceTask() {
+    const label = newMaintenanceTaskLabel.trim();
+
+    if (!label) {
+      window.alert("Escribe el nombre de la tarea.");
+      return;
+    }
+
+    const task: MaintenanceTask = {
+      id: `maintenance-${Date.now()}`,
+      label,
+    };
+
+    setMaintenanceTasks((prev) =>
+      [...prev, task].sort((a, b) =>
+        a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+      )
+    );
+
+    setNewMaintenanceTaskLabel("");
+  }
+
+  function startEditMaintenanceTask(task: MaintenanceTask) {
+    setEditingMaintenanceTaskId(task.id);
+    setEditingMaintenanceTaskLabel(task.label);
+  }
+
+  function cancelEditMaintenanceTask() {
+    setEditingMaintenanceTaskId("");
+    setEditingMaintenanceTaskLabel("");
+  }
+
+  function saveMaintenanceTask() {
+    const label = editingMaintenanceTaskLabel.trim();
+
+    if (!editingMaintenanceTaskId) return;
+
+    if (!label) {
+      window.alert("El nombre de la tarea no puede estar vacío.");
+      return;
+    }
+
+    setMaintenanceTasks((prev) =>
+      prev
+        .map((task) =>
+          task.id === editingMaintenanceTaskId
+            ? {
+                ...task,
+                label,
+              }
+            : task
+        )
+        .sort((a, b) =>
+          a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+        )
+    );
+
+    cancelEditMaintenanceTask();
+  }
+
+  function removeMaintenanceTask(taskId: string) {
+    const task = maintenanceTasks.find((item) => item.id === taskId);
+
+    if (!task) return;
+
+    const ok = window.confirm(`¿Eliminar la tarea "${task.label}"?`);
+
+    if (!ok) return;
+
+    setMaintenanceTasks((prev) => prev.filter((item) => item.id !== taskId));
+
+    if (editingMaintenanceTaskId === taskId) {
+      cancelEditMaintenanceTask();
+    }
+  }
 
   const activeJobs = jobs.filter((job) => job.status === "activo");
   const validationJobs = jobs.filter((job) => job.status === "validacion");
@@ -476,6 +624,164 @@ export default function OperariosTVView({
         </section>
 
         <div className="space-y-4">
+          <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black text-emerald-950">
+                  Tareas de mantenimiento
+                </h2>
+                <p className="text-xs font-semibold text-emerald-700">
+                  Tabla visual. No crea trabajos reales todavía.
+                </p>
+              </div>
+
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
+                {maintenanceTasks.length}
+              </span>
+            </div>
+
+            <div className="mb-3 rounded-2xl border border-emerald-200 bg-white p-3">
+              <label className="mb-2 block text-xs font-black uppercase tracking-wide text-emerald-800">
+                Crear tarea
+              </label>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="text"
+                  value={newMaintenanceTaskLabel}
+                  onChange={(event) =>
+                    setNewMaintenanceTaskLabel(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      addMaintenanceTask();
+                    }
+                  }}
+                  placeholder="Ej: Barrer zona camiones"
+                  className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:border-emerald-400"
+                />
+
+                <button
+                  type="button"
+                  onClick={addMaintenanceTask}
+                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-700"
+                >
+                  Crear
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-white">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="bg-emerald-100 text-xs uppercase tracking-wide text-emerald-900">
+                  <tr>
+                    <th className="px-3 py-3 font-black">Tarea</th>
+                    <th className="w-[190px] px-3 py-3 text-right font-black">
+                      Acciones
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {maintenanceTasks.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={2}
+                        className="px-3 py-6 text-center text-sm font-semibold text-slate-500"
+                      >
+                        No hay tareas de mantenimiento.
+                      </td>
+                    </tr>
+                  ) : (
+                    maintenanceTasks.map((task) => {
+                      const isEditing = editingMaintenanceTaskId === task.id;
+
+                      return (
+                        <tr
+                          key={task.id}
+                          className="border-t border-emerald-100 align-middle"
+                        >
+                          <td className="px-3 py-3">
+                            {isEditing ? (
+                              <input
+                                type="text"
+                                value={editingMaintenanceTaskLabel}
+                                onChange={(event) =>
+                                  setEditingMaintenanceTaskLabel(
+                                    event.target.value
+                                  )
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    saveMaintenanceTask();
+                                  }
+
+                                  if (event.key === "Escape") {
+                                    cancelEditMaintenanceTask();
+                                  }
+                                }}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:border-emerald-400"
+                                autoFocus
+                              />
+                            ) : (
+                              <div className="font-bold text-slate-900">
+                                {task.label}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {isEditing ? (
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={saveMaintenanceTask}
+                                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white"
+                                >
+                                  Guardar
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={cancelEditMaintenanceTask}
+                                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    startEditMaintenanceTask(task)
+                                  }
+                                  className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 hover:bg-blue-100"
+                                >
+                                  Editar
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    removeMaintenanceTask(task.id)
+                                  }
+                                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+                                >
+                                  Borrar
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-violet-900">
