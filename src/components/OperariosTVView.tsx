@@ -63,6 +63,15 @@ type MaintenanceTask = {
   label: string;
 };
 
+type AssignedMaintenanceTask = {
+  id: string;
+  taskId: string;
+  taskLabel: string;
+  techName: string;
+  assignedAtMs: number;
+  status: "pendiente" | "finalizada";
+};
+
 const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
   {
     id: "limpieza_zona_trabajo",
@@ -110,6 +119,17 @@ function formatWorkedTime(minutes: number) {
   if (hours <= 0) return `${mins} min`;
 
   return `${hours} h ${mins} min`;
+}
+
+function formatMaintenanceAssignedAt(value: number) {
+  const date = new Date(value);
+
+  return date.toLocaleString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function getLiveWorkedMinutes(job: JobForOperarios, nowMs: number) {
@@ -359,6 +379,38 @@ export default function OperariosTVView({
 const [selectedMaintenanceTechName, setSelectedMaintenanceTechName] =
   useState("");
 
+  const [assignedMaintenanceTasks, setAssignedMaintenanceTasks] = useState<
+  AssignedMaintenanceTask[]
+>(() => {
+  try {
+    const saved = window.localStorage.getItem("assignedMaintenanceTasks");
+
+    if (saved) {
+      const parsed = JSON.parse(saved);
+
+      if (
+        Array.isArray(parsed) &&
+        parsed.every(
+          (item) =>
+            item &&
+            typeof item.id === "string" &&
+            typeof item.taskId === "string" &&
+            typeof item.taskLabel === "string" &&
+            typeof item.techName === "string" &&
+            typeof item.assignedAtMs === "number" &&
+            (item.status === "pendiente" || item.status === "finalizada")
+        )
+      ) {
+        return parsed;
+      }
+    }
+
+    return [];
+  } catch {
+    return [];
+  }
+});
+
   useEffect(() => {
     const interval = window.setInterval(() => {
       setNowTick(Date.now());
@@ -377,6 +429,17 @@ const [selectedMaintenanceTechName, setSelectedMaintenanceTechName] =
       // Si localStorage falla, no rompemos la pantalla.
     }
   }, [maintenanceTasks]);
+
+useEffect(() => {
+  try {
+    window.localStorage.setItem(
+      "assignedMaintenanceTasks",
+      JSON.stringify(assignedMaintenanceTasks)
+    );
+  } catch {
+    // Si localStorage falla, no rompemos la pantalla.
+  }
+}, [assignedMaintenanceTasks]);
 
   function addMaintenanceTask() {
     const label = newMaintenanceTaskLabel.trim();
@@ -454,7 +517,7 @@ const [selectedMaintenanceTechName, setSelectedMaintenanceTechName] =
     }
   }
 
-  function assignMaintenanceTask() {
+function assignMaintenanceTask() {
   if (!selectedMaintenanceTask) {
     window.alert("Selecciona una tarea de mantenimiento.");
     return;
@@ -471,8 +534,47 @@ const [selectedMaintenanceTechName, setSelectedMaintenanceTechName] =
 
   if (!ok) return;
 
-  window.alert(
-    `Asignación visual creada:\n\nTarea: ${selectedMaintenanceTask.label}\nTécnico: ${selectedMaintenanceTechName}\n\nDe momento no se crea ningún trabajo real.`
+  const assignedTask: AssignedMaintenanceTask = {
+    id: `assigned-maintenance-${Date.now()}`,
+    taskId: selectedMaintenanceTask.id,
+    taskLabel: selectedMaintenanceTask.label,
+    techName: selectedMaintenanceTechName,
+    assignedAtMs: Date.now(),
+    status: "pendiente",
+  };
+
+  setAssignedMaintenanceTasks((prev) => [assignedTask, ...prev]);
+  setSelectedMaintenanceTechName("");
+}
+
+function finishAssignedMaintenanceTask(assignedTaskId: string) {
+  setAssignedMaintenanceTasks((prev) =>
+    prev.map((task) =>
+      task.id === assignedTaskId
+        ? {
+            ...task,
+            status: "finalizada",
+          }
+        : task
+    )
+  );
+}
+
+function removeAssignedMaintenanceTask(assignedTaskId: string) {
+  const task = assignedMaintenanceTasks.find(
+    (item) => item.id === assignedTaskId
+  );
+
+  if (!task) return;
+
+  const ok = window.confirm(
+    `¿Borrar la asignación "${task.taskLabel}" de ${task.techName}?`
+  );
+
+  if (!ok) return;
+
+  setAssignedMaintenanceTasks((prev) =>
+    prev.filter((item) => item.id !== assignedTaskId)
   );
 }
 
@@ -891,6 +993,82 @@ const selectedMaintenanceTask =
     >
       Asignar tarea visual
     </button>
+    <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+  <table className="w-full border-collapse text-left text-xs">
+    <thead className="bg-slate-100 uppercase tracking-wide text-slate-600">
+      <tr>
+        <th className="px-3 py-3 font-black">Tarea</th>
+        <th className="px-3 py-3 font-black">Técnico</th>
+        <th className="px-3 py-3 font-black">Estado</th>
+        <th className="px-3 py-3 font-black">Hora</th>
+        <th className="px-3 py-3 text-right font-black">Acciones</th>
+      </tr>
+    </thead>
+
+    <tbody>
+      {assignedMaintenanceTasks.length === 0 ? (
+        <tr>
+          <td
+            colSpan={5}
+            className="px-3 py-6 text-center text-sm font-semibold text-slate-500"
+          >
+            No hay tareas asignadas.
+          </td>
+        </tr>
+      ) : (
+        assignedMaintenanceTasks.map((task) => (
+          <tr key={task.id} className="border-t border-slate-100">
+            <td className="px-3 py-3 font-bold text-slate-900">
+              {task.taskLabel}
+            </td>
+
+            <td className="px-3 py-3 font-semibold text-slate-700">
+              {task.techName}
+            </td>
+
+            <td className="px-3 py-3">
+              <span
+                className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${
+                  task.status === "finalizada"
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {task.status === "finalizada" ? "Finalizada" : "Pendiente"}
+              </span>
+            </td>
+
+            <td className="px-3 py-3 font-semibold text-slate-500">
+              {formatMaintenanceAssignedAt(task.assignedAtMs)}
+            </td>
+
+            <td className="px-3 py-3">
+              <div className="flex justify-end gap-2">
+                {task.status !== "finalizada" && (
+                  <button
+                    type="button"
+                    onClick={() => finishAssignedMaintenanceTask(task.id)}
+                    className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
+                  >
+                    Finalizar
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => removeAssignedMaintenanceTask(task.id)}
+                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+                >
+                  Borrar
+                </button>
+              </div>
+            </td>
+          </tr>
+        ))
+      )}
+    </tbody>
+  </table>
+</div>
   </div>
 </div>
           </section>
