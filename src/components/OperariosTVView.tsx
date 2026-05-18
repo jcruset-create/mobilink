@@ -399,6 +399,41 @@ async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
     return fallback;
   }
 }
+async function sendMaintenanceJson<T>(
+  url: string,
+  options: RequestInit,
+  fallback: T
+): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE}${url}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+
+    if (!response.ok) {
+      return fallback;
+    }
+
+    return (await response.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+async function deleteMaintenanceApi(url: string) {
+  try {
+    const response = await fetch(`${API_BASE}${url}`, {
+      method: "DELETE",
+    });
+
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 function saveMaintenanceTasksToLocalStorage(tasks: MaintenanceTask[]) {
   try {
@@ -626,29 +661,38 @@ const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
     });
   }, [techs]);
 
-  function addMaintenanceTask() {
-    const label = newMaintenanceTaskLabel.trim();
+  async function addMaintenanceTask() {
+  const label = newMaintenanceTaskLabel.trim();
 
-    if (!label) {
-      window.alert("Escribe el nombre de la tarea.");
-      return;
-    }
-
-    const task: MaintenanceTask = {
-      id: `maintenance-${Date.now()}`,
-      label,
-      type: newMaintenanceTaskType,
-    };
-
-    setMaintenanceTasks((prev) =>
-      [...prev, task].sort((a, b) =>
-        a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-      )
-    );
-
-    setNewMaintenanceTaskLabel("");
-    setNewMaintenanceTaskType("en_taller");
+  if (!label) {
+    window.alert("Escribe el nombre de la tarea.");
+    return;
   }
+
+  const task: MaintenanceTask = {
+    id: `maintenance-${Date.now()}`,
+    label,
+    type: newMaintenanceTaskType,
+  };
+
+  const savedTask = await sendMaintenanceJson<MaintenanceTask>(
+    "/api/maintenance-tasks",
+    {
+      method: "POST",
+      body: JSON.stringify(task),
+    },
+    task
+  );
+
+  setMaintenanceTasks((prev) =>
+    [...prev, savedTask].sort((a, b) =>
+      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+    )
+  );
+
+  setNewMaintenanceTaskLabel("");
+  setNewMaintenanceTaskType("en_taller");
+}
 
   function startEditMaintenanceTask(task: MaintenanceTask) {
     setEditingMaintenanceTaskId(task.id);
@@ -662,110 +706,150 @@ const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
     setEditingMaintenanceTaskType("en_taller");
   }
 
-  function saveMaintenanceTask() {
-    const label = editingMaintenanceTaskLabel.trim();
+  async function saveMaintenanceTask() {
+  const label = editingMaintenanceTaskLabel.trim();
 
-    if (!editingMaintenanceTaskId) return;
+  if (!editingMaintenanceTaskId) return;
 
-    if (!label) {
-      window.alert("El nombre de la tarea no puede estar vacío.");
-      return;
-    }
+  if (!label) {
+    window.alert("El nombre de la tarea no puede estar vacío.");
+    return;
+  }
 
-    setMaintenanceTasks((prev) =>
-      prev
-        .map((task) =>
-          task.id === editingMaintenanceTaskId
-            ? {
-                ...task,
-                label,
-                type: editingMaintenanceTaskType,
-              }
-            : task
-        )
-        .sort((a, b) =>
-          a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-        )
-    );
+  const currentTask = maintenanceTasks.find(
+    (task) => task.id === editingMaintenanceTaskId
+  );
 
+  if (!currentTask) return;
+
+  const nextTask: MaintenanceTask = {
+    ...currentTask,
+    label,
+    type: editingMaintenanceTaskType,
+  };
+
+  const savedTask = await sendMaintenanceJson<MaintenanceTask>(
+    `/api/maintenance-tasks/${editingMaintenanceTaskId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(nextTask),
+    },
+    nextTask
+  );
+
+  setMaintenanceTasks((prev) =>
+    prev
+      .map((task) =>
+        task.id === editingMaintenanceTaskId ? savedTask : task
+      )
+      .sort((a, b) =>
+        a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+      )
+  );
+
+  cancelEditMaintenanceTask();
+}
+
+  async function removeMaintenanceTask(taskId: string) {
+  const task = maintenanceTasks.find((item) => item.id === taskId);
+
+  if (!task) return;
+
+  const ok = window.confirm(`¿Eliminar la tarea "${task.label}"?`);
+
+  if (!ok) return;
+
+  await deleteMaintenanceApi(`/api/maintenance-tasks/${taskId}`);
+
+  setMaintenanceTasks((prev) => prev.filter((item) => item.id !== taskId));
+
+  if (editingMaintenanceTaskId === taskId) {
     cancelEditMaintenanceTask();
   }
-
-  function removeMaintenanceTask(taskId: string) {
-    const task = maintenanceTasks.find((item) => item.id === taskId);
-
-    if (!task) return;
-
-    const ok = window.confirm(`¿Eliminar la tarea "${task.label}"?`);
-
-    if (!ok) return;
-
-    setMaintenanceTasks((prev) => prev.filter((item) => item.id !== taskId));
-
-    if (editingMaintenanceTaskId === taskId) {
-      cancelEditMaintenanceTask();
-    }
-  }
-
-  function assignMaintenanceTask() {
-    if (!selectedMaintenanceTask) {
-      window.alert("Selecciona una tarea de mantenimiento.");
-      return;
-    }
-
-    if (!selectedMaintenanceTechName) {
-      window.alert("Selecciona un técnico disponible.");
-      return;
-    }
-
-    const existingPendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
-  (task) => task.techName === selectedMaintenanceTechName
-);
-
-if (existingPendingMaintenanceTask) {
-  window.alert(
-    `${selectedMaintenanceTechName} ya tiene una tarea de mantenimiento pendiente:\n\n${existingPendingMaintenanceTask.taskLabel}`
-  );
-  return;
 }
 
-    const ok = window.confirm(
-      `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
+ async function assignMaintenanceTask() {
+  if (!selectedMaintenanceTask) {
+    window.alert("Selecciona una tarea de mantenimiento.");
+    return;
+  }
+
+  if (!selectedMaintenanceTechName) {
+    window.alert("Selecciona un técnico disponible.");
+    return;
+  }
+
+  const existingPendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
+    (task) => task.techName === selectedMaintenanceTechName
+  );
+
+  if (existingPendingMaintenanceTask) {
+    window.alert(
+      `${selectedMaintenanceTechName} ya tiene una tarea de mantenimiento pendiente:\n\n${existingPendingMaintenanceTask.taskLabel}`
     );
-
-    if (!ok) return;
-
-    const assignedTask: AssignedMaintenanceTask = {
-  id: `assigned-maintenance-${Date.now()}`,
-  taskId: selectedMaintenanceTask.id,
-  taskLabel: selectedMaintenanceTask.label,
-  taskType: selectedMaintenanceTask.type,
-  techName: selectedMaintenanceTechName,
-  assignedAtMs: Date.now(),
-  status: "pendiente",
-  statusChangedAtMs: null,
-};
-
-    setAssignedMaintenanceTasks((prev) => [assignedTask, ...prev]);
-    setSelectedMaintenanceTechName("");
+    return;
   }
 
+  const ok = window.confirm(
+    `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
+  );
 
-  function finishAssignedMaintenanceTask(assignedTaskId: string) {
+  if (!ok) return;
+
+  const assignedTask: AssignedMaintenanceTask = {
+    id: `assigned-maintenance-${Date.now()}`,
+    taskId: selectedMaintenanceTask.id,
+    taskLabel: selectedMaintenanceTask.label,
+    taskType: selectedMaintenanceTask.type,
+    techName: selectedMaintenanceTechName,
+    assignedAtMs: Date.now(),
+    status: "pendiente",
+    statusChangedAtMs: null,
+  };
+
+  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+    "/api/assigned-maintenance-tasks",
+    {
+      method: "POST",
+      body: JSON.stringify(assignedTask),
+    },
+    assignedTask
+  );
+
+  setAssignedMaintenanceTasks((prev) => [savedTask, ...prev]);
+  setSelectedMaintenanceTechName("");
+}
+
+
+async function finishAssignedMaintenanceTask(assignedTaskId: string) {
+  const localUpdatedAt = Date.now();
+
+  const currentTask = assignedMaintenanceTasks.find(
+    (task) => task.id === assignedTaskId
+  );
+
+  if (!currentTask) return;
+
+  const fallbackTask: AssignedMaintenanceTask = {
+    ...currentTask,
+    status: "finalizada",
+    statusChangedAtMs: localUpdatedAt,
+  };
+
+  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+    `/api/assigned-maintenance-tasks/${assignedTaskId}/finish`,
+    {
+      method: "PUT",
+    },
+    fallbackTask
+  );
+
   setAssignedMaintenanceTasks((prev) =>
-    prev.map((task) =>
-      task.id === assignedTaskId
-        ? {
-            ...task,
-            status: "finalizada",
-            statusChangedAtMs: Date.now(),
-          }
-        : task
-    )
+    prev.map((task) => (task.id === assignedTaskId ? savedTask : task))
   );
 }
 
-function interruptAssignedMaintenanceTask(assignedTaskId: string) {
+async function interruptAssignedMaintenanceTask(assignedTaskId: string) {
   const task = assignedMaintenanceTasks.find(
     (item) => item.id === assignedTaskId
   );
@@ -788,20 +872,26 @@ function interruptAssignedMaintenanceTask(assignedTaskId: string) {
 
   if (!ok) return;
 
+  const fallbackTask: AssignedMaintenanceTask = {
+    ...task,
+    status: "interrumpida",
+    statusChangedAtMs: Date.now(),
+  };
+
+  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+    `/api/assigned-maintenance-tasks/${assignedTaskId}/interrupt`,
+    {
+      method: "PUT",
+    },
+    fallbackTask
+  );
+
   setAssignedMaintenanceTasks((prev) =>
-    prev.map((item) =>
-      item.id === assignedTaskId
-        ? {
-            ...item,
-            status: "interrumpida",
-            statusChangedAtMs: Date.now(),
-          }
-        : item
-    )
+    prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
   );
 }
 
-  function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
+async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
   const task = assignedMaintenanceTasks.find(
     (item) => item.id === assignedTaskId
   );
@@ -836,60 +926,72 @@ function interruptAssignedMaintenanceTask(assignedTaskId: string) {
 
   if (!ok) return;
 
-  setAssignedMaintenanceTasks((prev) =>
-    prev.map((item) =>
-      item.id === assignedTaskId
-        ? {
-    ...item,
+  const fallbackTask: AssignedMaintenanceTask = {
+    ...task,
     status: "pendiente",
     assignedAtMs: Date.now(),
     statusChangedAtMs: null,
-  }
-        : item
-    )
+  };
+
+  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+    `/api/assigned-maintenance-tasks/${assignedTaskId}/resume`,
+    {
+      method: "PUT",
+    },
+    fallbackTask
+  );
+
+  setAssignedMaintenanceTasks((prev) =>
+    prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
   );
 }
 
-  function removeAssignedMaintenanceTask(assignedTaskId: string) {
-    const task = assignedMaintenanceTasks.find(
-      (item) => item.id === assignedTaskId
-    );
+  async function removeAssignedMaintenanceTask(assignedTaskId: string) {
+  const task = assignedMaintenanceTasks.find(
+    (item) => item.id === assignedTaskId
+  );
 
-    if (!task) return;
+  if (!task) return;
 
-    const ok = window.confirm(
-      `¿Borrar la asignación "${task.taskLabel}" de ${task.techName}?`
-    );
+  const ok = window.confirm(
+    `¿Borrar la asignación "${task.taskLabel}" de ${task.techName}?`
+  );
 
-    if (!ok) return;
+  if (!ok) return;
 
-    setAssignedMaintenanceTasks((prev) =>
-      prev.filter((item) => item.id !== assignedTaskId)
-    );
+  await deleteMaintenanceApi(
+    `/api/assigned-maintenance-tasks/${assignedTaskId}`
+  );
+
+  setAssignedMaintenanceTasks((prev) =>
+    prev.filter((item) => item.id !== assignedTaskId)
+  );
+}
+
+  async function clearFinishedMaintenanceTasks() {
+  const historyTasks = assignedMaintenanceTasks.filter(
+    (task) => task.status === "finalizada" || task.status === "interrumpida"
+  );
+
+  if (historyTasks.length === 0) {
+    window.alert("No hay tareas finalizadas o interrumpidas para limpiar.");
+    return;
   }
 
-  function clearFinishedMaintenanceTasks() {
-    const historyTasks = assignedMaintenanceTasks.filter(
-      (task) => task.status === "finalizada" || task.status === "interrumpida"
-    );
+  const ok = window.confirm(
+    `¿Limpiar ${historyTasks.length} tarea(s) finalizada(s) o interrumpida(s)?`
+  );
 
-    if (historyTasks.length === 0) {
-      window.alert("No hay tareas finalizadas o interrumpidas para limpiar.");
-      return;
-    }
+  if (!ok) return;
 
-    const ok = window.confirm(
-      `¿Limpiar ${historyTasks.length} tarea(s) finalizada(s) o interrumpida(s)?`
-    );
+  await deleteMaintenanceApi("/api/assigned-maintenance-tasks/history");
 
-    if (!ok) return;
-
-    setAssignedMaintenanceTasks((prev) =>
-      prev.filter(
-        (task) => task.status !== "finalizada" && task.status !== "interrumpida"
-      )
-    );
-  }
+  setAssignedMaintenanceTasks((prev) =>
+    prev.filter(
+      (task) => task.status !== "finalizada" && task.status !== "interrumpida"
+    )
+  );
+}
 
   const activeJobs = jobs.filter((job) => job.status === "activo");
   const validationJobs = jobs.filter((job) => job.status === "validacion");
