@@ -251,6 +251,60 @@ app.get("/api/payments/deposit-status/:jobId", async (req, res) => {
   }
 });
 
+app.get("/api/payments/status/:reference", async (req, res) => {
+  try {
+    const reference = String(req.params.reference || "").trim();
+
+    if (!reference) {
+      return res.status(400).json({
+        success: false,
+        message: "Referencia no válida",
+      });
+    }
+
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          reference,
+          customer_name,
+          customer_phone,
+          amount_cents,
+          status,
+          stripe_session_id,
+          stripe_payment_intent_id,
+          payment_url,
+          paid_at_ms,
+          created_at_ms
+        FROM payments
+        WHERE reference = $1
+        ORDER BY created_at_ms DESC
+        LIMIT 1
+      `,
+      [reference]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Cobro no encontrado",
+      });
+    }
+
+    res.json({
+      success: true,
+      payment: result.rows[0],
+    });
+  } catch (error: any) {
+    console.error("ERROR CONSULTANDO PAYMENT:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
   try {
     const {
@@ -1019,7 +1073,540 @@ app.delete("/api/jobs/:id", async (req, res) => {
     res.status(500).json({ error: "Error eliminando trabajo" });
   }
 });
+/* =========================================================
+   MAINTENANCE TASKS
+========================================================= */
 
+type MaintenanceTaskType = "en_taller" | "fuera_taller";
+
+type AssignedMaintenanceTaskStatus =
+  | "pendiente"
+  | "finalizada"
+  | "interrumpida";
+
+type MaintenanceTask = {
+  id: string;
+  label: string;
+  type: MaintenanceTaskType;
+};
+
+type AssignedMaintenanceTask = {
+  id: string;
+  taskId: string;
+  taskLabel: string;
+  taskType: MaintenanceTaskType;
+  techName: string;
+  assignedAtMs: number;
+  status: AssignedMaintenanceTaskStatus;
+  statusChangedAtMs?: number | null;
+};
+
+const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
+  {
+    id: "limpieza_zona_trabajo",
+    label: "Limpieza zona trabajo",
+    type: "en_taller",
+  },
+  {
+    id: "ordenar_almacen",
+    label: "Ordenar almacén",
+    type: "en_taller",
+  },
+  {
+    id: "revisar_herramientas",
+    label: "Revisar herramientas",
+    type: "en_taller",
+  },
+  {
+    id: "cargar_baterias",
+    label: "Cargar baterías",
+    type: "en_taller",
+  },
+  {
+    id: "revisar_compresor",
+    label: "Revisar compresor",
+    type: "en_taller",
+  },
+  {
+    id: "recoger_material_fuera",
+    label: "Recoger material fuera",
+    type: "fuera_taller",
+  },
+];
+
+async function ensureMaintenanceTables() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS maintenance_tasks (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS assigned_maintenance_tasks (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    )
+  `);
+}
+
+function normalizeMaintenanceTask(item: any): MaintenanceTask | null {
+  if (!item || typeof item !== "object") return null;
+
+  const id = String(item.id || "").trim();
+  const label = String(item.label || "").trim();
+
+  if (!id || !label) return null;
+
+  const type: MaintenanceTaskType =
+    item.type === "fuera_taller" || item.type === "en_taller"
+      ? item.type
+      : "en_taller";
+
+  return {
+    id,
+    label,
+    type,
+  };
+}
+
+function normalizeAssignedMaintenanceTask(
+  item: any
+): AssignedMaintenanceTask | null {
+  if (!item || typeof item !== "object") return null;
+
+  const id = String(item.id || "").trim();
+  const taskId = String(item.taskId || "").trim();
+  const taskLabel = String(item.taskLabel || "").trim();
+  const techName = String(item.techName || "").trim();
+
+  if (!id || !taskId || !taskLabel || !techName) return null;
+
+  const assignedAtMs = Number(item.assignedAtMs || Date.now());
+
+  if (!Number.isFinite(assignedAtMs)) return null;
+
+  const taskType: MaintenanceTaskType =
+    item.taskType === "fuera_taller" || item.taskType === "en_taller"
+      ? item.taskType
+      : "en_taller";
+
+  const status: AssignedMaintenanceTaskStatus =
+    item.status === "finalizada" ||
+    item.status === "interrumpida" ||
+    item.status === "pendiente"
+      ? item.status
+      : "pendiente";
+
+  const statusChangedAtMs =
+    typeof item.statusChangedAtMs === "number" &&
+    Number.isFinite(item.statusChangedAtMs)
+      ? item.statusChangedAtMs
+      : null;
+
+  return {
+    id,
+    taskId,
+    taskLabel,
+    taskType,
+    techName,
+    assignedAtMs,
+    status,
+    statusChangedAtMs,
+  };
+}
+
+async function seedDefaultMaintenanceTasksIfEmpty() {
+  await ensureMaintenanceTables();
+
+  const countResult = await db.query(`
+    SELECT COUNT(*)::int AS count
+    FROM maintenance_tasks
+  `);
+
+  const count = Number(countResult.rows[0]?.count || 0);
+
+  if (count > 0) return;
+
+  const now = Date.now();
+
+  for (const task of DEFAULT_MAINTENANCE_TASKS) {
+    await db.query(
+      `
+        INSERT INTO maintenance_tasks (id, data, "updatedAtMs")
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id)
+        DO NOTHING
+      `,
+      [task.id, JSON.stringify(task), now]
+    );
+  }
+}
+
+app.get("/api/maintenance-tasks", async (_req, res) => {
+  try {
+    await seedDefaultMaintenanceTasksIfEmpty();
+
+    const result = await db.query(`
+      SELECT data
+      FROM maintenance_tasks
+      ORDER BY LOWER(data->>'label') ASC
+    `);
+
+    const tasks = result.rows
+      .map((row) => normalizeMaintenanceTask(row.data))
+      .filter(Boolean);
+
+    res.json(tasks);
+  } catch (error) {
+    console.error("GET /api/maintenance-tasks error:", error);
+    res.status(500).json({ error: "Error obteniendo tareas de mantenimiento" });
+  }
+});
+
+app.post("/api/maintenance-tasks", async (req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const task = normalizeMaintenanceTask({
+      id: req.body?.id || `maintenance-${Date.now()}`,
+      label: req.body?.label,
+      type: req.body?.type,
+    });
+
+    if (!task) {
+      return res.status(400).json({
+        error: "Tarea de mantenimiento no válida",
+      });
+    }
+
+    const now = Date.now();
+
+    await db.query(
+      `
+        INSERT INTO maintenance_tasks (id, data, "updatedAtMs")
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id)
+        DO UPDATE SET
+          data = EXCLUDED.data,
+          "updatedAtMs" = EXCLUDED."updatedAtMs"
+      `,
+      [task.id, JSON.stringify(task), now]
+    );
+
+    res.json(task);
+  } catch (error) {
+    console.error("POST /api/maintenance-tasks error:", error);
+    res.status(500).json({ error: "Error creando tarea de mantenimiento" });
+  }
+});
+
+app.put("/api/maintenance-tasks/:id", async (req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const id = String(req.params.id || "").trim();
+
+    if (!id) {
+      return res.status(400).json({ error: "ID de tarea no válido" });
+    }
+
+    const existingResult = await db.query(
+      `
+        SELECT data
+        FROM maintenance_tasks
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id]
+    );
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: "Tarea no encontrada" });
+    }
+
+    const existingTask = existingResult.rows[0].data ?? {};
+
+    const task = normalizeMaintenanceTask({
+      ...existingTask,
+      ...req.body,
+      id,
+    });
+
+    if (!task) {
+      return res.status(400).json({
+        error: "Tarea de mantenimiento no válida",
+      });
+    }
+
+    const now = Date.now();
+
+    await db.query(
+      `
+        UPDATE maintenance_tasks
+        SET
+          data = $2,
+          "updatedAtMs" = $3
+        WHERE id = $1
+      `,
+      [id, JSON.stringify(task), now]
+    );
+
+    res.json(task);
+  } catch (error) {
+    console.error("PUT /api/maintenance-tasks/:id error:", error);
+    res.status(500).json({ error: "Error actualizando tarea de mantenimiento" });
+  }
+});
+
+app.delete("/api/maintenance-tasks/:id", async (req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const id = String(req.params.id || "").trim();
+
+    if (!id) {
+      return res.status(400).json({ error: "ID de tarea no válido" });
+    }
+
+    await db.query(`DELETE FROM maintenance_tasks WHERE id = $1`, [id]);
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/maintenance-tasks/:id error:", error);
+    res.status(500).json({ error: "Error eliminando tarea de mantenimiento" });
+  }
+});
+
+app.get("/api/assigned-maintenance-tasks", async (_req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const result = await db.query(`
+      SELECT data
+      FROM assigned_maintenance_tasks
+      ORDER BY COALESCE((data->>'assignedAtMs')::bigint, 0) DESC
+    `);
+
+    const tasks = result.rows
+      .map((row) => normalizeAssignedMaintenanceTask(row.data))
+      .filter(Boolean);
+
+    res.json(tasks);
+  } catch (error) {
+    console.error("GET /api/assigned-maintenance-tasks error:", error);
+    res.status(500).json({
+      error: "Error obteniendo tareas de mantenimiento asignadas",
+    });
+  }
+});
+
+app.post("/api/assigned-maintenance-tasks", async (req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const task = normalizeAssignedMaintenanceTask({
+      id: req.body?.id || `assigned-maintenance-${Date.now()}`,
+      taskId: req.body?.taskId,
+      taskLabel: req.body?.taskLabel,
+      taskType: req.body?.taskType,
+      techName: req.body?.techName,
+      assignedAtMs: req.body?.assignedAtMs ?? Date.now(),
+      status: req.body?.status ?? "pendiente",
+      statusChangedAtMs: req.body?.statusChangedAtMs ?? null,
+    });
+
+    if (!task) {
+      return res.status(400).json({
+        error: "Asignación de mantenimiento no válida",
+      });
+    }
+
+    const existingPending = await db.query(
+      `
+        SELECT data
+        FROM assigned_maintenance_tasks
+        WHERE data->>'techName' = $1
+          AND data->>'status' = 'pendiente'
+        LIMIT 1
+      `,
+      [task.techName]
+    );
+
+    if (existingPending.rows.length > 0) {
+      return res.status(409).json({
+        error: "El técnico ya tiene una tarea de mantenimiento pendiente",
+        assignedTask: existingPending.rows[0].data,
+      });
+    }
+
+    const now = Date.now();
+
+    await db.query(
+      `
+        INSERT INTO assigned_maintenance_tasks (id, data, "updatedAtMs")
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id)
+        DO UPDATE SET
+          data = EXCLUDED.data,
+          "updatedAtMs" = EXCLUDED."updatedAtMs"
+      `,
+      [task.id, JSON.stringify(task), now]
+    );
+
+    res.json(task);
+  } catch (error) {
+    console.error("POST /api/assigned-maintenance-tasks error:", error);
+    res.status(500).json({
+      error: "Error asignando tarea de mantenimiento",
+    });
+  }
+});
+
+async function updateAssignedMaintenanceTaskStatus(
+  id: string,
+  status: AssignedMaintenanceTaskStatus,
+  extra: Record<string, unknown> = {}
+) {
+  await ensureMaintenanceTables();
+
+  const existingResult = await db.query(
+    `
+      SELECT data
+      FROM assigned_maintenance_tasks
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  if (existingResult.rows.length === 0) {
+    return null;
+  }
+
+  const current = existingResult.rows[0].data ?? {};
+  const now = Date.now();
+
+  const nextTask = normalizeAssignedMaintenanceTask({
+    ...current,
+    ...extra,
+    id,
+    status,
+    statusChangedAtMs: status === "pendiente" ? null : now,
+  });
+
+  if (!nextTask) {
+    return null;
+  }
+
+  await db.query(
+    `
+      UPDATE assigned_maintenance_tasks
+      SET
+        data = $2,
+        "updatedAtMs" = $3
+      WHERE id = $1
+    `,
+    [id, JSON.stringify(nextTask), now]
+  );
+
+  return nextTask;
+}
+
+app.put("/api/assigned-maintenance-tasks/:id/finish", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+
+    const task = await updateAssignedMaintenanceTaskStatus(id, "finalizada");
+
+    if (!task) {
+      return res.status(404).json({ error: "Asignación no encontrada" });
+    }
+
+    res.json(task);
+  } catch (error) {
+    console.error("PUT /api/assigned-maintenance-tasks/:id/finish error:", error);
+    res.status(500).json({ error: "Error finalizando mantenimiento" });
+  }
+});
+
+app.put("/api/assigned-maintenance-tasks/:id/interrupt", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+
+    const task = await updateAssignedMaintenanceTaskStatus(id, "interrumpida");
+
+    if (!task) {
+      return res.status(404).json({ error: "Asignación no encontrada" });
+    }
+
+    res.json(task);
+  } catch (error) {
+    console.error(
+      "PUT /api/assigned-maintenance-tasks/:id/interrupt error:",
+      error
+    );
+    res.status(500).json({ error: "Error interrumpiendo mantenimiento" });
+  }
+});
+
+app.put("/api/assigned-maintenance-tasks/:id/resume", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+
+    const task = await updateAssignedMaintenanceTaskStatus(id, "pendiente", {
+      assignedAtMs: Date.now(),
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: "Asignación no encontrada" });
+    }
+
+    res.json(task);
+  } catch (error) {
+    console.error("PUT /api/assigned-maintenance-tasks/:id/resume error:", error);
+    res.status(500).json({ error: "Error reanudando mantenimiento" });
+  }
+});
+
+app.delete("/api/assigned-maintenance-tasks/history", async (_req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    await db.query(`
+      DELETE FROM assigned_maintenance_tasks
+      WHERE data->>'status' IN ('finalizada', 'interrumpida')
+    `);
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/assigned-maintenance-tasks/history error:", error);
+    res.status(500).json({ error: "Error limpiando historial" });
+  }
+});
+
+app.delete("/api/assigned-maintenance-tasks/:id", async (req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const id = String(req.params.id || "").trim();
+
+    if (!id) {
+      return res.status(400).json({ error: "ID de asignación no válido" });
+    }
+
+    await db.query(`DELETE FROM assigned_maintenance_tasks WHERE id = $1`, [
+      id,
+    ]);
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/assigned-maintenance-tasks/:id error:", error);
+    res.status(500).json({ error: "Error eliminando asignación" });
+  }
+});
 /* =========================================================
    LOGS
 ========================================================= */
