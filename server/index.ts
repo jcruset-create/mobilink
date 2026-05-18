@@ -11,6 +11,7 @@ import { supabase, SUPABASE_STORAGE_BUCKET } from "./supabase.ts";
 import OpenAI from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
+import Stripe from "stripe";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -20,6 +21,51 @@ const twilioClient = twilio(
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.post("/api/payments/create-deposit", async (req, res) => {
+  try {
+    const { jobId, customerName } = req.body;
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+
+      line_items: [
+        {
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: `Paga y señal asistencia ${jobId || ""}`,
+            },
+            unit_amount: 5000,
+          },
+          quantity: 1,
+        },
+      ],
+
+      mode: "payment",
+
+      success_url: `${process.env.PUBLIC_APP_URL}/payment-success`,
+      cancel_url: `${process.env.PUBLIC_APP_URL}/payment-cancelled`,
+
+      metadata: {
+        jobId: String(jobId || ""),
+        customerName: String(customerName || ""),
+      },
+    });
+
+    res.json({
+      success: true,
+      url: session.url,
+    });
+  } catch (error: any) {
+    console.error("STRIPE CREATE ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
   try {
     const {
@@ -72,6 +118,9 @@ const RESET_PASSWORD = "sea123";
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+  apiVersion: "2026-04-22.dahlia",
 });
 /* =========================================================
    HELPERS
