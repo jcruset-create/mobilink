@@ -32,7 +32,7 @@ app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
 
     const message = await twilioClient.messages.create({
   from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
-  to: `whatsapp:${customerPhone}`,
+  to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
   contentSid:
     process.env.TWILIO_CONTENT_SID ||
     "HXdf941b56b6cf5464b5d2b2374171c926",
@@ -76,7 +76,29 @@ const openai = new OpenAI({
 /* =========================================================
    HELPERS
 ========================================================= */
+/* =========================================================
+   HELPERS
+========================================================= */
 
+function normalizeSpanishPhone(phone: string) {
+  const digits = String(phone || "").replace(/\D/g, "");
+
+  if (!digits) return "";
+
+  if (digits.startsWith("34") && digits.length === 11) {
+    return `+${digits}`;
+  }
+
+  if (digits.length === 9) {
+    return `+34${digits}`;
+  }
+
+  if (String(phone).trim().startsWith("+")) {
+    return String(phone).trim();
+  }
+
+  return `+${digits}`;
+}
 function safeJsonParse<T>(value: unknown, fallback: T): T {
   if (typeof value !== "string" || value.trim() === "") return fallback;
 
@@ -1368,10 +1390,19 @@ async function sendWhatsAppAgendaReminder(job: any, reminderLabel: string) {
   }
 
   return twilioClient.messages.create({
-    from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+14155238886",
-    to: `whatsapp:${String(job.customerPhone).trim()}`,
-    body: buildReminderMessage(job, reminderLabel),
-  });
+  from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
+ to: `whatsapp:${normalizeSpanishPhone(job.customerPhone)}`,
+  contentSid:
+    process.env.TWILIO_CONTENT_SID ||
+    "HXdf941b56b6cf5464b5d2b2374171c926",
+  contentVariables: JSON.stringify({
+    "1": job.customerName || "cliente",
+    "2": getScheduledJobLabel(job),
+    "3": job.plate || "-",
+    "4": formatSpanishDate(job.date || ""),
+    "5": job.startTime || "",
+  }),
+});
 }
 
 function shouldSendReminder(triggerAtMs: number | null, appointmentAtMs: number | null, nowMs: number) {
@@ -1480,14 +1511,18 @@ async function checkAgendaWhatsAppReminders() {
             `WhatsApp agenda reminder enviado: cita=${job.id} tipo=${reminder.sentField} sid=${message.sid}`
           );
         } catch (error: any) {
-          console.error("Error enviando recordatorio WhatsApp agenda:", {
-            jobId: job.id,
-            sentField: reminder.sentField,
-            message: error.message,
-            code: error.code,
-            status: error.status,
-            moreInfo: error.moreInfo,
-          });
+         console.error("Error enviando recordatorio WhatsApp agenda:", {
+  jobId: job.id,
+  sentField: reminder.sentField,
+  to: normalizeSpanishPhone(job.customerPhone),
+  from: process.env.TWILIO_WHATSAPP_FROM,
+  contentSid: process.env.TWILIO_CONTENT_SID,
+  message: error.message,
+  code: error.code,
+  status: error.status,
+  moreInfo: error.moreInfo,
+  fullError: JSON.stringify(error, null, 2),
+});
         }
       }
     }

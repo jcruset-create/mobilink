@@ -777,12 +777,13 @@ estimatedMinutes: safeEstimatedMinutes,    };
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              customerName: scheduled.customerName,
-              customerPhone: scheduled.customerPhone,
-              jobDescription: logLabel,
-              date: scheduled.date,
-              time: scheduled.startTime,
-            }),
+  customerName: scheduled.customerName,
+  customerPhone: scheduled.customerPhone,
+  jobDescription: logLabel,
+  plate: scheduled.plate,
+  date: scheduled.date,
+  time: scheduled.startTime,
+}),
           });
 
           appendLog(`WhatsApp enviado a ${scheduled.customerPhone}`);
@@ -887,12 +888,13 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        customerName: job.customerName || "cliente",
-        customerPhone: job.customerPhone,
-        jobDescription,
-        date: job.date,
-        time: job.startTime,
-      }),
+  customerName: job.customerName || "cliente",
+  customerPhone: job.customerPhone,
+  jobDescription,
+  plate: job.plate,
+  date: job.date,
+  time: job.startTime,
+}),
     });
 
     const data = await res.json();
