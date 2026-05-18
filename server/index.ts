@@ -42,6 +42,31 @@ app.post(
           amountTotal: session.amount_total,
           paymentStatus: session.payment_status,
         });
+        await db.query(
+  `
+    UPDATE payments
+    SET
+      status = 'paid',
+      amount_cents = $1,
+      paid_at_ms = $2,
+      stripe_payment_intent_id = $3
+    WHERE stripe_session_id = $4
+  `,
+  [
+    session.amount_total ?? 0,
+    Date.now(),
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : null,
+    session.id,
+  ]
+);
+
+console.log("✅ PAGO GUARDADO EN PAYMENTS:", {
+  reference: session.metadata?.reference || session.metadata?.jobId,
+  amount: session.amount_total,
+  sessionId: session.id,
+});
 
         const jobId = Number(session.metadata?.jobId);
 
@@ -89,16 +114,24 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", async (req, res) => {
   try {
-    const { jobId, customerName, amountEuros } = req.body;
+    const { jobId, customerName, customerPhone, amountEuros } = req.body;
 
-const amountCents = Math.round(Number(amountEuros || 0) * 100);
+    const reference = String(jobId || "").trim();
+    const amountCents = Math.round(Number(amountEuros || 0) * 100);
 
-if (!amountCents || amountCents < 100) {
-  return res.status(400).json({
-    success: false,
-    message: "El importe mínimo es 1 €",
-  });
-}
+    if (!reference) {
+      return res.status(400).json({
+        success: false,
+        message: "La referencia del cobro es obligatoria",
+      });
+    }
+
+    if (!amountCents || amountCents < 100) {
+      return res.status(400).json({
+        success: false,
+        message: "El importe mínimo es 1 €",
+      });
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -108,7 +141,7 @@ if (!amountCents || amountCents < 100) {
           price_data: {
             currency: "eur",
             product_data: {
-              name: `Paga y señal asistencia ${jobId || ""}`,
+              name: `Paga y señal ${reference}`,
             },
             unit_amount: amountCents,
           },
@@ -122,15 +155,44 @@ if (!amountCents || amountCents < 100) {
       cancel_url: `${process.env.PUBLIC_APP_URL}/payment-cancelled`,
 
       metadata: {
-        jobId: String(jobId || ""),
+        reference,
+        jobId: reference,
         customerName: String(customerName || ""),
+        customerPhone: String(customerPhone || ""),
         amountEuros: String(amountEuros || ""),
       },
     });
 
+    await db.query(
+      `
+        INSERT INTO payments (
+          reference,
+          customer_name,
+          customer_phone,
+          amount_cents,
+          status,
+          stripe_session_id,
+          payment_url,
+          created_at_ms
+        )
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+      `,
+      [
+        reference,
+        String(customerName || ""),
+        String(customerPhone || ""),
+        amountCents,
+        session.id,
+        session.url,
+        Date.now(),
+      ]
+    );
+
     res.json({
       success: true,
       url: session.url,
+      sessionId: session.id,
+      reference,
     });
   } catch (error: any) {
     console.error("STRIPE CREATE ERROR:", error);
