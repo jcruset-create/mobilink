@@ -79,6 +79,7 @@ type AssignedMaintenanceTask = {
   techName: string;
   assignedAtMs: number;
   status: AssignedMaintenanceTaskStatus;
+  statusChangedAtMs?: number | null;
 };
 
 const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
@@ -150,13 +151,18 @@ function formatMaintenanceAssignedAt(value: number) {
     minute: "2-digit",
   });
 }
-function formatMaintenanceElapsedTime(task: AssignedMaintenanceTask, nowMs: number) {
-  if (task.status === "finalizada") return "Finalizada";
-  if (task.status === "interrumpida") return "Interrumpida";
+function formatMaintenanceElapsedTime(
+  task: AssignedMaintenanceTask,
+  nowMs: number
+) {
+  const endMs =
+    task.status === "pendiente"
+      ? nowMs
+      : task.statusChangedAtMs ?? task.assignedAtMs;
 
   const elapsedMinutes = Math.max(
     0,
-    Math.floor((nowMs - task.assignedAtMs) / 60000)
+    Math.floor((endMs - task.assignedAtMs) / 60000)
   );
 
   return formatWorkedTime(elapsedMinutes);
@@ -474,24 +480,27 @@ export default function OperariosTVView({
                   item.status === "finalizada" ||
                   item.status === "interrumpida")
             )
-            .map((item) => ({
-              id: item.id,
-              taskId: item.taskId,
-              taskLabel: item.taskLabel,
-              taskType:
-                item.taskType === "fuera_taller" ||
-                item.taskType === "en_taller"
-                  ? item.taskType
-                  : "en_taller",
-              techName: item.techName,
-              assignedAtMs: item.assignedAtMs,
-              status:
-                item.status === "finalizada" ||
-                item.status === "interrumpida" ||
-                item.status === "pendiente"
-                  ? item.status
-                  : "pendiente",
-            }));
+.map((item) => ({
+  id: item.id,
+  taskId: item.taskId,
+  taskLabel: item.taskLabel,
+  taskType:
+    item.taskType === "fuera_taller" || item.taskType === "en_taller"
+      ? item.taskType
+      : "en_taller",
+  techName: item.techName,
+  assignedAtMs: item.assignedAtMs,
+  status:
+    item.status === "finalizada" ||
+    item.status === "interrumpida" ||
+    item.status === "pendiente"
+      ? item.status
+      : "pendiente",
+  statusChangedAtMs:
+    typeof item.statusChangedAtMs === "number"
+      ? item.statusChangedAtMs
+      : null,
+}));
         }
       }
 
@@ -546,9 +555,10 @@ export default function OperariosTVView({
         changed = true;
 
         return {
-          ...task,
-          status: "interrumpida" as const,
-        };
+  ...task,
+  status: "interrumpida" as const,
+  statusChangedAtMs: Date.now(),
+};
       });
 
       return changed ? next : prev;
@@ -654,31 +664,33 @@ export default function OperariosTVView({
     if (!ok) return;
 
     const assignedTask: AssignedMaintenanceTask = {
-      id: `assigned-maintenance-${Date.now()}`,
-      taskId: selectedMaintenanceTask.id,
-      taskLabel: selectedMaintenanceTask.label,
-      taskType: selectedMaintenanceTask.type,
-      techName: selectedMaintenanceTechName,
-      assignedAtMs: Date.now(),
-      status: "pendiente",
-    };
+  id: `assigned-maintenance-${Date.now()}`,
+  taskId: selectedMaintenanceTask.id,
+  taskLabel: selectedMaintenanceTask.label,
+  taskType: selectedMaintenanceTask.type,
+  techName: selectedMaintenanceTechName,
+  assignedAtMs: Date.now(),
+  status: "pendiente",
+  statusChangedAtMs: null,
+};
 
     setAssignedMaintenanceTasks((prev) => [assignedTask, ...prev]);
     setSelectedMaintenanceTechName("");
   }
 
   function finishAssignedMaintenanceTask(assignedTaskId: string) {
-    setAssignedMaintenanceTasks((prev) =>
-      prev.map((task) =>
-        task.id === assignedTaskId
-          ? {
-              ...task,
-              status: "finalizada",
-            }
-          : task
-      )
-    );
-  }
+  setAssignedMaintenanceTasks((prev) =>
+    prev.map((task) =>
+      task.id === assignedTaskId
+        ? {
+            ...task,
+            status: "finalizada",
+            statusChangedAtMs: Date.now(),
+          }
+        : task
+    )
+  );
+}
 
   function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
   const task = assignedMaintenanceTasks.find(
@@ -719,9 +731,11 @@ export default function OperariosTVView({
     prev.map((item) =>
       item.id === assignedTaskId
         ? {
-            ...item,
-            status: "pendiente",
-          }
+    ...item,
+    status: "pendiente",
+    assignedAtMs: Date.now(),
+    statusChangedAtMs: null,
+  }
         : item
     )
   );
