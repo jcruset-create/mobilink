@@ -19,6 +19,40 @@ const twilioClient = twilio(
 );
 
 const app = express();
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+
+    try {
+      const event = stripe.webhooks.constructEvent(
+        req.body,
+        sig as string,
+        process.env.STRIPE_WEBHOOK_SECRET || ""
+      );
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+
+        console.log("✅ STRIPE PAGO COMPLETADO:", {
+          sessionId: session.id,
+          jobId: session.metadata?.jobId,
+          customerName: session.metadata?.customerName,
+          amountTotal: session.amount_total,
+          paymentStatus: session.payment_status,
+        });
+
+        // Aquí después actualizaremos la asistencia como señal pagada
+      }
+
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error("❌ STRIPE WEBHOOK ERROR:", error.message);
+      res.status(400).send(`Webhook Error: ${error.message}`);
+    }
+  }
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", async (req, res) => {
