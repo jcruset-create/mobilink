@@ -386,6 +386,41 @@ function SmallJobCard({
   );
 }
 
+async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE}${url}`);
+
+    if (!response.ok) {
+      return fallback;
+    }
+
+    return (await response.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveMaintenanceTasksToLocalStorage(tasks: MaintenanceTask[]) {
+  try {
+    window.localStorage.setItem("maintenanceTasks", JSON.stringify(tasks));
+  } catch {
+    // No rompemos la pantalla si localStorage falla.
+  }
+}
+
+function saveAssignedMaintenanceTasksToLocalStorage(
+  tasks: AssignedMaintenanceTask[]
+) {
+  try {
+    window.localStorage.setItem(
+      "assignedMaintenanceTasks",
+      JSON.stringify(tasks)
+    );
+  } catch {
+    // No rompemos la pantalla si localStorage falla.
+  }
+}
+
 export default function OperariosTVView({
   jobs,
   techs,
@@ -398,7 +433,7 @@ export default function OperariosTVView({
   onLogout,
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
-
+const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
   const [maintenanceTasks, setMaintenanceTasks] = useState<MaintenanceTask[]>(
     () => {
       try {
@@ -519,26 +554,52 @@ export default function OperariosTVView({
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "maintenanceTasks",
-        JSON.stringify(maintenanceTasks)
-      );
-    } catch {
-      // Si localStorage falla, no rompemos la pantalla.
-    }
-  }, [maintenanceTasks]);
+  saveMaintenanceTasksToLocalStorage(maintenanceTasks);
+}, [maintenanceTasks]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "assignedMaintenanceTasks",
-        JSON.stringify(assignedMaintenanceTasks)
-      );
-    } catch {
-      // Si localStorage falla, no rompemos la pantalla.
+  saveAssignedMaintenanceTasksToLocalStorage(assignedMaintenanceTasks);
+}, [assignedMaintenanceTasks]);
+
+  useEffect(() => {
+  let cancelled = false;
+
+  async function loadMaintenanceFromApi() {
+    const localMaintenanceTasks = maintenanceTasks;
+    const localAssignedMaintenanceTasks = assignedMaintenanceTasks;
+
+    const apiMaintenanceTasks = await fetchMaintenanceJson<MaintenanceTask[]>(
+      "/api/maintenance-tasks",
+      localMaintenanceTasks
+    );
+
+    const apiAssignedMaintenanceTasks = await fetchMaintenanceJson<
+      AssignedMaintenanceTask[]
+    >("/api/assigned-maintenance-tasks", localAssignedMaintenanceTasks);
+
+    if (cancelled) return;
+
+    if (Array.isArray(apiMaintenanceTasks)) {
+      setMaintenanceTasks(apiMaintenanceTasks);
+      saveMaintenanceTasksToLocalStorage(apiMaintenanceTasks);
     }
-  }, [assignedMaintenanceTasks]);
+
+    if (Array.isArray(apiAssignedMaintenanceTasks)) {
+      setAssignedMaintenanceTasks(apiAssignedMaintenanceTasks);
+      saveAssignedMaintenanceTasksToLocalStorage(apiAssignedMaintenanceTasks);
+    }
+
+    setMaintenanceApiLoaded(true);
+  }
+
+  void loadMaintenanceFromApi();
+
+  return () => {
+    cancelled = true;
+  };
+  // Solo al arrancar la pantalla.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   useEffect(() => {
     setAssignedMaintenanceTasks((prev) => {
@@ -1066,9 +1127,21 @@ function interruptAssignedMaintenanceTask(assignedTaskId: string) {
                 </p>
               </div>
 
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
-                {maintenanceTasks.length}
-              </span>
+              <div className="flex items-center gap-2">
+  <span
+    className={`rounded-full px-3 py-1 text-xs font-black ${
+      maintenanceApiLoaded
+        ? "bg-emerald-100 text-emerald-700"
+        : "bg-amber-100 text-amber-700"
+    }`}
+  >
+    {maintenanceApiLoaded ? "API" : "LOCAL"}
+  </span>
+
+  <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
+    {maintenanceTasks.length}
+  </span>
+</div>
             </div>
 
             <div className="mb-3 grid gap-2 sm:grid-cols-3">
