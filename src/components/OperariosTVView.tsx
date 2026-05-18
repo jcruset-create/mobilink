@@ -582,11 +582,21 @@ function removeAssignedMaintenanceTask(assignedTaskId: string) {
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
   const waitingJobs = jobs.filter((job) => job.status === "espera");
-  const availableMaintenanceTechs = techs.filter(
-  (tech) =>
-    normalizeTechStatus(tech.status) === "disponible" &&
-    tech.currentJobId == null
+const pendingAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
+  (task) => task.status === "pendiente"
 );
+
+const availableMaintenanceTechs = techs.filter((tech) => {
+  const hasPendingMaintenanceTask = pendingAssignedMaintenanceTasks.some(
+    (task) => task.techName === tech.name
+  );
+
+  return (
+    normalizeTechStatus(tech.status) === "disponible" &&
+    tech.currentJobId == null &&
+    !hasPendingMaintenanceTask
+  );
+});
 
 const selectedMaintenanceTask =
   maintenanceTasks.find((task) => task.id === selectedMaintenanceTaskId) ??
@@ -1215,13 +1225,18 @@ const selectedMaintenanceTask =
                 tech.currentJobId != null
                   ? jobs.find((job) => job.id === tech.currentJobId)
                   : null;
+              const pendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
+  (task) => task.techName === tech.name
+);
 
               return (
                 <div
                   key={tech.name}
-                  className={`rounded-2xl border p-3 ${getTechCardClass(
-                    tech.status
-                  )}`}
+                  className={`rounded-2xl border p-3 ${
+  pendingMaintenanceTask
+    ? "border-emerald-300 bg-emerald-200 text-emerald-950"
+    : getTechCardClass(tech.status)
+}`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-3">
@@ -1233,18 +1248,18 @@ const selectedMaintenanceTask =
                         </div>
 
                         <div className="truncate text-xs font-semibold opacity-80">
-                          {currentJob
-                            ? `${currentJob.plate} · ${getOperationLabel(
-                                currentJob
-                              )}`
-                            : "Sin trabajo asignado"}
-                        </div>
+  {currentJob
+    ? `${currentJob.plate} · ${getOperationLabel(currentJob)}`
+    : pendingMaintenanceTask
+      ? `Mantenimiento · ${pendingMaintenanceTask.taskLabel}`
+      : "Sin trabajo asignado"}
+</div>
                       </div>
                     </div>
 
-                    <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
-                      {getTechStatusLabel(tech.status)}
-                    </span>
+<span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
+  {pendingMaintenanceTask ? "MANTENIMIENTO" : getTechStatusLabel(tech.status)}
+</span>
                   </div>
                 </div>
               );
