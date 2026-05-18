@@ -723,13 +723,22 @@ const validationJobs = useMemo(
     [activeJobs]
   );
 
-const pausedJobs = useMemo(
-  () =>
-    [...activeJobs]
-      .filter((job) => job.status === "parado" && !isLinkedBlockedJob(job))
-      .sort((a, b) => b.createdAtMs - a.createdAtMs),
-  [activeJobs]
-);
+const pausedJobs = useMemo(() => {
+  const map = new Map<string, Job>();
+
+  [...activeJobs]
+    .filter((job) => job.status === "parado" && !isLinkedBlockedJob(job))
+    .sort((a, b) => b.createdAtMs - a.createdAtMs)
+    .forEach((job) => {
+      const key = `${job.plate}-${getOperationLabel(job)}-${job.status}`;
+
+      if (!map.has(key)) {
+        map.set(key, job);
+      }
+    });
+
+  return Array.from(map.values());
+}, [activeJobs]);
 
 const blockedJobs = useMemo(
   () =>
