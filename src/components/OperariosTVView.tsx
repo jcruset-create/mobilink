@@ -60,6 +60,11 @@ type Props = {
 
 type MaintenanceTaskType = "en_taller" | "fuera_taller";
 
+type AssignedMaintenanceTaskStatus =
+  | "pendiente"
+  | "finalizada"
+  | "interrumpida";
+
 type MaintenanceTask = {
   id: string;
   label: string;
@@ -73,7 +78,7 @@ type AssignedMaintenanceTask = {
   taskType: MaintenanceTaskType;
   techName: string;
   assignedAtMs: number;
-  status: "pendiente" | "finalizada";
+  status: AssignedMaintenanceTaskStatus;
 };
 
 const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
@@ -249,6 +254,24 @@ function getTechAvatarUrl(tech?: TechForOperarios | null) {
   if (tech.avatar.startsWith("http")) return tech.avatar;
 
   return `${API_BASE}${tech.avatar}`;
+}
+
+function getAssignedMaintenanceStatusLabel(
+  status: AssignedMaintenanceTaskStatus
+) {
+  if (status === "finalizada") return "Finalizada";
+  if (status === "interrumpida") return "Interrumpida";
+
+  return "Pendiente";
+}
+
+function getAssignedMaintenanceStatusClass(
+  status: AssignedMaintenanceTaskStatus
+) {
+  if (status === "finalizada") return "bg-emerald-100 text-emerald-700";
+  if (status === "interrumpida") return "bg-sky-100 text-sky-700";
+
+  return "bg-amber-100 text-amber-700";
 }
 
 function TechAvatar({
@@ -437,7 +460,9 @@ export default function OperariosTVView({
                 typeof item.taskLabel === "string" &&
                 typeof item.techName === "string" &&
                 typeof item.assignedAtMs === "number" &&
-                (item.status === "pendiente" || item.status === "finalizada")
+                (item.status === "pendiente" ||
+                  item.status === "finalizada" ||
+                  item.status === "interrumpida")
             )
             .map((item) => ({
               id: item.id,
@@ -450,7 +475,12 @@ export default function OperariosTVView({
                   : "en_taller",
               techName: item.techName,
               assignedAtMs: item.assignedAtMs,
-              status: item.status,
+              status:
+                item.status === "finalizada" ||
+                item.status === "interrumpida" ||
+                item.status === "pendiente"
+                  ? item.status
+                  : "pendiente",
             }));
         }
       }
@@ -490,6 +520,30 @@ export default function OperariosTVView({
       // Si localStorage falla, no rompemos la pantalla.
     }
   }, [assignedMaintenanceTasks]);
+
+  useEffect(() => {
+    setAssignedMaintenanceTasks((prev) => {
+      let changed = false;
+
+      const next = prev.map((task) => {
+        if (task.status !== "pendiente") return task;
+        if (task.taskType !== "en_taller") return task;
+
+        const tech = techs.find((item) => item.name === task.techName);
+
+        if (!tech || tech.currentJobId == null) return task;
+
+        changed = true;
+
+        return {
+          ...task,
+          status: "interrumpida" as const,
+        };
+      });
+
+      return changed ? next : prev;
+    });
+  }, [techs]);
 
   function addMaintenanceTask() {
     const label = newMaintenanceTaskLabel.trim();
@@ -635,23 +689,25 @@ export default function OperariosTVView({
   }
 
   function clearFinishedMaintenanceTasks() {
-    const finishedTasks = assignedMaintenanceTasks.filter(
-      (task) => task.status === "finalizada"
+    const historyTasks = assignedMaintenanceTasks.filter(
+      (task) => task.status === "finalizada" || task.status === "interrumpida"
     );
 
-    if (finishedTasks.length === 0) {
-      window.alert("No hay tareas finalizadas para limpiar.");
+    if (historyTasks.length === 0) {
+      window.alert("No hay tareas finalizadas o interrumpidas para limpiar.");
       return;
     }
 
     const ok = window.confirm(
-      `¿Limpiar ${finishedTasks.length} tarea(s) finalizada(s)?`
+      `¿Limpiar ${historyTasks.length} tarea(s) finalizada(s) o interrumpida(s)?`
     );
 
     if (!ok) return;
 
     setAssignedMaintenanceTasks((prev) =>
-      prev.filter((task) => task.status !== "finalizada")
+      prev.filter(
+        (task) => task.status !== "finalizada" && task.status !== "interrumpida"
+      )
     );
   }
 
@@ -672,13 +728,17 @@ export default function OperariosTVView({
     (task) => task.taskType === "fuera_taller"
   );
 
-  const finishedAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
-    (task) => task.status === "finalizada"
+  const interruptedAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
+  (task) => task.status === "interrumpida"
+);
+
+  const historyAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
+    (task) => task.status === "finalizada" || task.status === "interrumpida"
   );
 
   const visibleAssignedMaintenanceTasks = showFinishedMaintenanceTasks
     ? assignedMaintenanceTasks
-    : assignedMaintenanceTasks.filter((task) => task.status !== "finalizada");
+    : assignedMaintenanceTasks.filter((task) => task.status === "pendiente");
 
   const maintenanceTechNames = Array.from(
     new Set(pendingAssignedMaintenanceTasks.map((task) => task.techName))
@@ -902,12 +962,12 @@ export default function OperariosTVView({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-emerald-200 bg-white px-3 py-3">
-                <div className="text-[10px] font-black uppercase tracking-wide text-emerald-700">
-                  Finalizadas
+              <div className="rounded-2xl border border-sky-200 bg-white px-3 py-3">
+                <div className="text-[10px] font-black uppercase tracking-wide text-sky-700">
+                  Interrumpidas
                 </div>
-                <div className="text-2xl font-black text-emerald-900">
-                  {finishedAssignedMaintenanceTasks.length}
+                <div className="text-2xl font-black text-sky-900">
+                  {interruptedAssignedMaintenanceTasks.length}
                 </div>
               </div>
 
@@ -1222,7 +1282,7 @@ export default function OperariosTVView({
                     </h4>
                     <p className="text-xs font-semibold text-slate-500">
                       {showFinishedMaintenanceTasks
-                        ? "Mostrando pendientes y finalizadas."
+                        ? "Mostrando pendientes, finalizadas e interrumpidas."
                         : "Mostrando solo tareas pendientes."}
                     </p>
                   </div>
@@ -1236,17 +1296,17 @@ export default function OperariosTVView({
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
                     >
                       {showFinishedMaintenanceTasks
-                        ? "Ocultar finalizadas"
-                        : "Mostrar finalizadas"}
+                        ? "Ocultar historial"
+                        : "Mostrar historial"}
                     </button>
 
                     <button
                       type="button"
                       onClick={clearFinishedMaintenanceTasks}
-                      disabled={finishedAssignedMaintenanceTasks.length === 0}
+                      disabled={historyAssignedMaintenanceTasks.length === 0}
                       className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                     >
-                      Limpiar finalizadas
+                      Limpiar historial
                     </button>
                   </div>
                 </div>
@@ -1301,15 +1361,11 @@ export default function OperariosTVView({
 
                             <td className="px-3 py-3">
                               <span
-                                className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${
-                                  task.status === "finalizada"
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : "bg-amber-100 text-amber-700"
-                                }`}
+                                className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${getAssignedMaintenanceStatusClass(
+                                  task.status
+                                )}`}
                               >
-                                {task.status === "finalizada"
-                                  ? "Finalizada"
-                                  : "Pendiente"}
+                                {getAssignedMaintenanceStatusLabel(task.status)}
                               </span>
                             </td>
 
@@ -1319,7 +1375,7 @@ export default function OperariosTVView({
 
                             <td className="px-3 py-3">
                               <div className="flex justify-end gap-2">
-                                {task.status !== "finalizada" && (
+                                {task.status === "pendiente" && (
                                   <button
                                     type="button"
                                     onClick={() =>
