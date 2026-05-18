@@ -4766,24 +4766,23 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 {view === "operativo" && dueScheduledJobs.length > 0 && (
-  <div className="rounded-3xl border-2 border-amber-300 bg-amber-50 p-3 shadow-sm">
-    <div className="mb-4 flex items-center justify-between gap-3">
+  <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
+    <div className="mb-2 flex items-center justify-between gap-2">
       <div>
-        <h2 className="text-xl font-black text-amber-950">
-          Citas programadas pendientes de llegada
+        <h2 className="text-sm font-black text-amber-950">
+          Citas pendientes de llegada
         </h2>
-
-        <p className="mt-1 text-sm font-medium text-amber-700">
-          Vehículos con cita próxima o vencida. Pulsa “Llegó” para pasarlos a operativo.
+        <p className="text-[10px] font-medium text-amber-700">
+          Pulsa “Llegó” para pasarlas a operativo.
         </p>
       </div>
 
-      <span className="rounded-full bg-amber-100 px-4 py-2 text-lg font-black text-amber-800">
+      <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-black text-amber-800">
         {dueScheduledJobs.length}
       </span>
     </div>
 
-    <div className="grid gap-2 md:grid-cols-2">
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
       {dueScheduledJobs.map((job) => {
         const secondTemplate = job.secondTemplateKey
           ? quickTemplates.find(
@@ -4805,28 +4804,28 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         return (
           <div
             key={job.id}
-            className={`rounded-2xl border bg-white p-3 shadow-sm ${
+            className={`rounded-xl border bg-white p-2 shadow-sm ${
               isLate ? "border-red-300" : "border-amber-200"
             }`}
           >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
                 <input
                   value={job.plate}
                   onChange={(e) =>
                     updateScheduledJobField(job.id, "plate", e.target.value)
                   }
                   placeholder="Matrícula"
-                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-1g font-black uppercase tracking-wide text-slate-950"
+                  className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-sm font-black uppercase tracking-wide text-slate-950"
                 />
 
-                <div className="mt-1 text-lg font-bold text-amber-900">
+                <div className="mt-1 text-xs font-bold text-amber-900">
                   {job.date} · {job.startTime}
                 </div>
               </div>
 
               <span
-                className={`rounded-full px-3 py-1 text-xs font-black uppercase ${
+                className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
                   isLate
                     ? "bg-red-100 text-red-700"
                     : "bg-amber-100 text-amber-700"
@@ -4836,15 +4835,17 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               </span>
             </div>
 
-            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
-              <div className="text-xs font-bold uppercase text-amber-600">
-                Trabajo principal
+            <div className="rounded-xl border border-amber-100 bg-amber-50 px-2 py-2">
+              <div className="text-[9px] font-bold uppercase text-amber-600">
+                Trabajo
               </div>
 
               <select
                 value={job.firstTemplateKey || job.templateKey}
-                onChange={(e) => updateScheduledJobTemplate(job.id, e.target.value)}
-                className="mt-1 w-full rounded-xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 text-sm font-black text-red-700"
+                onChange={(e) =>
+                  updateScheduledJobTemplate(job.id, e.target.value)
+                }
+                className="mt-1 w-full rounded-lg border border-yellow-300 bg-yellow-100 px-2 py-1 text-xs font-bold text-red-700"
               >
                 {quickTemplates
                   .slice()
@@ -4865,91 +4866,67 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               </select>
 
               {secondTemplate && (
-                <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800">
+                <div className="mt-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-800">
                   Después: {secondTemplate.label}
                 </div>
               )}
 
               {includedTasks.length > 0 && (
-                <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-                  <div className="text-xs font-bold uppercase text-emerald-700">
-                    Tareas incluidas
-                  </div>
-
-                  <div className="mt-1 text-sm font-semibold text-emerald-900">
-                    {includedTasks.map((task) => task.label).join(" + ")}
-                  </div>
+                <div className="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-900">
+                  {includedTasks.map((task) => task.label).join(" + ")}
                 </div>
               )}
             </div>
 
-            <div className="mt-3 grid gap-2 text-sm">
-              <div className="rounded-xl bg-slate-50 px-3 py-2">
-                <label className="mb-1 block text-xs font-bold text-slate-700">
-                  Cliente
-                </label>
+            <div className="mt-2 grid gap-1 text-xs">
+              <input
+                value={job.customerName || ""}
+                onChange={(e) =>
+                  updateScheduledJobField(
+                    job.id,
+                    "customerName",
+                    e.target.value
+                  )
+                }
+                placeholder="Cliente"
+                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+              />
 
-                <input
-                  value={job.customerName || ""}
-                  onChange={(e) =>
-                    updateScheduledJobField(
-                      job.id,
-                      "customerName",
-                      e.target.value
-                    )
-                  }
-                  placeholder="Nombre del cliente"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                />
-              </div>
+              <input
+                value={job.customerPhone || ""}
+                onChange={(e) =>
+                  updateScheduledJobField(
+                    job.id,
+                    "customerPhone",
+                    e.target.value
+                  )
+                }
+                placeholder="Teléfono"
+                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+              />
 
-              <div className="rounded-xl bg-slate-50 px-3 py-2">
-                <label className="mb-1 block text-xs font-bold text-slate-700">
-                  Teléfono
-                </label>
-
-                <input
-                  value={job.customerPhone || ""}
-                  onChange={(e) =>
-                    updateScheduledJobField(
-                      job.id,
-                      "customerPhone",
-                      e.target.value
-                    )
-                  }
-                  placeholder="Teléfono móvil"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                />
-              </div>
-
-              <div className="rounded-xl bg-slate-50 px-3 py-2">
-                <label className="mb-1 block text-xs font-bold text-slate-700">
-                  Observaciones
-                </label>
-
-                <textarea
-                  value={job.notes || ""}
-                  onChange={(e) =>
-                    updateScheduledJobField(job.id, "notes", e.target.value)
-                  }
-                  placeholder="Observaciones de la cita"
-                  rows={3}
-                  className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                />
-              </div>
+              <textarea
+                value={job.notes || ""}
+                onChange={(e) =>
+                  updateScheduledJobField(job.id, "notes", e.target.value)
+                }
+                placeholder="Observaciones"
+                rows={1}
+                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+              />
 
               {job.urgent && (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-black text-red-700">
+                <div className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-black text-red-700">
                   URGENTE
                 </div>
               )}
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => confirmScheduledArrival(job)}
-                className="rounded-2xl bg-green-600 px-3 py-2 text-sm font-black text-white hover:bg-green-700"
+                className="rounded-xl bg-green-600 px-2 py-2 text-xs font-black text-white hover:bg-green-700"
               >
                 Llegó
               </button>
@@ -4957,7 +4934,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <button
                 type="button"
                 onClick={() => cancelScheduledJob(job.id)}
-                className="rounded-2xl border border-red-200 bg-white px-4 py-4 text-lg font-bold text-red-600 hover:bg-red-50"
+                className="rounded-xl border border-red-200 bg-white px-2 py-2 text-xs font-bold text-red-600 hover:bg-red-50"
               >
                 Cancelar
               </button>
