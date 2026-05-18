@@ -4766,7 +4766,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 {view === "operativo" && dueScheduledJobs.length > 0 && (
-  <div className="rounded-3xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+  <div className="rounded-3xl border-2 border-amber-300 bg-amber-50 p-3 shadow-sm">
     <div className="mb-4 flex items-center justify-between gap-3">
       <div>
         <h2 className="text-xl font-black text-amber-950">
@@ -4783,7 +4783,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
       </span>
     </div>
 
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid gap-2 md:grid-cols-2">
       {dueScheduledJobs.map((job) => {
         const secondTemplate = job.secondTemplateKey
           ? quickTemplates.find(
@@ -4805,7 +4805,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         return (
           <div
             key={job.id}
-            className={`rounded-3xl border-2 bg-white p-5 shadow-sm ${
+            className={`rounded-2xl border bg-white p-3 shadow-sm ${
               isLate ? "border-red-300" : "border-amber-200"
             }`}
           >
@@ -4817,7 +4817,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                     updateScheduledJobField(job.id, "plate", e.target.value)
                   }
                   placeholder="Matrícula"
-                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-3xl font-black uppercase tracking-wide text-slate-950"
+                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-1g font-black uppercase tracking-wide text-slate-950"
                 />
 
                 <div className="mt-1 text-lg font-bold text-amber-900">
@@ -4949,7 +4949,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <button
                 type="button"
                 onClick={() => confirmScheduledArrival(job)}
-                className="rounded-2xl bg-green-600 px-4 py-4 text-lg font-black text-white hover:bg-green-700"
+                className="rounded-2xl bg-green-600 px-3 py-2 text-sm font-black text-white hover:bg-green-700"
               >
                 Llegó
               </button>
