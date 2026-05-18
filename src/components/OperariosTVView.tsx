@@ -670,6 +670,53 @@ export default function OperariosTVView({
     );
   }
 
+  function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
+  const task = assignedMaintenanceTasks.find(
+    (item) => item.id === assignedTaskId
+  );
+
+  if (!task) return;
+
+  if (task.status !== "interrumpida") {
+    window.alert("Solo se pueden reanudar tareas interrumpidas.");
+    return;
+  }
+
+  const tech = techs.find((item) => item.name === task.techName);
+
+  if (!tech) {
+    window.alert("No se ha encontrado el técnico asignado.");
+    return;
+  }
+
+  if (
+    normalizeTechStatus(tech.status) !== "disponible" ||
+    tech.currentJobId != null
+  ) {
+    window.alert(
+      "Este técnico todavía no está disponible. No se puede reanudar la tarea."
+    );
+    return;
+  }
+
+  const ok = window.confirm(
+    `¿Reanudar "${task.taskLabel}" con ${task.techName}?`
+  );
+
+  if (!ok) return;
+
+  setAssignedMaintenanceTasks((prev) =>
+    prev.map((item) =>
+      item.id === assignedTaskId
+        ? {
+            ...item,
+            status: "pendiente",
+          }
+        : item
+    )
+  );
+}
+
   function removeAssignedMaintenanceTask(assignedTaskId: string) {
     const task = assignedMaintenanceTasks.find(
       (item) => item.id === assignedTaskId
@@ -1375,28 +1422,34 @@ export default function OperariosTVView({
 
                             <td className="px-3 py-3">
                               <div className="flex justify-end gap-2">
-                                {task.status === "pendiente" && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      finishAssignedMaintenanceTask(task.id)
-                                    }
-                                    className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
-                                  >
-                                    Finalizar
-                                  </button>
-                                )}
+  {task.status === "pendiente" && (
+    <button
+      type="button"
+      onClick={() => finishAssignedMaintenanceTask(task.id)}
+      className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
+    >
+      Finalizar
+    </button>
+  )}
 
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    removeAssignedMaintenanceTask(task.id)
-                                  }
-                                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
-                                >
-                                  Borrar
-                                </button>
-                              </div>
+  {task.status === "interrumpida" && (
+    <button
+      type="button"
+      onClick={() => resumeInterruptedMaintenanceTask(task.id)}
+      className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 hover:bg-sky-100"
+    >
+      Reanudar
+    </button>
+  )}
+
+  <button
+    type="button"
+    onClick={() => removeAssignedMaintenanceTask(task.id)}
+    className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+  >
+    Borrar
+  </button>
+</div>
                             </td>
                           </tr>
                         ))
