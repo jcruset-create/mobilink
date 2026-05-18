@@ -89,7 +89,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", async (req, res) => {
   try {
-    const { jobId, customerName } = req.body;
+    const { jobId, customerName, amountEuros } = req.body;
+
+const amountCents = Math.round(Number(amountEuros || 0) * 100);
+
+if (!amountCents || amountCents < 100) {
+  return res.status(400).json({
+    success: false,
+    message: "El importe mínimo es 1 €",
+  });
+}
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -101,7 +110,7 @@ app.post("/api/payments/create-deposit", async (req, res) => {
             product_data: {
               name: `Paga y señal asistencia ${jobId || ""}`,
             },
-            unit_amount: 5000,
+            unit_amount: amountCents,
           },
           quantity: 1,
         },
@@ -115,6 +124,7 @@ app.post("/api/payments/create-deposit", async (req, res) => {
       metadata: {
         jobId: String(jobId || ""),
         customerName: String(customerName || ""),
+        amountEuros: String(amountEuros || ""),
       },
     });
 
