@@ -150,7 +150,17 @@ function formatMaintenanceAssignedAt(value: number) {
     minute: "2-digit",
   });
 }
+function formatMaintenanceElapsedTime(task: AssignedMaintenanceTask, nowMs: number) {
+  if (task.status === "finalizada") return "Finalizada";
+  if (task.status === "interrumpida") return "Interrumpida";
 
+  const elapsedMinutes = Math.max(
+    0,
+    Math.floor((nowMs - task.assignedAtMs) / 60000)
+  );
+
+  return formatWorkedTime(elapsedMinutes);
+}
 function getMaintenanceTaskTypeLabel(type: MaintenanceTaskType) {
   if (type === "fuera_taller") return "Fuera de taller";
 
@@ -1366,7 +1376,7 @@ export default function OperariosTVView({
                         <th className="px-3 py-3 font-black">Tipo</th>
                         <th className="px-3 py-3 font-black">Técnico</th>
                         <th className="px-3 py-3 font-black">Estado</th>
-                        <th className="px-3 py-3 font-black">Hora</th>
+                        <th className="px-3 py-3 font-black">Tiempo</th>
                         <th className="px-3 py-3 text-right font-black">
                           Acciones
                         </th>
@@ -1377,7 +1387,7 @@ export default function OperariosTVView({
                       {visibleAssignedMaintenanceTasks.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={6}
+                            colSpan={7}
                             className="px-3 py-6 text-center text-sm font-semibold text-slate-500"
                           >
                             No hay tareas asignadas.
@@ -1417,10 +1427,14 @@ export default function OperariosTVView({
                             </td>
 
                             <td className="px-3 py-3 font-semibold text-slate-500">
-                              {formatMaintenanceAssignedAt(task.assignedAtMs)}
-                            </td>
+  {formatMaintenanceAssignedAt(task.assignedAtMs)}
+</td>
 
-                            <td className="px-3 py-3">
+<td className="px-3 py-3 font-black text-slate-700">
+  {formatMaintenanceElapsedTime(task, nowTick)}
+</td>
+
+<td className="px-3 py-3">
                               <div className="flex justify-end gap-2">
   {task.status === "pendiente" && (
     <button
