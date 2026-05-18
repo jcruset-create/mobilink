@@ -4277,6 +4277,17 @@ return (
 >
   Almacén neumáticos
 </button>
+
+<button
+  type="button"
+  onClick={() => {
+    window.location.href = "/cobros";
+  }}
+  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100"
+>
+  Cobros
+</button>
+
   {canAccessView(userRole, "historico") && (
   <button
     type="button"
