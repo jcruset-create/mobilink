@@ -339,6 +339,61 @@ app.get("/api/payments/recent", async (_req, res) => {
   }
 });
 
+app.delete("/api/payments/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "ID de cobro no válido",
+      });
+    }
+
+    const existing = await db.query(
+      `
+        SELECT id, status
+        FROM payments
+        WHERE id = $1
+      `,
+      [id]
+    );
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Cobro no encontrado",
+      });
+    }
+
+    if (existing.rows[0].status === "paid") {
+      return res.status(400).json({
+        success: false,
+        message: "No se puede eliminar un cobro pagado",
+      });
+    }
+
+    await db.query(
+      `
+        DELETE FROM payments
+        WHERE id = $1
+      `,
+      [id]
+    );
+
+    res.json({
+      success: true,
+    });
+  } catch (error: any) {
+    console.error("ERROR ELIMINANDO PAYMENT:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
   try {
     const {

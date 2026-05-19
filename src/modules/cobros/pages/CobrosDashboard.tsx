@@ -68,6 +68,19 @@ Importe: ${(amount / 100).toFixed(2)} €`;
   }
 
   async function createPaymentLink() {
+    const safeReference = jobId.trim();
+    const amountValue = Number(amountEuros || 0);
+
+    if (!safeReference) {
+      setMessage("La referencia del cobro es obligatoria.");
+      return;
+    }
+
+    if (!Number.isFinite(amountValue) || amountValue < 1) {
+      setMessage("El importe mínimo es 1 €.");
+      return;
+    }
+
     setLoading(true);
     setMessage("");
     setPaymentUrl("");
@@ -79,7 +92,7 @@ Importe: ${(amount / 100).toFixed(2)} €`;
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          jobId,
+          jobId: jobId.trim(),
           customerName,
           customerPhone,
           amountEuros: Number(amountEuros),
@@ -161,6 +174,82 @@ Importe: ${(amount / 100).toFixed(2)} €`;
     );
 
     setMessage("Mensaje WhatsApp copiado.");
+  }
+
+  function getMinutesAgo(ms?: number | null) {
+    if (!ms) return "";
+
+    const diffMinutes = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+
+    if (diffMinutes < 1) return "hace menos de 1 minuto";
+    if (diffMinutes === 1) return "hace 1 minuto";
+    if (diffMinutes < 60) return `hace ${diffMinutes} minutos`;
+
+    const diffHours = Math.floor(diffMinutes / 60);
+
+    if (diffHours === 1) return "hace 1 hora";
+    if (diffHours < 24) return `hace ${diffHours} horas`;
+
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays === 1) return "hace 1 día";
+
+    return `hace ${diffDays} días`;
+  }
+
+  function isOldPending(payment: RecentPayment) {
+    if (payment.status === "paid") return false;
+    if (!payment.created_at_ms) return false;
+
+    const diffMinutes = Math.floor((Date.now() - payment.created_at_ms) / 60000);
+
+    return diffMinutes >= 30;
+  }
+
+  async function copyText(text: string, successMessage: string) {
+    await navigator.clipboard.writeText(text);
+    setMessage(successMessage);
+  }
+
+  async function deletePendingPayment(payment: RecentPayment) {
+    if (payment.status === "paid") {
+      setMessage("No se puede eliminar un cobro pagado.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Eliminar el cobro pendiente ${payment.reference}?`
+    );
+
+    if (!ok) return;
+
+    try {
+      const response = await fetch(`/api/payments/${payment.id}`, {
+        method: "DELETE",
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.message || "No se pudo eliminar el cobro");
+      }
+
+      setMessage("Cobro pendiente eliminado.");
+      await loadRecentPayments();
+    } catch (error: any) {
+      setMessage(error.message || "Error eliminando cobro");
+    }
+  }
+
+  function duplicatePayment(payment: RecentPayment) {
+    setJobId(`${payment.reference}-COPIA`);
+    setCustomerName(payment.customer_name || "");
+    setCustomerPhone(payment.customer_phone || "");
+    setAmountEuros((payment.amount_cents / 100).toFixed(2));
+    setPaymentUrl("");
+    setPaymentStatus(null);
+    setQrUrl("");
+    setMessage("Cobro duplicado. Revisa la referencia y crea un nuevo enlace.");
   }
 
   const isPaid = paymentStatus?.depositStatus === "paid";
@@ -425,12 +514,25 @@ Importe: ${(amount / 100).toFixed(2)} €`;
               </button>
             </div>
 
-            <input
-              value={paymentSearch}
-              onChange={(e) => setPaymentSearch(e.target.value)}
-              placeholder="Buscar por referencia, cliente o teléfono"
-              className="mb-4 w-full rounded-xl bg-slate-800 border border-slate-600 px-4 py-3 text-white outline-none"
-            />
+            <div className="mb-4 flex gap-2">
+              <input
+                value={paymentSearch}
+                onChange={(e) => setPaymentSearch(e.target.value)}
+                placeholder="Buscar por referencia, cliente o teléfono"
+                className="w-full rounded-xl bg-slate-800 border border-slate-600 px-4 py-3 text-white outline-none"
+              />
+
+              <button
+                onClick={() => setPaymentSearch("")}
+                className="rounded-xl border border-slate-600 px-3 py-2 text-xs font-black text-slate-200 hover:bg-slate-800"
+              >
+                Limpiar
+              </button>
+            </div>
+
+            <div className="mb-4 text-xs font-bold text-slate-400">
+              Resultados: {filteredPayments.length}
+            </div>
 
             <div className="space-y-3">
               {filteredPayments.length === 0 && (
@@ -456,7 +558,11 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                 return (
                   <div
                     key={payment.id}
-                    className="rounded-xl border border-slate-700 bg-slate-800 p-4"
+                    className={`rounded-xl border p-4 ${
+                      isOldPending(payment)
+                        ? "border-red-400 bg-red-950/50"
+                        : "border-slate-700 bg-slate-800"
+                    }`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -482,6 +588,12 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                       </div>
                     </div>
 
+                    {isOldPending(payment) && (
+                      <div className="mt-3 rounded-xl border border-red-400 bg-red-900/60 px-3 py-2 text-xs font-black text-red-100">
+                        Pendiente desde hace más de 30 minutos
+                      </div>
+                    )}
+
                     <div className="mt-3 text-sm text-slate-300">
                       Importe: {(payment.amount_cents / 100).toFixed(2)} €
                     </div>
@@ -496,12 +608,19 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                     <div className="mt-1 text-xs text-slate-500">
                       Pagado:{" "}
                       {payment.paid_at_ms
-                        ? new Date(payment.paid_at_ms).toLocaleString()
+                        ? `${new Date(payment.paid_at_ms).toLocaleString()} (${getMinutesAgo(
+                            payment.paid_at_ms
+                          )})`
                         : "Pendiente"}
                     </div>
 
                     <div className="mt-3 flex flex-col sm:flex-row gap-2">
-                      {payment.payment_url && (
+                      {payment.status === "paid" && (
+                        <div className="rounded-xl border border-emerald-500 bg-emerald-950/40 px-3 py-2 text-xs font-bold text-emerald-200">
+                          Cobro pagado: acciones de enlace bloqueadas
+                        </div>
+                      )}
+                      {payment.payment_url && payment.status !== "paid" && (
                         <a
                           href={payment.payment_url}
                           target="_blank"
@@ -512,7 +631,7 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                         </a>
                       )}
 
-                      {payment.payment_url && (
+                      {payment.payment_url && payment.status !== "paid" && (
                         <button
                           onClick={() => setQrUrl(payment.payment_url || "")}
                           className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white"
@@ -531,7 +650,7 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                         </button>
                       )}
 
-                      {payment.payment_url && (
+                      {payment.payment_url && payment.status !== "paid" && (
                         <button
                           onClick={() => copyRecentWhatsApp(payment)}
                           className="rounded-xl bg-green-500 px-3 py-2 text-xs font-black text-black"
@@ -546,6 +665,36 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                       >
                         Copiar referencia
                       </button>
+
+                      {payment.payment_url && payment.status !== "paid" && (
+                        <button
+                          onClick={() =>
+                            copyText(
+                              payment.payment_url || "",
+                              "Enlace copiado."
+                            )
+                          }
+                          className="rounded-xl bg-white px-3 py-2 text-xs font-black text-black"
+                        >
+                          Copiar enlace
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => duplicatePayment(payment)}
+                        className="rounded-xl bg-purple-600 px-3 py-2 text-xs font-black text-white"
+                      >
+                        Duplicar
+                      </button>
+
+                      {payment.status !== "paid" && (
+                        <button
+                          onClick={() => deletePendingPayment(payment)}
+                          className="rounded-xl bg-red-600 px-3 py-2 text-xs font-black text-white"
+                        >
+                          Eliminar
+                        </button>
+                      )}
 
                       <button
                         onClick={async () => {
