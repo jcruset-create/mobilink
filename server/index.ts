@@ -950,7 +950,20 @@ app.post("/api/jobs", requireSupervisorRole, async (req, res) => {
         return;
       }
     }
+    const assignedNames = Array.isArray(job.assignedNames)
+  ? job.assignedNames.map((name: unknown) => String(name || "").trim()).filter(Boolean)
+  : [];
 
+const blockedOutsideMaintenanceTechNames =
+  await getBlockedOutsideMaintenanceTechNames(assignedNames);
+
+if (blockedOutsideMaintenanceTechNames.length > 0) {
+  return res.status(409).json({
+    error:
+      "Asignación bloqueada: técnico en mantenimiento fuera de taller",
+    blockedTechNames: blockedOutsideMaintenanceTechNames,
+  });
+}
     const result = await db.query(
       `
         INSERT INTO jobs (
@@ -1001,7 +1014,7 @@ app.post("/api/jobs", requireSupervisorRole, async (req, res) => {
         incomingPlate,
         !!job.urgent,
         job.status ?? "espera",
-        JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
+        JSON.stringify(assignedNames),
         job.reason ?? "",
         job.createdAtMs ?? Date.now(),
         job.startedAtMs ?? null,
@@ -1216,6 +1229,40 @@ function normalizeAssignedMaintenanceTask(
     status,
     statusChangedAtMs,
   };
+}
+
+async function getBlockedOutsideMaintenanceTechNames(techNames: string[]) {
+  await ensureMaintenanceTables();
+
+  const uniqueTechNames = Array.from(
+    new Set(
+      techNames
+        .map((name) => String(name || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (uniqueTechNames.length === 0) {
+    return [];
+  }
+
+  const result = await db.query(
+    `
+      SELECT data
+      FROM assigned_maintenance_tasks
+      WHERE data->>'status' = 'pendiente'
+        AND data->>'taskType' = 'fuera_taller'
+        AND data->>'techName' = ANY($1::text[])
+    `,
+    [uniqueTechNames]
+  );
+
+  const blockedNames = result.rows
+    .map((row) => normalizeAssignedMaintenanceTask(row.data))
+    .filter(Boolean)
+    .map((task) => task!.techName);
+
+  return Array.from(new Set(blockedNames));
 }
 
 async function seedDefaultMaintenanceTasksIfEmpty() {
