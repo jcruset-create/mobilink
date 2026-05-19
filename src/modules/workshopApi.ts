@@ -40,6 +40,30 @@ export function getAdminHeaders(extra?: HeadersInit): HeadersInit {
 }
 
 export { API_BASE };
+
+async function readApiError(response: Response) {
+  return response.json().catch(() => null);
+}
+
+function isMaintenanceBlockError(
+  response: Response,
+  errorData: any
+): errorData is { error?: string; blockedTechNames: string[] } {
+  return (
+    response.status === 409 &&
+    errorData &&
+    Array.isArray(errorData.blockedTechNames) &&
+    errorData.blockedTechNames.length > 0
+  );
+}
+
+function showMaintenanceBlockAlert(blockedTechNames: string[]) {
+  window.alert(
+    `No se puede guardar el trabajo.\n\nTécnico fuera de taller por mantenimiento: ${blockedTechNames.join(
+      ", "
+    )}`
+  );
+}
 export async function saveJobToBackend(job: Job) {
   try {
     const response = await fetchWithTimeout(`${API_BASE}/api/jobs`, {
@@ -50,30 +74,32 @@ export async function saveJobToBackend(job: Job) {
       body: JSON.stringify(job),
     });
 
-    const responseText = await response.text();
-
     if (!response.ok) {
+      const errorData = await readApiError(response);
+
+      if (isMaintenanceBlockError(response, errorData)) {
+        showMaintenanceBlockAlert(errorData.blockedTechNames);
+
+        throw new Error(
+          `Trabajo bloqueado por mantenimiento fuera de taller: ${errorData.blockedTechNames.join(
+            ", "
+          )}`
+        );
+      }
+
       console.error("Error guardando trabajo:", {
         status: response.status,
-        responseText,
+        errorData,
         job,
       });
 
       throw new Error(
-        responseText ||
+        errorData?.error ||
           `No se pudo guardar el trabajo ${job.plate}. Código ${response.status}.`
       );
     }
 
-    if (!responseText) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(responseText);
-    } catch {
-      return null;
-    }
+    return response.json().catch(() => null);
   } catch (error) {
     console.error("Error guardando trabajo:", error);
     throw error;
