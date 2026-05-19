@@ -785,6 +785,14 @@ const outsideMaintenanceTechsSummary = useMemo(() => {
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
 }, [techs, maintenanceAvailability]);
 
+const workshopMaintenanceTechsSummary = useMemo(() => {
+  return techs
+    .filter((tech) =>
+      maintenanceAvailability.workshopMaintenanceTechNames.includes(tech.name)
+    )
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+}, [techs, maintenanceAvailability]);
+
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
 
@@ -4642,6 +4650,42 @@ return (
           <span
             key={tech.name}
             className="rounded-full border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700"
+          >
+            {tech.name}
+            {task ? ` · ${task.taskLabel}` : ""}
+          </span>
+        );
+      })}
+    </div>
+  </div>
+)}
+{workshopMaintenanceTechsSummary.length > 0 && (
+  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <div>
+        <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
+          En mantenimiento en taller
+        </div>
+        <div className="text-xs font-semibold text-emerald-600">
+          Siguen disponibles para trabajos reales
+        </div>
+      </div>
+
+      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">
+        {workshopMaintenanceTechsSummary.length}
+      </span>
+    </div>
+
+    <div className="flex flex-wrap gap-2">
+      {workshopMaintenanceTechsSummary.map((tech) => {
+        const task = maintenanceAvailability.workshopTasks.find(
+          (item) => item.techName === tech.name
+        );
+
+        return (
+          <span
+            key={tech.name}
+            className="rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-700"
           >
             {tech.name}
             {task ? ` · ${task.taskLabel}` : ""}
