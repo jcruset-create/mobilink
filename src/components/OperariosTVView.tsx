@@ -1053,6 +1053,12 @@ async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
   (task) => task.status === "interrumpida"
 );
 
+const recentInterruptedMaintenanceTasks =
+  interruptedAssignedMaintenanceTasks.filter((task) => {
+    const changedAt = task.statusChangedAtMs ?? task.assignedAtMs;
+    return Date.now() - changedAt < 10 * 60 * 1000;
+  });
+
   const historyAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
     (task) => task.status === "finalizada" || task.status === "interrumpida"
   );
@@ -1319,7 +1325,27 @@ async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
                 </div>
               </div>
             </div>
+            {recentInterruptedMaintenanceTasks.length > 0 && (
+  <div className="mb-3 rounded-2xl border border-sky-200 bg-sky-50 p-3">
+    <div className="mb-2 text-xs font-black uppercase tracking-wide text-sky-700">
+      Mantenimiento interrumpido recientemente
+    </div>
 
+    <div className="space-y-2">
+      {recentInterruptedMaintenanceTasks.map((task) => (
+        <div
+          key={task.id}
+          className="rounded-xl border border-sky-100 bg-white px-3 py-2 text-xs font-bold text-sky-900"
+        >
+          {task.techName} · {task.taskLabel}
+          <span className="ml-2 font-semibold text-sky-600">
+            Interrumpida por trabajo real
+          </span>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
             {maintenanceTechNames.length > 0 && (
               <div className="mb-3 rounded-2xl border border-emerald-200 bg-white p-3">
                 <div className="mb-2 text-xs font-black uppercase tracking-wide text-emerald-800">
