@@ -655,30 +655,50 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
-  useEffect(() => {
-    setAssignedMaintenanceTasks((prev) => {
-      let changed = false;
+useEffect(() => {
+  let cancelled = false;
 
-      const next = prev.map((task) => {
-        if (task.status !== "pendiente") return task;
-        if (task.taskType !== "en_taller") return task;
+  async function interruptWorkshopMaintenanceWithRealJob() {
+    const tasksToInterrupt = assignedMaintenanceTasks.filter((task) => {
+      if (task.status !== "pendiente") return false;
+      if (task.taskType !== "en_taller") return false;
 
-        const tech = techs.find((item) => item.name === task.techName);
+      const tech = techs.find((item) => item.name === task.techName);
 
-        if (!tech || tech.currentJobId == null) return task;
-
-        changed = true;
-
-        return {
-  ...task,
-  status: "interrumpida" as const,
-  statusChangedAtMs: Date.now(),
-};
-      });
-
-      return changed ? next : prev;
+      return !!tech && tech.currentJobId != null;
     });
-  }, [techs]);
+
+    if (tasksToInterrupt.length === 0) return;
+
+    for (const task of tasksToInterrupt) {
+      const fallbackTask: AssignedMaintenanceTask = {
+        ...task,
+        status: "interrumpida",
+        statusChangedAtMs: Date.now(),
+      };
+
+      const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+        `/api/assigned-maintenance-tasks/${task.id}/interrupt`,
+        {
+          method: "PUT",
+        },
+        fallbackTask
+      );
+
+      if (cancelled) return;
+
+      setAssignedMaintenanceTasks((prev) =>
+        prev.map((item) => (item.id === task.id ? savedTask : item))
+      );
+    }
+  }
+
+  void interruptWorkshopMaintenanceWithRealJob();
+
+  return () => {
+    cancelled = true;
+  };
+}, [techs, assignedMaintenanceTasks]);
 
   async function addMaintenanceTask() {
   const label = newMaintenanceTaskLabel.trim();
