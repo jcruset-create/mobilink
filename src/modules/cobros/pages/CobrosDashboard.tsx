@@ -275,6 +275,17 @@ Importe: ${(amount / 100).toFixed(2)} €`;
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-3xl font-black mb-2">Cobros</h1>
+            <div
+  className={`inline-flex items-center rounded-full px-4 py-2 text-xs font-black ${
+    import.meta.env.VITE_STRIPE_MODE === "live"
+      ? "bg-emerald-500 text-black"
+      : "bg-amber-400 text-black"
+  }`}
+>
+  {import.meta.env.VITE_STRIPE_MODE === "live"
+    ? "💶 STRIPE REAL"
+    : "🧪 STRIPE TEST"}
+</div>
             <p className="text-slate-400">
               Crear enlaces de pago con Stripe.
             </p>
