@@ -214,15 +214,16 @@ export default function SeaTarragonaV1() {
   const [newRule, setNewRule] = useState("");
   const [techs, setTechs] = useState<Tech[]>(INITIAL_TECHS);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [maintenanceAvailability, setMaintenanceAvailability] =
+const [maintenanceAvailability, setMaintenanceAvailability] =
   useState<MaintenanceAvailability>({
     blockedTechNames: [],
     workshopMaintenanceTechNames: [],
     outsideWorkshopTasks: [],
     workshopTasks: [],
     pendingTasks: [],
-  });
-  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
+    interruptedTasks: [],
+    activeMaintenanceTasks: [],
+  });  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const scheduledJobsLoadedRef = useRef(false);
   const scheduledJobsDirtyRef = useRef(false);
   const scheduledJobsSaveVersionRef = useRef(0);
@@ -360,6 +361,8 @@ type MaintenanceAvailability = {
   outsideWorkshopTasks: MaintenanceAvailabilityTask[];
   workshopTasks: MaintenanceAvailabilityTask[];
   pendingTasks: MaintenanceAvailabilityTask[];
+  interruptedTasks: MaintenanceAvailabilityTask[];
+  activeMaintenanceTasks: MaintenanceAvailabilityTask[];
 };
 
 const [quickDraft, setQuickDraft] = useState<QuickDraftState>({
@@ -903,23 +906,29 @@ useEffect(() => {
 
       if (cancelled) return;
 
-      setMaintenanceAvailability({
-        blockedTechNames: Array.isArray(data.blockedTechNames)
-          ? data.blockedTechNames
-          : [],
-        workshopMaintenanceTechNames: Array.isArray(
-          data.workshopMaintenanceTechNames
-        )
-          ? data.workshopMaintenanceTechNames
-          : [],
-        outsideWorkshopTasks: Array.isArray(data.outsideWorkshopTasks)
-          ? data.outsideWorkshopTasks
-          : [],
-        workshopTasks: Array.isArray(data.workshopTasks)
-          ? data.workshopTasks
-          : [],
-        pendingTasks: Array.isArray(data.pendingTasks) ? data.pendingTasks : [],
-      });
+setMaintenanceAvailability({
+  blockedTechNames: Array.isArray(data.blockedTechNames)
+    ? data.blockedTechNames
+    : [],
+  workshopMaintenanceTechNames: Array.isArray(
+    data.workshopMaintenanceTechNames
+  )
+    ? data.workshopMaintenanceTechNames
+    : [],
+  outsideWorkshopTasks: Array.isArray(data.outsideWorkshopTasks)
+    ? data.outsideWorkshopTasks
+    : [],
+  workshopTasks: Array.isArray(data.workshopTasks)
+    ? data.workshopTasks
+    : [],
+  pendingTasks: Array.isArray(data.pendingTasks) ? data.pendingTasks : [],
+  interruptedTasks: Array.isArray(data.interruptedTasks)
+    ? data.interruptedTasks
+    : [],
+  activeMaintenanceTasks: Array.isArray(data.activeMaintenanceTasks)
+    ? data.activeMaintenanceTasks
+    : [],
+});
     } catch {
       // Si falla la API, no bloqueamos la pantalla.
     }
@@ -955,6 +964,15 @@ function hasAnyTechBlockedByOutsideMaintenance(techNames: string[]) {
   );
 
   return true;
+}
+
+function getInterruptedMaintenanceTasksForTechs(techNames: string[]) {
+  return maintenanceAvailability.pendingTasks.filter(
+    (task) =>
+      techNames.includes(task.techName) &&
+      task.taskType === "en_taller" &&
+      task.status === "interrumpida"
+  );
 }
 
 const techHoursReport = useMemo<TechHoursSummary[]>(
@@ -3291,50 +3309,64 @@ if (shouldCloseScheduledJobForFinishedJob(jobId)) {
     )}. Queda pendiente de validar antes de iniciar.`
   );
 }
+const job = jobs.find((item) => item.id === jobId);
 
-  try {
-    const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
-      method: "POST",
-      headers: getAdminHeaders({
-        "Content-Type": "application/json",
-      }),
-      body: JSON.stringify({
-        closedAtMs,
-        actualMinutes,
-        workedAccumulatedMinutes: actualMinutes,
-        pausedAccumulatedMinutes: pausedMinutes,
-        status: "cerrado",
-        startedAtMs: null,
-      }),
-    });
+try {
+  const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
+    method: "POST",
+    headers: getAdminHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      closedAtMs,
+      actualMinutes,
+      workedAccumulatedMinutes: actualMinutes,
+      pausedAccumulatedMinutes: pausedMinutes,
+      status: "cerrado",
+      startedAtMs: null,
+    }),
+  });
 
-    if (!response.ok) {
-      // Fallback: si el endpoint /finish no guarda bien, guardamos el trabajo cerrado entero.
-      await saveJobToBackend(closedJob);
-    }
-
-    if (reactivatedLinkedJob) {
-      await saveJobToBackend(reactivatedLinkedJob);
-    }
-
-    for (const tech of finalTechs) {
-      saveTechToBackend(tech);
-    }
-
-    await reloadJobsFromBackend();
-    recalcWaitingQueue(finalTechs, finalJobs);
-  } catch (error) {
-    console.error("Error cerrando trabajo:", error);
-
-    // Fallback final: intentamos guardar el cerrado igualmente.
-    try {
-      await saveJobToBackend(closedJob);
-      await reloadJobsFromBackend();
-    } catch (fallbackError) {
-      console.error("Error guardando cierre fallback:", fallbackError);
-      appendLog(`Error al finalizar ${target.plate}.`);
-    }
+  if (!response.ok) {
+    // Fallback: si el endpoint /finish no guarda bien, guardamos el trabajo cerrado entero.
+    await saveJobToBackend(closedJob);
   }
+
+  if (reactivatedLinkedJob) {
+    await saveJobToBackend(reactivatedLinkedJob);
+  }
+
+  for (const tech of finalTechs) {
+    saveTechToBackend(tech);
+  }
+
+  await reloadJobsFromBackend();
+
+  const finishedAssignedNames = job?.assignedNames ?? [];
+  const interruptedTasksToResume =
+    getInterruptedMaintenanceTasksForTechs(finishedAssignedNames);
+
+  if (interruptedTasksToResume.length > 0) {
+    window.alert(
+      `Trabajo finalizado.\n\nHay mantenimiento interrumpido pendiente de reanudar:\n\n${interruptedTasksToResume
+        .map((task) => `${task.techName}: ${task.taskLabel}`)
+        .join("\n")}`
+    );
+  }
+
+  recalcWaitingQueue(finalTechs, finalJobs);
+} catch (error) {
+  console.error("Error cerrando trabajo:", error);
+
+  // Fallback final: intentamos guardar el cerrado igualmente.
+  try {
+    await saveJobToBackend(closedJob);
+    await reloadJobsFromBackend();
+  } catch (fallbackError) {
+    console.error("Error guardando cierre fallback:", fallbackError);
+    appendLog(`Error al finalizar ${target.plate}.`);
+  }
+}
 }
 
 async function updateQuickTemplate(updatedTemplate: QuickTemplate) {

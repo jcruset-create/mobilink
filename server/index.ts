@@ -1530,15 +1530,23 @@ app.get("/api/maintenance-availability", async (_req, res) => {
     await ensureMaintenanceTables();
 
     const result = await db.query(`
-      SELECT data
-      FROM assigned_maintenance_tasks
-      WHERE data->>'status' = 'pendiente'
-      ORDER BY COALESCE((data->>'assignedAtMs')::bigint, 0) DESC
-    `);
+  SELECT data
+  FROM assigned_maintenance_tasks
+  WHERE data->>'status' IN ('pendiente', 'interrumpida')
+  ORDER BY COALESCE((data->>'assignedAtMs')::bigint, 0) DESC
+`);
+    
+    const activeMaintenanceTasks = result.rows
+  .map((row) => normalizeAssignedMaintenanceTask(row.data))
+  .filter(Boolean) as AssignedMaintenanceTask[];
 
-    const pendingTasks = result.rows
-      .map((row) => normalizeAssignedMaintenanceTask(row.data))
-      .filter(Boolean) as AssignedMaintenanceTask[];
+const pendingTasks = activeMaintenanceTasks.filter(
+  (task) => task.status === "pendiente"
+);
+
+const interruptedTasks = activeMaintenanceTasks.filter(
+  (task) => task.status === "interrumpida"
+);  
 
     const outsideWorkshopTasks = pendingTasks.filter(
       (task) => task.taskType === "fuera_taller"
@@ -1557,12 +1565,14 @@ app.get("/api/maintenance-availability", async (_req, res) => {
     );
 
     res.json({
-      blockedTechNames,
-      workshopMaintenanceTechNames,
-      outsideWorkshopTasks,
-      workshopTasks,
-      pendingTasks,
-    });
+  blockedTechNames,
+  workshopMaintenanceTechNames,
+  outsideWorkshopTasks,
+  workshopTasks,
+  pendingTasks,
+  interruptedTasks,
+  activeMaintenanceTasks,
+});
   } catch (error) {
     console.error("GET /api/maintenance-availability error:", error);
     res.status(500).json({
