@@ -214,6 +214,14 @@ export default function SeaTarragonaV1() {
   const [newRule, setNewRule] = useState("");
   const [techs, setTechs] = useState<Tech[]>(INITIAL_TECHS);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [maintenanceAvailability, setMaintenanceAvailability] =
+  useState<MaintenanceAvailability>({
+    blockedTechNames: [],
+    workshopMaintenanceTechNames: [],
+    outsideWorkshopTasks: [],
+    workshopTasks: [],
+    pendingTasks: [],
+  });
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const scheduledJobsLoadedRef = useRef(false);
   const scheduledJobsDirtyRef = useRef(false);
@@ -335,6 +343,25 @@ type QuickDraftState = {
   includedTaskIds: string[];
 };
 
+type MaintenanceAvailabilityTask = {
+  id: string;
+  taskId: string;
+  taskLabel: string;
+  taskType: "en_taller" | "fuera_taller";
+  techName: string;
+  assignedAtMs: number;
+  status: "pendiente" | "finalizada" | "interrumpida";
+  statusChangedAtMs?: number | null;
+};
+
+type MaintenanceAvailability = {
+  blockedTechNames: string[];
+  workshopMaintenanceTechNames: string[];
+  outsideWorkshopTasks: MaintenanceAvailabilityTask[];
+  workshopTasks: MaintenanceAvailabilityTask[];
+  pendingTasks: MaintenanceAvailabilityTask[];
+};
+
 const [quickDraft, setQuickDraft] = useState<QuickDraftState>({
   templateKey: "",
   linkedTemplateKey: "",
@@ -407,6 +434,9 @@ const [view, setView] = useState<AppView>(() => {
 
   return "operativo";
 });
+
+
+
 useEffect(() => {
   if (!userRole) return;
 
@@ -648,12 +678,13 @@ useEffect(() => {
     return;
   }
 
-  const hasAvailableTech = techs.some(
-    (tech) =>
-      !tech.blocked &&
-      tech.currentJobId == null &&
-      (tech.status === "disponible" || tech.status === "supervisor")
-  );
+const hasAvailableTech = techs.some(
+  (tech) =>
+    !tech.blocked &&
+    tech.currentJobId == null &&
+    !isTechBlockedByOutsideMaintenance(tech.name) &&
+    (tech.status === "disponible" || tech.status === "supervisor")
+);
 
   if (!hasAvailableTech) {
     setInitialAutoAssignDone(true);
@@ -742,10 +773,11 @@ const availableTechsSummary = useMemo(() => {
       (tech) =>
         tech.status === "disponible" &&
         tech.currentJobId == null &&
-        !tech.blocked
+        !tech.blocked &&
+        !isTechBlockedByOutsideMaintenance(tech.name)
     )
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs]);
+}, [techs, maintenanceAvailability]);
 
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
@@ -843,6 +875,57 @@ useEffect(() => {
     console.error("Error guardando agenda:", error);
   });
 }, [scheduledJobs, scheduledJobsLoaded]);
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadMaintenanceAvailability() {
+    try {
+      const response = await fetch(`${API_BASE}/api/maintenance-availability`);
+
+      if (!response.ok) return;
+
+      const data = (await response.json()) as MaintenanceAvailability;
+
+      if (cancelled) return;
+
+      setMaintenanceAvailability({
+        blockedTechNames: Array.isArray(data.blockedTechNames)
+          ? data.blockedTechNames
+          : [],
+        workshopMaintenanceTechNames: Array.isArray(
+          data.workshopMaintenanceTechNames
+        )
+          ? data.workshopMaintenanceTechNames
+          : [],
+        outsideWorkshopTasks: Array.isArray(data.outsideWorkshopTasks)
+          ? data.outsideWorkshopTasks
+          : [],
+        workshopTasks: Array.isArray(data.workshopTasks)
+          ? data.workshopTasks
+          : [],
+        pendingTasks: Array.isArray(data.pendingTasks) ? data.pendingTasks : [],
+      });
+    } catch {
+      // Si falla la API, no bloqueamos la pantalla.
+    }
+  }
+
+  void loadMaintenanceAvailability();
+
+  const interval = window.setInterval(() => {
+    void loadMaintenanceAvailability();
+  }, 15000);
+
+  return () => {
+    cancelled = true;
+    window.clearInterval(interval);
+  };
+}, []);
+
+function isTechBlockedByOutsideMaintenance(techName: string) {
+  return maintenanceAvailability.blockedTechNames.includes(techName);
+}
 
 const techHoursReport = useMemo<TechHoursSummary[]>(
   () => buildTechHoursReport(closedJobs, techs),
