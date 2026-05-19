@@ -11,6 +11,7 @@ import EmptyState from "./components/EmptyState";
 import { APP_VERSION } from "./version";
 import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
+import { useMaintenanceAvailability } from "./modules/useMaintenanceAvailability";
 import OperariosTVView from "./components/OperariosTVView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
 import type {
@@ -214,16 +215,7 @@ export default function SeaTarragonaV1() {
   const [newRule, setNewRule] = useState("");
   const [techs, setTechs] = useState<Tech[]>(INITIAL_TECHS);
   const [jobs, setJobs] = useState<Job[]>([]);
-const [maintenanceAvailability, setMaintenanceAvailability] =
-  useState<MaintenanceAvailability>({
-    blockedTechNames: [],
-    workshopMaintenanceTechNames: [],
-    outsideWorkshopTasks: [],
-    workshopTasks: [],
-    pendingTasks: [],
-    interruptedTasks: [],
-    activeMaintenanceTasks: [],
-  });  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
+  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const scheduledJobsLoadedRef = useRef(false);
   const scheduledJobsDirtyRef = useRef(false);
   const scheduledJobsSaveVersionRef = useRef(0);
@@ -344,27 +336,6 @@ type QuickDraftState = {
   includedTaskIds: string[];
 };
 
-type MaintenanceAvailabilityTask = {
-  id: string;
-  taskId: string;
-  taskLabel: string;
-  taskType: "en_taller" | "fuera_taller";
-  techName: string;
-  assignedAtMs: number;
-  status: "pendiente" | "finalizada" | "interrumpida";
-  statusChangedAtMs?: number | null;
-};
-
-type MaintenanceAvailability = {
-  blockedTechNames: string[];
-  workshopMaintenanceTechNames: string[];
-  outsideWorkshopTasks: MaintenanceAvailabilityTask[];
-  workshopTasks: MaintenanceAvailabilityTask[];
-  pendingTasks: MaintenanceAvailabilityTask[];
-  interruptedTasks: MaintenanceAvailabilityTask[];
-  activeMaintenanceTasks: MaintenanceAvailabilityTask[];
-};
-
 const [quickDraft, setQuickDraft] = useState<QuickDraftState>({
   templateKey: "",
   linkedTemplateKey: "",
@@ -436,6 +407,37 @@ const [view, setView] = useState<AppView>(() => {
   }
 
   return "operativo";
+});
+
+const autoSyncPaused =
+  formOpen ||
+  quickEntryOpen ||
+  resetConfirmOpen ||
+  editingQuickTemplateKey !== null;
+
+const {
+  maintenanceAvailability,
+  maintenanceAvailabilitySyncedAt,
+  maintenanceAvailabilitySyncError,
+  maintenanceAvailabilityIsStale,
+  outsideMaintenanceTechsSummary,
+  workshopMaintenanceTechsSummary,
+  interruptedMaintenanceSummary,
+  oldInterruptedMaintenanceSummary,
+  maintenanceSummaryCounts,
+  maintenanceAttentionCount,
+  reloadMaintenanceAvailabilityFromBackend,
+  isTechBlockedByOutsideMaintenance,
+  hasAnyTechBlockedByOutsideMaintenance,
+  getInterruptedMaintenanceTasksForTechs,
+  clearMaintenanceHistoryFromPanel,
+  formatMaintenanceSyncTime,
+} = useMaintenanceAvailability({
+  techs,
+  isAuthenticated,
+  autoSyncPaused,
+  lastSyncAt,
+  getAdminHeaders,
 });
 
 
@@ -780,27 +782,7 @@ const availableTechsSummary = useMemo(() => {
         !isTechBlockedByOutsideMaintenance(tech.name)
     )
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs, maintenanceAvailability]);
-
-const outsideMaintenanceTechsSummary = useMemo(() => {
-  return techs
-    .filter((tech) => isTechBlockedByOutsideMaintenance(tech.name))
-    .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs, maintenanceAvailability]);
-
-const workshopMaintenanceTechsSummary = useMemo(() => {
-  return techs
-    .filter((tech) =>
-      maintenanceAvailability.workshopMaintenanceTechNames.includes(tech.name)
-    )
-    .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs, maintenanceAvailability]);
-
-const interruptedMaintenanceSummary = useMemo(() => {
-  return maintenanceAvailability.interruptedTasks
-    .filter((task) => task.taskType === "en_taller")
-    .sort((a, b) => b.assignedAtMs - a.assignedAtMs);
-}, [maintenanceAvailability]);
+}, [techs, isTechBlockedByOutsideMaintenance]);
 
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
@@ -844,12 +826,6 @@ const techLoadStats = useMemo<TechLoadStat[]>(
 useEffect(() => {
   console.log("SELF TESTS:", runSelfTests(techStats, techLoadStats));
 }, [techStats, techLoadStats]);
-const autoSyncPaused =
-  formOpen ||
-  quickEntryOpen ||
-  resetConfirmOpen ||
-  editingQuickTemplateKey !== null;
-
 useAutoSync({
   enabled: isAuthenticated,
   paused: autoSyncPaused,
@@ -865,6 +841,7 @@ useAutoSync({
 
     await reloadLogsFromBackend();
     await reloadTechsFromBackend();
+    await reloadMaintenanceAvailabilityFromBackend();
   },
   onSynced: () => {
     setLastSyncAt(Date.now());
@@ -898,88 +875,6 @@ useEffect(() => {
     console.error("Error guardando agenda:", error);
   });
 }, [scheduledJobs, scheduledJobsLoaded]);
-
-useEffect(() => {
-  let cancelled = false;
-
-  async function loadMaintenanceAvailability() {
-    try {
-      const response = await fetch(`${API_BASE}/api/maintenance-availability`);
-
-      if (!response.ok) return;
-
-      const data = (await response.json()) as MaintenanceAvailability;
-
-      if (cancelled) return;
-
-setMaintenanceAvailability({
-  blockedTechNames: Array.isArray(data.blockedTechNames)
-    ? data.blockedTechNames
-    : [],
-  workshopMaintenanceTechNames: Array.isArray(
-    data.workshopMaintenanceTechNames
-  )
-    ? data.workshopMaintenanceTechNames
-    : [],
-  outsideWorkshopTasks: Array.isArray(data.outsideWorkshopTasks)
-    ? data.outsideWorkshopTasks
-    : [],
-  workshopTasks: Array.isArray(data.workshopTasks)
-    ? data.workshopTasks
-    : [],
-  pendingTasks: Array.isArray(data.pendingTasks) ? data.pendingTasks : [],
-  interruptedTasks: Array.isArray(data.interruptedTasks)
-    ? data.interruptedTasks
-    : [],
-  activeMaintenanceTasks: Array.isArray(data.activeMaintenanceTasks)
-    ? data.activeMaintenanceTasks
-    : [],
-});
-    } catch {
-      // Si falla la API, no bloqueamos la pantalla.
-    }
-  }
-
-  void loadMaintenanceAvailability();
-
-  const interval = window.setInterval(() => {
-    void loadMaintenanceAvailability();
-  }, 15000);
-
-  return () => {
-    cancelled = true;
-    window.clearInterval(interval);
-  };
-}, []);
-
-function isTechBlockedByOutsideMaintenance(techName: string) {
-  return maintenanceAvailability.blockedTechNames.includes(techName);
-}
-
-function hasAnyTechBlockedByOutsideMaintenance(techNames: string[]) {
-  const blockedTech = techNames.find((name) =>
-    isTechBlockedByOutsideMaintenance(name)
-  );
-
-  if (!blockedTech) {
-    return false;
-  }
-
-  window.alert(
-    `${blockedTech} está en una tarea de mantenimiento fuera de taller y no puede recibir trabajos reales ahora.`
-  );
-
-  return true;
-}
-
-function getInterruptedMaintenanceTasksForTechs(techNames: string[]) {
-  return maintenanceAvailability.pendingTasks.filter(
-    (task) =>
-      techNames.includes(task.techName) &&
-      task.taskType === "en_taller" &&
-      task.status === "interrumpida"
-  );
-}
 
 const techHoursReport = useMemo<TechHoursSummary[]>(
   () => buildTechHoursReport(closedJobs, techs),
@@ -4291,7 +4186,10 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
-      onBack={() => setView("operativo")}
+      onBack={() => {
+        setView("operativo");
+        void reloadMaintenanceAvailabilityFromBackend();
+      }}
       onGoWorkshopScreen={() => setView("pantalla")}
       canGoBack={canAccessView(userRole, "operativo")}
       onLogout={() => {
@@ -4434,7 +4332,10 @@ return (
   {canAccessView(userRole, "operativo") && (
     <button
       type="button"
-      onClick={() => setView("operativo")}
+      onClick={() => {
+        setView("operativo");
+        void reloadMaintenanceAvailabilityFromBackend();
+      }}
       className={`rounded-2xl px-4 py-2 text-sm font-medium ${
         view === "operativo"
           ? "bg-slate-900 text-white"
@@ -4512,14 +4413,32 @@ return (
   {userCanUseScreens && canAccessView(userRole, "operarios") && (
     <button
       type="button"
-      onClick={() => setView("operarios")}
-      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+      onClick={() => {
+        setView("operarios");
+        void reloadMaintenanceAvailabilityFromBackend();
+      }}
+      className={`flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium ${
         view === "operarios"
           ? "bg-slate-900 text-white"
           : "border border-slate-200 bg-white text-slate-700"
       }`}
     >
-      Pantalla técnicos
+      <span>Pantalla técnicos</span>
+
+      {maintenanceAttentionCount > 0 && (
+        <span
+          title={`Mantenimiento: ${maintenanceSummaryCounts.workshop} en taller, ${maintenanceSummaryCounts.outside} fuera de taller, ${maintenanceSummaryCounts.interrupted} interrumpidas`}
+          className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+            maintenanceSummaryCounts.outside > 0
+              ? "bg-red-100 text-red-700"
+              : maintenanceSummaryCounts.interrupted > 0
+              ? "bg-sky-100 text-sky-700"
+              : "bg-emerald-100 text-emerald-700"
+          }`}
+        >
+          {maintenanceAttentionCount}
+        </span>
+      )}
     </button>
   )}
 
@@ -4634,15 +4553,129 @@ return (
       </div>
 
       <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-black uppercase tracking-wide text-emerald-800">
-            Técnicos disponibles
-          </h2>
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-black uppercase tracking-wide text-emerald-800">
+              Técnicos disponibles
+            </h2>
+
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+              <span
+                className={
+                  maintenanceAvailabilitySyncError
+                    ? "text-red-600"
+                    : autoSyncPaused || maintenanceAvailabilityIsStale
+                    ? "text-amber-600"
+                    : "text-emerald-600"
+                }
+              >
+                Mant.:{" "}
+                {autoSyncPaused
+                  ? `Pausado ${formatMaintenanceSyncTime(
+                      maintenanceAvailabilitySyncedAt
+                    )}`
+                  : maintenanceAvailabilitySyncError
+                  ? "Error"
+                  : maintenanceAvailabilityIsStale
+                  ? `Desactualizado ${formatMaintenanceSyncTime(
+                      maintenanceAvailabilitySyncedAt
+                    )}`
+                  : `OK ${formatMaintenanceSyncTime(
+                      maintenanceAvailabilitySyncedAt
+                    )}`}
+              </span>
+
+              {!autoSyncPaused &&
+                (maintenanceAvailabilitySyncError ||
+                  maintenanceAvailabilityIsStale) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void reloadMaintenanceAvailabilityFromBackend();
+                    }}
+                    className={`rounded-lg border bg-white px-2 py-1 text-[10px] font-black hover:bg-slate-50 ${
+                      maintenanceAvailabilitySyncError
+                        ? "border-red-200 text-red-700 hover:bg-red-50"
+                        : "border-amber-200 text-amber-700 hover:bg-amber-50"
+                    }`}
+                  >
+                    Reintentar
+                  </button>
+                )}
+            </div>
+          </div>
 
           <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-black text-emerald-700">
             {availableTechsSummary.length}
           </span>
         </div>
+
+        {(maintenanceSummaryCounts.workshop > 0 ||
+          maintenanceSummaryCounts.outside > 0 ||
+          maintenanceSummaryCounts.interrupted > 0) && (
+          <div className="mb-3 grid gap-2 sm:grid-cols-3">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+              <div className="text-[10px] font-black uppercase tracking-wide text-emerald-700">
+                Mant. en taller
+              </div>
+              <div className="text-2xl font-black text-emerald-900">
+                {maintenanceSummaryCounts.workshop}
+              </div>
+              <div className="text-[11px] font-semibold text-emerald-700">
+                No bloquea trabajos
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-3">
+              <div className="text-[10px] font-black uppercase tracking-wide text-red-700">
+                Fuera taller
+              </div>
+              <div className="text-2xl font-black text-red-900">
+                {maintenanceSummaryCounts.outside}
+              </div>
+              <div className="text-[11px] font-semibold text-red-700">
+                Bloquea trabajos
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3">
+              <div className="text-[10px] font-black uppercase tracking-wide text-sky-700">
+                Interrumpidas
+              </div>
+
+              <div className="text-2xl font-black text-sky-900">
+                {maintenanceSummaryCounts.interrupted}
+              </div>
+
+              <div className="mb-2 text-[11px] font-semibold text-sky-700">
+                Pendientes revisar
+              </div>
+
+              {oldInterruptedMaintenanceSummary.length > 0 ? (
+                <div className="grid gap-2">
+                  <div className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-[11px] font-bold text-sky-700">
+                    {oldInterruptedMaintenanceSummary.length} antigua(s) se
+                    pueden limpiar
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={clearMaintenanceHistoryFromPanel}
+                    className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-[11px] font-black text-sky-700 hover:bg-sky-100"
+                  >
+                    Limpiar antiguas
+                  </button>
+                </div>
+              ) : (
+                maintenanceSummaryCounts.interrupted > 0 && (
+                  <div className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-[11px] font-bold text-sky-700">
+                    Todas son recientes
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+        )}
 
         {availableTechsSummary.length === 0 ? (
           <div className="rounded-xl bg-white px-3 py-3 text-sm font-medium text-emerald-400">
@@ -4659,114 +4692,122 @@ return (
               </div>
             ))}
           </div>
-          
         )}
+
         {outsideMaintenanceTechsSummary.length > 0 && (
-  <div className="rounded-2xl border border-red-200 bg-red-50 p-3">
-    <div className="mb-2 flex items-center justify-between gap-2">
-      <div>
-        <div className="text-xs font-black uppercase tracking-wide text-red-700">
-          Fuera de taller por mantenimiento
-        </div>
-        <div className="text-xs font-semibold text-red-600">
-          No disponibles para trabajos reales
-        </div>
-      </div>
+          <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-black uppercase tracking-wide text-red-700">
+                  Fuera de taller por mantenimiento
+                </div>
+                <div className="text-xs font-semibold text-red-600">
+                  No disponibles para trabajos reales
+                </div>
+              </div>
 
-      <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-700">
-        {outsideMaintenanceTechsSummary.length}
-      </span>
-    </div>
+              <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-700">
+                {outsideMaintenanceTechsSummary.length}
+              </span>
+            </div>
 
-    <div className="flex flex-wrap gap-2">
-      {outsideMaintenanceTechsSummary.map((tech) => {
-        const task = maintenanceAvailability.outsideWorkshopTasks.find(
-          (item) => item.techName === tech.name
-        );
+            <div className="flex flex-wrap gap-2">
+              {outsideMaintenanceTechsSummary.map((tech) => {
+                const task = maintenanceAvailability.outsideWorkshopTasks.find(
+                  (item) => item.techName === tech.name
+                );
 
-        return (
-          <span
-            key={tech.name}
-            className="rounded-full border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700"
-          >
-            {tech.name}
-            {task ? ` · ${task.taskLabel}` : ""}
-          </span>
-        );
-      })}
-    </div>
-  </div>
-)}
-{workshopMaintenanceTechsSummary.length > 0 && (
-  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-    <div className="mb-2 flex items-center justify-between gap-2">
-      <div>
-        <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
-          En mantenimiento en taller
-        </div>
-        <div className="text-xs font-semibold text-emerald-600">
-          Siguen disponibles para trabajos reales
-        </div>
-      </div>
+                return (
+                  <span
+                    key={tech.name}
+                    className="rounded-full border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700"
+                  >
+                    {tech.name}
+                    {task ? ` · ${task.taskLabel}` : ""}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
-      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">
-        {workshopMaintenanceTechsSummary.length}
-      </span>
-    </div>
+        {workshopMaintenanceTechsSummary.length > 0 && (
+          <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                  En mantenimiento en taller
+                </div>
+                <div className="text-xs font-semibold text-emerald-600">
+                  Siguen disponibles para trabajos reales
+                </div>
+              </div>
 
-    <div className="flex flex-wrap gap-2">
-      {workshopMaintenanceTechsSummary.map((tech) => {
-        const task = maintenanceAvailability.workshopTasks.find(
-          (item) => item.techName === tech.name
-        );
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">
+                {workshopMaintenanceTechsSummary.length}
+              </span>
+            </div>
 
-        return (
-          <span
-            key={tech.name}
-            className="rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-700"
-          >
-            {tech.name}
-            {task ? ` · ${task.taskLabel}` : ""}
-          </span>
-        );
-      })}
-    </div>
-  </div>
-)}
+            <div className="flex flex-wrap gap-2">
+              {workshopMaintenanceTechsSummary.map((tech) => {
+                const task = maintenanceAvailability.workshopTasks.find(
+                  (item) => item.techName === tech.name
+                );
 
-{interruptedMaintenanceSummary.length > 0 && (
-  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-3">
-    <div className="mb-2 flex items-center justify-between gap-2">
-      <div>
-        <div className="text-xs font-black uppercase tracking-wide text-sky-700">
-          Mantenimiento interrumpido
-        </div>
-        <div className="text-xs font-semibold text-sky-600">
-          Pendiente de revisar en Pantalla técnicos
-        </div>
-      </div>
+                return (
+                  <span
+                    key={tech.name}
+                    className="rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-700"
+                  >
+                    {tech.name}
+                    {task ? ` · ${task.taskLabel}` : ""}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
-      <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-black text-sky-700">
-        {interruptedMaintenanceSummary.length}
-      </span>
-    </div>
+        {interruptedMaintenanceSummary.length > 0 && (
+          <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-black uppercase tracking-wide text-sky-700">
+                  Mantenimiento interrumpido
+                </div>
+                <div className="text-xs font-semibold text-sky-600">
+                  Interrumpidas recientemente. Revisar en Pantalla técnicos
+                </div>
+              </div>
 
-    <div className="mb-3 flex flex-wrap gap-2">
-      {interruptedMaintenanceSummary.slice(0, 4).map((task) => (
-        <span
-          key={task.id}
-          className="rounded-full border border-sky-200 bg-white px-3 py-2 text-xs font-black text-sky-700"
-        >
-          {task.techName} · {task.taskLabel}
-        </span>
-      ))}
-    </div>
+              <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-black text-sky-700">
+                {interruptedMaintenanceSummary.length}
+              </span>
+            </div>
 
-    <div className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-xs font-bold text-sky-700">
-  Ve a Pantalla técnicos para reanudar o revisar estas tareas.
-</div>
-  </div>
-)}
+            <div className="mb-3 flex flex-wrap gap-2">
+              {interruptedMaintenanceSummary.slice(0, 4).map((task) => (
+                <span
+                  key={task.id}
+                  className="rounded-full border border-sky-200 bg-white px-3 py-2 text-xs font-black text-sky-700"
+                >
+                  {task.techName} · {task.taskLabel}
+                </span>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setView("operarios");
+                void reloadMaintenanceAvailabilityFromBackend();
+              }}
+              className="rounded-xl bg-sky-700 px-4 py-2 text-xs font-black text-white hover:bg-sky-800"
+            >
+              Ir a Pantalla técnicos
+            </button>
+          </div>
+        )}
       </div>
     </div>
   </section>
