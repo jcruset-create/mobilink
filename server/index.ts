@@ -964,6 +964,20 @@ if (blockedOutsideMaintenanceTechNames.length > 0) {
     blockedTechNames: blockedOutsideMaintenanceTechNames,
   });
 }
+
+const interruptedMaintenanceTasks =
+  await interruptWorkshopMaintenanceForTechs(assignedNames);
+
+if (interruptedMaintenanceTasks.length > 0) {
+  console.log("Mantenimiento en taller interrumpido por trabajo real:", {
+    assignedNames,
+    interruptedMaintenanceTasks: interruptedMaintenanceTasks.map((task) => ({
+      id: task.id,
+      taskLabel: task.taskLabel,
+      techName: task.techName,
+    })),
+  });
+}
     const result = await db.query(
       `
         INSERT INTO jobs (
@@ -1263,6 +1277,63 @@ async function getBlockedOutsideMaintenanceTechNames(techNames: string[]) {
     .map((task) => task!.techName);
 
   return Array.from(new Set(blockedNames));
+}
+
+async function interruptWorkshopMaintenanceForTechs(techNames: string[]) {
+  await ensureMaintenanceTables();
+
+  const uniqueTechNames = Array.from(
+    new Set(
+      techNames
+        .map((name) => String(name || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (uniqueTechNames.length === 0) {
+    return [];
+  }
+
+  const result = await db.query(
+    `
+      SELECT id, data
+      FROM assigned_maintenance_tasks
+      WHERE data->>'status' = 'pendiente'
+        AND data->>'taskType' = 'en_taller'
+        AND data->>'techName' = ANY($1::text[])
+    `,
+    [uniqueTechNames]
+  );
+
+  const now = Date.now();
+  const interruptedTasks: AssignedMaintenanceTask[] = [];
+
+  for (const row of result.rows) {
+    const currentTask = normalizeAssignedMaintenanceTask(row.data);
+
+    if (!currentTask) continue;
+
+    const nextTask: AssignedMaintenanceTask = {
+      ...currentTask,
+      status: "interrumpida",
+      statusChangedAtMs: now,
+    };
+
+    await db.query(
+      `
+        UPDATE assigned_maintenance_tasks
+        SET
+          data = $2,
+          "updatedAtMs" = $3
+        WHERE id = $1
+      `,
+      [row.id, JSON.stringify(nextTask), now]
+    );
+
+    interruptedTasks.push(nextTask);
+  }
+
+  return interruptedTasks;
 }
 
 async function seedDefaultMaintenanceTasksIfEmpty() {
