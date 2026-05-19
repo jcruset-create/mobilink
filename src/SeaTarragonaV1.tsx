@@ -2077,13 +2077,30 @@ setDraft({ area: draft.area, plate: "", urgent: false, template: "" });
 setFormOpen(false);
 
   try {
-   await fetchWithTimeout(`${API_BASE}/api/jobs`, {
+   const response = await fetchWithTimeout(`${API_BASE}/api/jobs`, {
   method: "POST",
   headers: getAdminHeaders({
     "Content-Type": "application/json",
   }),
   body: JSON.stringify(finalJob),
 });
+
+if (!response.ok) {
+  const errorData = await response.json().catch(() => null);
+
+  if (response.status === 409 && errorData?.blockedTechNames?.length > 0) {
+    window.alert(
+      `No se puede asignar el trabajo.\n\nTécnico fuera de taller por mantenimiento: ${errorData.blockedTechNames.join(
+        ", "
+      )}`
+    );
+
+    return;
+  }
+
+  window.alert(errorData?.error || "Error guardando el trabajo.");
+  return;
+}
 
  for (const tech of result.techs) {
   saveTechToBackend(tech);
