@@ -927,6 +927,22 @@ function isTechBlockedByOutsideMaintenance(techName: string) {
   return maintenanceAvailability.blockedTechNames.includes(techName);
 }
 
+function hasAnyTechBlockedByOutsideMaintenance(techNames: string[]) {
+  const blockedTech = techNames.find((name) =>
+    isTechBlockedByOutsideMaintenance(name)
+  );
+
+  if (!blockedTech) {
+    return false;
+  }
+
+  window.alert(
+    `${blockedTech} está en una tarea de mantenimiento fuera de taller y no puede recibir trabajos reales ahora.`
+  );
+
+  return true;
+}
+
 const techHoursReport = useMemo<TechHoursSummary[]>(
   () => buildTechHoursReport(closedJobs, techs),
   [closedJobs, techs]
@@ -1491,6 +1507,21 @@ function allocateJob(
   );
 
   const assignedNames = result.assignedNames ?? [];
+
+if (hasAnyTechBlockedByOutsideMaintenance(assignedNames)) {
+  const reason =
+    "Asignación bloqueada: uno de los técnicos propuestos está en mantenimiento fuera de taller.";
+  const waitingJob = makeWaitingJob(reason);
+
+  return {
+    assigned: false,
+    assignedNames: [],
+    reason,
+    techs: restoreProtectedTechs(safeBaseTechs),
+    jobs: upsertJobInList(baseJobs, waitingJob),
+    needsRamonApproval: false,
+  };
+}
   const hasProtectedAssigned = assignedNames.some((name) => {
     const tech = baseTechs.find((item) => item.name === name);
     return tech ? isProtectedTech(tech) : false;
