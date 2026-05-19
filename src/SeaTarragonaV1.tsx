@@ -796,6 +796,12 @@ const workshopMaintenanceTechsSummary = useMemo(() => {
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
 }, [techs, maintenanceAvailability]);
 
+const interruptedMaintenanceSummary = useMemo(() => {
+  return maintenanceAvailability.interruptedTasks
+    .filter((task) => task.taskType === "en_taller")
+    .sort((a, b) => b.assignedAtMs - a.assignedAtMs);
+}, [maintenanceAvailability]);
+
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
 
@@ -4725,6 +4731,40 @@ return (
         );
       })}
     </div>
+  </div>
+)}
+
+{interruptedMaintenanceSummary.length > 0 && (
+  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-3">
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <div>
+        <div className="text-xs font-black uppercase tracking-wide text-sky-700">
+          Mantenimiento interrumpido
+        </div>
+        <div className="text-xs font-semibold text-sky-600">
+          Pendiente de revisar en Pantalla técnicos
+        </div>
+      </div>
+
+      <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-black text-sky-700">
+        {interruptedMaintenanceSummary.length}
+      </span>
+    </div>
+
+    <div className="mb-3 flex flex-wrap gap-2">
+      {interruptedMaintenanceSummary.slice(0, 4).map((task) => (
+        <span
+          key={task.id}
+          className="rounded-full border border-sky-200 bg-white px-3 py-2 text-xs font-black text-sky-700"
+        >
+          {task.techName} · {task.taskLabel}
+        </span>
+      ))}
+    </div>
+
+    <div className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-xs font-bold text-sky-700">
+  Ve a Pantalla técnicos para reanudar o revisar estas tareas.
+</div>
   </div>
 )}
       </div>
