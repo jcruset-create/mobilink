@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import QRCode from "react-qr-code";
 
 type PaymentStatus = {
   id: number;
@@ -33,6 +34,7 @@ export default function CobrosDashboard() {
   const [recentPayments, setRecentPayments] = useState<RecentPayment[]>([]);
   const [paymentFilter, setPaymentFilter] = useState<"all" | "pending" | "paid">("all");
   const [paymentSearch, setPaymentSearch] = useState("");
+  const [qrUrl, setQrUrl] = useState("");
 
   async function loadRecentPayments() {
     try {
@@ -284,6 +286,14 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                   >
                     Abrir WhatsApp
                   </a>
+
+                  <button
+                    type="button"
+                    onClick={() => setQrUrl(paymentUrl)}
+                    className="rounded-xl bg-indigo-600 text-white font-bold px-4 py-2"
+                  >
+                    Ver QR
+                  </button>
                 </div>
               </div>
             )}
@@ -442,6 +452,16 @@ Importe: ${(amount / 100).toFixed(2)} €`;
 
                       {payment.payment_url && (
                         <button
+                          type="button"
+                          onClick={() => setQrUrl(payment.payment_url || "")}
+                          className="rounded-xl bg-indigo-600 px-3 py-2 text-center text-xs font-black text-white"
+                        >
+                          Ver QR
+                        </button>
+                      )}
+
+                      {payment.payment_url && (
+                        <button
                           onClick={() => copyRecentWhatsApp(payment)}
                           className="rounded-xl bg-green-500 px-3 py-2 text-xs font-black text-black"
                         >
@@ -471,6 +491,32 @@ Importe: ${(amount / 100).toFixed(2)} €`;
           </div>
         </div>
       </div>
+
+      {qrUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
+            <h2 className="mb-4 text-2xl font-black text-black">
+              QR de pago
+            </h2>
+
+            <div className="inline-block rounded-2xl bg-white p-4">
+              <QRCode value={qrUrl} size={260} />
+            </div>
+
+            <div className="mt-4 break-all text-xs text-slate-600">
+              {qrUrl}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setQrUrl("")}
+              className="mt-6 w-full rounded-xl bg-black py-3 font-black text-white"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
