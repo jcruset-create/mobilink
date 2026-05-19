@@ -606,6 +606,10 @@ app.post("/api/reset", requireAdminRole, async (req, res) => {
    await db.query(`DELETE FROM jobs`);
 await db.query(`DELETE FROM logs`);
 
+await ensureMaintenanceTables();
+
+await db.query(`DELETE FROM assigned_maintenance_tasks`);
+
 await db.query(`
   UPDATE techs
   SET
