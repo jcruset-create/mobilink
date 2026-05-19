@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 import SeaTarragonaV1 from "./SeaTarragonaV1";
 import AlmacenDashboard from "./modules/almacen-neumaticos/pages/AlmacenDashboard";
 import StockOperativo from "./modules/almacen-neumaticos/pages/StockOperativo";
+import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 import PaymentResult from "./modules/cobros/pages/PaymentResult";
 
 export default function App() {
@@ -19,16 +20,21 @@ export default function App() {
         path="/almacen-neumaticos/stock"
         element={<StockOperativo />}
       />
-      <Route
-  path="/payment-success"
-  element={<PaymentResult type="success" />}
-/>
 
-<Route
-  path="/payment-cancelled"
-  element={<PaymentResult type="cancelled" />}
-/>
+      <Route
+        path="/cobros"
+        element={<CobrosDashboard />}
+      />
+
+      <Route
+        path="/payment-success"
+        element={<PaymentResult type="success" />}
+      />
+
+      <Route
+        path="/payment-cancelled"
+        element={<PaymentResult type="cancelled" />}
+      />
     </Routes>
-    
   );
 }
