@@ -1403,6 +1403,52 @@ app.get("/api/assigned-maintenance-tasks", async (_req, res) => {
   }
 });
 
+app.get("/api/maintenance-availability", async (_req, res) => {
+  try {
+    await ensureMaintenanceTables();
+
+    const result = await db.query(`
+      SELECT data
+      FROM assigned_maintenance_tasks
+      WHERE data->>'status' = 'pendiente'
+      ORDER BY COALESCE((data->>'assignedAtMs')::bigint, 0) DESC
+    `);
+
+    const pendingTasks = result.rows
+      .map((row) => normalizeAssignedMaintenanceTask(row.data))
+      .filter(Boolean) as AssignedMaintenanceTask[];
+
+    const outsideWorkshopTasks = pendingTasks.filter(
+      (task) => task.taskType === "fuera_taller"
+    );
+
+    const workshopTasks = pendingTasks.filter(
+      (task) => task.taskType === "en_taller"
+    );
+
+    const blockedTechNames = Array.from(
+      new Set(outsideWorkshopTasks.map((task) => task.techName))
+    );
+
+    const workshopMaintenanceTechNames = Array.from(
+      new Set(workshopTasks.map((task) => task.techName))
+    );
+
+    res.json({
+      blockedTechNames,
+      workshopMaintenanceTechNames,
+      outsideWorkshopTasks,
+      workshopTasks,
+      pendingTasks,
+    });
+  } catch (error) {
+    console.error("GET /api/maintenance-availability error:", error);
+    res.status(500).json({
+      error: "Error obteniendo disponibilidad de mantenimiento",
+    });
+  }
+});
+
 app.post("/api/assigned-maintenance-tasks", async (req, res) => {
   try {
     await ensureMaintenanceTables();
