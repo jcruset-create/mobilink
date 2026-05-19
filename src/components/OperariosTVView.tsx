@@ -151,6 +151,16 @@ function formatMaintenanceAssignedAt(value: number) {
     minute: "2-digit",
   });
 }
+
+function formatMaintenanceSyncTime(value: number | null) {
+  if (!value) return "Sin sincronizar";
+
+  return new Date(value).toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function formatMaintenanceElapsedTime(
   task: AssignedMaintenanceTask,
   nowMs: number
@@ -469,6 +479,9 @@ export default function OperariosTVView({
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
 const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
+const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<number | null>(
+  null
+);
   const [maintenanceTasks, setMaintenanceTasks] = useState<MaintenanceTask[]>(
     () => {
       try {
@@ -596,7 +609,7 @@ const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
   saveAssignedMaintenanceTasksToLocalStorage(assignedMaintenanceTasks);
 }, [assignedMaintenanceTasks]);
 
-  useEffect(() => {
+useEffect(() => {
   let cancelled = false;
 
   async function loadMaintenanceFromApi() {
@@ -625,14 +638,20 @@ const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
     }
 
     setMaintenanceApiLoaded(true);
+    setMaintenanceLastSyncAt(Date.now());
   }
 
   void loadMaintenanceFromApi();
 
+  const interval = window.setInterval(() => {
+    void loadMaintenanceFromApi();
+  }, 15000);
+
   return () => {
     cancelled = true;
+    window.clearInterval(interval);
   };
-  // Solo al arrancar la pantalla.
+  // Sincronización automática con backend.
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
@@ -1229,19 +1248,25 @@ async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
-  <span
-    className={`rounded-full px-3 py-1 text-xs font-black ${
-      maintenanceApiLoaded
-        ? "bg-emerald-100 text-emerald-700"
-        : "bg-amber-100 text-amber-700"
-    }`}
-  >
-    {maintenanceApiLoaded ? "API" : "LOCAL"}
-  </span>
+<div className="flex flex-col items-end gap-1">
+  <div className="flex items-center gap-2">
+    <span
+      className={`rounded-full px-3 py-1 text-xs font-black ${
+        maintenanceApiLoaded
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-amber-100 text-amber-700"
+      }`}
+    >
+      {maintenanceApiLoaded ? "API" : "LOCAL"}
+    </span>
 
-  <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
-    {maintenanceTasks.length}
+    <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
+      {maintenanceTasks.length}
+    </span>
+  </div>
+
+  <span className="text-[10px] font-bold text-emerald-700">
+    Sync: {formatMaintenanceSyncTime(maintenanceLastSyncAt)}
   </span>
 </div>
             </div>
