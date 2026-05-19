@@ -51,6 +51,12 @@ export default function CobrosDashboard() {
 
   useEffect(() => {
     loadRecentPayments();
+
+    const interval = setInterval(() => {
+      loadRecentPayments();
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, []);
 
   function buildWhatsAppText(url: string, amount: number) {
@@ -87,6 +93,7 @@ Importe: ${(amount / 100).toFixed(2)} €`;
       }
 
       setPaymentUrl(data.url);
+      setQrUrl(data.url);
       setMessage("Enlace de pago creado correctamente.");
       await loadRecentPayments();
     } catch (error: any) {
@@ -171,11 +178,22 @@ Importe: ${(amount / 100).toFixed(2)} €`;
   return (
     <div className="min-h-screen bg-slate-950 text-white p-6">
       <div className="max-w-5xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-3xl font-black mb-2">Cobros</h1>
-          <p className="text-slate-400">
-            Crear enlaces de paga y señal con Stripe.
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-black mb-2">Cobros</h1>
+            <p className="text-slate-400">
+              Crear enlaces de paga y señal con Stripe.
+            </p>
+          </div>
+
+          <button
+            onClick={() => {
+              window.location.href = "/";
+            }}
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-slate-800"
+          >
+            Volver
+          </button>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
@@ -448,6 +466,15 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                         >
                           Abrir enlace
                         </a>
+                      )}
+
+                      {payment.payment_url && (
+                        <button
+                          onClick={() => setQrUrl(payment.payment_url || "")}
+                          className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white"
+                        >
+                          Ver QR
+                        </button>
                       )}
 
                       {payment.payment_url && (
