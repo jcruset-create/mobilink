@@ -779,6 +779,12 @@ const availableTechsSummary = useMemo(() => {
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
 }, [techs, maintenanceAvailability]);
 
+const outsideMaintenanceTechsSummary = useMemo(() => {
+  return techs
+    .filter((tech) => isTechBlockedByOutsideMaintenance(tech.name))
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+}, [techs, maintenanceAvailability]);
+
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
 
@@ -4607,7 +4613,44 @@ return (
               </div>
             ))}
           </div>
+          
         )}
+        {outsideMaintenanceTechsSummary.length > 0 && (
+  <div className="rounded-2xl border border-red-200 bg-red-50 p-3">
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <div>
+        <div className="text-xs font-black uppercase tracking-wide text-red-700">
+          Fuera de taller por mantenimiento
+        </div>
+        <div className="text-xs font-semibold text-red-600">
+          No disponibles para trabajos reales
+        </div>
+      </div>
+
+      <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-700">
+        {outsideMaintenanceTechsSummary.length}
+      </span>
+    </div>
+
+    <div className="flex flex-wrap gap-2">
+      {outsideMaintenanceTechsSummary.map((tech) => {
+        const task = maintenanceAvailability.outsideWorkshopTasks.find(
+          (item) => item.techName === tech.name
+        );
+
+        return (
+          <span
+            key={tech.name}
+            className="rounded-full border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700"
+          >
+            {tech.name}
+            {task ? ` · ${task.taskLabel}` : ""}
+          </span>
+        );
+      })}
+    </div>
+  </div>
+)}
       </div>
     </div>
   </section>
