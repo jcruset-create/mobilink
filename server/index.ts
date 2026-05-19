@@ -305,6 +305,40 @@ app.get("/api/payments/status/:reference", async (req, res) => {
   }
 });
 
+app.get("/api/payments/recent", async (_req, res) => {
+  try {
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          reference,
+          customer_name,
+          customer_phone,
+          amount_cents,
+          status,
+          payment_url,
+          paid_at_ms,
+          created_at_ms
+        FROM payments
+        ORDER BY created_at_ms DESC
+        LIMIT 25
+      `
+    );
+
+    res.json({
+      success: true,
+      payments: result.rows,
+    });
+  } catch (error: any) {
+    console.error("ERROR LISTANDO PAYMENTS:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
   try {
     const {
@@ -1051,6 +1085,130 @@ if (interruptedMaintenanceTasks.length > 0) {
   } catch (error) {
     console.error("POST /api/jobs error:", error);
     res.status(500).json({ error: "Error guardando trabajo" });
+  }
+});
+
+
+app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const job = req.body ?? {};
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de trabajo no válido" });
+    }
+
+    const incomingPlate = String(job.plate ?? "").trim().toUpperCase();
+
+    if (!incomingPlate) {
+      return res.status(400).json({ error: "La matrícula es obligatoria" });
+    }
+
+    const assignedNames = Array.isArray(job.assignedNames)
+      ? job.assignedNames
+          .map((name: unknown) => String(name || "").trim())
+          .filter(Boolean)
+      : [];
+
+    const blockedOutsideMaintenanceTechNames =
+      await getBlockedOutsideMaintenanceTechNames(assignedNames);
+
+    if (blockedOutsideMaintenanceTechNames.length > 0) {
+      return res.status(409).json({
+        error: "Asignación bloqueada: técnico en mantenimiento fuera de taller",
+        blockedTechNames: blockedOutsideMaintenanceTechNames,
+      });
+    }
+
+    const interruptedMaintenanceTasks =
+      await interruptWorkshopMaintenanceForTechs(assignedNames);
+
+    if (interruptedMaintenanceTasks.length > 0) {
+      console.log(
+        "Mantenimiento en taller interrumpido por actualización de trabajo:",
+        {
+          jobId: id,
+          assignedNames,
+          interruptedMaintenanceTasks: interruptedMaintenanceTasks.map(
+            (task) => ({
+              id: task.id,
+              taskLabel: task.taskLabel,
+              techName: task.techName,
+            })
+          ),
+        }
+      );
+    }
+
+    const result = await db.query(
+      `
+        INSERT INTO jobs (
+          id,
+          area,
+          plate,
+          urgent,
+          status,
+          "assignedNames",
+          reason,
+          "createdAtMs",
+          "startedAtMs",
+          "closedAtMs",
+          template,
+          "quickEntryLabel",
+          "quickEntryMode",
+          "actualMinutes",
+          "workedAccumulatedMinutes",
+          "pausedAccumulatedMinutes",
+          "pausedAtMs"
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9,
+          $10, $11, $12, $13, $14, $15, $16, $17
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          area = EXCLUDED.area,
+          plate = EXCLUDED.plate,
+          urgent = EXCLUDED.urgent,
+          status = EXCLUDED.status,
+          "assignedNames" = EXCLUDED."assignedNames",
+          reason = EXCLUDED.reason,
+          "createdAtMs" = EXCLUDED."createdAtMs",
+          "startedAtMs" = EXCLUDED."startedAtMs",
+          "closedAtMs" = EXCLUDED."closedAtMs",
+          template = EXCLUDED.template,
+          "quickEntryLabel" = EXCLUDED."quickEntryLabel",
+          "quickEntryMode" = EXCLUDED."quickEntryMode",
+          "actualMinutes" = EXCLUDED."actualMinutes",
+          "workedAccumulatedMinutes" = EXCLUDED."workedAccumulatedMinutes",
+          "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
+          "pausedAtMs" = EXCLUDED."pausedAtMs"
+        RETURNING *
+      `,
+      [
+        id,
+        job.area,
+        incomingPlate,
+        !!job.urgent,
+        job.status ?? "espera",
+        JSON.stringify(assignedNames),
+        job.reason ?? "",
+        job.createdAtMs ?? Date.now(),
+        job.startedAtMs ?? null,
+        job.closedAtMs ?? null,
+        job.template ?? null,
+        job.quickEntryLabel ?? null,
+        job.quickEntryMode ?? null,
+        job.actualMinutes ?? null,
+        job.workedAccumulatedMinutes ?? 0,
+        job.pausedAccumulatedMinutes ?? 0,
+        job.pausedAtMs ?? null,
+      ]
+    );
+
+    res.json(normalizeJobRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/jobs/:id error:", error);
+    res.status(500).json({ error: "Error actualizando trabajo" });
   }
 });
 

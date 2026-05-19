@@ -2759,6 +2759,13 @@ async function authorizeProposedJob(jobId: number) {
     return;
   }
 
+  if (hasAnyTechBlockedByOutsideMaintenance(assignedNames)) {
+    appendLog(
+      `No se puede iniciar ${job.plate}: técnico en mantenimiento fuera de taller.`
+    );
+    return;
+  }
+
   for (const techName of assignedNames) {
     const tech = techs.find((item) => item.name === techName);
 
@@ -2882,6 +2889,13 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
 
   const tech = techs.find((item) => item.name === techName);
   if (!tech) return;
+
+  if (hasAnyTechBlockedByOutsideMaintenance([techName])) {
+    appendLog(
+      `No se puede asignar ${job.plate} a ${techName}: mantenimiento fuera de taller.`
+    );
+    return;
+  }
 
   if (
     !canAssignTechManuallyToJob(
@@ -3643,6 +3657,13 @@ function reassignJob(jobId: number, techName: string) {
   const tech = techs.find((item) => item.name === techName);
   if (!tech) return;
 
+  if (hasAnyTechBlockedByOutsideMaintenance([techName])) {
+    appendLog(
+      `No se puede reasignar ${job.plate} a ${techName}: mantenimiento fuera de taller.`
+    );
+    return;
+  }
+
   const previousAssignedNames = job.assignedNames ?? [];
   const previousResponsibleName = previousAssignedNames[0] ?? "";
   const previousSupportName = previousAssignedNames[1] ?? "";
@@ -3805,6 +3826,13 @@ function changeSupportForJob(jobId: number, newSupportName: string) {
   const newSupport = techs.find((tech) => tech.name === newSupportName);
   if (!newSupport) return;
 
+  if (hasAnyTechBlockedByOutsideMaintenance([newSupportName])) {
+    appendLog(
+      `No se puede poner apoyo ${newSupportName} en ${job.plate}: mantenimiento fuera de taller.`
+    );
+    return;
+  }
+
   if (
     !canAssignTechManuallyToJob(
       newSupport,
@@ -3948,8 +3976,8 @@ function addSupportToJob(jobId: number, forcedSupportName?: string) {
 
   
   const candidates = techs
-  .filter((tech) => canTechBeProposedForJob(tech))
-  .filter(() => true);
+    .filter((tech) => canTechBeProposedForJob(tech))
+    .filter((tech) => !isTechBlockedByOutsideMaintenance(tech.name));
 
   const support = forcedSupportName
     ? candidates.find((candidate) => candidate.name === forcedSupportName)
@@ -3958,6 +3986,13 @@ function addSupportToJob(jobId: number, forcedSupportName?: string) {
   if (!support) {
     appendLog(`No hay apoyo disponible para ${job.plate}.`);
     alert("No hay apoyo disponible válido para este trabajo.");
+    return;
+  }
+
+  if (hasAnyTechBlockedByOutsideMaintenance([support.name])) {
+    appendLog(
+      `No se puede añadir apoyo ${support.name} en ${job.plate}: mantenimiento fuera de taller.`
+    );
     return;
   }
 
@@ -6268,6 +6303,11 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   "responsable"
 ) || tech.name === assignedNames[0]
       )
+      .filter(
+        (tech) =>
+          tech.name === assignedNames[0] ||
+          !isTechBlockedByOutsideMaintenance(tech.name)
+      )
       .map((tech) => (
         <option key={tech.name} value={tech.name}>
           {tech.name}
@@ -6298,6 +6338,11 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   quickTemplates,
   "apoyo"
 ) || tech.name === assignedNames[1]
+          )
+          .filter(
+            (tech) =>
+              tech.name === assignedNames[1] ||
+              !isTechBlockedByOutsideMaintenance(tech.name)
           )
           .map((tech) => (
             <option key={tech.name} value={tech.name}>
@@ -6817,6 +6862,7 @@ const textColor = "";
       "apoyo"
     )
   )
+  .filter((tech) => !isTechBlockedByOutsideMaintenance(tech.name))
   .map((tech) => (
     <option key={tech.name} value={tech.name}>
       {tech.name}
@@ -6844,6 +6890,7 @@ const textColor = "";
       const currentResponsible = assignedNames[0];
 
       if (tech.name === currentResponsible) return true;
+      if (isTechBlockedByOutsideMaintenance(tech.name)) return false;
 
       return canSelectTechManuallyForJob(
         tech,
@@ -6892,6 +6939,11 @@ const textColor = "";
               quickTemplates,
               "apoyo"
             ) || tech.name === assignedNames[1]
+        )
+        .filter(
+          (tech) =>
+            tech.name === assignedNames[1] ||
+            !isTechBlockedByOutsideMaintenance(tech.name)
         )
         .map((tech) => (
           <option key={tech.name} value={tech.name}>
