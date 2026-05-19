@@ -60,7 +60,7 @@ export default function CobrosDashboard() {
   }, []);
 
   function buildWhatsAppText(url: string, amount: number) {
-    return `Hola, para confirmar la asistencia puede realizar la paga y señal aquí:
+    return `Hola, para confirmar la asistencia puede realizar la pago aquí:
 
 ${url}
 
@@ -148,6 +148,11 @@ Importe: ${(amount / 100).toFixed(2)} €`;
     setMessage("Mensaje WhatsApp copiado al portapapeles.");
   }
 
+  async function copyReference(reference: string) {
+    await navigator.clipboard.writeText(reference);
+    setMessage("Referencia copiada.");
+  }
+
   async function copyRecentWhatsApp(payment: RecentPayment) {
     if (!payment.payment_url) return;
 
@@ -182,7 +187,7 @@ Importe: ${(amount / 100).toFixed(2)} €`;
           <div>
             <h1 className="text-3xl font-black mb-2">Cobros</h1>
             <p className="text-slate-400">
-              Crear enlaces de paga y señal con Stripe.
+              Crear enlaces de pago con Stripe.
             </p>
           </div>
 
@@ -260,6 +265,22 @@ Importe: ${(amount / 100).toFixed(2)} €`;
               {statusLoading ? "Consultando..." : "Consultar estado del pago"}
             </button>
 
+            <button
+              onClick={() => {
+                setJobId("");
+                setCustomerName("");
+                setCustomerPhone("");
+                setAmountEuros("50");
+                setPaymentUrl("");
+                setPaymentStatus(null);
+                setQrUrl("");
+                setMessage("");
+              }}
+              className="w-full rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-black py-3"
+            >
+              Nuevo cobro
+            </button>
+
             {paymentUrl && (
               <div className="bg-slate-800 border border-emerald-500 rounded-xl p-4 space-y-3">
                 <div className="text-sm text-slate-300">Enlace generado:</div>
@@ -315,6 +336,18 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                 </div>
               </div>
             )}
+
+            <div
+              className={`rounded-2xl p-5 text-center font-black text-2xl ${
+                isPaid
+                  ? "bg-emerald-500 text-black"
+                  : "bg-amber-400 text-black"
+              }`}
+            >
+              {!paymentStatus && "SIN CONSULTAR"}
+              {paymentStatus && isPaid && "✅ PAGADO"}
+              {paymentStatus && !isPaid && "⏳ PENDIENTE"}
+            </div>
 
             <div className="bg-slate-800 rounded-xl p-4">
               <div className="text-sm text-slate-400">Estado del pago</div>
@@ -406,7 +439,18 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                 </div>
               )}
 
-              {filteredPayments.map((payment) => {
+              {[...filteredPayments]
+                .sort((a, b) => {
+                  if (a.status === b.status) {
+                    return (b.created_at_ms || 0) - (a.created_at_ms || 0);
+                  }
+
+                  if (a.status === "pending") return -1;
+                  if (b.status === "pending") return 1;
+
+                  return 0;
+                })
+                .map((payment) => {
                 const paid = payment.status === "paid";
 
                 return (
@@ -495,6 +539,39 @@ Importe: ${(amount / 100).toFixed(2)} €`;
                           Copiar WhatsApp
                         </button>
                       )}
+
+                      <button
+                        onClick={() => copyReference(payment.reference)}
+                        className="rounded-xl bg-slate-700 px-3 py-2 text-xs font-black text-white"
+                      >
+                        Copiar referencia
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          setJobId(payment.reference);
+
+                          try {
+                            const response = await fetch(
+                              `/api/payments/status/${encodeURIComponent(
+                                payment.reference
+                              )}`
+                            );
+
+                            const data = await response.json();
+
+                            if (data.success) {
+                              await loadRecentPayments();
+                              setMessage("Estado actualizado.");
+                            }
+                          } catch (error) {
+                            console.error(error);
+                          }
+                        }}
+                        className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white"
+                      >
+                        Actualizar estado
+                      </button>
 
                       <button
                         onClick={() => {
