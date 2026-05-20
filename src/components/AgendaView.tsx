@@ -65,6 +65,17 @@ export type ScheduledJob = {
   createdAtMs?: number;
 };
 
+type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate";
+
+type DateReminder = {
+  id: number;
+  title: string;
+  startDate: string;
+  endDate: string;
+  color: DateReminderColor;
+  notes?: string;
+};
+
 type Props = {
   scheduledJobs: ScheduledJob[];
   setScheduledJobs: Dispatch<SetStateAction<ScheduledJob[]>>;
@@ -405,6 +416,38 @@ useEffect(() => {
 
   const [selectedArea, setSelectedArea] = useState<AreaKey>("camion");
 
+  const [dateReminders, setDateReminders] = useState<DateReminder[]>(() => {
+    try {
+      if (typeof window === "undefined") return [];
+
+      const saved = window.localStorage.getItem("agendaDateReminders");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [reminderModalOpen, setReminderModalOpen] = useState(false);
+
+  const [reminderDraft, setReminderDraft] = useState({
+    title: "",
+    startDate: getTodayKey(),
+    endDate: getTodayKey(),
+    color: "red" as DateReminderColor,
+    notes: "",
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "agendaDateReminders",
+        JSON.stringify(dateReminders)
+      );
+    } catch {
+      // Si localStorage no está disponible, la agenda seguirá funcionando.
+    }
+  }, [dateReminders]);
+
   const [draft, setDraft] = useState({
     templateKey: quickTemplates[0]?.key ?? "",
     plate: "",
@@ -458,6 +501,99 @@ useEffect(() => {
     visibleDays.length > 0 ? visibleDays : days.length > 0 ? [days[0]] : [];
 
   const todayKey = formatLocalDate(new Date());
+
+  function getReminderColorClass(color: DateReminderColor) {
+    if (color === "orange") return "bg-orange-600 border-orange-700 text-white";
+    if (color === "blue") return "bg-blue-600 border-blue-700 text-white";
+    if (color === "green") return "bg-emerald-600 border-emerald-700 text-white";
+    if (color === "slate") return "bg-slate-600 border-slate-700 text-white";
+
+    return "bg-red-600 border-red-700 text-white";
+  }
+
+  function getVisibleDateReminders() {
+    return dateReminders.filter((reminder) =>
+      finalVisibleDays.some(
+        (day) => day.date >= reminder.startDate && day.date <= reminder.endDate
+      )
+    );
+  }
+
+  function getReminderGridRange(reminder: DateReminder) {
+    const visibleIndexes = finalVisibleDays
+      .map((day, index) => ({ day, index }))
+      .filter(
+        ({ day }) => day.date >= reminder.startDate && day.date <= reminder.endDate
+      )
+      .map(({ index }) => index);
+
+    if (visibleIndexes.length === 0) return null;
+
+    const firstIndex = Math.min(...visibleIndexes);
+    const lastIndex = Math.max(...visibleIndexes);
+
+    return {
+      // +2 porque la primera columna es la columna de horas.
+      gridColumn: `${firstIndex + 2} / ${lastIndex + 3}`,
+    };
+  }
+
+  function openDateReminderModal() {
+    setReminderDraft({
+      title: "",
+      startDate: days[0]?.date ?? getTodayKey(),
+      endDate: days[5]?.date ?? getTodayKey(),
+      color: "red",
+      notes: "",
+    });
+    setReminderModalOpen(true);
+  }
+
+  function saveDateReminder() {
+    if (!reminderDraft.title.trim()) {
+      alert("Escribe un título para el recordatorio.");
+      return;
+    }
+
+    if (reminderDraft.endDate < reminderDraft.startDate) {
+      alert("La fecha final no puede ser anterior a la fecha inicial.");
+      return;
+    }
+
+    const reminder: DateReminder = {
+      id: Date.now(),
+      title: reminderDraft.title.trim().toUpperCase(),
+      startDate: reminderDraft.startDate,
+      endDate: reminderDraft.endDate,
+      color: reminderDraft.color,
+      notes: reminderDraft.notes.trim(),
+    };
+
+    setDateReminders((prev) => [...prev, reminder]);
+    appendLog(
+      `Recordatorio creado: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
+    );
+
+    setReminderModalOpen(false);
+    setReminderDraft({
+      title: "",
+      startDate: getTodayKey(),
+      endDate: getTodayKey(),
+      color: "red",
+      notes: "",
+    });
+  }
+
+  function deleteDateReminder(id: number) {
+    const reminder = dateReminders.find((item) => item.id === id);
+    if (!reminder) return;
+
+    const ok = window.confirm(`¿Eliminar el recordatorio "${reminder.title}"?`);
+    if (!ok) return;
+
+    setDateReminders((prev) => prev.filter((item) => item.id !== id));
+    appendLog(`Recordatorio eliminado: ${reminder.title}.`);
+  }
 
   function normalizeMinutes(value: unknown, fallback = 0) {
   if (value === null || value === undefined || value === "") return fallback;
@@ -912,6 +1048,10 @@ appendLog(
     alert("Error conectando con el servidor de WhatsApp.");
   }
 }
+
+  const visibleDateReminders = getVisibleDateReminders();
+  const allDayReminderRows = Math.max(1, visibleDateReminders.length);
+
   return (
     <div className="h-screen overflow-hidden bg-slate-50 p-3 text-slate-900">
       <div className="w-full space-y-4">
@@ -947,6 +1087,14 @@ appendLog(
               className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
             >
               + Nueva cita
+            </button>
+
+            <button
+              type="button"
+              onClick={openDateReminderModal}
+              className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+            >
+              + Recordatorio fechas
             </button>
 
             <button
@@ -1041,6 +1189,73 @@ appendLog(
                 {day.label}
               </div>
             ))}
+          </div>
+
+          <div
+            className={`sticky top-[45px] z-30 grid border-b border-slate-200 bg-white ${
+              calendarMode === "day"
+                ? "min-w-[900px] grid-cols-[70px_1fr]"
+                : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
+            }`}
+            style={{
+              gridTemplateRows: `repeat(${allDayReminderRows}, minmax(30px, auto))`,
+            }}
+          >
+            <div
+              className="z-10 border-r border-slate-200 bg-white p-2 text-[11px] font-bold text-slate-500"
+              style={{ gridColumn: "1 / 2", gridRow: `1 / ${allDayReminderRows + 1}` }}
+            >
+              Todo el día
+            </div>
+
+            {finalVisibleDays.map((day, index) => (
+              <div
+                key={`all-day-bg-${day.date}`}
+                className="border-l border-slate-200 bg-slate-50/80"
+                style={{
+                  gridColumn: `${index + 2} / ${index + 3}`,
+                  gridRow: `1 / ${allDayReminderRows + 1}`,
+                }}
+              />
+            ))}
+
+            {visibleDateReminders.map((reminder, index) => {
+              const range = getReminderGridRange(reminder);
+              if (!range) return null;
+
+              return (
+                <div
+                  key={reminder.id}
+                  title={reminder.notes || reminder.title}
+                  className={`z-20 mx-1 my-1 flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase shadow-sm ${getReminderColorClass(
+                    reminder.color
+                  )}`}
+                  style={{
+                    gridColumn: range.gridColumn,
+                    gridRow: `${index + 1} / ${index + 2}`,
+                  }}
+                >
+                  <span className="truncate">
+                    {reminder.title}
+                    <span className="ml-2 font-medium opacity-90">
+                      {reminder.startDate} → {reminder.endDate}
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteDateReminder(reminder.id);
+                    }}
+                    className="shrink-0 rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-black text-slate-700"
+                    title="Eliminar recordatorio"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           <div
@@ -1338,6 +1553,124 @@ appendLog(
             })}
           </div>
         </div>
+
+        {reminderModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+              <h3 className="text-xl font-semibold">Nuevo recordatorio por fechas</h3>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Se mostrará arriba de la agenda, como un evento de todo el día.
+                Puedes poner unos días concretos o un mes completo, por ejemplo
+                del 01/05 al 31/05.
+              </p>
+
+              <div className="mt-5 space-y-4">
+                <input
+                  value={reminderDraft.title}
+                  onChange={(e) =>
+                    setReminderDraft((prev) => ({
+                      ...prev,
+                      title: e.target.value,
+                    }))
+                  }
+                  placeholder="Ej: SUPERVISIÓN TACÓGRAFO JORDI CRUSET"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+                />
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">
+                      Fecha inicio
+                    </label>
+
+                    <input
+                      type="date"
+                      value={reminderDraft.startDate}
+                      onChange={(e) =>
+                        setReminderDraft((prev) => ({
+                          ...prev,
+                          startDate: e.target.value,
+                          endDate:
+                            prev.endDate < e.target.value
+                              ? e.target.value
+                              : prev.endDate,
+                        }))
+                      }
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-500">
+                      Fecha final
+                    </label>
+
+                    <input
+                      type="date"
+                      value={reminderDraft.endDate}
+                      onChange={(e) =>
+                        setReminderDraft((prev) => ({
+                          ...prev,
+                          endDate: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <select
+                  value={reminderDraft.color}
+                  onChange={(e) =>
+                    setReminderDraft((prev) => ({
+                      ...prev,
+                      color: e.target.value as DateReminderColor,
+                    }))
+                  }
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+                >
+                  <option value="red">Rojo</option>
+                  <option value="orange">Naranja</option>
+                  <option value="blue">Azul</option>
+                  <option value="green">Verde</option>
+                  <option value="slate">Gris</option>
+                </select>
+
+                <textarea
+                  value={reminderDraft.notes}
+                  onChange={(e) =>
+                    setReminderDraft((prev) => ({
+                      ...prev,
+                      notes: e.target.value,
+                    }))
+                  }
+                  placeholder="Observaciones"
+                  rows={3}
+                  className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-3"
+                />
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setReminderModalOpen(false)}
+                  className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={saveDateReminder}
+                  className="flex-1 rounded-2xl bg-red-600 px-4 py-3 text-sm font-medium text-white"
+                >
+                  Guardar recordatorio
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
