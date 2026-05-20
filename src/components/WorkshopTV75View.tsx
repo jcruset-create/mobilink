@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
 type JobForTV75 = {
@@ -34,6 +36,24 @@ type Props = {
   getOperationLabel: (job: OperationLabelJob) => string;
   onBack?: () => void;
   onLogout?: () => void;
+};
+
+type MaintenanceTaskType = "en_taller" | "fuera_taller";
+
+type AssignedMaintenanceTaskStatus =
+  | "pendiente"
+  | "finalizada"
+  | "interrumpida";
+
+type AssignedMaintenanceTask = {
+  id: string;
+  taskId: string;
+  taskLabel: string;
+  taskType: MaintenanceTaskType;
+  techName: string;
+  assignedAtMs: number;
+  status: AssignedMaintenanceTaskStatus;
+  statusChangedAtMs?: number | null;
 };
 
 const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
@@ -159,6 +179,40 @@ function formatWorkedTime(job: JobForTV75) {
   return `${hours} h ${mins} min`;
 }
 
+function formatMaintenanceTime(task: AssignedMaintenanceTask, nowMs: number) {
+  const endMs =
+    task.status === "pendiente"
+      ? nowMs
+      : task.statusChangedAtMs ?? task.assignedAtMs;
+
+  const minutes = Math.max(0, Math.floor((endMs - task.assignedAtMs) / 60000));
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+
+  if (hours <= 0) return `${mins} min`;
+
+  return `${hours} h ${mins} min`;
+}
+
+function getMaintenanceTaskTypeLabel(type: MaintenanceTaskType) {
+  if (type === "fuera_taller") return "Fuera de taller";
+  return "Mantenimiento";
+}
+
+async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE}${url}`);
+
+    if (!response.ok) {
+      return fallback;
+    }
+
+    return (await response.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function SmallJobCard({
   job,
   getOperationLabel,
@@ -205,6 +259,66 @@ function SmallJobCard({
   );
 }
 
+function MaintenanceVisualCard({
+  task,
+  tech,
+  nowMs,
+}: {
+  task: AssignedMaintenanceTask;
+  tech?: TechForTV75 | null;
+  nowMs: number;
+}) {
+  const isOutside = task.taskType === "fuera_taller";
+
+  return (
+    <div
+      className={`rounded-3xl border p-4 shadow-sm ${
+        isOutside
+          ? "border-red-200 bg-red-50"
+          : "border-emerald-200 bg-emerald-50"
+      }`}
+    >
+      <div className="mb-3 flex flex-wrap gap-2">
+        <div className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm">
+          <TechAvatar tech={tech} size="large" />
+
+          <div className="truncate text-xl font-black">{task.techName}</div>
+        </div>
+      </div>
+
+      <div className="min-w-0">
+        <div className="mb-2 flex items-center gap-2">
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-black uppercase ${
+              isOutside
+                ? "bg-red-100 text-red-700"
+                : "bg-emerald-100 text-emerald-700"
+            }`}
+          >
+            {isOutside ? "Fuera taller" : "Mantenimiento"}
+          </span>
+
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-400">
+            Tarea
+          </span>
+        </div>
+
+        <div className="break-words text-3xl font-black leading-none tracking-wide text-slate-950">
+          {task.taskLabel}
+        </div>
+
+        <div className="mt-2 line-clamp-2 text-lg font-black leading-tight text-slate-700">
+          {getMaintenanceTaskTypeLabel(task.taskType)}
+        </div>
+
+        <div className="mt-4 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-base font-black text-white">
+          Tiempo trabajando: {formatMaintenanceTime(task, nowMs)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WorkshopTV75View({
   jobs,
   techs,
@@ -212,10 +326,56 @@ export default function WorkshopTV75View({
   onBack,
   onLogout,
 }: Props) {
+  const [nowTick, setNowTick] = useState(Date.now());
+  const [assignedMaintenanceTasks, setAssignedMaintenanceTasks] = useState<
+    AssignedMaintenanceTask[]
+  >([]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 30000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAssignedMaintenanceTasks() {
+      const apiAssignedMaintenanceTasks = await fetchMaintenanceJson<
+        AssignedMaintenanceTask[]
+      >("/api/assigned-maintenance-tasks", []);
+
+      if (cancelled) return;
+
+      if (Array.isArray(apiAssignedMaintenanceTasks)) {
+        setAssignedMaintenanceTasks(apiAssignedMaintenanceTasks);
+      }
+    }
+
+    void loadAssignedMaintenanceTasks();
+
+    const interval = window.setInterval(() => {
+      void loadAssignedMaintenanceTasks();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
   const activeJobs = jobs.filter((job) => job.status === "activo");
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
   const waitingJobs = jobs.filter((job) => job.status === "espera");
+
+  const pendingMaintenanceTasks = assignedMaintenanceTasks.filter(
+    (task) => task.status === "pendiente"
+  );
+
+  const activeVisualCount = activeJobs.length + pendingMaintenanceTasks.length;
 
   const tvScale =
     typeof window === "undefined"
@@ -235,7 +395,7 @@ export default function WorkshopTV75View({
             </h1>
 
             <p className="text-sm font-semibold text-slate-500">
-              Vista TV · trabajos activos y estado de técnicos
+              Vista TV · trabajos activos, mantenimiento y estado de técnicos
             </p>
           </div>
 
@@ -245,7 +405,7 @@ export default function WorkshopTV75View({
                 Activos
               </div>
               <div className="text-xl font-black text-slate-900">
-                {activeJobs.length}
+                {activeVisualCount}
               </div>
             </div>
 
@@ -304,13 +464,13 @@ export default function WorkshopTV75View({
               <h2 className="text-2xl font-black">Trabajos activos</h2>
 
               <span className="rounded-full bg-slate-100 px-4 py-2 text-sm font-black text-slate-700">
-                {activeJobs.length}
+                {activeVisualCount}
               </span>
             </div>
 
-            {activeJobs.length === 0 ? (
+            {activeJobs.length === 0 && pendingMaintenanceTasks.length === 0 ? (
               <div className="flex h-[calc(100%-60px)] items-center justify-center rounded-3xl border border-slate-200 bg-slate-50 text-lg font-black text-slate-400">
-                No hay trabajos activos.
+                No hay trabajos activos ni tareas asignadas.
               </div>
             ) : (
               <div className="grid h-[calc(100%-60px)] auto-rows-max grid-cols-3 gap-4 overflow-auto pr-2">
@@ -319,7 +479,7 @@ export default function WorkshopTV75View({
 
                   return (
                     <div
-                      key={job.id}
+                      key={`job-${job.id}`}
                       className="rounded-3xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
                     >
                       <div className="mb-3 flex flex-wrap gap-2">
@@ -377,6 +537,19 @@ export default function WorkshopTV75View({
                         </div>
                       </div>
                     </div>
+                  );
+                })}
+
+                {pendingMaintenanceTasks.map((task) => {
+                  const tech = techs.find((item) => item.name === task.techName);
+
+                  return (
+                    <MaintenanceVisualCard
+                      key={`maintenance-${task.id}`}
+                      task={task}
+                      tech={tech}
+                      nowMs={nowTick}
+                    />
                   );
                 })}
               </div>
@@ -457,12 +630,20 @@ export default function WorkshopTV75View({
                     ? jobs.find((job) => job.id === tech.currentJobId)
                     : null;
 
+                const pendingMaintenanceTask = pendingMaintenanceTasks.find(
+                  (task) => task.techName === tech.name
+                );
+
                 return (
                   <div
                     key={tech.name}
-                    className={`rounded-2xl border p-4 ${getTechCardClass(
-                      tech.status
-                    )}`}
+                    className={`rounded-2xl border p-4 ${
+                      pendingMaintenanceTask
+                        ? pendingMaintenanceTask.taskType === "fuera_taller"
+                          ? "border-red-300 bg-red-200 text-red-950"
+                          : "border-emerald-300 bg-emerald-200 text-emerald-950"
+                        : getTechCardClass(tech.status)
+                    }`}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
@@ -478,13 +659,21 @@ export default function WorkshopTV75View({
                               ? `${currentJob.plate} · ${getOperationLabel(
                                   currentJob
                                 )}`
+                              : pendingMaintenanceTask
+                              ? `${getMaintenanceTaskTypeLabel(
+                                  pendingMaintenanceTask.taskType
+                                )} · ${pendingMaintenanceTask.taskLabel}`
                               : "Sin trabajo asignado"}
                           </div>
                         </div>
                       </div>
 
                       <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-3 py-1 text-[10px] font-black">
-                        {getTechStatusLabel(tech.status)}
+                        {pendingMaintenanceTask
+                          ? pendingMaintenanceTask.taskType === "fuera_taller"
+                            ? "FUERA TALLER"
+                            : "MANTENIMIENTO"
+                          : getTechStatusLabel(tech.status)}
                       </span>
                     </div>
                   </div>
