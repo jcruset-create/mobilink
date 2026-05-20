@@ -1375,11 +1375,21 @@ async function uploadTechAvatar(file: File, techName: string) {
   formData.append("avatar", file);
 
   try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/techs/${name}/avatar`, {
-  method: "POST",
-  headers: getAdminHeaders(),
-  body: formData,
-});
+    const response = await fetchWithTimeout(
+      `${API_BASE}/api/techs/${encodeURIComponent(techName)}/avatar`,
+      {
+        method: "POST",
+        headers: getAdminHeaders(),
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.error("Error subiendo avatar:", response.status, text);
+      alert(`No se pudo subir la foto de ${techName}.`);
+      return;
+    }
 
     const updatedTech = await response.json();
 
@@ -1395,8 +1405,11 @@ async function uploadTechAvatar(file: File, techName: string) {
     );
 
     appendLog(`Foto actualizada para ${techName}.`);
+
+    await reloadTechsFromBackend();
   } catch (error) {
     console.error("Error subiendo avatar:", error);
+    alert(`Error subiendo la foto de ${techName}.`);
   }
 }
 
