@@ -600,14 +600,18 @@ async function loadTechs() {
 
         if (!found) return baseTech;
 
-        const loadedStatus = found.status as TechStatus;
-        const isManualUnavailable = isManualUnavailableStatus(loadedStatus);
+        const loadedStatus =
+  found.status === "supervisor"
+    ? ("disponible" as TechStatus)
+    : ((found.status ?? baseTech.status) as TechStatus);
 
-        return {
-          ...baseTech,
-          status: loadedStatus,
-          blocked: isManualUnavailable || !!found.blocked,
-          currentJobId: isManualUnavailable ? null : found.currentJobId ?? null,
+const isManualUnavailable = isManualUnavailableStatus(loadedStatus);
+
+return {
+  ...baseTech,
+  status: loadedStatus,
+  blocked: isManualUnavailable,
+  currentJobId: isManualUnavailable ? null : found.currentJobId ?? null,
           competencies: hasCompetencies
             ? found.competencies
             : baseTech.competencies,
@@ -770,15 +774,17 @@ const validationJobs = useMemo(
 
 const availableTechsSummary = useMemo(() => {
   return techs
-    .filter(
-      (tech) =>
-        tech.status === "disponible" &&
+    .filter((tech) => {
+      const status = tech.status === "supervisor" ? "disponible" : tech.status;
+
+      return (
+        status === "disponible" &&
         tech.currentJobId == null &&
-        !tech.blocked &&
-        !isTechBlockedByOutsideMaintenance(tech.name)
-    )
+        !isUnavailableTechStatus(status)
+      );
+    })
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs, isTechBlockedByOutsideMaintenance]);
+}, [techs]);
 
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
@@ -1106,10 +1112,16 @@ if (!Array.isArray(data)) return;
         return found
   ? {
       ...baseTech,
-      status: (found.status ?? baseTech.status) as TechStatus,
-      blocked:
-        isUnavailableTechStatus((found.status ?? baseTech.status) as TechStatus) ||
-        !!found.blocked,
+      status:
+  found.status === "supervisor"
+    ? ("disponible" as TechStatus)
+    : ((found.status ?? baseTech.status) as TechStatus),
+
+blocked: isUnavailableTechStatus(
+  found.status === "supervisor"
+    ? ("disponible" as TechStatus)
+    : ((found.status ?? baseTech.status) as TechStatus)
+),
       currentJobId: found.currentJobId ?? null,
       competencies: hasCompetencies
         ? found.competencies
