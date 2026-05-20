@@ -154,6 +154,13 @@ import {
   getRecommendedTechForJob,
 } from "./modules/workshopInsights";
 import { downloadBackup } from "./modules/backup";
+import {
+  DEFAULT_WORKSHOP_ID,
+  WORKSHOPS,
+  getWorkshopById,
+  normalizeWorkshopId,
+  type WorkshopId,
+} from "./modules/workshops";
 
 function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
   if (tech.currentJobId == null) return jobs;
@@ -205,6 +212,13 @@ function applyAssignmentToTechs(
   });
 }
 
+function belongsToWorkshop(
+  item: { workshopId?: string | null },
+  selectedWorkshopId: WorkshopId
+) {
+  return normalizeWorkshopId(item.workshopId) === selectedWorkshopId;
+}
+
 export default function SeaTarragonaV1() {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
   const [rules, setRules] = useState<string[]>([]);
@@ -237,6 +251,25 @@ const [userRole, setUserRole] = useState<UserRole | null>(() => {
 const isAdmin = canUseAdminTools(userRole);
 const isSupervisor = canUseSupervisorTools(userRole);
 const userCanUseScreens = canUseScreens(userRole);
+const [selectedWorkshopId, setSelectedWorkshopId] = useState<WorkshopId>(() => {
+  try {
+    const saved = localStorage.getItem("sea-selected-workshop");
+    return normalizeWorkshopId(saved || DEFAULT_WORKSHOP_ID);
+  } catch {
+    return DEFAULT_WORKSHOP_ID;
+  }
+});
+
+const selectedWorkshop = getWorkshopById(selectedWorkshopId);
+
+useEffect(() => {
+  try {
+    localStorage.setItem("sea-selected-workshop", selectedWorkshopId);
+  } catch {
+    // No rompemos la app si localStorage falla.
+  }
+}, [selectedWorkshopId]);
+
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetPassword, setResetPassword] = useState("");
   const [resetError, setResetError] = useState("");
@@ -435,6 +468,48 @@ const {
   lastSyncAt,
   getAdminHeaders,
 });
+
+const visibleJobs = useMemo(
+  () => jobs.filter((job) => belongsToWorkshop(job, selectedWorkshopId)),
+  [jobs, selectedWorkshopId]
+);
+
+const visibleScheduledJobs = useMemo(
+  () =>
+    scheduledJobs.filter((job) =>
+      belongsToWorkshop(job, selectedWorkshopId)
+    ),
+  [scheduledJobs, selectedWorkshopId]
+);
+
+const visibleTechs = useMemo(() => {
+  const visibleJobIds = new Set(visibleJobs.map((job) => job.id));
+
+  return techs.filter((tech) => {
+    if (belongsToWorkshop(tech, selectedWorkshopId)) return true;
+
+    return (
+      tech.currentJobId != null &&
+      visibleJobIds.has(tech.currentJobId)
+    );
+  });
+}, [techs, visibleJobs, selectedWorkshopId]);
+
+const visibleQuickTemplates = useMemo(
+  () =>
+    quickTemplates.filter((template) =>
+      belongsToWorkshop(template, selectedWorkshopId)
+    ),
+  [quickTemplates, selectedWorkshopId]
+);
+
+const visibleLinkedTemplates = useMemo(
+  () =>
+    linkedTemplates.filter((template) =>
+      belongsToWorkshop(template, selectedWorkshopId)
+    ),
+  [linkedTemplates, selectedWorkshopId]
+);
 
 
 
@@ -702,14 +777,14 @@ const hasAvailableTech = techs.some(
 
 const activeJobs = useMemo(
   () =>
-    jobs.filter(
+    visibleJobs.filter(
       (job) =>
         job.status === "activo" ||
         job.status === "validacion" ||
         job.status === "espera" ||
         job.status === "parado"
     ),
-  [jobs]
+  [visibleJobs]
 );
 
 const validationJobs = useMemo(
@@ -727,8 +802,8 @@ const validationJobs = useMemo(
 );
 
   const closedJobs = useMemo(
-    () => jobs.filter((job) => job.status === "cerrado"),
-    [jobs]
+    () => visibleJobs.filter((job) => job.status === "cerrado"),
+    [visibleJobs]
   );
 
   const waitingJobs = useMemo(
@@ -761,19 +836,19 @@ const validationJobs = useMemo(
   );
 
   const workingTechsSummary = useMemo(() => {
-  return techs
+  return visibleTechs
     .filter((tech) => {
       if (tech.currentJobId == null) return false;
 
-      const job = jobs.find((item) => item.id === tech.currentJobId);
+      const job = visibleJobs.find((item) => item.id === tech.currentJobId);
 
       return Boolean(job && job.status === "activo");
     })
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs, jobs]);
+}, [visibleTechs, visibleJobs]);
 
 const availableTechsSummary = useMemo(() => {
-  return techs
+  return visibleTechs
     .filter((tech) => {
       const status = tech.status === "supervisor" ? "disponible" : tech.status;
 
@@ -784,7 +859,7 @@ const availableTechsSummary = useMemo(() => {
       );
     })
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [techs]);
+}, [visibleTechs]);
 
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
@@ -821,8 +896,8 @@ const blockedJobs = useMemo(
 );
 
 const techLoadStats = useMemo<TechLoadStat[]>(
-  () => buildTechLoadStats(jobs, techs),
-  [jobs, techs]
+  () => buildTechLoadStats(visibleJobs, visibleTechs),
+  [visibleJobs, visibleTechs]
 );
 
 useEffect(() => {
@@ -879,8 +954,8 @@ useEffect(() => {
 }, [scheduledJobs, scheduledJobsLoaded]);
 
 const techHoursReport = useMemo<TechHoursSummary[]>(
-  () => buildTechHoursReport(closedJobs, techs),
-  [closedJobs, techs]
+  () => buildTechHoursReport(closedJobs, visibleTechs),
+  [closedJobs, visibleTechs]
 );
 
 const workshopAlerts = useMemo<WorkshopAlert[]>(
@@ -899,8 +974,8 @@ const techOperationStats = useMemo<TechOperationStat[]>(
   [closedJobs]
 );
 const techClosureStats = useMemo<TechClosureStat[]>(
-  () => buildTechClosureStats(closedJobs, techs),
-  [closedJobs, techs]
+  () => buildTechClosureStats(closedJobs, visibleTechs),
+  [closedJobs, visibleTechs]
 );
 
 const aiRanking = useMemo(
@@ -940,7 +1015,7 @@ const dueScheduledJobs = useMemo(() => {
     "0"
   )}-${String(now.getDate()).padStart(2, "0")}`;
 
-  return scheduledJobs
+  return visibleScheduledJobs
     .filter((job) => job.status === "programado")
     .filter((job) => job.status !== "cancelado")
     .filter((job) => job.status !== "eliminado")
@@ -960,15 +1035,15 @@ const dueScheduledJobs = useMemo(() => {
 
       return aMs - bMs;
     });
-}, [scheduledJobs]);
+}, [visibleScheduledJobs]);
 const arrivedPendingValidationScheduledJobs = useMemo(() => {
-  return scheduledJobs
+  return visibleScheduledJobs
     .filter((scheduled) => {
       if (scheduled.status !== "en_cola") return false;
 
       if (!scheduled.jobId) return false;
 
-      const linkedJob = jobs.find((job) => job.id === scheduled.jobId);
+      const linkedJob = visibleJobs.find((job) => job.id === scheduled.jobId);
 
       if (!linkedJob) return false;
 
@@ -983,7 +1058,7 @@ const arrivedPendingValidationScheduledJobs = useMemo(() => {
 
       return aMs - bMs;
     });
-}, [scheduledJobs, jobs]);
+}, [visibleScheduledJobs, visibleJobs]);
 
 
 async function askExternalAIWorkshop() {
@@ -997,8 +1072,8 @@ async function askExternalAIWorkshop() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        jobs,
-        techs,
+        jobs: visibleJobs,
+        techs: visibleTechs,
         operationReport,
         techOperationStats,
       }),
@@ -1805,6 +1880,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 
   const firstJob: Job = {
   id: firstJobId,
+  workshopId: normalizeWorkshopId(currentScheduled.workshopId ?? selectedWorkshopId),
   area: firstTemplate.area,
   plate: currentScheduled.plate.trim().toUpperCase(),
   urgent: currentScheduled.urgent,
@@ -1847,6 +1923,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
 
       const secondJob: Job = {
   id: secondJobId,
+  workshopId: normalizeWorkshopId(currentScheduled.workshopId ?? selectedWorkshopId),
   area: secondTemplate.area,
   plate: currentScheduled.plate.trim().toUpperCase(),
   urgent: currentScheduled.urgent,
@@ -1946,6 +2023,7 @@ async function createJob() {
 
 const baseJob: Job = {
   id: safeJobId,
+  workshopId: selectedWorkshopId,
   area: draft.area,
   plate: draft.plate.trim().toUpperCase(),
   urgent: draft.urgent,
@@ -2025,6 +2103,7 @@ function addLinkedTemplate() {
 
   const template: LinkedTemplate = {
     id: `linked-template-${Date.now()}`,
+    workshopId: selectedWorkshopId,
     label,
     firstTemplateKey: firstTemplate.key,
     secondTemplateKey: secondTemplate.key,
@@ -2097,6 +2176,7 @@ async function createTemplateEntry() {
 
   const firstJob: Job = {
   id: safeJobId,
+  workshopId: selectedWorkshopId,
   area: firstTemplate.area,
   plate,
   urgent: quickDraft.urgent,
@@ -2136,6 +2216,7 @@ async function createTemplateEntry() {
   if (isLinkedEntry && secondTemplate) {
     const secondJob: Job = {
   id: secondSafeJobId,
+  workshopId: selectedWorkshopId,
   area: secondTemplate.area,
   plate,
   urgent: quickDraft.urgent,
@@ -2309,6 +2390,7 @@ async function addQuickTemplate() {
 
   const template: QuickTemplate = {
     key: `${keyBase || "entrada"}_${Date.now()}`,
+    workshopId: selectedWorkshopId,
     label,
     area: newQuickTemplate.area,
     mode: newQuickTemplate.mode,
@@ -3279,6 +3361,7 @@ async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
         }),
         body: JSON.stringify({
           key: safeTemplate.key,
+          workshopId: normalizeWorkshopId(safeTemplate.workshopId ?? selectedWorkshopId),
           label: safeTemplate.label,
           area: safeTemplate.area,
           mode: safeTemplate.mode,
@@ -3745,7 +3828,7 @@ function reassignJob(jobId: number, techName: string) {
     if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) {
       return;
     }
-    setTechs((prev) => [...prev, createTech(name)]);
+    setTechs((prev) => [...prev, { ...createTech(name), workshopId: selectedWorkshopId }]);
     setNewTechName("");
     appendLog(`Técnico añadido: ${name}.`);
   }
@@ -4124,8 +4207,8 @@ function updateTechPriority(
 if (userRole === "tv75") {
   return (
     <WorkshopTV75View
-      jobs={jobs}
-      techs={techs}
+      jobs={visibleJobs}
+      techs={visibleTechs}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
@@ -4146,10 +4229,10 @@ if (userRole === "tv75") {
 if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
   return (
     <WorkshopWallScreen
-  jobs={jobs}
-  techs={techs}
-  scheduledJobs={scheduledJobs}
-  quickTemplates={quickTemplates}
+  jobs={visibleJobs}
+  techs={visibleTechs}
+  scheduledJobs={visibleScheduledJobs}
+  quickTemplates={visibleQuickTemplates}
   onBack={() => setView("operativo")}
 />
   );
@@ -4159,8 +4242,8 @@ if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
 if (view === "operarios" && canAccessView(userRole, "operarios")) {
   return (
     <OperariosTVView
-      jobs={jobs}
-      techs={techs}
+      jobs={visibleJobs}
+      techs={visibleTechs}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
@@ -4185,8 +4268,8 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
 if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
   return (
     <WorkshopTV75View
-      jobs={jobs}
-      techs={techs}
+      jobs={visibleJobs}
+      techs={visibleTechs}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
@@ -4212,9 +4295,10 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
     <AgendaView
       scheduledJobs={scheduledJobs}
       setScheduledJobs={setScheduledJobsAndSave}
-      quickTemplates={quickTemplates}
+      quickTemplates={visibleQuickTemplates}
+      selectedWorkshopId={selectedWorkshopId}
       customExtraTasks={customExtraTasks}
-      linkedTemplates={linkedTemplates}
+      linkedTemplates={visibleLinkedTemplates}
       AREA_META={AREA_META}
       onBack={() => setView("operativo")}
       appendLog={appendLog}
@@ -4227,7 +4311,7 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
 if (view === "historico" && canAccessView(userRole, "historico")) {
   return (
     <FinishedAndCancelledJobsView
-      jobs={jobs}
+      jobs={visibleJobs}
       getOperationLabel={getOperationLabel}
       onBack={() => setView("operativo")}
     />
@@ -4284,8 +4368,8 @@ return (
           <UserCog className="h-8 w-8" />
           <div>
 <h1 className="text-2xl font-semibold">
-  SEA Tarragona · Panel {APP_VERSION}
-</h1>           <p className="text-sm text-slate-600">
+  {selectedWorkshop.name} · Panel {APP_VERSION}
+</h1>          <p className="text-sm text-slate-600">
   Pantalla dividida en Operativo y Ajustes
 </p>
 
@@ -4305,7 +4389,25 @@ return (
 </div>
           </div>
         </div>
+<div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+  <label className="mb-1 block text-[10px] font-black uppercase tracking-wide text-slate-500">
+    Taller actual
+  </label>
 
+  <select
+    value={selectedWorkshopId}
+    onChange={(event) =>
+      setSelectedWorkshopId(normalizeWorkshopId(event.target.value))
+    }
+    className="min-w-[190px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-900 outline-none focus:ring-2 focus:ring-slate-300"
+  >
+    {WORKSHOPS.filter((workshop) => workshop.active).map((workshop) => (
+      <option key={workshop.id} value={workshop.id}>
+        {workshop.name}
+      </option>
+    ))}
+  </select>
+</div>
        <div className="flex flex-wrap gap-2">
   {canAccessView(userRole, "operativo") && (
     <button
@@ -4501,7 +4603,7 @@ return (
         ) : (
           <div className="flex flex-wrap gap-2">
             {workingTechsSummary.map((tech) => {
-              const job = jobs.find((item) => item.id === tech.currentJobId);
+              const job = visibleJobs.find((item) => item.id === tech.currentJobId);
 
               return (
                 <div

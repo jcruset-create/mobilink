@@ -6,6 +6,12 @@ import {
   buildSelectableIncludedTasks,
   getIncludedTasksByIds,
 } from "../modules/quickTaskSelector";
+import {
+  DEFAULT_WORKSHOP_ID,
+  getWorkshopById,
+  normalizeWorkshopId,
+  type WorkshopId,
+} from "../modules/workshops";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -26,10 +32,12 @@ type QuickTemplate = {
   allowedTechs: string[];
   priorityOrder: string[];
   standardMinutes?: number | null;
+  workshopId?: WorkshopId | string | null;
 };
 
 export type ScheduledJob = {
   id: number;
+  workshopId?: WorkshopId | string | null;
   date: string;
   startTime: string;
   endTime: string;
@@ -69,6 +77,7 @@ type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate";
 
 type DateReminder = {
   id: number;
+  workshopId?: WorkshopId | string | null;
   title: string;
   startDate: string;
   endDate: string;
@@ -80,6 +89,7 @@ type Props = {
   scheduledJobs: ScheduledJob[];
   setScheduledJobs: Dispatch<SetStateAction<ScheduledJob[]>>;
   quickTemplates: QuickTemplate[];
+  selectedWorkshopId: WorkshopId | string;
   customExtraTasks?: CustomExtraTask[];
   AREA_META: any;
   onBack: () => void;
@@ -92,6 +102,7 @@ type Props = {
     label: string;
     firstTemplateKey: string;
     secondTemplateKey: string;
+    workshopId?: WorkshopId | string | null;
   }[];
 };
 
@@ -386,6 +397,7 @@ export default function AgendaView({
   scheduledJobs,
   setScheduledJobs,
   quickTemplates,
+  selectedWorkshopId,
   customExtraTasks = [],
   linkedTemplates = [],
   AREA_META,
@@ -394,6 +406,21 @@ export default function AgendaView({
   cancelScheduledJob,
   deleteScheduledJobFromBackend,
 }: Props) {
+  const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
+  const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
+
+  function getItemWorkshopId(item: { workshopId?: string | null }) {
+    return normalizeWorkshopId(item.workshopId ?? DEFAULT_WORKSHOP_ID);
+  }
+
+  function belongsToSelectedWorkshop(item: { workshopId?: string | null }) {
+    return getItemWorkshopId(item) === safeSelectedWorkshopId;
+  }
+
+  const scheduledJobsForSelectedWorkshop = scheduledJobs.filter(
+    belongsToSelectedWorkshop
+  );
+
   const [weekOffset, setWeekOffset] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [currentClock, setCurrentClock] = useState(() => new Date());
@@ -512,11 +539,13 @@ useEffect(() => {
   }
 
   function getVisibleDateReminders() {
-    return dateReminders.filter((reminder) =>
-      finalVisibleDays.some(
-        (day) => day.date >= reminder.startDate && day.date <= reminder.endDate
-      )
-    );
+    return dateReminders
+      .filter(belongsToSelectedWorkshop)
+      .filter((reminder) =>
+        finalVisibleDays.some(
+          (day) => day.date >= reminder.startDate && day.date <= reminder.endDate
+        )
+      );
   }
 
   function getReminderGridRange(reminder: DateReminder) {
@@ -562,6 +591,7 @@ useEffect(() => {
 
     const reminder: DateReminder = {
       id: Date.now(),
+      workshopId: safeSelectedWorkshopId,
       title: reminderDraft.title.trim().toUpperCase(),
       startDate: reminderDraft.startDate,
       endDate: reminderDraft.endDate,
@@ -843,6 +873,7 @@ const safeEstimatedMinutes = Math.max(
 );
 
     const nextData = {
+      workshopId: safeSelectedWorkshopId,
       date: selectedSlot.date,
       startTime: selectedSlot.startTime,
 endTime: addMinutesToTime(selectedSlot.startTime, safeEstimatedMinutes),
@@ -974,7 +1005,7 @@ estimatedMinutes: safeEstimatedMinutes,    };
     const nowKey = formatLocalDate(now);
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-    const expiredJobs = scheduledJobs.filter((job) => {
+    const expiredJobs = scheduledJobsForSelectedWorkshop.filter((job) => {
       if (job.status === "cancelado") return true;
       if (job.status === "cerrado") return true;
 
@@ -1076,7 +1107,8 @@ appendLog(
 </div>
 
           <div className="mt-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-            Citas cargadas: {scheduledJobs.length} · Semana: {days[0]?.date} a{" "}
+            Taller: {selectedWorkshop.shortName} · Citas cargadas:{" "}
+            {scheduledJobsForSelectedWorkshop.length} · Semana: {days[0]?.date} a{" "}
             {days[5]?.date}
           </div>
 
@@ -1282,7 +1314,7 @@ appendLog(
               const dayStart = 8 * 60 + 30;
               const dayHeight = slots.length * SLOT_HEIGHT;
 
-              const dayJobs = scheduledJobs
+              const dayJobs = scheduledJobsForSelectedWorkshop
   .filter((job) => job.status !== "cancelado")
   .filter((job) => job.status !== "eliminado")
   .filter((job) => getScheduledDate(job) === day.date)

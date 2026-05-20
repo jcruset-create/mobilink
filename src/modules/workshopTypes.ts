@@ -1,4 +1,5 @@
 import type { IncludedTask } from "./quickTaskSelector";
+import type { WorkshopId } from "./workshops";
 
 export type TechStatus =
   | "disponible"
@@ -37,6 +38,7 @@ export type QuickTemplate = {
   allowedTechs: string[];
   priorityOrder: string[];
   standardMinutes?: number | null;
+  workshopId?: WorkshopId | string | null;
 };
 
 export type LinkedTemplate = {
@@ -44,6 +46,7 @@ export type LinkedTemplate = {
   label: string;
   firstTemplateKey: string;
   secondTemplateKey: string;
+  workshopId?: WorkshopId | string | null;
 };
 
 export type RoleCapability = {
@@ -58,6 +61,7 @@ export type RolePriority = {
 
 export type Tech = {
   name: string;
+  workshopId?: WorkshopId | string | null;
   status: TechStatus;
   currentJobId: number | null;
   blocked: boolean;
@@ -70,12 +74,14 @@ export type Tech = {
 
 export type SavedTechConfig = {
   name: string;
+  workshopId?: WorkshopId | string | null;
   competencies: Record<CompetencyKey, RoleCapability>;
   priorities: Record<AreaKey, RolePriority>;
 };
 
 export type Job = {
   id: number;
+  workshopId?: WorkshopId | string | null;
   area: AreaKey;
   plate: string;
   urgent: boolean;
@@ -132,12 +138,14 @@ export type OperationSummary = {
 
 export type TechHoursSummary = {
   name: string;
+  workshopId?: WorkshopId | string | null;
   responsable: { daily: number; weekly: number; monthly: number };
   apoyo: { daily: number; weekly: number; monthly: number };
 };
 
 export type TechLoadStat = {
   techName: string;
+  workshopId?: WorkshopId | string | null;
   activeCount: number;
   totalOpenMinutes: number;
 };
@@ -155,6 +163,7 @@ export type WorkshopAlert = {
 
 export type TechOperationStat = {
   techName: string;
+  workshopId?: WorkshopId | string | null;
   operationKey: string;
   operationLabel: string;
   totalMinutes: number;
@@ -164,6 +173,7 @@ export type TechOperationStat = {
 
 export type TechClosureStat = {
   techName: string;
+  workshopId?: WorkshopId | string | null;
   closedCount: number;
   totalMinutes: number;
   averageMinutes: number;
