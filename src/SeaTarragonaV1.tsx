@@ -944,6 +944,8 @@ const dueScheduledJobs = useMemo(() => {
     .filter((job) => job.status === "programado")
     .filter((job) => job.status !== "cancelado")
     .filter((job) => job.status !== "eliminado")
+    .filter((job) => job.jobId == null)
+    .filter((job) => job.arrivedAtMs == null)
     .filter((job) => job.date === today)
     .filter((job) => {
       const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
