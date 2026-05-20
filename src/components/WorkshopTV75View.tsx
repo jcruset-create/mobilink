@@ -14,6 +14,11 @@ type JobForTV75 = {
   reason?: string;
   startedAtMs?: number | null;
   createdAtMs?: number | null;
+  standardMinutes?: number | null;
+  predictedMinutes?: number | null;
+  aiMinutes?: number | null;
+  estimatedMinutes?: number | null;
+  actualMinutes?: number | null;
 };
 
 type TechForTV75 = {
@@ -163,20 +168,79 @@ function TechAvatar({
   );
 }
 
-function formatWorkedTime(job: JobForTV75) {
-  if (!job.startedAtMs) return "0 min";
+function getWorkedMinutes(job: JobForTV75) {
+  if (!job.startedAtMs) return 0;
 
   const startedAtMs = Number(job.startedAtMs);
 
-  if (!Number.isFinite(startedAtMs)) return "0 min";
+  if (!Number.isFinite(startedAtMs)) return 0;
 
-  const minutes = Math.max(0, Math.floor((Date.now() - startedAtMs) / 60000));
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
+  return Math.max(0, Math.floor((Date.now() - startedAtMs) / 60000));
+}
+
+function formatMinutes(minutes: number) {
+  const safeMinutes = Math.max(0, Math.floor(minutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
 
   if (hours <= 0) return `${mins} min`;
 
   return `${hours} h ${mins} min`;
+}
+
+function formatWorkedTime(job: JobForTV75) {
+  return formatMinutes(getWorkedMinutes(job));
+}
+
+function getFallbackEstimatedMinutes(job: JobForTV75) {
+  if (job.area === "camion") return 45;
+  if (job.area === "movil") return 180;
+  if (job.area === "tacografo") return 60;
+  if (job.area === "turismo") return 45;
+  if (job.area === "mecanica") return 45;
+
+  return 45;
+}
+
+function getEstimatedMinutes(job: JobForTV75) {
+  const candidates = [
+    job.standardMinutes,
+    job.estimatedMinutes,
+    job.actualMinutes,
+  ];
+
+  const validCandidate = candidates.find(
+    (value) => typeof value === "number" && Number.isFinite(value) && value > 0
+  );
+
+  if (typeof validCandidate === "number") {
+    return Math.round(validCandidate);
+  }
+
+  return getFallbackEstimatedMinutes(job);
+}
+
+function getAiMinutes(job: JobForTV75) {
+  const candidates = [job.aiMinutes, job.predictedMinutes];
+
+  const validCandidate = candidates.find(
+    (value) => typeof value === "number" && Number.isFinite(value) && value > 0
+  );
+
+  if (typeof validCandidate === "number") {
+    return Math.round(validCandidate);
+  }
+
+  const estimatedMinutes = getEstimatedMinutes(job);
+
+  return Math.max(10, estimatedMinutes - 5);
+}
+
+function isJobDelayed(job: JobForTV75) {
+  const workedMinutes = getWorkedMinutes(job);
+  const estimatedMinutes = getEstimatedMinutes(job);
+
+  return workedMinutes > estimatedMinutes;
 }
 
 function formatMaintenanceTime(task: AssignedMaintenanceTask, nowMs: number) {
@@ -186,12 +250,8 @@ function formatMaintenanceTime(task: AssignedMaintenanceTask, nowMs: number) {
       : task.statusChangedAtMs ?? task.assignedAtMs;
 
   const minutes = Math.max(0, Math.floor((endMs - task.assignedAtMs) / 60000));
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
 
-  if (hours <= 0) return `${mins} min`;
-
-  return `${hours} h ${mins} min`;
+  return formatMinutes(minutes);
 }
 
 function getMaintenanceTaskTypeLabel(type: MaintenanceTaskType) {
@@ -254,6 +314,104 @@ function SmallJobCard({
 
       <div className="mt-3 rounded-xl bg-slate-900 px-3 py-2 text-sm font-black text-white">
         Tiempo: {formatWorkedTime(job)}
+      </div>
+    </div>
+  );
+}
+
+function ActiveJobVisualCard({
+  job,
+  techs,
+  getOperationLabel,
+}: {
+  job: JobForTV75;
+  techs: TechForTV75[];
+  getOperationLabel: (job: OperationLabelJob) => string;
+}) {
+  const assignedNames = job.assignedNames ?? [];
+  const delayed = isJobDelayed(job);
+  const estimatedMinutes = getEstimatedMinutes(job);
+  const aiMinutes = getAiMinutes(job);
+
+  return (
+    <div
+      className={`relative rounded-3xl border p-4 shadow-sm ${
+        delayed
+          ? "border-red-300 bg-red-50 shadow-red-100"
+          : "border-slate-200 bg-slate-50"
+      }`}
+    >
+      <div className="mb-3 flex flex-wrap gap-2">
+        {assignedNames.length > 0 ? (
+          assignedNames.map((name) => {
+            const tech = techs.find((item) => item.name === name);
+
+            return (
+              <div
+                key={name}
+                className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm"
+              >
+                <TechAvatar tech={tech} size="large" />
+
+                <div className="truncate text-xl font-black">{name}</div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-400">
+            Sin técnicos asignados
+          </div>
+        )}
+      </div>
+
+      <div className="min-w-0">
+        <div className="mb-2 flex items-center gap-2">
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getAreaClass(
+              job.area
+            )}`}
+          >
+            {getAreaLabel(job.area)}
+          </span>
+
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-400">
+            #{job.id}
+          </span>
+        </div>
+
+        <div className="relative">
+          <div className="break-words text-3xl font-black leading-none tracking-wide text-slate-950">
+            {job.plate || "SIN MATRÍCULA"}
+          </div>
+
+          {delayed && (
+            <div className="absolute right-0 top-[-4px] animate-pulse rounded-3xl bg-orange-600 px-6 py-3 text-center text-2xl font-black leading-tight text-white shadow-lg shadow-orange-300">
+              Trabajo
+              <br />
+              Retrasado
+            </div>
+          )}
+        </div>
+
+        <div className="mt-2 line-clamp-2 text-lg font-black leading-tight text-slate-700">
+          {getOperationLabel(job)}
+        </div>
+
+        <div className="mt-4 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-base font-black text-white">
+          Tiempo trabajando: {formatWorkedTime(job)}
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 overflow-hidden rounded-3xl border-2 border-slate-900 bg-white text-center text-xl font-black text-slate-950">
+          <div className="border-r-2 border-slate-900 px-3 py-2">
+            <span className="text-slate-700">IA: </span>
+            {formatMinutes(aiMinutes)}
+          </div>
+
+          <div className="px-3 py-2">
+            <span className="text-slate-700">Previsto: </span>
+            {formatMinutes(estimatedMinutes)}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -474,71 +632,14 @@ export default function WorkshopTV75View({
               </div>
             ) : (
               <div className="grid h-[calc(100%-60px)] auto-rows-max grid-cols-3 gap-4 overflow-auto pr-2">
-                {activeJobs.map((job) => {
-                  const assignedNames = job.assignedNames ?? [];
-
-                  return (
-                    <div
-                      key={`job-${job.id}`}
-                      className="rounded-3xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
-                    >
-                      <div className="mb-3 flex flex-wrap gap-2">
-                        {assignedNames.length > 0 ? (
-                          assignedNames.map((name) => {
-                            const tech = techs.find(
-                              (item) => item.name === name
-                            );
-
-                            return (
-                              <div
-                                key={name}
-                                className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm"
-                              >
-                                <TechAvatar tech={tech} size="large" />
-
-                                <div className="truncate text-xl font-black">
-                                  {name}
-                                </div>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <div className="rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-400">
-                            Sin técnicos asignados
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="mb-2 flex items-center gap-2">
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getAreaClass(
-                              job.area
-                            )}`}
-                          >
-                            {getAreaLabel(job.area)}
-                          </span>
-
-                          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-400">
-                            #{job.id}
-                          </span>
-                        </div>
-
-                        <div className="break-words text-3xl font-black leading-none tracking-wide text-slate-950">
-                          {job.plate || "SIN MATRÍCULA"}
-                        </div>
-
-                        <div className="mt-2 line-clamp-2 text-lg font-black leading-tight text-slate-700">
-                          {getOperationLabel(job)}
-                        </div>
-
-                        <div className="mt-4 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-base font-black text-white">
-                          Tiempo trabajando: {formatWorkedTime(job)}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {activeJobs.map((job) => (
+                  <ActiveJobVisualCard
+                    key={`job-${job.id}`}
+                    job={job}
+                    techs={techs}
+                    getOperationLabel={getOperationLabel}
+                  />
+                ))}
 
                 {pendingMaintenanceTasks.map((task) => {
                   const tech = techs.find((item) => item.name === task.techName);
