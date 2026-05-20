@@ -199,11 +199,7 @@ function applyAssignmentToTechs(
     const isMain = idx === 0;
     return {
       ...tech,
-      status: (isMain
-        ? tech.name === "Ramón"
-          ? "supervisor"
-          : "ocupado"
-        : "refuerzo") as TechStatus,
+      status: (isMain ? "ocupado" : "refuerzo") as TechStatus,
       currentJobId: job.id,
     };
   });
@@ -1328,8 +1324,7 @@ function allocateJob(
   job: Job,
   baseTechs: Tech[],
   baseJobs: Job[],
-  logResult = true,
-  askRamonApproval = false
+  logResult = true
 ): AllocationResult {
   const isProtectedTech = (tech: Tech) =>
     isHardBlockedTechStatus(tech.status) || isManualUnavailableStatus(tech.status);
@@ -1481,57 +1476,7 @@ if (hasAnyTechBlockedByOutsideMaintenance(assignedNames)) {
     };
   }
 
-  if (result.assigned && result.needsRamonApproval) {
-    if (!askRamonApproval) {
-      const reason =
-        "Trabajo enviado a cola: Ramón solo se usará como último recurso con confirmación.";
-      const waitingJob = makeWaitingJob(reason);
-
-      if (logResult) {
-        appendLog(
-          `${AREA_META[job.area].label} ${job.plate} queda en cola. Ramón era el único disponible.`
-        );
-      }
-
-      return {
-        assigned: false,
-        assignedNames: [],
-        reason,
-        techs: restoreProtectedTechs(safeBaseTechs),
-        jobs: upsertJobInList(baseJobs, waitingJob),
-        needsRamonApproval: true,
-      };
-    }
-
-    const confirmRamon = window.confirm(
-      `Ramón es el único disponible para ${getOperationLabel(
-        job
-      )} ${job.plate}.\n\nAceptar = asignar a Ramón.\nCancelar = enviar a cola hasta que quede libre otro empleado.`
-    );
-
-    if (!confirmRamon) {
-      const reason =
-        "Pendiente en cola: se esperará al próximo técnico libre antes de usar a Ramón.";
-      const waitingJob = makeWaitingJob(reason);
-
-      if (logResult) {
-        appendLog(
-          `${AREA_META[job.area].label} ${job.plate} enviado a cola. Ramón no asignado.`
-        );
-      }
-
-      return {
-        assigned: false,
-        assignedNames: [],
-        reason,
-        techs: restoreProtectedTechs(safeBaseTechs),
-        jobs: upsertJobInList(baseJobs, waitingJob),
-        needsRamonApproval: true,
-      };
-    }
-  }
-
-  const safeResult: AllocationResult = {
+   const safeResult: AllocationResult = {
     ...result,
     techs: restoreProtectedTechs(result.techs),
     jobs: result.jobs.map((item) => {
@@ -1611,7 +1556,7 @@ function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
     });
 
   for (const job of pending) {
-    const result = allocateJob(job, currentTechs, currentJobs, false, false);
+    const result = allocateJob(job, currentTechs, currentJobs, false);
 
     if (!result.assigned) {
       currentJobs = result.jobs;
@@ -1871,7 +1816,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
   blockedReason: null,
 };
 
-  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true, true);
+  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true,);
 
   let jobsToSet = result.jobs;
   let jobsToSave: Job[] = [
@@ -1997,7 +1942,7 @@ const baseJob: Job = {
   startedAtMs: null,
   template: (draft.template || null) as TemplateKey | null,
 };
-  const result = allocateJob(baseJob, techs, [baseJob, ...jobs], true, true);
+  const result = allocateJob(baseJob, techs, [baseJob, ...jobs], true,);
 
 const finalJob = result.jobs.find((j) => j.id === baseJob.id) ?? baseJob;
 
@@ -2167,7 +2112,7 @@ async function createTemplateEntry() {
   blockedReason: null,
 };
 
-  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true, true);
+  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true,);
 
   let finalJobs: Job[] = result.jobs;
   let jobsToSave: Job[] = [
@@ -2529,10 +2474,7 @@ async function pauseJob(jobId: number) {
     assignedNames.includes(tech.name)
       ? {
           ...tech,
-          status:
-            tech.name === "Ramón"
-              ? ("supervisor" as TechStatus)
-              : ("disponible" as TechStatus),
+          status: "disponible" as TechStatus,
           currentJobId: null,
         }
       : tech
@@ -2795,7 +2737,7 @@ async function authorizeProposedJob(jobId: number) {
       return;
     }
 
-    if (tech.status !== "disponible" && tech.status !== "supervisor") {
+    if (tech.status !== "disponible") {
       alert(
         `No se puede iniciar el trabajo.\n\n${tech.name} no está libre actualmente.`
       );
@@ -2821,11 +2763,9 @@ async function authorizeProposedJob(jobId: number) {
 
     return {
       ...tech,
-      status: tech.name === "Ramón"
-        ? ("supervisor" as TechStatus)
-        : isResponsible
-        ? ("ocupado" as TechStatus)
-        : ("refuerzo" as TechStatus),
+      status: isResponsible
+  ? ("ocupado" as TechStatus)
+  : ("refuerzo" as TechStatus),
       currentJobId: jobId,
       blocked: isUnavailableTechStatus(tech.status),
     };
@@ -2940,10 +2880,7 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
     item.name === techName
       ? {
           ...item,
-          status:
-            item.name === "Ramón"
-              ? ("supervisor" as TechStatus)
-              : ("ocupado" as TechStatus),
+          status: "ocupado" as TechStatus,
           currentJobId: jobId,
           blocked: isUnavailableTechStatus(item.status),
         }
@@ -3124,9 +3061,7 @@ async function finishJob(jobId: number) {
     assignedNames.includes(tech.name)
       ? {
           ...tech,
-          status: (tech.name === "Ramón"
-            ? "supervisor"
-            : "disponible") as TechStatus,
+          status: "disponible" as TechStatus,
           currentJobId: null,
         }
       : tech
@@ -3186,7 +3121,7 @@ async function finishJob(jobId: number) {
     freedTechs,
     jobsWithReopened,
     true,
-    true
+  
   );
 
   finalJobs = result.jobs;
@@ -3416,8 +3351,7 @@ async function setTechManual(name: string, nextStatus: TechStatus) {
   const changedAtMs = nowMs();
   const isGoingUnavailable = isUnavailableTechStatus(nextStatus);
   const isGoingHardBlocked = isHardBlockedTechStatus(nextStatus);
-  const isGoingFree =
-    nextStatus === "disponible" || nextStatus === "supervisor";
+  const isGoingFree = nextStatus === "disponible";
 
   const validationProposal = getValidationProposalForTech(name, jobs);
 
@@ -3708,9 +3642,7 @@ function reassignJob(jobId: number, techName: string) {
     if (previousAssignedNames.includes(item.name)) {
       return {
         ...item,
-        status: (item.name === "Ramón"
-          ? "supervisor"
-          : "disponible") as TechStatus,
+        status: "disponible" as TechStatus,
         currentJobId: null,
       };
     }
@@ -4021,7 +3953,7 @@ function addSupportToJob(jobId: number, forcedSupportName?: string) {
     if (tech.name === assignedNames[1] && tech.name !== support.name) {
       return {
         ...tech,
-        status: tech.name === "Ramón" ? ("supervisor" as TechStatus) : ("disponible" as TechStatus),
+        status: "disponible" as TechStatus,
         currentJobId: null,
       };
     }
@@ -4089,10 +4021,7 @@ function removeSupportFromActiveJob(jobId: number) {
     tech.name === supportName
       ? {
           ...tech,
-          status:
-            tech.name === "Ramón"
-              ? ("supervisor" as TechStatus)
-              : ("disponible" as TechStatus),
+          status: "disponible" as TechStatus,
           currentJobId: null,
         }
       : tech
@@ -6464,9 +6393,7 @@ const textColor = "";
 <option value="vacaciones">vacaciones</option>
 <option value="baja">baja</option>
 <option value="otro_taller">otro taller</option>
-                  {tech.name === "Ramón" && (
-  <option value="supervisor">supervisor</option>
-)}
+
                         </select>
                       </td>
 <td className={`py-2 text-xs ${textColor}`}>

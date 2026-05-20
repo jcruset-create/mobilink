@@ -107,7 +107,7 @@ export const INITIAL_TECHS: Tech[] = [
   createTech("David"),
   createTech("Andrés"),
   createTech("Albert"),
-  createTech("Ramón", "supervisor"),
+  createTech("Ramón"),
 ];
 
 export function countReservedMobileCapacity(techs: Tech[]): number {
