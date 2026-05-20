@@ -177,6 +177,7 @@ function formatMaintenanceElapsedTime(
 
   return formatWorkedTime(elapsedMinutes);
 }
+
 function getMaintenanceTaskTypeLabel(type: MaintenanceTaskType) {
   if (type === "fuera_taller") return "Fuera de taller";
 
@@ -409,6 +410,7 @@ async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
     return fallback;
   }
 }
+
 async function sendMaintenanceJson<T>(
   url: string,
   options: RequestInit,
@@ -478,10 +480,11 @@ export default function OperariosTVView({
   onLogout,
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
-const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
-const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<number | null>(
-  null
-);
+  const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
+  const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<
+    number | null
+  >(null);
+
   const [maintenanceTasks, setMaintenanceTasks] = useState<MaintenanceTask[]>(
     () => {
       try {
@@ -563,27 +566,27 @@ const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<number | null
                   item.status === "finalizada" ||
                   item.status === "interrumpida")
             )
-.map((item) => ({
-  id: item.id,
-  taskId: item.taskId,
-  taskLabel: item.taskLabel,
-  taskType:
-    item.taskType === "fuera_taller" || item.taskType === "en_taller"
-      ? item.taskType
-      : "en_taller",
-  techName: item.techName,
-  assignedAtMs: item.assignedAtMs,
-  status:
-    item.status === "finalizada" ||
-    item.status === "interrumpida" ||
-    item.status === "pendiente"
-      ? item.status
-      : "pendiente",
-  statusChangedAtMs:
-    typeof item.statusChangedAtMs === "number"
-      ? item.statusChangedAtMs
-      : null,
-}));
+            .map((item) => ({
+              id: item.id,
+              taskId: item.taskId,
+              taskLabel: item.taskLabel,
+              taskType:
+                item.taskType === "fuera_taller" || item.taskType === "en_taller"
+                  ? item.taskType
+                  : "en_taller",
+              techName: item.techName,
+              assignedAtMs: item.assignedAtMs,
+              status:
+                item.status === "finalizada" ||
+                item.status === "interrumpida" ||
+                item.status === "pendiente"
+                  ? item.status
+                  : "pendiente",
+              statusChangedAtMs:
+                typeof item.statusChangedAtMs === "number"
+                  ? item.statusChangedAtMs
+                  : null,
+            }));
         }
       }
 
@@ -602,136 +605,136 @@ const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<number | null
   }, []);
 
   useEffect(() => {
-  saveMaintenanceTasksToLocalStorage(maintenanceTasks);
-}, [maintenanceTasks]);
+    saveMaintenanceTasksToLocalStorage(maintenanceTasks);
+  }, [maintenanceTasks]);
 
   useEffect(() => {
-  saveAssignedMaintenanceTasksToLocalStorage(assignedMaintenanceTasks);
-}, [assignedMaintenanceTasks]);
+    saveAssignedMaintenanceTasksToLocalStorage(assignedMaintenanceTasks);
+  }, [assignedMaintenanceTasks]);
 
-useEffect(() => {
-  let cancelled = false;
+  useEffect(() => {
+    let cancelled = false;
 
-  async function loadMaintenanceFromApi() {
-    const localMaintenanceTasks = maintenanceTasks;
-    const localAssignedMaintenanceTasks = assignedMaintenanceTasks;
+    async function loadMaintenanceFromApi() {
+      const localMaintenanceTasks = maintenanceTasks;
+      const localAssignedMaintenanceTasks = assignedMaintenanceTasks;
 
-    const apiMaintenanceTasks = await fetchMaintenanceJson<MaintenanceTask[]>(
-      "/api/maintenance-tasks",
-      localMaintenanceTasks
-    );
-
-    const apiAssignedMaintenanceTasks = await fetchMaintenanceJson<
-      AssignedMaintenanceTask[]
-    >("/api/assigned-maintenance-tasks", localAssignedMaintenanceTasks);
-
-    if (cancelled) return;
-
-    if (Array.isArray(apiMaintenanceTasks)) {
-      setMaintenanceTasks(apiMaintenanceTasks);
-      saveMaintenanceTasksToLocalStorage(apiMaintenanceTasks);
-    }
-
-    if (Array.isArray(apiAssignedMaintenanceTasks)) {
-      setAssignedMaintenanceTasks(apiAssignedMaintenanceTasks);
-      saveAssignedMaintenanceTasksToLocalStorage(apiAssignedMaintenanceTasks);
-    }
-
-    setMaintenanceApiLoaded(true);
-    setMaintenanceLastSyncAt(Date.now());
-  }
-
-  void loadMaintenanceFromApi();
-
-  const interval = window.setInterval(() => {
-    void loadMaintenanceFromApi();
-  }, 15000);
-
-  return () => {
-    cancelled = true;
-    window.clearInterval(interval);
-  };
-  // Sincronización automática con backend.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
-
-useEffect(() => {
-  let cancelled = false;
-
-  async function interruptWorkshopMaintenanceWithRealJob() {
-    const tasksToInterrupt = assignedMaintenanceTasks.filter((task) => {
-      if (task.status !== "pendiente") return false;
-      if (task.taskType !== "en_taller") return false;
-
-      const tech = techs.find((item) => item.name === task.techName);
-
-      return !!tech && tech.currentJobId != null;
-    });
-
-    if (tasksToInterrupt.length === 0) return;
-
-    for (const task of tasksToInterrupt) {
-      const fallbackTask: AssignedMaintenanceTask = {
-        ...task,
-        status: "interrumpida",
-        statusChangedAtMs: Date.now(),
-      };
-
-      const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
-        `/api/assigned-maintenance-tasks/${task.id}/interrupt`,
-        {
-          method: "PUT",
-        },
-        fallbackTask
+      const apiMaintenanceTasks = await fetchMaintenanceJson<MaintenanceTask[]>(
+        "/api/maintenance-tasks",
+        localMaintenanceTasks
       );
+
+      const apiAssignedMaintenanceTasks = await fetchMaintenanceJson<
+        AssignedMaintenanceTask[]
+      >("/api/assigned-maintenance-tasks", localAssignedMaintenanceTasks);
 
       if (cancelled) return;
 
-      setAssignedMaintenanceTasks((prev) =>
-        prev.map((item) => (item.id === task.id ? savedTask : item))
-      );
+      if (Array.isArray(apiMaintenanceTasks)) {
+        setMaintenanceTasks(apiMaintenanceTasks);
+        saveMaintenanceTasksToLocalStorage(apiMaintenanceTasks);
+      }
+
+      if (Array.isArray(apiAssignedMaintenanceTasks)) {
+        setAssignedMaintenanceTasks(apiAssignedMaintenanceTasks);
+        saveAssignedMaintenanceTasksToLocalStorage(apiAssignedMaintenanceTasks);
+      }
+
+      setMaintenanceApiLoaded(true);
+      setMaintenanceLastSyncAt(Date.now());
     }
-  }
 
-  void interruptWorkshopMaintenanceWithRealJob();
+    void loadMaintenanceFromApi();
 
-  return () => {
-    cancelled = true;
-  };
-}, [techs, assignedMaintenanceTasks]);
+    const interval = window.setInterval(() => {
+      void loadMaintenanceFromApi();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+    // Sincronización automática con backend.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function interruptWorkshopMaintenanceWithRealJob() {
+      const tasksToInterrupt = assignedMaintenanceTasks.filter((task) => {
+        if (task.status !== "pendiente") return false;
+        if (task.taskType !== "en_taller") return false;
+
+        const tech = techs.find((item) => item.name === task.techName);
+
+        return !!tech && tech.currentJobId != null;
+      });
+
+      if (tasksToInterrupt.length === 0) return;
+
+      for (const task of tasksToInterrupt) {
+        const fallbackTask: AssignedMaintenanceTask = {
+          ...task,
+          status: "interrumpida",
+          statusChangedAtMs: Date.now(),
+        };
+
+        const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+          `/api/assigned-maintenance-tasks/${task.id}/interrupt`,
+          {
+            method: "PUT",
+          },
+          fallbackTask
+        );
+
+        if (cancelled) return;
+
+        setAssignedMaintenanceTasks((prev) =>
+          prev.map((item) => (item.id === task.id ? savedTask : item))
+        );
+      }
+    }
+
+    void interruptWorkshopMaintenanceWithRealJob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [techs, assignedMaintenanceTasks]);
 
   async function addMaintenanceTask() {
-  const label = newMaintenanceTaskLabel.trim();
+    const label = newMaintenanceTaskLabel.trim();
 
-  if (!label) {
-    window.alert("Escribe el nombre de la tarea.");
-    return;
+    if (!label) {
+      window.alert("Escribe el nombre de la tarea.");
+      return;
+    }
+
+    const task: MaintenanceTask = {
+      id: `maintenance-${Date.now()}`,
+      label,
+      type: newMaintenanceTaskType,
+    };
+
+    const savedTask = await sendMaintenanceJson<MaintenanceTask>(
+      "/api/maintenance-tasks",
+      {
+        method: "POST",
+        body: JSON.stringify(task),
+      },
+      task
+    );
+
+    setMaintenanceTasks((prev) =>
+      [...prev, savedTask].sort((a, b) =>
+        a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+      )
+    );
+
+    setNewMaintenanceTaskLabel("");
+    setNewMaintenanceTaskType("en_taller");
   }
-
-  const task: MaintenanceTask = {
-    id: `maintenance-${Date.now()}`,
-    label,
-    type: newMaintenanceTaskType,
-  };
-
-  const savedTask = await sendMaintenanceJson<MaintenanceTask>(
-    "/api/maintenance-tasks",
-    {
-      method: "POST",
-      body: JSON.stringify(task),
-    },
-    task
-  );
-
-  setMaintenanceTasks((prev) =>
-    [...prev, savedTask].sort((a, b) =>
-      a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-    )
-  );
-
-  setNewMaintenanceTaskLabel("");
-  setNewMaintenanceTaskType("en_taller");
-}
 
   function startEditMaintenanceTask(task: MaintenanceTask) {
     setEditingMaintenanceTaskId(task.id);
@@ -746,291 +749,290 @@ useEffect(() => {
   }
 
   async function saveMaintenanceTask() {
-  const label = editingMaintenanceTaskLabel.trim();
+    const label = editingMaintenanceTaskLabel.trim();
 
-  if (!editingMaintenanceTaskId) return;
+    if (!editingMaintenanceTaskId) return;
 
-  if (!label) {
-    window.alert("El nombre de la tarea no puede estar vacío.");
-    return;
-  }
+    if (!label) {
+      window.alert("El nombre de la tarea no puede estar vacío.");
+      return;
+    }
 
-  const currentTask = maintenanceTasks.find(
-    (task) => task.id === editingMaintenanceTaskId
-  );
+    const currentTask = maintenanceTasks.find(
+      (task) => task.id === editingMaintenanceTaskId
+    );
 
-  if (!currentTask) return;
+    if (!currentTask) return;
 
-  const nextTask: MaintenanceTask = {
-    ...currentTask,
-    label,
-    type: editingMaintenanceTaskType,
-  };
+    const nextTask: MaintenanceTask = {
+      ...currentTask,
+      label,
+      type: editingMaintenanceTaskType,
+    };
 
-  const savedTask = await sendMaintenanceJson<MaintenanceTask>(
-    `/api/maintenance-tasks/${editingMaintenanceTaskId}`,
-    {
-      method: "PUT",
-      body: JSON.stringify(nextTask),
-    },
-    nextTask
-  );
+    const savedTask = await sendMaintenanceJson<MaintenanceTask>(
+      `/api/maintenance-tasks/${editingMaintenanceTaskId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(nextTask),
+      },
+      nextTask
+    );
 
-  setMaintenanceTasks((prev) =>
-    prev
-      .map((task) =>
-        task.id === editingMaintenanceTaskId ? savedTask : task
-      )
-      .sort((a, b) =>
-        a.label.localeCompare(b.label, "es", { sensitivity: "base" })
-      )
-  );
+    setMaintenanceTasks((prev) =>
+      prev
+        .map((task) =>
+          task.id === editingMaintenanceTaskId ? savedTask : task
+        )
+        .sort((a, b) =>
+          a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+        )
+    );
 
-  cancelEditMaintenanceTask();
-}
-
-  async function removeMaintenanceTask(taskId: string) {
-  const task = maintenanceTasks.find((item) => item.id === taskId);
-
-  if (!task) return;
-
-  const ok = window.confirm(`¿Eliminar la tarea "${task.label}"?`);
-
-  if (!ok) return;
-
-  await deleteMaintenanceApi(`/api/maintenance-tasks/${taskId}`);
-
-  setMaintenanceTasks((prev) => prev.filter((item) => item.id !== taskId));
-
-  if (editingMaintenanceTaskId === taskId) {
     cancelEditMaintenanceTask();
   }
-}
 
- async function assignMaintenanceTask() {
-  if (!selectedMaintenanceTask) {
-    window.alert("Selecciona una tarea de mantenimiento.");
-    return;
+  async function removeMaintenanceTask(taskId: string) {
+    const task = maintenanceTasks.find((item) => item.id === taskId);
+
+    if (!task) return;
+
+    const ok = window.confirm(`¿Eliminar la tarea "${task.label}"?`);
+
+    if (!ok) return;
+
+    await deleteMaintenanceApi(`/api/maintenance-tasks/${taskId}`);
+
+    setMaintenanceTasks((prev) => prev.filter((item) => item.id !== taskId));
+
+    if (editingMaintenanceTaskId === taskId) {
+      cancelEditMaintenanceTask();
+    }
   }
 
-  if (!selectedMaintenanceTechName) {
-    window.alert("Selecciona un técnico disponible.");
-    return;
-  }
+  async function assignMaintenanceTask() {
+    if (!selectedMaintenanceTask) {
+      window.alert("Selecciona una tarea de mantenimiento.");
+      return;
+    }
 
-  const existingPendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
-    (task) => task.techName === selectedMaintenanceTechName
-  );
+    if (!selectedMaintenanceTechName) {
+      window.alert("Selecciona un técnico disponible.");
+      return;
+    }
 
-  if (existingPendingMaintenanceTask) {
-    window.alert(
-      `${selectedMaintenanceTechName} ya tiene una tarea de mantenimiento pendiente:\n\n${existingPendingMaintenanceTask.taskLabel}`
+    const existingPendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
+      (task) => task.techName === selectedMaintenanceTechName
     );
-    return;
-  }
 
-  const ok = window.confirm(
-    `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
-  );
+    if (existingPendingMaintenanceTask) {
+      window.alert(
+        `${selectedMaintenanceTechName} ya tiene una tarea de mantenimiento pendiente:\n\n${existingPendingMaintenanceTask.taskLabel}`
+      );
+      return;
+    }
 
-  if (!ok) return;
-
-  const assignedTask: AssignedMaintenanceTask = {
-    id: `assigned-maintenance-${Date.now()}`,
-    taskId: selectedMaintenanceTask.id,
-    taskLabel: selectedMaintenanceTask.label,
-    taskType: selectedMaintenanceTask.type,
-    techName: selectedMaintenanceTechName,
-    assignedAtMs: Date.now(),
-    status: "pendiente",
-    statusChangedAtMs: null,
-  };
-
-  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
-    "/api/assigned-maintenance-tasks",
-    {
-      method: "POST",
-      body: JSON.stringify(assignedTask),
-    },
-    assignedTask
-  );
-
-  setAssignedMaintenanceTasks((prev) => [savedTask, ...prev]);
-  setSelectedMaintenanceTechName("");
-}
-
-
-async function finishAssignedMaintenanceTask(assignedTaskId: string) {
-  const localUpdatedAt = Date.now();
-
-  const currentTask = assignedMaintenanceTasks.find(
-    (task) => task.id === assignedTaskId
-  );
-
-  if (!currentTask) return;
-
-  const fallbackTask: AssignedMaintenanceTask = {
-    ...currentTask,
-    status: "finalizada",
-    statusChangedAtMs: localUpdatedAt,
-  };
-
-  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
-    `/api/assigned-maintenance-tasks/${assignedTaskId}/finish`,
-    {
-      method: "PUT",
-    },
-    fallbackTask
-  );
-
-  setAssignedMaintenanceTasks((prev) =>
-    prev.map((task) => (task.id === assignedTaskId ? savedTask : task))
-  );
-}
-
-async function interruptAssignedMaintenanceTask(assignedTaskId: string) {
-  const task = assignedMaintenanceTasks.find(
-    (item) => item.id === assignedTaskId
-  );
-
-  if (!task) return;
-
-  if (task.status !== "pendiente") {
-    window.alert("Solo se pueden interrumpir tareas pendientes.");
-    return;
-  }
-
-  if (task.taskType !== "en_taller") {
-    window.alert("Solo se pueden interrumpir tareas de mantenimiento en taller.");
-    return;
-  }
-
-  const ok = window.confirm(
-    `¿Interrumpir "${task.taskLabel}" de ${task.techName}?`
-  );
-
-  if (!ok) return;
-
-  const fallbackTask: AssignedMaintenanceTask = {
-    ...task,
-    status: "interrumpida",
-    statusChangedAtMs: Date.now(),
-  };
-
-  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
-    `/api/assigned-maintenance-tasks/${assignedTaskId}/interrupt`,
-    {
-      method: "PUT",
-    },
-    fallbackTask
-  );
-
-  setAssignedMaintenanceTasks((prev) =>
-    prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
-  );
-}
-
-async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
-  const task = assignedMaintenanceTasks.find(
-    (item) => item.id === assignedTaskId
-  );
-
-  if (!task) return;
-
-  if (task.status !== "interrumpida") {
-    window.alert("Solo se pueden reanudar tareas interrumpidas.");
-    return;
-  }
-
-  const tech = techs.find((item) => item.name === task.techName);
-
-  if (!tech) {
-    window.alert("No se ha encontrado el técnico asignado.");
-    return;
-  }
-
-  if (
-    normalizeTechStatus(tech.status) !== "disponible" ||
-    tech.currentJobId != null
-  ) {
-    window.alert(
-      "Este técnico todavía no está disponible. No se puede reanudar la tarea."
+    const ok = window.confirm(
+      `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
     );
-    return;
+
+    if (!ok) return;
+
+    const assignedTask: AssignedMaintenanceTask = {
+      id: `assigned-maintenance-${Date.now()}`,
+      taskId: selectedMaintenanceTask.id,
+      taskLabel: selectedMaintenanceTask.label,
+      taskType: selectedMaintenanceTask.type,
+      techName: selectedMaintenanceTechName,
+      assignedAtMs: Date.now(),
+      status: "pendiente",
+      statusChangedAtMs: null,
+    };
+
+    const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+      "/api/assigned-maintenance-tasks",
+      {
+        method: "POST",
+        body: JSON.stringify(assignedTask),
+      },
+      assignedTask
+    );
+
+    setAssignedMaintenanceTasks((prev) => [savedTask, ...prev]);
+    setSelectedMaintenanceTechName("");
   }
 
-  const ok = window.confirm(
-    `¿Reanudar "${task.taskLabel}" con ${task.techName}?`
-  );
+  async function finishAssignedMaintenanceTask(assignedTaskId: string) {
+    const localUpdatedAt = Date.now();
 
-  if (!ok) return;
+    const currentTask = assignedMaintenanceTasks.find(
+      (task) => task.id === assignedTaskId
+    );
 
-  const fallbackTask: AssignedMaintenanceTask = {
-    ...task,
-    status: "pendiente",
-    assignedAtMs: Date.now(),
-    statusChangedAtMs: null,
-  };
+    if (!currentTask) return;
 
-  const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
-    `/api/assigned-maintenance-tasks/${assignedTaskId}/resume`,
-    {
-      method: "PUT",
-    },
-    fallbackTask
-  );
+    const fallbackTask: AssignedMaintenanceTask = {
+      ...currentTask,
+      status: "finalizada",
+      statusChangedAtMs: localUpdatedAt,
+    };
 
-  setAssignedMaintenanceTasks((prev) =>
-    prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
-  );
-}
+    const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+      `/api/assigned-maintenance-tasks/${assignedTaskId}/finish`,
+      {
+        method: "PUT",
+      },
+      fallbackTask
+    );
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.map((task) => (task.id === assignedTaskId ? savedTask : task))
+    );
+  }
+
+  async function interruptAssignedMaintenanceTask(assignedTaskId: string) {
+    const task = assignedMaintenanceTasks.find(
+      (item) => item.id === assignedTaskId
+    );
+
+    if (!task) return;
+
+    if (task.status !== "pendiente") {
+      window.alert("Solo se pueden interrumpir tareas pendientes.");
+      return;
+    }
+
+    if (task.taskType !== "en_taller") {
+      window.alert("Solo se pueden interrumpir tareas de mantenimiento en taller.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Interrumpir "${task.taskLabel}" de ${task.techName}?`
+    );
+
+    if (!ok) return;
+
+    const fallbackTask: AssignedMaintenanceTask = {
+      ...task,
+      status: "interrumpida",
+      statusChangedAtMs: Date.now(),
+    };
+
+    const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+      `/api/assigned-maintenance-tasks/${assignedTaskId}/interrupt`,
+      {
+        method: "PUT",
+      },
+      fallbackTask
+    );
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
+    );
+  }
+
+  async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
+    const task = assignedMaintenanceTasks.find(
+      (item) => item.id === assignedTaskId
+    );
+
+    if (!task) return;
+
+    if (task.status !== "interrumpida") {
+      window.alert("Solo se pueden reanudar tareas interrumpidas.");
+      return;
+    }
+
+    const tech = techs.find((item) => item.name === task.techName);
+
+    if (!tech) {
+      window.alert("No se ha encontrado el técnico asignado.");
+      return;
+    }
+
+    if (
+      normalizeTechStatus(tech.status) !== "disponible" ||
+      tech.currentJobId != null
+    ) {
+      window.alert(
+        "Este técnico todavía no está disponible. No se puede reanudar la tarea."
+      );
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Reanudar "${task.taskLabel}" con ${task.techName}?`
+    );
+
+    if (!ok) return;
+
+    const fallbackTask: AssignedMaintenanceTask = {
+      ...task,
+      status: "pendiente",
+      assignedAtMs: Date.now(),
+      statusChangedAtMs: null,
+    };
+
+    const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+      `/api/assigned-maintenance-tasks/${assignedTaskId}/resume`,
+      {
+        method: "PUT",
+      },
+      fallbackTask
+    );
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
+    );
+  }
 
   async function removeAssignedMaintenanceTask(assignedTaskId: string) {
-  const task = assignedMaintenanceTasks.find(
-    (item) => item.id === assignedTaskId
-  );
+    const task = assignedMaintenanceTasks.find(
+      (item) => item.id === assignedTaskId
+    );
 
-  if (!task) return;
+    if (!task) return;
 
-  const ok = window.confirm(
-    `¿Borrar la asignación "${task.taskLabel}" de ${task.techName}?`
-  );
+    const ok = window.confirm(
+      `¿Borrar la asignación "${task.taskLabel}" de ${task.techName}?`
+    );
 
-  if (!ok) return;
+    if (!ok) return;
 
-  await deleteMaintenanceApi(
-    `/api/assigned-maintenance-tasks/${assignedTaskId}`
-  );
+    await deleteMaintenanceApi(
+      `/api/assigned-maintenance-tasks/${assignedTaskId}`
+    );
 
-  setAssignedMaintenanceTasks((prev) =>
-    prev.filter((item) => item.id !== assignedTaskId)
-  );
-}
-
-  async function clearFinishedMaintenanceTasks() {
-  const historyTasks = assignedMaintenanceTasks.filter(
-    (task) => task.status === "finalizada" || task.status === "interrumpida"
-  );
-
-  if (historyTasks.length === 0) {
-    window.alert("No hay tareas finalizadas o interrumpidas para limpiar.");
-    return;
+    setAssignedMaintenanceTasks((prev) =>
+      prev.filter((item) => item.id !== assignedTaskId)
+    );
   }
 
-  const ok = window.confirm(
-    `¿Limpiar ${historyTasks.length} tarea(s) finalizada(s) o interrumpida(s)?`
-  );
+  async function clearFinishedMaintenanceTasks() {
+    const historyTasks = assignedMaintenanceTasks.filter(
+      (task) => task.status === "finalizada" || task.status === "interrumpida"
+    );
 
-  if (!ok) return;
+    if (historyTasks.length === 0) {
+      window.alert("No hay tareas finalizadas o interrumpidas para limpiar.");
+      return;
+    }
 
-  await deleteMaintenanceApi("/api/assigned-maintenance-tasks/history");
+    const ok = window.confirm(
+      `¿Limpiar ${historyTasks.length} tarea(s) finalizada(s) o interrumpida(s)?`
+    );
 
-  setAssignedMaintenanceTasks((prev) =>
-    prev.filter(
-      (task) => task.status !== "finalizada" && task.status !== "interrumpida"
-    )
-  );
-}
+    if (!ok) return;
+
+    await deleteMaintenanceApi("/api/assigned-maintenance-tasks/history");
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.filter(
+        (task) => task.status !== "finalizada" && task.status !== "interrumpida"
+      )
+    );
+  }
 
   const activeJobs = jobs.filter((job) => job.status === "activo");
   const validationJobs = jobs.filter((job) => job.status === "validacion");
@@ -1050,14 +1052,14 @@ async function resumeInterruptedMaintenanceTask(assignedTaskId: string) {
   );
 
   const interruptedAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
-  (task) => task.status === "interrumpida"
-);
+    (task) => task.status === "interrumpida"
+  );
 
-const recentInterruptedMaintenanceTasks =
-  interruptedAssignedMaintenanceTasks.filter((task) => {
-    const changedAt = task.statusChangedAtMs ?? task.assignedAtMs;
-    return Date.now() - changedAt < 10 * 60 * 1000;
-  });
+  const recentInterruptedMaintenanceTasks =
+    interruptedAssignedMaintenanceTasks.filter((task) => {
+      const changedAt = task.statusChangedAtMs ?? task.assignedAtMs;
+      return Date.now() - changedAt < 10 * 60 * 1000;
+    });
 
   const historyAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
     (task) => task.status === "finalizada" || task.status === "interrumpida"
@@ -1076,16 +1078,16 @@ const recentInterruptedMaintenanceTasks =
   );
 
   const availableMaintenanceTechs = techs.filter((tech) => {
-  const hasAnyPendingMaintenanceTask = pendingAssignedMaintenanceTasks.some(
-    (task) => task.techName === tech.name
-  );
+    const hasAnyPendingMaintenanceTask = pendingAssignedMaintenanceTasks.some(
+      (task) => task.techName === tech.name
+    );
 
-  return (
-    normalizeTechStatus(tech.status) === "disponible" &&
-    tech.currentJobId == null &&
-    !hasAnyPendingMaintenanceTask
-  );
-});
+    return (
+      normalizeTechStatus(tech.status) === "disponible" &&
+      tech.currentJobId == null &&
+      !hasAnyPendingMaintenanceTask
+    );
+  });
 
   const selectedMaintenanceTask =
     maintenanceTasks.find((task) => task.id === selectedMaintenanceTaskId) ??
@@ -1139,14 +1141,16 @@ const recentInterruptedMaintenanceTasks =
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-xl font-black">Trabajos asignados</h2>
+
             <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-600">
-              {activeJobs.length}
+              {activeJobs.length + pendingAssignedMaintenanceTasks.length}
             </span>
           </div>
 
-          {activeJobs.length === 0 ? (
+          {activeJobs.length === 0 &&
+          pendingAssignedMaintenanceTasks.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-              No hay trabajos activos.
+              No hay trabajos activos ni tareas de mantenimiento asignadas.
             </div>
           ) : (
             <div className="grid gap-3 2xl:grid-cols-2">
@@ -1156,7 +1160,7 @@ const recentInterruptedMaintenanceTasks =
 
                 return (
                   <div
-                    key={job.id}
+                    key={`job-${job.id}`}
                     className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
                   >
                     <div className="mb-3 flex flex-wrap gap-3">
@@ -1258,6 +1262,91 @@ const recentInterruptedMaintenanceTasks =
                   </div>
                 );
               })}
+
+              {pendingAssignedMaintenanceTasks.map((task) => {
+                const tech = techs.find((item) => item.name === task.techName);
+                const isOutside = task.taskType === "fuera_taller";
+
+                return (
+                  <div
+                    key={`maintenance-${task.id}`}
+                    className={`rounded-3xl border p-4 ${
+                      isOutside
+                        ? "border-red-200 bg-red-50"
+                        : "border-emerald-200 bg-emerald-50"
+                    }`}
+                  >
+                    <div className="mb-3 flex flex-wrap gap-3">
+                      <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
+                        <TechAvatar tech={tech} size="large" />
+                        <div className="text-2xl font-black">
+                          {task.techName}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <div className="mb-1 flex items-center gap-2">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-black uppercase ${
+                              isOutside
+                                ? "bg-red-100 text-red-700"
+                                : "bg-emerald-100 text-emerald-700"
+                            }`}
+                          >
+                            {isOutside ? "Fuera taller" : "Mantenimiento"}
+                          </span>
+
+                          <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500">
+                            Tarea
+                          </span>
+                        </div>
+
+                        <div className="text-4xl font-black tracking-wide text-slate-950">
+                          {task.taskLabel}
+                        </div>
+
+                        <div className="mt-1 text-xl font-bold text-slate-700">
+                          {getMaintenanceTaskTypeLabel(task.taskType)}
+                        </div>
+
+                        <div className="mt-3 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-lg font-black text-white shadow-sm">
+                          Tiempo trabajando:{" "}
+                          {formatMaintenanceElapsedTime(task, nowTick)}
+                        </div>
+
+                        <div className="mt-3 rounded-2xl border border-white bg-white/80 px-4 py-3 text-sm font-bold text-slate-700">
+                          Asignada:{" "}
+                          {formatMaintenanceAssignedAt(task.assignedAtMs)}
+                        </div>
+                      </div>
+
+                      <div className="grid min-w-[190px] gap-2">
+                        <button
+                          type="button"
+                          onClick={() => finishAssignedMaintenanceTask(task.id)}
+                          className="rounded-2xl bg-slate-900 px-4 py-4 text-lg font-bold text-white"
+                        >
+                          Finalizar
+                        </button>
+
+                        {task.taskType === "en_taller" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              interruptAssignedMaintenanceTask(task.id)
+                            }
+                            className="rounded-2xl border border-sky-300 bg-sky-50 px-4 py-4 text-lg font-bold text-sky-700"
+                          >
+                            Interrumpir
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
@@ -1274,27 +1363,27 @@ const recentInterruptedMaintenanceTasks =
                 </p>
               </div>
 
-<div className="flex flex-col items-end gap-1">
-  <div className="flex items-center gap-2">
-    <span
-      className={`rounded-full px-3 py-1 text-xs font-black ${
-        maintenanceApiLoaded
-          ? "bg-emerald-100 text-emerald-700"
-          : "bg-amber-100 text-amber-700"
-      }`}
-    >
-      {maintenanceApiLoaded ? "API" : "LOCAL"}
-    </span>
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-black ${
+                      maintenanceApiLoaded
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-amber-100 text-amber-700"
+                    }`}
+                  >
+                    {maintenanceApiLoaded ? "API" : "LOCAL"}
+                  </span>
 
-    <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
-      {maintenanceTasks.length}
-    </span>
-  </div>
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
+                    {maintenanceTasks.length}
+                  </span>
+                </div>
 
-  <span className="text-[10px] font-bold text-emerald-700">
-    Sync: {formatMaintenanceSyncTime(maintenanceLastSyncAt)}
-  </span>
-</div>
+                <span className="text-[10px] font-bold text-emerald-700">
+                  Sync: {formatMaintenanceSyncTime(maintenanceLastSyncAt)}
+                </span>
+              </div>
             </div>
 
             <div className="mb-3 grid gap-2 sm:grid-cols-3">
@@ -1325,27 +1414,29 @@ const recentInterruptedMaintenanceTasks =
                 </div>
               </div>
             </div>
-            {recentInterruptedMaintenanceTasks.length > 0 && (
-  <div className="mb-3 rounded-2xl border border-sky-200 bg-sky-50 p-3">
-    <div className="mb-2 text-xs font-black uppercase tracking-wide text-sky-700">
-      Mantenimiento interrumpido recientemente
-    </div>
 
-    <div className="space-y-2">
-      {recentInterruptedMaintenanceTasks.map((task) => (
-        <div
-          key={task.id}
-          className="rounded-xl border border-sky-100 bg-white px-3 py-2 text-xs font-bold text-sky-900"
-        >
-          {task.techName} · {task.taskLabel}
-          <span className="ml-2 font-semibold text-sky-600">
-            Interrumpida por trabajo real
-          </span>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+            {recentInterruptedMaintenanceTasks.length > 0 && (
+              <div className="mb-3 rounded-2xl border border-sky-200 bg-sky-50 p-3">
+                <div className="mb-2 text-xs font-black uppercase tracking-wide text-sky-700">
+                  Mantenimiento interrumpido recientemente
+                </div>
+
+                <div className="space-y-2">
+                  {recentInterruptedMaintenanceTasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className="rounded-xl border border-sky-100 bg-white px-3 py-2 text-xs font-bold text-sky-900"
+                    >
+                      {task.techName} · {task.taskLabel}
+                      <span className="ml-2 font-semibold text-sky-600">
+                        Interrumpida por trabajo real
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {maintenanceTechNames.length > 0 && (
               <div className="mb-3 rounded-2xl border border-emerald-200 bg-white p-3">
                 <div className="mb-2 text-xs font-black uppercase tracking-wide text-emerald-800">
@@ -1569,7 +1660,9 @@ const recentInterruptedMaintenanceTasks =
                   Asignar tarea a técnico disponible
                 </h3>
                 <p className="text-xs font-semibold text-emerald-700">
-                  Cada técnico puede tener una tarea de mantenimiento pendiente. En taller no bloquea trabajos reales; fuera de taller sí bloquea.
+                  Cada técnico puede tener una tarea de mantenimiento pendiente.
+                  En taller no bloquea trabajos reales; fuera de taller sí
+                  bloquea.
                 </p>
               </div>
 
@@ -1591,7 +1684,8 @@ const recentInterruptedMaintenanceTasks =
                     ) : (
                       maintenanceTasks.map((task) => (
                         <option key={task.id} value={task.id}>
-                          {task.label} · {getMaintenanceTaskTypeLabel(task.type)}
+                          {task.label} ·{" "}
+                          {getMaintenanceTaskTypeLabel(task.type)}
                         </option>
                       ))
                     )}
@@ -1683,6 +1777,7 @@ const recentInterruptedMaintenanceTasks =
                         <th className="px-3 py-3 font-black">Tipo</th>
                         <th className="px-3 py-3 font-black">Técnico</th>
                         <th className="px-3 py-3 font-black">Estado</th>
+                        <th className="px-3 py-3 font-black">Inicio</th>
                         <th className="px-3 py-3 font-black">Tiempo</th>
                         <th className="px-3 py-3 text-right font-black">
                           Acciones
@@ -1702,7 +1797,10 @@ const recentInterruptedMaintenanceTasks =
                         </tr>
                       ) : (
                         visibleAssignedMaintenanceTasks.map((task) => (
-                          <tr key={task.id} className="border-t border-slate-100">
+                          <tr
+                            key={task.id}
+                            className="border-t border-slate-100"
+                          >
                             <td className="px-3 py-3 font-bold text-slate-900">
                               {task.taskLabel}
                             </td>
@@ -1734,54 +1832,65 @@ const recentInterruptedMaintenanceTasks =
                             </td>
 
                             <td className="px-3 py-3 font-semibold text-slate-500">
-  {formatMaintenanceAssignedAt(task.assignedAtMs)}
-</td>
+                              {formatMaintenanceAssignedAt(task.assignedAtMs)}
+                            </td>
 
-<td className="px-3 py-3 font-black text-slate-700">
-  {formatMaintenanceElapsedTime(task, nowTick)}
-</td>
+                            <td className="px-3 py-3 font-black text-slate-700">
+                              {formatMaintenanceElapsedTime(task, nowTick)}
+                            </td>
 
-<td className="px-3 py-3">
+                            <td className="px-3 py-3">
                               <div className="flex justify-end gap-2">
- {task.status === "pendiente" && (
-  <>
-    {task.taskType === "en_taller" && (
-      <button
-        type="button"
-        onClick={() => interruptAssignedMaintenanceTask(task.id)}
-        className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 hover:bg-sky-100"
-      >
-        Interrumpir
-      </button>
-    )}
+                                {task.status === "pendiente" && (
+                                  <>
+                                    {task.taskType === "en_taller" && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          interruptAssignedMaintenanceTask(
+                                            task.id
+                                          )
+                                        }
+                                        className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 hover:bg-sky-100"
+                                      >
+                                        Interrumpir
+                                      </button>
+                                    )}
 
-    <button
-      type="button"
-      onClick={() => finishAssignedMaintenanceTask(task.id)}
-      className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
-    >
-      Finalizar
-    </button>
-  </>
-)}
-  {task.status === "interrumpida" && (
-    <button
-      type="button"
-      onClick={() => resumeInterruptedMaintenanceTask(task.id)}
-      className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 hover:bg-sky-100"
-    >
-      Reanudar
-    </button>
-  )}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        finishAssignedMaintenanceTask(task.id)
+                                      }
+                                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
+                                    >
+                                      Finalizar
+                                    </button>
+                                  </>
+                                )}
 
-  <button
-    type="button"
-    onClick={() => removeAssignedMaintenanceTask(task.id)}
-    className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
-  >
-    Borrar
-  </button>
-</div>
+                                {task.status === "interrumpida" && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      resumeInterruptedMaintenanceTask(task.id)
+                                    }
+                                    className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 hover:bg-sky-100"
+                                  >
+                                    Reanudar
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    removeAssignedMaintenanceTask(task.id)
+                                  }
+                                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+                                >
+                                  Borrar
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -1924,90 +2033,94 @@ const recentInterruptedMaintenanceTasks =
         </div>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-  <div className="mb-3 flex items-center justify-between">
-    <h2 className="text-lg font-black">Estado técnicos</h2>
-    <span className="text-xs text-slate-500">No editable</span>
-  </div>
-
-  <div className="space-y-2">
-    {techs.map((tech) => {
-      const currentJob =
-        tech.currentJobId != null
-          ? jobs.find((job) => job.id === tech.currentJobId)
-          : null;
-
-      const validationProposal = jobs.find(
-        (job) =>
-          job.status === "validacion" &&
-          Array.isArray(job.assignedNames) &&
-          job.assignedNames.includes(tech.name)
-      );
-
-      const isReservedForValidation = Boolean(validationProposal && !currentJob);
-
-      const pendingWorkshopMaintenanceTask =
-        pendingWorkshopMaintenanceTasks.find(
-          (task) => task.techName === tech.name
-        );
-
-      const pendingOutsideMaintenanceTask =
-        pendingOutsideMaintenanceTasks.find(
-          (task) => task.techName === tech.name
-        );
-
-      return (
-        <div
-          key={tech.name}
-          className={`rounded-2xl border p-3 ${
-            pendingOutsideMaintenanceTask
-              ? "border-red-300 bg-red-200 text-red-950"
-              : pendingWorkshopMaintenanceTask
-                ? "border-emerald-300 bg-emerald-200 text-emerald-950"
-                : isReservedForValidation
-                  ? "border-violet-300 bg-violet-200 text-violet-950"
-                  : getTechCardClass(tech.status)
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-3">
-              <TechAvatar tech={tech} />
-
-              <div className="min-w-0">
-                <div className="truncate text-lg font-black">
-                  {tech.name}
-                </div>
-
-                <div className="truncate text-xs font-semibold opacity-80">
-                  {currentJob
-                    ? `${currentJob.plate} · ${getOperationLabel(currentJob)}`
-                    : pendingOutsideMaintenanceTask
-                      ? `Fuera de taller · ${pendingOutsideMaintenanceTask.taskLabel}`
-                      : pendingWorkshopMaintenanceTask
-                        ? `Mantenimiento taller · ${pendingWorkshopMaintenanceTask.taskLabel}`
-                        : validationProposal
-                          ? `Propuesto en ${validationProposal.plate} · ${getOperationLabel(
-                              validationProposal
-                            )}`
-                          : "Sin trabajo asignado"}
-                </div>
-              </div>
-            </div>
-
-            <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
-              {pendingOutsideMaintenanceTask
-                ? "FUERA TALLER"
-                : pendingWorkshopMaintenanceTask
-                  ? "MANT. TALLER"
-                  : isReservedForValidation
-                    ? "RESERVADO"
-                    : getTechStatusLabel(tech.status)}
-            </span>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-black">Estado técnicos</h2>
+            <span className="text-xs text-slate-500">No editable</span>
           </div>
-        </div>
-      );
-    })}
-  </div>
-</section>
+
+          <div className="space-y-2">
+            {techs.map((tech) => {
+              const currentJob =
+                tech.currentJobId != null
+                  ? jobs.find((job) => job.id === tech.currentJobId)
+                  : null;
+
+              const validationProposal = jobs.find(
+                (job) =>
+                  job.status === "validacion" &&
+                  Array.isArray(job.assignedNames) &&
+                  job.assignedNames.includes(tech.name)
+              );
+
+              const isReservedForValidation = Boolean(
+                validationProposal && !currentJob
+              );
+
+              const pendingWorkshopMaintenanceTask =
+                pendingWorkshopMaintenanceTasks.find(
+                  (task) => task.techName === tech.name
+                );
+
+              const pendingOutsideMaintenanceTask =
+                pendingOutsideMaintenanceTasks.find(
+                  (task) => task.techName === tech.name
+                );
+
+              return (
+                <div
+                  key={tech.name}
+                  className={`rounded-2xl border p-3 ${
+                    pendingOutsideMaintenanceTask
+                      ? "border-red-300 bg-red-200 text-red-950"
+                      : pendingWorkshopMaintenanceTask
+                      ? "border-emerald-300 bg-emerald-200 text-emerald-950"
+                      : isReservedForValidation
+                      ? "border-violet-300 bg-violet-200 text-violet-950"
+                      : getTechCardClass(tech.status)
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <TechAvatar tech={tech} />
+
+                      <div className="min-w-0">
+                        <div className="truncate text-lg font-black">
+                          {tech.name}
+                        </div>
+
+                        <div className="truncate text-xs font-semibold opacity-80">
+                          {currentJob
+                            ? `${currentJob.plate} · ${getOperationLabel(
+                                currentJob
+                              )}`
+                            : pendingOutsideMaintenanceTask
+                            ? `Fuera de taller · ${pendingOutsideMaintenanceTask.taskLabel}`
+                            : pendingWorkshopMaintenanceTask
+                            ? `Mantenimiento taller · ${pendingWorkshopMaintenanceTask.taskLabel}`
+                            : validationProposal
+                            ? `Propuesto en ${
+                                validationProposal.plate
+                              } · ${getOperationLabel(validationProposal)}`
+                            : "Sin trabajo asignado"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
+                      {pendingOutsideMaintenanceTask
+                        ? "FUERA TALLER"
+                        : pendingWorkshopMaintenanceTask
+                        ? "MANT. TALLER"
+                        : isReservedForValidation
+                        ? "RESERVADO"
+                        : getTechStatusLabel(tech.status)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       </div>
     </div>
   );
