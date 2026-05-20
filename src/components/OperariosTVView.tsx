@@ -1924,75 +1924,90 @@ const recentInterruptedMaintenanceTasks =
         </div>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-black">Estado técnicos</h2>
-            <span className="text-xs text-slate-500">No editable</span>
-          </div>
+  <div className="mb-3 flex items-center justify-between">
+    <h2 className="text-lg font-black">Estado técnicos</h2>
+    <span className="text-xs text-slate-500">No editable</span>
+  </div>
 
-          <div className="space-y-2">
-            {techs.map((tech) => {
-              const currentJob =
-                tech.currentJobId != null
-                  ? jobs.find((job) => job.id === tech.currentJobId)
-                  : null;
+  <div className="space-y-2">
+    {techs.map((tech) => {
+      const currentJob =
+        tech.currentJobId != null
+          ? jobs.find((job) => job.id === tech.currentJobId)
+          : null;
 
-              const pendingWorkshopMaintenanceTask =
-                pendingWorkshopMaintenanceTasks.find(
-                  (task) => task.techName === tech.name
-                );
+      const validationProposal = jobs.find(
+        (job) =>
+          job.status === "validacion" &&
+          Array.isArray(job.assignedNames) &&
+          job.assignedNames.includes(tech.name)
+      );
 
-              const pendingOutsideMaintenanceTask =
-                pendingOutsideMaintenanceTasks.find(
-                  (task) => task.techName === tech.name
-                );
+      const isReservedForValidation = Boolean(validationProposal && !currentJob);
 
-              return (
-                <div
-                  key={tech.name}
-                  className={`rounded-2xl border p-3 ${
-                    pendingOutsideMaintenanceTask
-                      ? "border-red-300 bg-red-200 text-red-950"
-                      : pendingWorkshopMaintenanceTask
-                        ? "border-emerald-300 bg-emerald-200 text-emerald-950"
-                        : getTechCardClass(tech.status)
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <TechAvatar tech={tech} />
+      const pendingWorkshopMaintenanceTask =
+        pendingWorkshopMaintenanceTasks.find(
+          (task) => task.techName === tech.name
+        );
 
-                      <div className="min-w-0">
-                        <div className="truncate text-lg font-black">
-                          {tech.name}
-                        </div>
+      const pendingOutsideMaintenanceTask =
+        pendingOutsideMaintenanceTasks.find(
+          (task) => task.techName === tech.name
+        );
 
-                        <div className="truncate text-xs font-semibold opacity-80">
-                          {currentJob
-                            ? `${currentJob.plate} · ${getOperationLabel(
-                                currentJob
-                              )}`
-                            : pendingOutsideMaintenanceTask
-                              ? `Fuera de taller · ${pendingOutsideMaintenanceTask.taskLabel}`
-                              : pendingWorkshopMaintenanceTask
-                                ? `Mantenimiento taller · ${pendingWorkshopMaintenanceTask.taskLabel}`
-                                : "Sin trabajo asignado"}
-                        </div>
-                      </div>
-                    </div>
+      return (
+        <div
+          key={tech.name}
+          className={`rounded-2xl border p-3 ${
+            pendingOutsideMaintenanceTask
+              ? "border-red-300 bg-red-200 text-red-950"
+              : pendingWorkshopMaintenanceTask
+                ? "border-emerald-300 bg-emerald-200 text-emerald-950"
+                : isReservedForValidation
+                  ? "border-violet-300 bg-violet-200 text-violet-950"
+                  : getTechCardClass(tech.status)
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-3">
+              <TechAvatar tech={tech} />
 
-                    <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
-                      {pendingOutsideMaintenanceTask
-                        ? "FUERA TALLER"
-                        : pendingWorkshopMaintenanceTask
-                          ? "MANT. TALLER"
-                          : getTechStatusLabel(tech.status)}
-                    </span>
-                  </div>
+              <div className="min-w-0">
+                <div className="truncate text-lg font-black">
+                  {tech.name}
                 </div>
-              );
-            })}
+
+                <div className="truncate text-xs font-semibold opacity-80">
+                  {currentJob
+                    ? `${currentJob.plate} · ${getOperationLabel(currentJob)}`
+                    : pendingOutsideMaintenanceTask
+                      ? `Fuera de taller · ${pendingOutsideMaintenanceTask.taskLabel}`
+                      : pendingWorkshopMaintenanceTask
+                        ? `Mantenimiento taller · ${pendingWorkshopMaintenanceTask.taskLabel}`
+                        : validationProposal
+                          ? `Propuesto en ${validationProposal.plate} · ${getOperationLabel(
+                              validationProposal
+                            )}`
+                          : "Sin trabajo asignado"}
+                </div>
+              </div>
+            </div>
+
+            <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
+              {pendingOutsideMaintenanceTask
+                ? "FUERA TALLER"
+                : pendingWorkshopMaintenanceTask
+                  ? "MANT. TALLER"
+                  : isReservedForValidation
+                    ? "RESERVADO"
+                    : getTechStatusLabel(tech.status)}
+            </span>
           </div>
-        </section>
+        </div>
+      );
+    })}
+  </div>
+</section>
       </div>
     </div>
   );
