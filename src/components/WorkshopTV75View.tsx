@@ -239,6 +239,7 @@ function getAiMinutes(job: JobForTV75) {
     job.predictedMinutes,
     job.estimatedMinutes,
     job.standardMinutes,
+    job.actualMinutes,
   ];
 
   for (const value of candidates) {
@@ -361,7 +362,7 @@ function ActiveJobVisualCard({
       }`}
     >
       {/* Técnico */}
-      <div className="mb-2 flex min-h-[46px] flex-wrap gap-2">
+      <div className="mb-2 flex min-h-[42px] flex-wrap gap-2">
         {assignedNames.length > 0 ? (
           assignedNames.map((name) => {
             const tech = techs.find((item) => item.name === name);
@@ -369,17 +370,17 @@ function ActiveJobVisualCard({
             return (
               <div
                 key={name}
-                className="flex h-11 items-center gap-2 rounded-2xl bg-white px-3 py-1.5 shadow-sm"
+                className="flex h-10 items-center gap-2 rounded-2xl bg-white px-3 py-1 shadow-sm"
               >
                 <TechAvatar tech={tech} />
-                <div className="max-w-[120px] truncate text-lg font-black">
+                <div className="max-w-[110px] truncate text-base font-black">
                   {name}
                 </div>
               </div>
             );
           })
         ) : (
-          <div className="flex h-11 items-center rounded-2xl bg-white px-3 py-1.5 text-xs font-bold text-slate-400 shadow-sm">
+          <div className="flex h-10 items-center rounded-2xl bg-white px-3 py-1 text-xs font-bold text-slate-400 shadow-sm">
             Sin técnicos asignados
           </div>
         )}
@@ -401,13 +402,13 @@ function ActiveJobVisualCard({
       </div>
 
       {/* Matrícula + alarma */}
-      <div className="relative min-h-[48px] pr-20">
+      <div className="relative min-h-[42px] pr-16">
         <div className="break-words text-2xl font-black leading-none tracking-wide text-slate-950">
           {job.plate || "SIN MATRÍCULA"}
         </div>
 
         {delayed && (
-          <div className="absolute right-0 top-1/2 w-16 -translate-y-1/2 rounded-xl bg-red-600 px-2 py-1 text-center text-[10px] font-black leading-tight text-white shadow-sm">
+          <div className="absolute right-0 top-1/2 w-14 -translate-y-1/2 rounded-lg bg-red-600 px-1.5 py-1 text-center text-[9px] font-black leading-tight text-white shadow-sm">
             <div>Trabajo</div>
             <div>retrasado</div>
           </div>
@@ -415,31 +416,31 @@ function ActiveJobVisualCard({
       </div>
 
       {/* Operación */}
-      <div className="mt-2 min-h-[42px] text-base font-black leading-tight text-slate-700 line-clamp-2">
+      <div className="mt-2 min-h-[38px] line-clamp-2 text-[15px] font-black leading-tight text-slate-700">
         {getOperationLabel(job)}
       </div>
 
-      {/* Bloques de tiempo: mismo ancho */}
-      <div className="mt-auto pt-3">
-        <div className="w-[250px] rounded-2xl bg-slate-900 px-3 py-2 text-center text-sm font-black text-white">
+      {/* Tiempos alineados y visibles */}
+      <div className="mt-auto flex flex-col items-start gap-2 pt-3">
+        <div className="w-[190px] rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-black text-white">
           Tiempo trabajando: {formatMinutes(workedMinutes)}
         </div>
 
-        <div className="mt-2 grid w-[250px] grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
-          <div className="border-r-2 border-slate-900 px-2 py-2">
-            <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+        <div className="grid w-[190px] grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
+          <div className="border-r-2 border-slate-900 px-2 py-1.5">
+            <div className="text-[9px] font-black uppercase tracking-wide text-slate-500">
               IA
             </div>
-            <div className="text-sm font-black text-slate-950">
+            <div className="text-xs font-black text-slate-950">
               {formatMinutes(aiMinutes)}
             </div>
           </div>
 
-          <div className="px-2 py-2">
-            <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+          <div className="px-2 py-1.5">
+            <div className="text-[9px] font-black uppercase tracking-wide text-slate-500">
               Previsto
             </div>
-            <div className="text-sm font-black text-slate-950">
+            <div className="text-xs font-black text-slate-950">
               {formatMinutes(estimatedMinutes)}
             </div>
           </div>
