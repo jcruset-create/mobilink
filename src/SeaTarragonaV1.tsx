@@ -96,7 +96,6 @@ import {
 import {
   areaPriority,
   getNextSafeJobId,
-  getOperationKey,
   getOperationLabel,
   getPausedMinutes,
   getPredictedTimeForJob,
@@ -1004,6 +1003,23 @@ const recommendedTechByJobId = useMemo(
   [runningJobs, techs, quickTemplates, techOperationStats]
 );
 
+const jobsForScreens = useMemo(
+  () =>
+    visibleJobs.map((job) => {
+      const displayMinutes = getDisplayMinutesForJob(job);
+
+      if (displayMinutes == null) return job;
+
+      return {
+        ...job,
+        screenEstimatedMinutes: displayMinutes,
+        screenAiMinutes: displayMinutes,
+        screenPrevistoMinutes: displayMinutes,
+      };
+    }),
+  [visibleJobs, scheduledJobs, quickTemplates]
+);
+
 const dueScheduledJobs = useMemo(() => {
   const nowMsValue = Date.now();
   const oneHourFromNow = nowMsValue + 60 * 60 * 1000;
@@ -1327,7 +1343,7 @@ function timeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
-function getScheduledEstimatedMinutesForJob(job: Job) {
+function getScheduledEstimatedMinutesForJob(job: Job): number | null {
   const scheduled = getScheduledJobByRelatedJobId(job.id);
 
   if (!scheduled) return null;
@@ -1346,6 +1362,43 @@ function getScheduledEstimatedMinutesForJob(job: Job) {
     if (Number.isFinite(diff) && diff > 0) {
       return Math.round(diff);
     }
+  }
+
+  return null;
+}
+
+function getDisplayMinutesForJob(job: Job): number | null {
+  const scheduledMinutes = getScheduledEstimatedMinutesForJob(job);
+
+  if (scheduledMinutes != null && scheduledMinutes > 0) {
+    return scheduledMinutes;
+  }
+
+  const includedTasksMinutes = (job.includedTasks ?? []).reduce(
+    (total, task) => {
+      const minutes = Number(task.standardMinutes);
+
+      return Number.isFinite(minutes) && minutes > 0
+        ? total + minutes
+        : total;
+    },
+    0
+  );
+
+  if (includedTasksMinutes > 0) {
+    return Math.round(includedTasksMinutes);
+  }
+
+  const template = quickTemplates.find((item) => {
+    if (job.template && item.key === job.template) return true;
+    if (job.quickEntryLabel && item.label === job.quickEntryLabel) return true;
+    return false;
+  });
+
+  const templateMinutes = Number(template?.standardMinutes);
+
+  if (Number.isFinite(templateMinutes) && templateMinutes > 0) {
+    return Math.round(templateMinutes);
   }
 
   return null;
@@ -4256,7 +4309,7 @@ function updateTechPriority(
 if (userRole === "tv75") {
   return (
     <WorkshopTV75View
-      jobs={visibleJobs}
+      jobs={jobsForScreens}
       techs={visibleTechs}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
@@ -4291,7 +4344,7 @@ if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
 if (view === "operarios" && canAccessView(userRole, "operarios")) {
   return (
     <OperariosTVView
-      jobs={visibleJobs}
+      jobs={jobsForScreens}
       techs={visibleTechs}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
@@ -6771,7 +6824,6 @@ const textColor = "";
 
 const workedMinutes = getWorkedMinutes(job);
 const scheduledMinutes = getScheduledEstimatedMinutesForJob(job);
-
 const predictedMinutesRaw = Number(prediction.predictedMinutes);
 
 const safePredictedMinutes =
@@ -6781,7 +6833,15 @@ const safePredictedMinutes =
 
 const aiMinutes = scheduledMinutes ?? safePredictedMinutes;
 const previstoMinutes = scheduledMinutes ?? safePredictedMinutes;
-
+console.log("DEBUG tiempos trabajo activo", {
+  jobId: job.id,
+  plate: job.plate,
+  workedMinutes,
+  scheduledMinutes,
+  predictedMinutes: prediction.predictedMinutes,
+  aiMinutes,
+  previstoMinutes,
+});
   return (
     <div
       key={job.id}
@@ -7212,10 +7272,17 @@ const previstoMinutes = scheduledMinutes ?? safePredictedMinutes;
 
               {waitingJobs.map((job) => {
                 const Icon = AREA_META[job.area].icon;
-                const estimate =
-                  operationReport.find(
-                    (item) => item.key === getOperationKey(job)
-                  )?.averageMinutes ?? null;
+const prediction = getPredictedTimeForJob(job, operationReport);
+
+const displayMinutes = getDisplayMinutesForJob(job);
+const predictedMinutesRaw = Number(prediction.predictedMinutes);
+
+const safePredictedMinutes =
+  Number.isFinite(predictedMinutesRaw) && predictedMinutesRaw > 0
+    ? Math.round(predictedMinutesRaw)
+    : 0;
+
+const previstoMinutes = displayMinutes ?? safePredictedMinutes;
 
                 return (
                   <div
@@ -7238,8 +7305,8 @@ const previstoMinutes = scheduledMinutes ?? safePredictedMinutes;
                       {getOperationLabel(job)}
                     </div>
                     <div className="mt-1 text-xs text-amber-700">
-                      Tiempo previsto: {formatMinutes(estimate)}
-                    </div>
+  Tiempo previsto: {formatMinutes(previstoMinutes)}
+</div>
                     <div className="mt-1 text-xs text-amber-700">
                       {job.reason}
                     </div>

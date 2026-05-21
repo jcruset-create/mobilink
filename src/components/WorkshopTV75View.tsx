@@ -19,6 +19,12 @@ type JobForTV75 = {
   aiMinutes?: number | null;
   estimatedMinutes?: number | null;
   actualMinutes?: number | null;
+
+  // Valores calculados desde SeaTarragonaV1 para pantallas.
+  // Tienen prioridad sobre los fallbacks antiguos.
+  screenEstimatedMinutes?: number | null;
+  screenAiMinutes?: number | null;
+  screenPrevistoMinutes?: number | null;
 };
 
 type TechForTV75 = {
@@ -192,53 +198,63 @@ function formatWorkedTime(job: JobForTV75) {
   return formatMinutes(getWorkedMinutes(job));
 }
 
-function getFallbackEstimatedMinutes(job: JobForTV75) {
-  if (job.area === "camion") return 45;
-  if (job.area === "movil") return 180;
-  if (job.area === "tacografo") return 60;
-  if (job.area === "turismo") return 45;
-  if (job.area === "mecanica") return 45;
+function getPositiveMinutes(value: unknown): number | null {
+  const numberValue = Number(value);
 
-  return 45;
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    return null;
+  }
+
+  return Math.round(numberValue);
 }
 
 function getEstimatedMinutes(job: JobForTV75) {
   const candidates = [
-    job.standardMinutes,
+    job.screenEstimatedMinutes,
+    job.screenPrevistoMinutes,
     job.estimatedMinutes,
+    job.standardMinutes,
     job.actualMinutes,
   ];
 
-  const validCandidate = candidates.find(
-    (value) => typeof value === "number" && Number.isFinite(value) && value > 0
-  );
+  for (const value of candidates) {
+    const minutes = getPositiveMinutes(value);
 
-  if (typeof validCandidate === "number") {
-    return Math.round(validCandidate);
+    if (minutes != null) {
+      return minutes;
+    }
   }
 
-  return getFallbackEstimatedMinutes(job);
+  return 0;
 }
 
 function getAiMinutes(job: JobForTV75) {
-  const candidates = [job.aiMinutes, job.predictedMinutes];
+  const candidates = [
+    job.screenAiMinutes,
+    job.screenEstimatedMinutes,
+    job.screenPrevistoMinutes,
+    job.aiMinutes,
+    job.predictedMinutes,
+    job.estimatedMinutes,
+    job.standardMinutes,
+  ];
 
-  const validCandidate = candidates.find(
-    (value) => typeof value === "number" && Number.isFinite(value) && value > 0
-  );
+  for (const value of candidates) {
+    const minutes = getPositiveMinutes(value);
 
-  if (typeof validCandidate === "number") {
-    return Math.round(validCandidate);
+    if (minutes != null) {
+      return minutes;
+    }
   }
 
-  const estimatedMinutes = getEstimatedMinutes(job);
-
-  return Math.max(10, estimatedMinutes - 5);
+  return getEstimatedMinutes(job);
 }
 
 function isJobDelayed(job: JobForTV75) {
   const workedMinutes = getWorkedMinutes(job);
   const estimatedMinutes = getEstimatedMinutes(job);
+
+  if (estimatedMinutes <= 0) return false;
 
   return workedMinutes > estimatedMinutes;
 }
@@ -329,9 +345,10 @@ function ActiveJobVisualCard({
   getOperationLabel: (job: OperationLabelJob) => string;
 }) {
   const assignedNames = job.assignedNames ?? [];
-  const delayed = isJobDelayed(job);
+  const workedMinutes = getWorkedMinutes(job);
   const estimatedMinutes = getEstimatedMinutes(job);
   const aiMinutes = getAiMinutes(job);
+  const delayed = isJobDelayed(job);
 
   return (
     <div
@@ -398,7 +415,7 @@ function ActiveJobVisualCard({
         </div>
 
         <div className="mt-4 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-base font-black text-white">
-          Tiempo trabajando: {formatWorkedTime(job)}
+          Tiempo trabajando: {formatMinutes(workedMinutes)}
         </div>
 
         <div className="mt-3 grid grid-cols-2 overflow-hidden rounded-3xl border-2 border-slate-900 bg-white text-center text-xl font-black text-slate-950">
