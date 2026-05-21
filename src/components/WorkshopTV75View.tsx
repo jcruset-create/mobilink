@@ -352,13 +352,14 @@ function ActiveJobVisualCard({
 
   return (
     <div
-      className={`relative rounded-3xl border p-4 shadow-sm ${
+      className={`relative flex min-h-[320px] flex-col rounded-3xl border p-4 shadow-sm ${
         delayed
           ? "border-red-300 bg-red-50 shadow-red-100"
           : "border-slate-200 bg-slate-50"
       }`}
     >
-      <div className="mb-3 flex flex-wrap gap-2">
+      {/* Técnicos */}
+      <div className="mb-3 flex min-h-[60px] flex-wrap gap-2">
         {assignedNames.length > 0 ? (
           assignedNames.map((name) => {
             const tech = techs.find((item) => item.name === name);
@@ -366,66 +367,80 @@ function ActiveJobVisualCard({
             return (
               <div
                 key={name}
-                className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm"
+                className="flex h-14 items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm"
               >
                 <TechAvatar tech={tech} size="large" />
 
-                <div className="truncate text-xl font-black">{name}</div>
+                <div className="max-w-[180px] truncate text-xl font-black">
+                  {name}
+                </div>
               </div>
             );
           })
         ) : (
-          <div className="rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-400">
+          <div className="flex h-14 items-center rounded-2xl bg-white px-3 py-2 text-sm font-bold text-slate-400 shadow-sm">
             Sin técnicos asignados
           </div>
         )}
       </div>
 
-      <div className="min-w-0">
-        <div className="mb-2 flex items-center gap-2">
-          <span
-            className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getAreaClass(
-              job.area
-            )}`}
-          >
-            {getAreaLabel(job.area)}
-          </span>
+      {/* Área + ID */}
+      <div className="mb-2 flex items-center gap-2">
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getAreaClass(
+            job.area
+          )}`}
+        >
+          {getAreaLabel(job.area)}
+        </span>
 
-          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-400">
-            #{job.id}
-          </span>
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-400">
+          #{job.id}
+        </span>
+      </div>
+
+      {/* Matrícula + alarma */}
+      <div className="relative min-h-[74px] pr-28">
+        <div className="break-words text-3xl font-black leading-none tracking-wide text-slate-950">
+          {job.plate || "SIN MATRÍCULA"}
         </div>
 
-        <div className="relative">
-          <div className="break-words text-3xl font-black leading-none tracking-wide text-slate-950">
-            {job.plate || "SIN MATRÍCULA"}
+        {delayed && (
+          <div className="absolute right-0 top-1/2 w-24 -translate-y-1/2 rounded-2xl bg-red-600 px-3 py-2 text-center text-sm font-black leading-tight text-white shadow-md">
+            <div>Trabajo</div>
+            <div>retrasado</div>
           </div>
+        )}
+      </div>
 
-          {delayed && (
-            <div className="absolute right-0 top-[-4px] animate-pulse rounded-3xl bg-orange-600 px-6 py-3 text-center text-2xl font-black leading-tight text-white shadow-lg shadow-orange-300">
-              Trabajo
-              <br />
-              Retrasado
-            </div>
-          )}
-        </div>
+      {/* Operación */}
+      <div className="mt-2 min-h-[52px] text-lg font-black leading-tight text-slate-700">
+        {getOperationLabel(job)}
+      </div>
 
-        <div className="mt-2 line-clamp-2 text-lg font-black leading-tight text-slate-700">
-          {getOperationLabel(job)}
-        </div>
-
-        <div className="mt-4 inline-flex rounded-2xl bg-slate-900 px-4 py-2 text-base font-black text-white">
+      {/* Tiempo efectivo */}
+      <div className="mt-4 flex justify-start">
+        <div className="min-w-[220px] rounded-2xl bg-slate-900 px-4 py-2 text-center text-sm font-black text-white">
           Tiempo trabajando: {formatMinutes(workedMinutes)}
         </div>
+      </div>
 
-        <div className="mt-3 grid grid-cols-2 overflow-hidden rounded-3xl border-2 border-slate-900 bg-white text-center text-xl font-black text-slate-950">
-          <div className="border-r-2 border-slate-900 px-3 py-2">
-            <span className="text-slate-700">IA: </span>
+      {/* IA y Previsto */}
+      <div className="mt-4 grid grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
+        <div className="border-r-2 border-slate-900 px-3 py-2">
+          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+            IA
+          </div>
+          <div className="text-base font-black text-slate-950">
             {formatMinutes(aiMinutes)}
           </div>
+        </div>
 
-          <div className="px-3 py-2">
-            <span className="text-slate-700">Previsto: </span>
+        <div className="px-3 py-2">
+          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+            Previsto
+          </div>
+          <div className="text-base font-black text-slate-950">
             {formatMinutes(estimatedMinutes)}
           </div>
         </div>
@@ -648,7 +663,7 @@ export default function WorkshopTV75View({
                 No hay trabajos activos ni tareas asignadas.
               </div>
             ) : (
-              <div className="grid h-[calc(100%-60px)] auto-rows-max grid-cols-3 gap-4 overflow-auto pr-2">
+              <div className="grid h-[calc(100%-60px)] auto-rows-[minmax(320px,auto)] grid-cols-3 gap-4 overflow-auto pr-2">
                 {activeJobs.map((job) => (
                   <ActiveJobVisualCard
                     key={`job-${job.id}`}
