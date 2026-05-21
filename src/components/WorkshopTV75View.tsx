@@ -373,7 +373,7 @@ function ActiveJobVisualCard({
                 className="flex h-10 items-center gap-2 rounded-2xl bg-white px-3 py-1 shadow-sm"
               >
                 <TechAvatar tech={tech} />
-                <div className="max-w-[110px] truncate text-base font-black">
+                <div className="max-w-[115px] truncate text-base font-black">
                   {name}
                 </div>
               </div>
@@ -420,27 +420,27 @@ function ActiveJobVisualCard({
         {getOperationLabel(job)}
       </div>
 
-      {/* Tiempos alineados y visibles */}
-      <div className="mt-auto flex flex-col items-start gap-2 pt-3">
-        <div className="w-[190px] rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-black text-white">
+      {/* Tiempos: mismo ancho, visibles y en una sola línea */}
+      <div className="mt-auto flex w-full flex-col gap-2 pt-3">
+        <div className="w-full rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-black text-white whitespace-nowrap">
           Tiempo trabajando: {formatMinutes(workedMinutes)}
         </div>
 
-        <div className="grid w-[190px] grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
-          <div className="border-r-2 border-slate-900 px-2 py-1.5">
+        <div className="grid w-full grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
+          <div className="min-w-0 border-r-2 border-slate-900 px-2 py-1.5">
             <div className="text-[9px] font-black uppercase tracking-wide text-slate-500">
               IA
             </div>
-            <div className="text-xs font-black text-slate-950">
+            <div className="truncate whitespace-nowrap text-[11px] font-black leading-tight text-slate-950">
               {formatMinutes(aiMinutes)}
             </div>
           </div>
 
-          <div className="px-2 py-1.5">
+          <div className="min-w-0 px-2 py-1.5">
             <div className="text-[9px] font-black uppercase tracking-wide text-slate-500">
               Previsto
             </div>
-            <div className="text-xs font-black text-slate-950">
+            <div className="truncate whitespace-nowrap text-[11px] font-black leading-tight text-slate-950">
               {formatMinutes(estimatedMinutes)}
             </div>
           </div>
