@@ -1008,10 +1008,16 @@ const jobsForScreens = useMemo(
     visibleJobs.map((job) => {
       const displayMinutes = getDisplayMinutesForJob(job);
 
-      if (displayMinutes == null) return job;
+      if (displayMinutes == null || displayMinutes <= 0) {
+        return job;
+      }
 
       return {
         ...job,
+        standardMinutes: displayMinutes,
+        estimatedMinutes: displayMinutes,
+        predictedMinutes: displayMinutes,
+        aiMinutes: displayMinutes,
         screenEstimatedMinutes: displayMinutes,
         screenAiMinutes: displayMinutes,
         screenPrevistoMinutes: displayMinutes,
@@ -1389,9 +1395,26 @@ function getDisplayMinutesForJob(job: Job): number | null {
     return Math.round(includedTasksMinutes);
   }
 
+  const normalizedJobLabel = String(job.quickEntryLabel ?? "")
+    .trim()
+    .toLowerCase();
+
+  const normalizedJobTemplate = String(job.template ?? "")
+    .trim()
+    .toLowerCase();
+
   const template = quickTemplates.find((item) => {
-    if (job.template && item.key === job.template) return true;
-    if (job.quickEntryLabel && item.label === job.quickEntryLabel) return true;
+    const itemKey = String(item.key ?? "").trim().toLowerCase();
+    const itemLabel = String(item.label ?? "").trim().toLowerCase();
+
+    if (normalizedJobTemplate && itemKey === normalizedJobTemplate) {
+      return true;
+    }
+
+    if (normalizedJobLabel && itemLabel === normalizedJobLabel) {
+      return true;
+    }
+
     return false;
   });
 
@@ -4370,7 +4393,7 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
 if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
   return (
     <WorkshopTV75View
-      jobs={visibleJobs}
+      jobs={jobsForScreens}
       techs={visibleTechs}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
@@ -7272,17 +7295,17 @@ console.log("DEBUG tiempos trabajo activo", {
 
               {waitingJobs.map((job) => {
                 const Icon = AREA_META[job.area].icon;
-const prediction = getPredictedTimeForJob(job, operationReport);
+                const prediction = getPredictedTimeForJob(job, operationReport);
 
-const displayMinutes = getDisplayMinutesForJob(job);
-const predictedMinutesRaw = Number(prediction.predictedMinutes);
+                const displayMinutes = getDisplayMinutesForJob(job);
+                const predictedMinutesRaw = Number(prediction.predictedMinutes);
 
-const safePredictedMinutes =
-  Number.isFinite(predictedMinutesRaw) && predictedMinutesRaw > 0
-    ? Math.round(predictedMinutesRaw)
-    : 0;
+                const safePredictedMinutes =
+                  Number.isFinite(predictedMinutesRaw) && predictedMinutesRaw > 0
+                    ? Math.round(predictedMinutesRaw)
+                    : 0;
 
-const previstoMinutes = displayMinutes ?? safePredictedMinutes;
+                const previstoMinutes = displayMinutes ?? safePredictedMinutes;
 
                 return (
                   <div

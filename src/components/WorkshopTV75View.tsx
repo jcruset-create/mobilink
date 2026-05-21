@@ -215,6 +215,8 @@ function getEstimatedMinutes(job: JobForTV75) {
     job.estimatedMinutes,
     job.standardMinutes,
     job.actualMinutes,
+    job.predictedMinutes,
+    job.aiMinutes,
   ];
 
   for (const value of candidates) {
@@ -352,14 +354,14 @@ function ActiveJobVisualCard({
 
   return (
     <div
-      className={`relative flex min-h-[320px] flex-col rounded-3xl border p-4 shadow-sm ${
+      className={`relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border p-3 shadow-sm ${
         delayed
           ? "border-red-300 bg-red-50 shadow-red-100"
           : "border-slate-200 bg-slate-50"
       }`}
     >
-      {/* Técnicos */}
-      <div className="mb-3 flex min-h-[60px] flex-wrap gap-2">
+      {/* Técnico */}
+      <div className="mb-2 flex min-h-[46px] flex-wrap gap-2">
         {assignedNames.length > 0 ? (
           assignedNames.map((name) => {
             const tech = techs.find((item) => item.name === name);
@@ -367,18 +369,17 @@ function ActiveJobVisualCard({
             return (
               <div
                 key={name}
-                className="flex h-14 items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm"
+                className="flex h-11 items-center gap-2 rounded-2xl bg-white px-3 py-1.5 shadow-sm"
               >
-                <TechAvatar tech={tech} size="large" />
-
-                <div className="max-w-[180px] truncate text-xl font-black">
+                <TechAvatar tech={tech} />
+                <div className="max-w-[120px] truncate text-lg font-black">
                   {name}
                 </div>
               </div>
             );
           })
         ) : (
-          <div className="flex h-14 items-center rounded-2xl bg-white px-3 py-2 text-sm font-bold text-slate-400 shadow-sm">
+          <div className="flex h-11 items-center rounded-2xl bg-white px-3 py-1.5 text-xs font-bold text-slate-400 shadow-sm">
             Sin técnicos asignados
           </div>
         )}
@@ -387,26 +388,26 @@ function ActiveJobVisualCard({
       {/* Área + ID */}
       <div className="mb-2 flex items-center gap-2">
         <span
-          className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getAreaClass(
+          className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${getAreaClass(
             job.area
           )}`}
         >
           {getAreaLabel(job.area)}
         </span>
 
-        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-400">
+        <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-400">
           #{job.id}
         </span>
       </div>
 
       {/* Matrícula + alarma */}
-      <div className="relative min-h-[74px] pr-28">
-        <div className="break-words text-3xl font-black leading-none tracking-wide text-slate-950">
+      <div className="relative min-h-[48px] pr-20">
+        <div className="break-words text-2xl font-black leading-none tracking-wide text-slate-950">
           {job.plate || "SIN MATRÍCULA"}
         </div>
 
         {delayed && (
-          <div className="absolute right-0 top-1/2 w-24 -translate-y-1/2 rounded-2xl bg-red-600 px-3 py-2 text-center text-sm font-black leading-tight text-white shadow-md">
+          <div className="absolute right-0 top-1/2 w-16 -translate-y-1/2 rounded-xl bg-red-600 px-2 py-1 text-center text-[10px] font-black leading-tight text-white shadow-sm">
             <div>Trabajo</div>
             <div>retrasado</div>
           </div>
@@ -414,34 +415,33 @@ function ActiveJobVisualCard({
       </div>
 
       {/* Operación */}
-      <div className="mt-2 min-h-[52px] text-lg font-black leading-tight text-slate-700">
+      <div className="mt-2 min-h-[42px] text-base font-black leading-tight text-slate-700 line-clamp-2">
         {getOperationLabel(job)}
       </div>
 
-      {/* Tiempo efectivo */}
-      <div className="mt-4 flex justify-start">
-        <div className="min-w-[220px] rounded-2xl bg-slate-900 px-4 py-2 text-center text-sm font-black text-white">
+      {/* Bloques de tiempo: mismo ancho */}
+      <div className="mt-auto pt-3">
+        <div className="w-[250px] rounded-2xl bg-slate-900 px-3 py-2 text-center text-sm font-black text-white">
           Tiempo trabajando: {formatMinutes(workedMinutes)}
         </div>
-      </div>
 
-      {/* IA y Previsto */}
-      <div className="mt-4 grid grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
-        <div className="border-r-2 border-slate-900 px-3 py-2">
-          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
-            IA
+        <div className="mt-2 grid w-[250px] grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
+          <div className="border-r-2 border-slate-900 px-2 py-2">
+            <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+              IA
+            </div>
+            <div className="text-sm font-black text-slate-950">
+              {formatMinutes(aiMinutes)}
+            </div>
           </div>
-          <div className="text-base font-black text-slate-950">
-            {formatMinutes(aiMinutes)}
-          </div>
-        </div>
 
-        <div className="px-3 py-2">
-          <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
-            Previsto
-          </div>
-          <div className="text-base font-black text-slate-950">
-            {formatMinutes(estimatedMinutes)}
+          <div className="px-2 py-2">
+            <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+              Previsto
+            </div>
+            <div className="text-sm font-black text-slate-950">
+              {formatMinutes(estimatedMinutes)}
+            </div>
           </div>
         </div>
       </div>
@@ -663,7 +663,7 @@ export default function WorkshopTV75View({
                 No hay trabajos activos ni tareas asignadas.
               </div>
             ) : (
-              <div className="grid h-[calc(100%-60px)] auto-rows-[minmax(320px,auto)] grid-cols-3 gap-4 overflow-auto pr-2">
+              <div className="grid h-[calc(100%-60px)] grid-cols-3 grid-rows-3 gap-3 overflow-auto pr-2">
                 {activeJobs.map((job) => (
                   <ActiveJobVisualCard
                     key={`job-${job.id}`}
