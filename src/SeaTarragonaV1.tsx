@@ -1315,6 +1315,42 @@ function getScheduledJobByRelatedJobId(jobId: number) {
   );
 }
 
+function timeToMinutes(time: string): number {
+  const [hoursRaw, minutesRaw] = time.split(":");
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return 0;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function getScheduledEstimatedMinutesForJob(job: Job) {
+  const scheduled = getScheduledJobByRelatedJobId(job.id);
+
+  if (!scheduled) return null;
+
+  const directMinutes = Number(scheduled.estimatedMinutes);
+
+  if (Number.isFinite(directMinutes) && directMinutes > 0) {
+    return Math.round(directMinutes);
+  }
+
+  if (scheduled.startTime && scheduled.endTime) {
+    const start = timeToMinutes(scheduled.startTime);
+    const end = timeToMinutes(scheduled.endTime);
+    const diff = end - start;
+
+    if (Number.isFinite(diff) && diff > 0) {
+      return Math.round(diff);
+    }
+  }
+
+  return null;
+}
+
 function shouldCloseScheduledJobForFinishedJob(jobId: number) {
   const scheduled = getScheduledJobByRelatedJobId(jobId);
   return shouldCloseScheduledJobForFinishedJobHelper(scheduled, jobId);
@@ -6733,6 +6769,19 @@ const textColor = "";
   const prediction = getPredictedTimeForJob(job, operationReport);
   const assignedNames = job.assignedNames ?? [];
 
+const workedMinutes = getWorkedMinutes(job);
+const scheduledMinutes = getScheduledEstimatedMinutesForJob(job);
+
+const predictedMinutesRaw = Number(prediction.predictedMinutes);
+
+const safePredictedMinutes =
+  Number.isFinite(predictedMinutesRaw) && predictedMinutesRaw > 0
+    ? Math.round(predictedMinutesRaw)
+    : 0;
+
+const aiMinutes = scheduledMinutes ?? safePredictedMinutes;
+const previstoMinutes = scheduledMinutes ?? safePredictedMinutes;
+
   return (
     <div
       key={job.id}
@@ -6797,7 +6846,7 @@ const textColor = "";
           <div className="mt-1 text-xs text-slate-500">
             Tiempo trabajado:{" "}
             <span className="font-medium">
-              {formatMinutes(getWorkedMinutes(job))}
+              {formatMinutes(workedMinutes)}
             </span>
           </div>
 
@@ -6811,7 +6860,7 @@ const textColor = "";
           <div className="mt-1 text-xs text-slate-500">
             Tiempo previsto IA:{" "}
             <span className="font-medium">
-              {formatMinutes(prediction.predictedMinutes)}
+              {formatMinutes(aiMinutes)}
             </span>
             {prediction.source !== "none" && (
               <span className="ml-1 text-slate-400">
@@ -6819,6 +6868,13 @@ const textColor = "";
               </span>
             )}
           </div>
+
+          <div className="mt-1 text-xs text-slate-500">
+  Tiempo previsto:{" "}
+  <span className="font-medium">
+    {formatMinutes(previstoMinutes)}
+  </span>
+</div>
 
           <div className="mt-1 text-xs text-slate-500">
             Motivo: {job.reason || "Sin motivo especificado."}
@@ -7116,7 +7172,7 @@ const textColor = "";
             <div>
               Trabajado:{" "}
               <span className="font-medium">
-                {formatMinutes(getWorkedMinutes(job))}
+               {formatMinutes(getWorkedMinutes(job))}
               </span>
             </div>
 
