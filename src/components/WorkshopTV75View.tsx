@@ -355,14 +355,14 @@ function ActiveJobVisualCard({
 
   return (
     <div
-      className={`relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border p-3 shadow-sm ${
+      className={`relative flex h-full min-h-0 flex-col overflow-hidden rounded-[clamp(14px,1.1vw,24px)] border p-[clamp(7px,0.65vw,12px)] shadow-sm ${
         delayed
           ? "border-red-300 bg-red-50 shadow-red-100"
           : "border-slate-200 bg-slate-50"
       }`}
     >
       {/* Técnico */}
-      <div className="mb-2 flex min-h-[42px] flex-wrap gap-2">
+      <div className="mb-[clamp(4px,0.45vw,8px)] flex min-h-[clamp(32px,3.8vh,42px)] flex-wrap gap-[clamp(4px,0.45vw,8px)]">
         {assignedNames.length > 0 ? (
           assignedNames.map((name) => {
             const tech = techs.find((item) => item.name === name);
@@ -370,45 +370,45 @@ function ActiveJobVisualCard({
             return (
               <div
                 key={name}
-                className="flex h-10 items-center gap-2 rounded-2xl bg-white px-3 py-1 shadow-sm"
+                className="flex h-[clamp(30px,3.6vh,40px)] min-w-0 items-center gap-2 rounded-2xl bg-white px-2 py-1 shadow-sm"
               >
                 <TechAvatar tech={tech} />
-                <div className="max-w-[115px] truncate text-base font-black">
+                <div className="max-w-[clamp(74px,7vw,115px)] truncate text-[clamp(12px,0.9vw,16px)] font-black">
                   {name}
                 </div>
               </div>
             );
           })
         ) : (
-          <div className="flex h-10 items-center rounded-2xl bg-white px-3 py-1 text-xs font-bold text-slate-400 shadow-sm">
+          <div className="flex h-[clamp(30px,3.6vh,40px)] items-center rounded-2xl bg-white px-2 py-1 text-[clamp(9px,0.75vw,12px)] font-bold text-slate-400 shadow-sm">
             Sin técnicos asignados
           </div>
         )}
       </div>
 
       {/* Área + ID */}
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-[clamp(4px,0.45vw,8px)] flex items-center gap-2">
         <span
-          className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${getAreaClass(
+          className={`rounded-full px-2 py-0.5 text-[clamp(8px,0.65vw,10px)] font-black uppercase ${getAreaClass(
             job.area
           )}`}
         >
           {getAreaLabel(job.area)}
         </span>
 
-        <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-400">
+        <span className="rounded-full bg-white px-2 py-0.5 text-[clamp(8px,0.65vw,10px)] font-black text-slate-400">
           #{job.id}
         </span>
       </div>
 
       {/* Matrícula + alarma */}
-      <div className="relative min-h-[42px] pr-16">
-        <div className="break-words text-2xl font-black leading-none tracking-wide text-slate-950">
+      <div className="relative min-h-[clamp(34px,4.2vh,46px)] pr-[clamp(44px,4.3vw,68px)]">
+        <div className="break-words text-[clamp(18px,1.45vw,26px)] font-black leading-none tracking-wide text-slate-950">
           {job.plate || "SIN MATRÍCULA"}
         </div>
 
         {delayed && (
-          <div className="absolute right-0 top-1/2 w-14 -translate-y-1/2 rounded-lg bg-red-600 px-1.5 py-1 text-center text-[9px] font-black leading-tight text-white shadow-sm">
+          <div className="absolute right-0 top-1/2 w-[clamp(42px,4vw,58px)] -translate-y-1/2 rounded-lg bg-red-600 px-1 py-1 text-center text-[clamp(7px,0.55vw,9px)] font-black leading-tight text-white shadow-sm">
             <div>Trabajo</div>
             <div>retrasado</div>
           </div>
@@ -416,31 +416,31 @@ function ActiveJobVisualCard({
       </div>
 
       {/* Operación */}
-      <div className="mt-2 min-h-[38px] line-clamp-2 text-[15px] font-black leading-tight text-slate-700">
+      <div className="mt-[clamp(4px,0.5vw,8px)] min-h-[clamp(30px,4vh,40px)] line-clamp-2 text-[clamp(11px,0.85vw,15px)] font-black leading-tight text-slate-700">
         {getOperationLabel(job)}
       </div>
 
       {/* Tiempos: mismo ancho, visibles y en una sola línea */}
-      <div className="mt-auto flex w-full flex-col gap-2 pt-3">
-        <div className="w-full rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-black text-white whitespace-nowrap">
+      <div className="mt-auto flex w-full flex-col gap-[clamp(4px,0.45vw,8px)] pt-[clamp(4px,0.55vw,10px)]">
+        <div className="w-full rounded-2xl bg-slate-900 px-2 py-[clamp(5px,0.55vh,8px)] text-center text-[clamp(9px,0.75vw,12px)] font-black text-white whitespace-nowrap">
           Tiempo trabajando: {formatMinutes(workedMinutes)}
         </div>
 
         <div className="grid w-full grid-cols-2 overflow-hidden rounded-2xl border-2 border-slate-900 bg-white text-center">
-          <div className="min-w-0 border-r-2 border-slate-900 px-2 py-1.5">
-            <div className="text-[9px] font-black uppercase tracking-wide text-slate-500">
+          <div className="min-w-0 border-r-2 border-slate-900 px-1 py-[clamp(3px,0.45vh,6px)]">
+            <div className="text-[clamp(7px,0.55vw,9px)] font-black uppercase tracking-wide text-slate-500">
               IA
             </div>
-            <div className="truncate whitespace-nowrap text-[11px] font-black leading-tight text-slate-950">
+            <div className="truncate whitespace-nowrap text-[clamp(8px,0.7vw,11px)] font-black leading-tight text-slate-950">
               {formatMinutes(aiMinutes)}
             </div>
           </div>
 
-          <div className="min-w-0 px-2 py-1.5">
-            <div className="text-[9px] font-black uppercase tracking-wide text-slate-500">
+          <div className="min-w-0 px-1 py-[clamp(3px,0.45vh,6px)]">
+            <div className="text-[clamp(7px,0.55vw,9px)] font-black uppercase tracking-wide text-slate-500">
               Previsto
             </div>
-            <div className="truncate whitespace-nowrap text-[11px] font-black leading-tight text-slate-950">
+            <div className="truncate whitespace-nowrap text-[clamp(8px,0.7vw,11px)] font-black leading-tight text-slate-950">
               {formatMinutes(estimatedMinutes)}
             </div>
           </div>
@@ -473,7 +473,7 @@ function MaintenanceVisualCard({
         <div className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm">
           <TechAvatar tech={tech} size="large" />
 
-          <div className="truncate text-xl font-black">{task.techName}</div>
+          <div className="truncate text-[clamp(15px,1.1vw,20px)] font-black">{task.techName}</div>
         </div>
       </div>
 
@@ -568,61 +568,53 @@ export default function WorkshopTV75View({
 
   const activeVisualCount = activeJobs.length + pendingMaintenanceTasks.length;
 
-  const tvScale =
-    typeof window === "undefined"
-      ? 1
-      : Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-
   return (
-    <div
-      className="fixed inset-0 overflow-hidden bg-white text-slate-950"
-      style={{ ["--tv-scale" as any]: tvScale }}
-    >
-      <div className="h-[1080px] w-[1920px] origin-top-left scale-[var(--tv-scale)] bg-white">
-        <header className="flex h-[78px] items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
+    <div className="fixed inset-0 overflow-hidden bg-white text-slate-950">
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-white">
+        <header className="flex h-[clamp(58px,7vh,76px)] shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-[clamp(10px,1vw,20px)] shadow-sm">
           <div>
-            <h1 className="text-3xl font-black leading-tight">
+            <h1 className="text-[clamp(20px,1.7vw,30px)] font-black leading-tight">
               Pantalla técnicos
             </h1>
 
-            <p className="text-sm font-semibold text-slate-500">
+            <p className="text-[clamp(10px,0.8vw,14px)] font-semibold text-slate-500">
               Vista TV · trabajos activos, mantenimiento y estado de técnicos
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-center">
+          <div className="flex shrink-0 items-center gap-[clamp(6px,0.65vw,12px)]">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-[clamp(8px,0.8vw,16px)] py-[clamp(5px,0.55vw,8px)] text-center">
               <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">
                 Activos
               </div>
-              <div className="text-xl font-black text-slate-900">
+              <div className="text-[clamp(16px,1.3vw,20px)] font-black text-slate-900">
                 {activeVisualCount}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-2 text-center">
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-[clamp(8px,0.8vw,16px)] py-[clamp(5px,0.55vw,8px)] text-center">
               <div className="text-[10px] font-black uppercase tracking-wide text-violet-500">
                 Validar
               </div>
-              <div className="text-xl font-black text-violet-800">
+              <div className="text-[clamp(16px,1.3vw,20px)] font-black text-violet-800">
                 {validationJobs.length}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-orange-200 bg-orange-50 px-4 py-2 text-center">
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 px-[clamp(8px,0.8vw,16px)] py-[clamp(5px,0.55vw,8px)] text-center">
               <div className="text-[10px] font-black uppercase tracking-wide text-orange-500">
                 Stand by
               </div>
-              <div className="text-xl font-black text-orange-800">
+              <div className="text-[clamp(16px,1.3vw,20px)] font-black text-orange-800">
                 {standByJobs.length}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2 text-center">
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-[clamp(8px,0.8vw,16px)] py-[clamp(5px,0.55vw,8px)] text-center">
               <div className="text-[10px] font-black uppercase tracking-wide text-sky-500">
                 Cola
               </div>
-              <div className="text-xl font-black text-sky-800">
+              <div className="text-[clamp(16px,1.3vw,20px)] font-black text-sky-800">
                 {waitingJobs.length}
               </div>
             </div>
@@ -631,7 +623,7 @@ export default function WorkshopTV75View({
               <button
                 type="button"
                 onClick={onBack}
-                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white"
+                className="rounded-2xl bg-slate-900 px-[clamp(10px,1vw,20px)] py-[clamp(7px,0.7vw,12px)] text-[clamp(11px,0.85vw,14px)] font-black text-white"
               >
                 Volver
               </button>
@@ -641,7 +633,7 @@ export default function WorkshopTV75View({
               <button
                 type="button"
                 onClick={onLogout}
-                className="rounded-2xl border border-red-200 bg-white px-5 py-3 text-sm font-black text-red-600 hover:bg-red-50"
+                className="rounded-2xl border border-red-200 bg-white px-[clamp(10px,1vw,20px)] py-[clamp(7px,0.7vw,12px)] text-[clamp(11px,0.85vw,14px)] font-black text-red-600 hover:bg-red-50"
               >
                 Salir
               </button>
@@ -649,10 +641,10 @@ export default function WorkshopTV75View({
           </div>
         </header>
 
-        <main className="grid h-[1002px] w-[1920px] grid-cols-[1fr_340px_360px] gap-4 bg-white p-4">
-          <section className="min-h-0 overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-black">Trabajos activos</h2>
+        <main className="grid min-h-0 flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_minmax(220px,18vw)_minmax(240px,20vw)] gap-[clamp(6px,0.7vw,12px)] bg-white p-[clamp(6px,0.7vw,12px)]">
+          <section className="min-h-0 overflow-hidden rounded-3xl border border-slate-200 bg-white p-[clamp(8px,0.8vw,16px)] shadow-sm">
+            <div className="mb-[clamp(8px,0.8vw,16px)] flex items-center justify-between">
+              <h2 className="text-[clamp(18px,1.45vw,24px)] font-black">Trabajos activos</h2>
 
               <span className="rounded-full bg-slate-100 px-4 py-2 text-sm font-black text-slate-700">
                 {activeVisualCount}
@@ -660,11 +652,11 @@ export default function WorkshopTV75View({
             </div>
 
             {activeJobs.length === 0 && pendingMaintenanceTasks.length === 0 ? (
-              <div className="flex h-[calc(100%-60px)] items-center justify-center rounded-3xl border border-slate-200 bg-slate-50 text-lg font-black text-slate-400">
+              <div className="flex h-[calc(100%-52px)] items-center justify-center rounded-3xl border border-slate-200 bg-slate-50 text-[clamp(13px,1vw,18px)] font-black text-slate-400">
                 No hay trabajos activos ni tareas asignadas.
               </div>
             ) : (
-              <div className="grid h-[calc(100%-60px)] grid-cols-3 grid-rows-3 gap-3 overflow-auto pr-2">
+              <div className="grid h-[calc(100%-52px)] grid-cols-3 grid-rows-3 gap-[clamp(6px,0.7vw,12px)] overflow-hidden">
                 {activeJobs.map((job) => (
                   <ActiveJobVisualCard
                     key={`job-${job.id}`}
@@ -690,10 +682,10 @@ export default function WorkshopTV75View({
             )}
           </section>
 
-          <section className="grid min-h-0 grid-rows-[1fr_1fr] gap-4">
-            <section className="min-h-0 overflow-hidden rounded-3xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-2xl font-black text-orange-900">
+          <section className="grid min-h-0 grid-rows-[1fr_1fr] gap-[clamp(6px,0.7vw,12px)]">
+            <section className="min-h-0 overflow-hidden rounded-3xl border border-orange-200 bg-orange-50 p-[clamp(8px,0.8vw,16px)] shadow-sm">
+              <div className="mb-[clamp(8px,0.8vw,16px)] flex items-center justify-between">
+                <h2 className="text-[clamp(17px,1.35vw,24px)] font-black text-orange-900">
                   Trabajos en Stand by
                 </h2>
 
@@ -702,7 +694,7 @@ export default function WorkshopTV75View({
                 </span>
               </div>
 
-              <div className="h-[calc(100%-60px)] space-y-3 overflow-auto pr-1">
+              <div className="h-[calc(100%-52px)] space-y-[clamp(6px,0.7vw,12px)] overflow-auto pr-1">
                 {standByJobs.length === 0 ? (
                   <div className="flex h-full items-center justify-center rounded-2xl border border-orange-200 bg-white/80 text-center text-sm font-black text-orange-700">
                     Sin trabajos en stand by.
@@ -719,9 +711,9 @@ export default function WorkshopTV75View({
               </div>
             </section>
 
-            <section className="min-h-0 overflow-hidden rounded-3xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-2xl font-black text-sky-900">
+            <section className="min-h-0 overflow-hidden rounded-3xl border border-sky-200 bg-sky-50 p-[clamp(8px,0.8vw,16px)] shadow-sm">
+              <div className="mb-[clamp(8px,0.8vw,16px)] flex items-center justify-between">
+                <h2 className="text-[clamp(17px,1.35vw,24px)] font-black text-sky-900">
                   Trabajos en cola
                 </h2>
 
@@ -730,7 +722,7 @@ export default function WorkshopTV75View({
                 </span>
               </div>
 
-              <div className="h-[calc(100%-60px)] space-y-3 overflow-auto pr-1">
+              <div className="h-[calc(100%-52px)] space-y-[clamp(6px,0.7vw,12px)] overflow-auto pr-1">
                 {waitingJobs.length === 0 ? (
                   <div className="flex h-full items-center justify-center rounded-2xl border border-sky-200 bg-white/80 text-center text-sm font-black text-sky-700">
                     Sin trabajos en cola.
@@ -748,16 +740,16 @@ export default function WorkshopTV75View({
             </section>
           </section>
 
-          <section className="min-h-0 overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-black">Estado técnicos</h2>
+          <section className="min-h-0 overflow-hidden rounded-3xl border border-slate-200 bg-white p-[clamp(8px,0.8vw,16px)] shadow-sm">
+            <div className="mb-[clamp(8px,0.8vw,16px)] flex items-center justify-between">
+              <h2 className="text-[clamp(18px,1.45vw,24px)] font-black">Estado técnicos</h2>
 
               <span className="text-xs font-bold text-slate-400">
                 No editable
               </span>
             </div>
 
-            <div className="h-[calc(100%-60px)] space-y-3 overflow-auto pr-1">
+            <div className="h-[calc(100%-52px)] space-y-[clamp(6px,0.7vw,12px)] overflow-auto pr-1">
               {techs.map((tech) => {
                 const currentJob =
                   tech.currentJobId != null
@@ -771,7 +763,7 @@ export default function WorkshopTV75View({
                 return (
                   <div
                     key={tech.name}
-                    className={`rounded-2xl border p-4 ${
+                    className={`rounded-2xl border p-[clamp(8px,0.8vw,16px)] ${
                       pendingMaintenanceTask
                         ? pendingMaintenanceTask.taskType === "fuera_taller"
                           ? "border-red-300 bg-red-200 text-red-950"
@@ -784,11 +776,11 @@ export default function WorkshopTV75View({
                         <TechAvatar tech={tech} />
 
                         <div className="min-w-0">
-                          <div className="truncate text-xl font-black">
+                          <div className="truncate text-[clamp(15px,1.1vw,20px)] font-black">
                             {tech.name}
                           </div>
 
-                          <div className="truncate text-xs font-bold opacity-80">
+                          <div className="truncate text-[clamp(9px,0.75vw,12px)] font-bold opacity-80">
                             {currentJob
                               ? `${currentJob.plate} · ${getOperationLabel(
                                   currentJob
