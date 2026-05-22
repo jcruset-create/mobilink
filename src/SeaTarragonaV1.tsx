@@ -770,8 +770,8 @@ const hasAvailableTech = techs.some(
     return;
   }
 
-  recalcWaitingQueue(techs, jobs);
-  setInitialAutoAssignDone(true);
+  // Cola manual: no asignamos automáticamente al cargar.
+setInitialAutoAssignDone(true);
 }, [jobs, techs, initialAutoAssignDone]);
 
 const activeJobs = useMemo(
@@ -1737,11 +1737,11 @@ if (hasAnyTechBlockedByOutsideMaintenance(assignedNames)) {
   return safeResult;
 }
 
-function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
-  // Cola de trabajo 100% manual.
-  // Mantenemos esta función para no romper llamadas existentes, pero ya no asigna trabajos automáticamente.
-  void updatedTechs;
-  void updatedJobs;
+function recalcWaitingQueue(_updatedTechs = techs, _updatedJobs = jobs) {
+  // COLA MANUAL:
+  // No asignamos trabajos de cola automáticamente.
+  // La cola solo se mueve si el usuario elige técnico manualmente
+  // o si hay una reserva para un técnico que acaba de quedar libre.
   return;
 }
 function updateScheduledJobField(
@@ -3061,6 +3061,101 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
   }
 }
 
+async function startReservedJobsForFreedTechs(
+  freedTechNames: string[],
+  baseJobs: Job[],
+  baseTechs: Tech[]
+): Promise<{ jobs: Job[]; techs: Tech[] }> {
+  let nextJobs = [...baseJobs];
+  let nextTechs = [...baseTechs];
+
+  for (const techName of freedTechNames) {
+    const reservedJob = nextJobs
+      .filter((job) => job.status === "espera")
+      .filter((job) => job.reservedTechName === techName)
+      .sort((a, b) => {
+        const aReservedAt = a.reservedAtMs ?? a.createdAtMs;
+        const bReservedAt = b.reservedAtMs ?? b.createdAtMs;
+
+        return aReservedAt - bReservedAt;
+      })[0];
+
+    if (!reservedJob) continue;
+
+    const tech = nextTechs.find((item) => item.name === techName);
+
+    if (!tech) continue;
+
+    const techIsFree =
+      tech.currentJobId == null &&
+      tech.status === "disponible" &&
+      !isTechBlockedByOutsideMaintenance(tech.name);
+
+    if (!techIsFree) continue;
+
+    if (
+      !canAssignTechManuallyToJob(
+        tech,
+        reservedJob,
+        nextJobs,
+        quickTemplates,
+        "responsable"
+      )
+    ) {
+      appendLog(
+        `No se pudo iniciar la reserva ${reservedJob.plate} para ${techName}: ya no cumple condiciones.`
+      );
+      continue;
+    }
+
+    const startedJob: Job = {
+      ...reservedJob,
+      status: "activo",
+      assignedNames: [techName],
+      startedAtMs: nowMs(),
+      reservedTechName: null,
+      reservedAtMs: null,
+      reason: `Inicio automático de reserva manual. Responsable: ${techName}.`,
+    };
+
+    nextJobs = nextJobs.map((item) =>
+      item.id === startedJob.id ? startedJob : item
+    );
+
+    nextTechs = nextTechs.map((item) =>
+      item.name === techName
+        ? {
+            ...item,
+            status: "ocupado" as TechStatus,
+            currentJobId: startedJob.id,
+            blocked: isUnavailableTechStatus(item.status),
+          }
+        : item
+    );
+
+    try {
+      await saveJobToBackend(startedJob);
+
+      const changedTech = nextTechs.find((item) => item.name === techName);
+      if (changedTech) {
+        await saveTechToBackend(changedTech);
+      }
+
+      appendLog(
+        `Trabajo reservado iniciado: ${startedJob.plate} asignado a ${techName}.`
+      );
+    } catch (error) {
+      console.error("Error iniciando reserva manual:", error);
+      appendLog(`Error iniciando reserva ${startedJob.plate} para ${techName}.`);
+    }
+  }
+
+  return {
+    jobs: nextJobs,
+    techs: nextTechs,
+  };
+}
+
 async function assignOrReserveWaitingJobManually(jobId: number, techName: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "espera") return;
@@ -3127,76 +3222,6 @@ async function assignOrReserveWaitingJobManually(jobId: number, techName: string
   }
 }
 
-async function startReservedJobsForFreedTechs(
-  baseJobs: Job[],
-  baseTechs: Tech[],
-  freedTechNames: string[]
-): Promise<{ jobs: Job[]; techs: Tech[] }> {
-  let nextJobs = [...baseJobs];
-  let nextTechs = [...baseTechs];
-
-  for (const techName of freedTechNames) {
-    const tech = nextTechs.find((item) => item.name === techName);
-
-    if (!tech) continue;
-
-    const techIsFree =
-      tech.currentJobId == null &&
-      tech.status === "disponible" &&
-      !tech.blocked &&
-      !isTechBlockedByOutsideMaintenance(tech.name);
-
-    if (!techIsFree) continue;
-
-    const reservedJob = nextJobs
-      .filter((item) => item.status === "espera")
-      .filter((item) => item.reservedTechName === techName)
-      .sort((a, b) => (a.reservedAtMs ?? a.createdAtMs) - (b.reservedAtMs ?? b.createdAtMs))[0];
-
-    if (!reservedJob) continue;
-
-    const startedReservedJob: Job = {
-      ...reservedJob,
-      status: "activo",
-      assignedNames: [techName],
-      startedAtMs: nowMs(),
-      reservedTechName: null,
-      reservedAtMs: null,
-      reason: `Inicio automático de reserva manual. Responsable: ${techName}.`,
-    };
-
-    nextJobs = nextJobs.map((item) =>
-      item.id === reservedJob.id ? startedReservedJob : item
-    );
-
-    nextTechs = nextTechs.map((item) =>
-      item.name === techName
-        ? {
-            ...item,
-            status: "ocupado" as TechStatus,
-            currentJobId: reservedJob.id,
-            blocked: isUnavailableTechStatus(item.status),
-          }
-        : item
-    );
-
-    await saveJobToBackend(startedReservedJob);
-
-    const changedTech = nextTechs.find((item) => item.name === techName);
-
-    if (changedTech) {
-      await saveTechToBackend(changedTech);
-    }
-
-    void updateScheduledJobStatusByJobId(reservedJob.id, "activo");
-
-    appendLog(
-      `Trabajo reservado iniciado: ${startedReservedJob.plate} asignado a ${techName}.`
-    );
-  }
-
-  return { jobs: nextJobs, techs: nextTechs };
-}
 
 async function deleteValidationJob(jobId: number) {
   const job = jobs.find((item) => item.id === jobId);
@@ -3382,43 +3407,42 @@ async function finishJob(jobId: number) {
   let reactivatedLinkedJob: Job | null = null;
 
   if (linkedJobToReactivate) {
-  const reopenedLinkedJob: Job = {
-    ...linkedJobToReactivate,
-    status: "espera",
-    assignedNames: [],
-    startedAtMs: null,
-    pausedAtMs: null,
-    dependsOnJobId: null,
-    blockedReason: null,
-    reason: `Trabajo vinculado desbloqueado tras finalizar ${getOperationLabel(
-      target
-    )}. Pendiente de validación manual antes de iniciar.`,
-  };
+    const reopenedLinkedJob: Job = {
+      ...linkedJobToReactivate,
+      status: "espera",
+      assignedNames: [],
+      startedAtMs: null,
+      pausedAtMs: null,
+      dependsOnJobId: null,
+      blockedReason: null,
+      reason: `Trabajo vinculado desbloqueado tras finalizar ${getOperationLabel(
+        target
+      )}. Pendiente de validación manual antes de iniciar.`,
+    };
 
-  const jobsWithReopened = jobsAfterClose.map((job) =>
-    job.id === reopenedLinkedJob.id ? reopenedLinkedJob : job
-  );
+    const jobsWithReopened = jobsAfterClose.map((job) =>
+      job.id === reopenedLinkedJob.id ? reopenedLinkedJob : job
+    );
 
-  const result = allocateJob(
-    reopenedLinkedJob,
-    freedTechs,
-    jobsWithReopened,
-    true,
-  
-  );
+    const result = allocateJob(
+      reopenedLinkedJob,
+      freedTechs,
+      jobsWithReopened,
+      true
+    );
 
-  finalJobs = result.jobs;
-  finalTechs = result.techs;
+    finalJobs = result.jobs;
+    finalTechs = result.techs;
 
-  reactivatedLinkedJob =
-    result.jobs.find((job) => job.id === reopenedLinkedJob.id) ??
-    reopenedLinkedJob;
-}
+    reactivatedLinkedJob =
+      result.jobs.find((job) => job.id === reopenedLinkedJob.id) ??
+      reopenedLinkedJob;
+  }
 
   const reservedStartResult = await startReservedJobsForFreedTechs(
+    assignedNames,
     finalJobs,
-    finalTechs,
-    assignedNames
+    finalTechs
   );
 
   finalJobs = reservedStartResult.jobs;
@@ -3427,15 +3451,12 @@ async function finishJob(jobId: number) {
   setJobs(finalJobs);
   setTechs(finalTechs);
 
-if (shouldCloseScheduledJobForFinishedJob(jobId)) {
   if (shouldCloseScheduledJobForFinishedJob(jobId)) {
-  void updateScheduledJobStatusByJobId(jobId, "cerrado");
-} else {
-  void updateScheduledJobStatusByJobId(jobId, "en_cola");
-}
-} else {
-  void updateScheduledJobStatusByJobId(jobId, "en_cola");
-}
+    void updateScheduledJobStatusByJobId(jobId, "cerrado");
+  } else {
+    void updateScheduledJobStatusByJobId(jobId, "en_cola");
+  }
+
   appendLog(
     `Trabajo ${target.plate} finalizado. Trabajado: ${formatMinutes(
       actualMinutes
@@ -3443,72 +3464,67 @@ if (shouldCloseScheduledJobForFinishedJob(jobId)) {
   );
 
   if (reactivatedLinkedJob) {
-  appendLog(
-    `Trabajo vinculado desbloqueado: ${
-      reactivatedLinkedJob.plate
-    } · ${getOperationLabel(
-      reactivatedLinkedJob
-    )}. Queda pendiente de validar antes de iniciar.`
-  );
-}
-const job = jobs.find((item) => item.id === jobId);
-
-try {
-  const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
-    method: "POST",
-    headers: getAdminHeaders({
-      "Content-Type": "application/json",
-    }),
-    body: JSON.stringify({
-      closedAtMs,
-      actualMinutes,
-      workedAccumulatedMinutes: actualMinutes,
-      pausedAccumulatedMinutes: pausedMinutes,
-      status: "cerrado",
-      startedAtMs: null,
-    }),
-  });
-
-  if (!response.ok) {
-    // Fallback: si el endpoint /finish no guarda bien, guardamos el trabajo cerrado entero.
-    await saveJobToBackend(closedJob);
-  }
-
-  if (reactivatedLinkedJob) {
-    await saveJobToBackend(reactivatedLinkedJob);
-  }
-
-  for (const tech of finalTechs) {
-    saveTechToBackend(tech);
-  }
-
-  await reloadJobsFromBackend();
-
-  const finishedAssignedNames = job?.assignedNames ?? [];
-  const interruptedTasksToResume =
-    getInterruptedMaintenanceTasksForTechs(finishedAssignedNames);
-
-  if (interruptedTasksToResume.length > 0) {
-    window.alert(
-      `Trabajo finalizado.\n\nHay mantenimiento interrumpido pendiente de reanudar:\n\n${interruptedTasksToResume
-        .map((task) => `${task.techName}: ${task.taskLabel}`)
-        .join("\n")}`
+    appendLog(
+      `Trabajo vinculado desbloqueado: ${
+        reactivatedLinkedJob.plate
+      } · ${getOperationLabel(
+        reactivatedLinkedJob
+      )}. Queda pendiente de validar antes de iniciar.`
     );
   }
 
-  recalcWaitingQueue(finalTechs, finalJobs);
-} catch (error) {
-  console.error("Error cerrando trabajo:", error);
-
-  // Fallback final: intentamos guardar el cerrado igualmente.
   try {
-    await saveJobToBackend(closedJob);
+    const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
+      method: "POST",
+      headers: getAdminHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({
+        closedAtMs,
+        actualMinutes,
+        workedAccumulatedMinutes: actualMinutes,
+        pausedAccumulatedMinutes: pausedMinutes,
+        status: "cerrado",
+        startedAtMs: null,
+      }),
+    });
+
+    if (!response.ok) {
+      await saveJobToBackend(closedJob);
+    }
+
+    if (reactivatedLinkedJob) {
+      await saveJobToBackend(reactivatedLinkedJob);
+    }
+
+    for (const tech of finalTechs) {
+      await saveTechToBackend(tech);
+    }
+
+    const interruptedTasksToResume =
+      getInterruptedMaintenanceTasksForTechs(assignedNames);
+
+    if (interruptedTasksToResume.length > 0) {
+      window.alert(
+        `Trabajo finalizado.\n\nHay mantenimiento interrumpido pendiente de reanudar:\n\n${interruptedTasksToResume
+          .map((task) => `${task.techName}: ${task.taskLabel}`)
+          .join("\n")}`
+      );
+    }
+
+    // Cola manual: no reasignamos automáticamente trabajos de cola.
     await reloadJobsFromBackend();
-  } catch (fallbackError) {
-    console.error("Error guardando cierre fallback:", fallbackError);
-    appendLog(`Error al finalizar ${target.plate}.`);
+  } catch (error) {
+    console.error("Error cerrando trabajo:", error);
+
+    try {
+      await saveJobToBackend(closedJob);
+      await reloadJobsFromBackend();
+    } catch (fallbackError) {
+      console.error("Error guardando cierre fallback:", fallbackError);
+      appendLog(`Error al finalizar ${target.plate}.`);
+    }
   }
-}
 }
 
 async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
