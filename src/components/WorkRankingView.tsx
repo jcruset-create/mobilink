@@ -129,6 +129,23 @@ export default function WorkRankingView({
 }: Props) {
   const [fromDate, setFromDate] = useState(getStartOfCurrentMonth());
   const [toDate, setToDate] = useState(getToday());
+  const [selectedTechName, setSelectedTechName] = useState("");
+
+  const filterTechNames = useMemo(() => {
+    const names = new Set<string>();
+
+    techs.forEach((tech) => {
+      if (tech.name) names.add(tech.name);
+    });
+
+    jobs.forEach((job) => {
+      (job.assignedNames ?? []).forEach((name) => {
+        if (name) names.add(name);
+      });
+    });
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b, "es"));
+  }, [jobs, techs]);
 
   const { rankingRows, detailRows, closedJobsCount, totalPoints } =
     useMemo(() => {
@@ -143,6 +160,11 @@ export default function WorkRankingView({
           if (!Number.isFinite(closedMs) || closedMs <= 0) return false;
 
           return closedMs >= fromMs && closedMs <= toMs;
+        })
+        .filter((job) => {
+          if (!selectedTechName) return true;
+
+          return (job.assignedNames ?? []).includes(selectedTechName);
         })
         .sort((a, b) => getClosedDateMs(b) - getClosedDateMs(a));
 
@@ -180,6 +202,10 @@ export default function WorkRankingView({
         const operationLabel = getOperationLabel(job);
 
         assignedNames.forEach((techName, index) => {
+          if (selectedTechName && techName !== selectedTechName) {
+            return;
+          }
+
           const role = index === 0 ? "responsable" : "apoyo";
           const basePoints = role === "responsable" ? 1 : 0.5;
           const finalPoints = basePoints * factor;
@@ -225,7 +251,14 @@ export default function WorkRankingView({
         closedJobsCount: closedJobs.length,
         totalPoints: rows.reduce((sum, row) => sum + row.totalPoints, 0),
       };
-    }, [jobs, quickTemplates, getOperationLabel, fromDate, toDate]);
+    }, [
+      jobs,
+      quickTemplates,
+      getOperationLabel,
+      fromDate,
+      toDate,
+      selectedTechName,
+    ]);
 
   const knownTechNames = new Set(techs.map((tech) => tech.name));
 
@@ -274,6 +307,23 @@ export default function WorkRankingView({
               />
             </label>
 
+            <label className="grid gap-1 text-sm font-bold text-slate-600">
+              Operario
+              <select
+                value={selectedTechName}
+                onChange={(event) => setSelectedTechName(event.target.value)}
+                className="min-w-[190px] rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-slate-300"
+              >
+                <option value="">Todos</option>
+
+                {filterTechNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <button
               type="button"
               onClick={() => {
@@ -306,6 +356,16 @@ export default function WorkRankingView({
             >
               Año actual
             </button>
+
+            {selectedTechName && (
+              <button
+                type="button"
+                onClick={() => setSelectedTechName("")}
+                className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100"
+              >
+                Quitar operario
+              </button>
+            )}
           </div>
 
           <div className="grid gap-3 md:grid-cols-3">
@@ -336,7 +396,11 @@ export default function WorkRankingView({
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-xl font-black">Ranking</h2>
+            <h2 className="text-xl font-black">
+              {selectedTechName
+                ? `Ranking de ${selectedTechName}`
+                : "Ranking"}
+            </h2>
             <span className="text-xs font-bold text-slate-400">
               Ordenado por puntos
             </span>
@@ -400,7 +464,11 @@ export default function WorkRankingView({
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-xl font-black">Detalle histórico</h2>
+            <h2 className="text-xl font-black">
+              {selectedTechName
+                ? `Detalle histórico de ${selectedTechName}`
+                : "Detalle histórico"}
+            </h2>
             <span className="text-xs font-bold text-slate-400">
               {detailRows.length} líneas de puntuación
             </span>
