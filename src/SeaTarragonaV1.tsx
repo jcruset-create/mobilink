@@ -1038,19 +1038,22 @@ const dueScheduledJobs = useMemo(() => {
   )}-${String(now.getDate()).padStart(2, "0")}`;
 
   return visibleScheduledJobs
-    .filter((job) => job.status === "programado")
-    .filter((job) => job.status !== "cancelado")
-    .filter((job) => job.status !== "eliminado")
-    .filter((job) => job.jobId == null)
-    .filter((job) => job.arrivedAtMs == null)
-    .filter((job) => job.date === today)
-    .filter((job) => {
-      const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
+  .filter((job) => {
+    const status = String(job.status ?? "").trim().toLowerCase();
 
-      if (Number.isNaN(startMs)) return false;
+    return status === "programado";
+  })
+  .filter((job) => job.jobId == null)
+  .filter((job) => job.secondJobId == null)
+  .filter((job) => job.arrivedAtMs == null)
+  .filter((job) => job.date === today)
+  .filter((job) => {
+    const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
 
-      return startMs <= oneHourFromNow;
-    })
+    if (Number.isNaN(startMs)) return false;
+
+    return startMs <= oneHourFromNow;
+  })
     .sort((a, b) => {
       const aMs = new Date(`${a.date}T${a.startTime}`).getTime();
       const bMs = new Date(`${b.date}T${b.startTime}`).getTime();
@@ -1793,9 +1796,15 @@ function cancelScheduledJob(id: number) {
   const scheduled = scheduledJobs.find((item) => item.id === id);
   if (!scheduled) return;
 
-  setScheduledJobs((prev) =>
+  setScheduledJobsAndSave((prev) =>
     prev.map((item) =>
-      item.id === id ? { ...item, status: "cancelado" } : item
+      item.id === id
+        ? {
+            ...item,
+            status: "cancelado",
+            cancelledAtMs: nowMs(),
+          }
+        : item
     )
   );
 
