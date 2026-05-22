@@ -1738,100 +1738,11 @@ if (hasAnyTechBlockedByOutsideMaintenance(assignedNames)) {
 }
 
 function recalcWaitingQueue(updatedTechs = techs, updatedJobs = jobs) {
-  const protectedStatusesByName = new Map(
-    updatedTechs
-      .filter((tech) => isManualUnavailableStatus(tech.status))
-      .map((tech) => [tech.name, tech.status])
-  );
-
-  let currentTechs = updatedTechs.map((tech) => {
-    if (isManualUnavailableStatus(tech.status)) {
-      return {
-        ...tech,
-        currentJobId: null,
-      };
-    }
-
-    return tech;
-  });
-
-  let currentJobs = [...updatedJobs];
-  let changed = false;
-
-  const pending = [...currentJobs]
-    .filter((j) => j.status === "espera")
-    .sort((a, b) => {
-      if (a.urgent !== b.urgent) return a.urgent ? -1 : 1;
-
-      const areaDiff = areaPriority(a.area) - areaPriority(b.area);
-      if (areaDiff !== 0) return areaDiff;
-
-      return a.createdAtMs - b.createdAtMs;
-    });
-
-  for (const job of pending) {
-    const result = allocateJob(job, currentTechs, currentJobs, false);
-
-    if (!result.assigned) {
-      currentJobs = result.jobs;
-      continue;
-    }
-
-    currentTechs = result.techs.map((tech) => {
-      const protectedStatus = protectedStatusesByName.get(tech.name);
-
-      if (protectedStatus) {
-        return {
-          ...tech,
-          status: protectedStatus,
-          currentJobId: null,
-        };
-      }
-
-      return tech;
-    });
-
-    currentJobs = result.jobs;
-    changed = true;
-
-    appendLog(
-  `Propuesta automática para ${job.plate}: ${result.assignedNames.join(
-    " + "
-  )}. Pendiente de validar.`
-);
-  }
-
-  // Validación manual activada:
-// no añadimos apoyos automáticamente ni movemos técnicos sin autorización.
-// El sistema puede proponer responsable/apoyo, pero el cambio real se hace
-// solo cuando Ramón/supervisor autoriza o reasigna manualmente.
-
-  currentTechs = currentTechs.map((tech) => {
-    const protectedStatus = protectedStatusesByName.get(tech.name);
-
-    if (protectedStatus) {
-      return {
-        ...tech,
-        status: protectedStatus,
-        currentJobId: null,
-      };
-    }
-
-    return tech;
-  });
-
-  if (!changed) return;
-
-  setTechs(applyManualTechStatusOverrides(currentTechs));
-  setJobs(currentJobs);
-
-  for (const tech of currentTechs) {
-    saveTechToBackend(tech);
-  }
-
-  for (const job of currentJobs) {
-    saveJobToBackend(job);
-  }
+  // Cola de trabajo 100% manual.
+  // Mantenemos esta función para no romper llamadas existentes, pero ya no asigna trabajos automáticamente.
+  void updatedTechs;
+  void updatedJobs;
+  return;
 }
 function updateScheduledJobField(
   scheduledId: number,
@@ -3044,6 +2955,7 @@ void updateScheduledJobStatusByJobId(jobId, "en_cola");
     appendLog(`Error al rechazar propuesta de ${job.plate}.`);
   }
 }
+
 async function assignWaitingJobManually(jobId: number, techName: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || (job.status !== "espera" && job.status !== "validacion")) return;
@@ -3054,6 +2966,19 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
   if (hasAnyTechBlockedByOutsideMaintenance([techName])) {
     appendLog(
       `No se puede asignar ${job.plate} a ${techName}: mantenimiento fuera de taller.`
+    );
+    return;
+  }
+
+  const techIsFree =
+    tech.currentJobId == null &&
+    tech.status === "disponible" &&
+    !tech.blocked &&
+    !isTechBlockedByOutsideMaintenance(tech.name);
+
+  if (!techIsFree) {
+    alert(
+      `${tech.name} no está libre ahora.\n\nUsa "Asignar o reservar técnico" para dejarlo reservado hasta que acabe su trabajo actual.`
     );
     return;
   }
@@ -3087,6 +3012,8 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
     status: "activo",
     assignedNames,
     startedAtMs: nowMs(),
+    reservedTechName: null,
+    reservedAtMs: null,
     reason:
       job.status === "validacion"
         ? `Propuesta reasignada y autorizada manualmente. Responsable: ${techName}.`
@@ -3111,9 +3038,9 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
   setJobs(updatedJobs);
   setTechs(updatedTechs);
 
-if (job.status === "validacion") {
-  void updateScheduledJobStatusByJobId(jobId, "activo");
-}
+  if (job.status === "validacion") {
+    void updateScheduledJobStatusByJobId(jobId, "activo");
+  }
 
   appendLog(
     job.status === "validacion"
@@ -3128,12 +3055,147 @@ if (job.status === "validacion") {
     if (changedTech) {
       saveTechToBackend(changedTech);
     }
-
-    recalcWaitingQueue(updatedTechs, updatedJobs);
   } catch (error) {
     console.error("Error asignando trabajo en cola:", error);
     appendLog(`Error al asignar ${job.plate}.`);
   }
+}
+
+async function assignOrReserveWaitingJobManually(jobId: number, techName: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "espera") return;
+
+  const tech = techs.find((item) => item.name === techName);
+  if (!tech) return;
+
+  if (hasAnyTechBlockedByOutsideMaintenance([techName])) {
+    appendLog(
+      `No se puede reservar ${job.plate} para ${techName}: mantenimiento fuera de taller.`
+    );
+    return;
+  }
+
+  const techIsFree =
+    tech.currentJobId == null &&
+    tech.status === "disponible" &&
+    !tech.blocked &&
+    !isTechBlockedByOutsideMaintenance(tech.name);
+
+  if (techIsFree) {
+    await assignWaitingJobManually(jobId, techName);
+    return;
+  }
+
+  if (
+    isHardBlockedTechStatus(tech.status) ||
+    isManualUnavailableStatus(tech.status) ||
+    isUnavailableTechStatus(tech.status)
+  ) {
+    alert(
+      `${tech.name} no se puede reservar.\n\nEstá en estado ${getTechStatusLabel(
+        tech.status
+      )}.`
+    );
+    return;
+  }
+
+  const reservedJob: Job = {
+    ...job,
+    reservedTechName: techName,
+    reservedAtMs: nowMs(),
+    assignedNames: [],
+    status: "espera",
+    startedAtMs: null,
+    reason: `Reservado manualmente para ${techName}. Se iniciará cuando termine su trabajo actual.`,
+  };
+
+  const updatedJobs = jobs.map((item) =>
+    item.id === jobId ? reservedJob : item
+  );
+
+  setJobs(updatedJobs);
+
+  try {
+    await saveJobToBackend(reservedJob);
+
+    appendLog(
+      `Trabajo ${job.plate} reservado para ${techName} cuando quede libre.`
+    );
+  } catch (error) {
+    console.error("Error reservando trabajo:", error);
+    appendLog(`Error reservando ${job.plate} para ${techName}.`);
+  }
+}
+
+async function startReservedJobsForFreedTechs(
+  baseJobs: Job[],
+  baseTechs: Tech[],
+  freedTechNames: string[]
+): Promise<{ jobs: Job[]; techs: Tech[] }> {
+  let nextJobs = [...baseJobs];
+  let nextTechs = [...baseTechs];
+
+  for (const techName of freedTechNames) {
+    const tech = nextTechs.find((item) => item.name === techName);
+
+    if (!tech) continue;
+
+    const techIsFree =
+      tech.currentJobId == null &&
+      tech.status === "disponible" &&
+      !tech.blocked &&
+      !isTechBlockedByOutsideMaintenance(tech.name);
+
+    if (!techIsFree) continue;
+
+    const reservedJob = nextJobs
+      .filter((item) => item.status === "espera")
+      .filter((item) => item.reservedTechName === techName)
+      .sort((a, b) => (a.reservedAtMs ?? a.createdAtMs) - (b.reservedAtMs ?? b.createdAtMs))[0];
+
+    if (!reservedJob) continue;
+
+    const startedReservedJob: Job = {
+      ...reservedJob,
+      status: "activo",
+      assignedNames: [techName],
+      startedAtMs: nowMs(),
+      reservedTechName: null,
+      reservedAtMs: null,
+      reason: `Inicio automático de reserva manual. Responsable: ${techName}.`,
+    };
+
+    nextJobs = nextJobs.map((item) =>
+      item.id === reservedJob.id ? startedReservedJob : item
+    );
+
+    nextTechs = nextTechs.map((item) =>
+      item.name === techName
+        ? {
+            ...item,
+            status: "ocupado" as TechStatus,
+            currentJobId: reservedJob.id,
+            blocked: isUnavailableTechStatus(item.status),
+          }
+        : item
+    );
+
+    await saveJobToBackend(startedReservedJob);
+
+    const changedTech = nextTechs.find((item) => item.name === techName);
+
+    if (changedTech) {
+      await saveTechToBackend(changedTech);
+    }
+
+    void updateScheduledJobStatusByJobId(reservedJob.id, "activo");
+
+    appendLog(
+      `Trabajo reservado iniciado: ${startedReservedJob.plate} asignado a ${techName}.`
+    );
+  }
+
+  return { jobs: nextJobs, techs: nextTechs };
 }
 
 async function deleteValidationJob(jobId: number) {
@@ -3352,6 +3414,15 @@ async function finishJob(jobId: number) {
     result.jobs.find((job) => job.id === reopenedLinkedJob.id) ??
     reopenedLinkedJob;
 }
+
+  const reservedStartResult = await startReservedJobsForFreedTechs(
+    finalJobs,
+    finalTechs,
+    assignedNames
+  );
+
+  finalJobs = reservedStartResult.jobs;
+  finalTechs = reservedStartResult.techs;
 
   setJobs(finalJobs);
   setTechs(finalTechs);
@@ -7333,33 +7404,56 @@ console.log("DEBUG tiempos trabajo activo", {
                     <div className="mt-1 text-xs text-amber-700">
                       {job.reason}
                     </div>
-                    <div className="mt-3 flex flex-col gap-2">
-  <select
-    defaultValue=""
-    onChange={(event) => {
-      if (event.target.value) {
-        assignWaitingJobManually(job.id, event.target.value);
-      }
-    }}
-    className="rounded-xl border border-amber-200 bg-white px-2 py-2 text-sm"
-  >
-    <option value="">Asignar manualmente</option>
-    {techs
-      .filter((tech) => !tech.blocked && tech.currentJobId == null)
-      .map((tech) => (
-        <option key={tech.name} value={tech.name}>
-          {tech.name}
-        </option>
-      ))}
-  </select>
 
-  <button
-    onClick={() => deleteWaitingJob(job.id)}
-    className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600"
-  >
-    Eliminar de cola
-  </button>
-</div>
+                    {job.reservedTechName && (
+                      <div className="mt-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                        Reservado para {job.reservedTechName} cuando acabe su trabajo actual.
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex flex-col gap-2">
+                      <select
+                        defaultValue=""
+                        onChange={(event) => {
+                          if (event.target.value) {
+                            assignOrReserveWaitingJobManually(
+                              job.id,
+                              event.target.value
+                            );
+                            event.currentTarget.value = "";
+                          }
+                        }}
+                        className="rounded-xl border border-amber-200 bg-white px-2 py-2 text-sm"
+                      >
+                        <option value="">Asignar o reservar técnico</option>
+                        {techs
+                          .filter((tech) => !tech.blocked)
+                          .filter((tech) => !isHardBlockedTechStatus(tech.status))
+                          .filter((tech) => !isManualUnavailableStatus(tech.status))
+                          .filter((tech) => !isTechBlockedByOutsideMaintenance(tech.name))
+                          .map((tech) => {
+                            const techIsBusy =
+                              tech.currentJobId != null ||
+                              tech.status === "ocupado" ||
+                              tech.status === "refuerzo";
+
+                            return (
+                              <option key={tech.name} value={tech.name}>
+                                {techIsBusy
+                                  ? `${tech.name} (cuando acabe)`
+                                  : `${tech.name} (libre)`}
+                              </option>
+                            );
+                          })}
+                      </select>
+
+                      <button
+                        onClick={() => deleteWaitingJob(job.id)}
+                        className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600"
+                      >
+                        Eliminar de cola
+                      </button>
+                    </div>
                   </div>
                 );
               })}

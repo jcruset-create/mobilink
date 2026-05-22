@@ -106,6 +106,14 @@ export type Job = {
   blockedReason?: string | null;
   linkedOrder?: 1 | 2 | null;
   blockedByJobId?: number | null;
+
+  /**
+   * Reserva manual desde cola:
+   * permite elegir un técnico ocupado para que el trabajo se inicie
+   * automáticamente cuando ese técnico termine su trabajo actual.
+   */
+  reservedTechName?: string | null;
+  reservedAtMs?: number | null;
 };
 
 export type AllocationResult = {
