@@ -8,8 +8,8 @@ export type AppView =
   | "operarios"
   | "workshop_tv_75"
   | "pantalla"
-  | "historico";
-
+  | "historico"
+  | "ranking";
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Administrador",
@@ -30,6 +30,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "operativo",
     "agenda",
     "entradas",
+    "ranking",
     "ajustes",
     "operarios",
     "workshop_tv_75",
@@ -40,18 +41,14 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "operativo",
     "agenda",
     "entradas",
+    "ranking",
     "operarios",
     "workshop_tv_75",
     "pantalla",
     "historico",
   ],
-  pantallas: [
-    "operarios",
-    "pantalla",
-  ],
-  tv75: [
-    "workshop_tv_75",
-  ],
+  pantallas: ["operarios", "pantalla"],
+  tv75: ["workshop_tv_75"],
 };
 
 export function isValidUserRole(role: string | null): role is UserRole {

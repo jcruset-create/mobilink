@@ -14,6 +14,7 @@ import { useAutoSync } from "./modules/useAutoSync";
 import { useMaintenanceAvailability } from "./modules/useMaintenanceAvailability";
 import OperariosTVView from "./components/OperariosTVView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
+import WorkRankingView from "./components/WorkRankingView";
 import type {
   AISuggestion,
   AllocationResult,
@@ -4529,6 +4530,19 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
     />
   );
 }
+
+if (view === "ranking" && canAccessView(userRole, "ranking")) {
+  return (
+    <WorkRankingView
+      jobs={visibleJobs}
+      techs={visibleTechs}
+      quickTemplates={visibleQuickTemplates}
+      getOperationLabel={getOperationLabel}
+      onBack={() => setView("operativo")}
+    />
+  );
+}
+
 if (view === "historico" && canAccessView(userRole, "historico")) {
   return (
     <FinishedAndCancelledJobsView
@@ -4696,7 +4710,19 @@ return (
 >
   Cobros
 </button>
-
+{canAccessView(userRole, "ranking") && (
+  <button
+    type="button"
+    onClick={() => setView("ranking")}
+    className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+      view === "ranking"
+        ? "bg-slate-900 text-white"
+        : "border border-slate-200 bg-white text-slate-700"
+    }`}
+  >
+    Ranking trabajos
+  </button>
+)}
   {canAccessView(userRole, "historico") && (
   <button
     type="button"
