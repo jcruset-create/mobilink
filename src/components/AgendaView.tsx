@@ -1,22 +1,37 @@
 import { useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+
 import {
   type IncludedTask,
   type CustomExtraTask,
   buildSelectableIncludedTasks,
   getIncludedTasksByIds,
 } from "../modules/quickTaskSelector";
+
 import {
   DEFAULT_WORKSHOP_ID,
   getWorkshopById,
   normalizeWorkshopId,
   type WorkshopId,
 } from "../modules/workshops";
-import ScheduledJobQuantityBox from "./ScheduledJobQuantityBox";
+
+import type {
+  Tech,
+  TechStatus,
+} from "../modules/workshopTypes";
+
+import {
+  SCHEDULED_TECH_STATUS_OPTIONS,
+  createScheduledTechStatus,
+  type ScheduledTechStatus,
+} from "../modules/techStatusScheduleHelpers";
+
+import { getTechStatusLabel } from "../modules/techStatus";
 import { buildScheduledJobV2FieldsFromTemplate } from "../modules/scheduledJobV2Helpers";
 import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpers";
-import ScheduledJobV2MiniLine from "./ScheduledJobV2MiniLine";
 
+import ScheduledJobQuantityBox from "./ScheduledJobQuantityBox";
+import ScheduledJobV2MiniLine from "./ScheduledJobV2MiniLine";
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
 type ScheduledJobStatus =
@@ -96,14 +111,33 @@ export type ScheduledJob = {
 
 type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate";
 
+type DateReminderKind = "normal" | "tech_status";
+
 type DateReminder = {
   id: number;
   workshopId?: WorkshopId | string | null;
+  kind?: DateReminderKind;
   title: string;
   startDate: string;
   endDate: string;
   color: DateReminderColor;
   notes?: string;
+
+  // Estado técnico programado
+  techStatusId?: string;
+  techName?: string;
+  techStatus?: TechStatus;
+};
+
+type ReminderDraft = {
+  kind: DateReminderKind;
+  title: string;
+  startDate: string;
+  endDate: string;
+  color: DateReminderColor;
+  notes: string;
+  techName: string;
+  techStatus: TechStatus;
 };
 
 type Props = {
@@ -118,6 +152,11 @@ type Props = {
   confirmScheduledArrival: (scheduled: ScheduledJob) => void;
   deleteScheduledJobFromBackend?: (id: number) => Promise<void>;
   cancelScheduledJob: (id: number) => void;
+
+  techs: Tech[];
+  scheduledTechStatuses: ScheduledTechStatus[];
+  setScheduledTechStatuses: Dispatch<SetStateAction<ScheduledTechStatus[]>>;
+
   linkedTemplates?: {
     id: string;
     label: string;
@@ -223,6 +262,10 @@ function addMinutesToTime(time: string, minutes: number) {
 
 function getTodayKey() {
   return formatLocalDate(new Date());
+}
+
+function createDateReminderId() {
+  return Date.now() + Math.floor(Math.random() * 100000);
 }
 
 function isPastDate(date: string) {
@@ -426,6 +469,9 @@ export default function AgendaView({
   appendLog,
   cancelScheduledJob,
   deleteScheduledJobFromBackend,
+  techs,
+  scheduledTechStatuses,
+  setScheduledTechStatuses,
 }: Props) {
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
@@ -477,13 +523,16 @@ useEffect(() => {
 
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
 
-  const [reminderDraft, setReminderDraft] = useState({
-    title: "",
-    startDate: getTodayKey(),
-    endDate: getTodayKey(),
-    color: "red" as DateReminderColor,
-    notes: "",
-  });
+const [reminderDraft, setReminderDraft] = useState<ReminderDraft>({
+  kind: "normal",
+  title: "",
+  startDate: getTodayKey(),
+  endDate: getTodayKey(),
+  color: "red",
+  notes: "",
+  techName: "",
+  techStatus: "vacaciones",
+});
 
   useEffect(() => {
     try {
@@ -560,15 +609,27 @@ useEffect(() => {
     return "bg-red-600 border-red-700 text-white";
   }
 
-  function getVisibleDateReminders() {
-    return dateReminders
-      .filter(belongsToSelectedWorkshop)
-      .filter((reminder) =>
-        finalVisibleDays.some(
-          (day) => day.date >= reminder.startDate && day.date <= reminder.endDate
-        )
-      );
-  }
+function getVisibleDateReminders() {
+  return dateReminders
+    .filter(belongsToSelectedWorkshop)
+    .filter((reminder) =>
+      finalVisibleDays.some(
+        (day) => day.date >= reminder.startDate && day.date <= reminder.endDate
+      )
+    )
+    .slice()
+    .sort((a, b) => {
+      if (a.startDate !== b.startDate) {
+        return a.startDate.localeCompare(b.startDate);
+      }
+
+      if (a.endDate !== b.endDate) {
+        return a.endDate.localeCompare(b.endDate);
+      }
+
+      return Number(a.id) - Number(b.id);
+    });
+}
 
   function getReminderGridRange(reminder: DateReminder) {
     const visibleIndexes = finalVisibleDays
@@ -589,63 +650,168 @@ useEffect(() => {
     };
   }
 
-  function openDateReminderModal() {
-    setReminderDraft({
-      title: "",
-      startDate: days[0]?.date ?? getTodayKey(),
-      endDate: days[5]?.date ?? getTodayKey(),
-      color: "red",
-      notes: "",
-    });
-    setReminderModalOpen(true);
+function openDateReminderModal() {
+  setReminderDraft({
+    kind: "normal",
+    title: "",
+    startDate: days[0]?.date ?? getTodayKey(),
+    endDate: days[5]?.date ?? getTodayKey(),
+    color: "red",
+    notes: "",
+    techName: "",
+    techStatus: "vacaciones",
+  });
+
+  setReminderModalOpen(true);
+}
+
+function saveDateReminder() {
+  if (!reminderDraft.startDate || !reminderDraft.endDate) {
+    alert("Selecciona fecha inicio y fecha final.");
+    return;
   }
 
-  function saveDateReminder() {
-    if (!reminderDraft.title.trim()) {
-      alert("Escribe un título para el recordatorio.");
+  if (reminderDraft.endDate < reminderDraft.startDate) {
+    alert("La fecha final no puede ser anterior a la fecha inicial.");
+    return;
+  }
+
+  if (reminderDraft.kind === "tech_status") {
+    const techName = reminderDraft.techName.trim();
+
+    if (!techName) {
+      alert("Selecciona un técnico.");
       return;
     }
 
-    if (reminderDraft.endDate < reminderDraft.startDate) {
-      alert("La fecha final no puede ser anterior a la fecha inicial.");
-      return;
-    }
-
-    const reminder: DateReminder = {
-      id: Date.now(),
-      workshopId: safeSelectedWorkshopId,
-      title: reminderDraft.title.trim().toUpperCase(),
+    const scheduledStatus = createScheduledTechStatus({
+      techName,
+      status: reminderDraft.techStatus,
       startDate: reminderDraft.startDate,
       endDate: reminderDraft.endDate,
-      color: reminderDraft.color,
+      label: `${techName} · ${getTechStatusLabel(reminderDraft.techStatus)}`,
+      notes: reminderDraft.notes.trim() || undefined,
+    });
+
+    const alreadyExists = scheduledTechStatuses.some(
+  (item: ScheduledTechStatus) =>
+    item.techName === scheduledStatus.techName &&
+    item.status === scheduledStatus.status &&
+    item.startDate === scheduledStatus.startDate &&
+    item.endDate === scheduledStatus.endDate
+);
+
+    const title =
+      reminderDraft.title.trim() ||
+      `${techName} · ${getTechStatusLabel(reminderDraft.techStatus)}`;
+
+    const reminder: DateReminder = {
+      id: createDateReminderId(),
+      workshopId: safeSelectedWorkshopId,
+      kind: "tech_status",
+      title: title.toUpperCase(),
+      startDate: reminderDraft.startDate,
+      endDate: reminderDraft.endDate,
+      color: reminderDraft.color || "orange",
       notes: reminderDraft.notes.trim(),
+      techStatusId: scheduledStatus.id,
+      techName,
+      techStatus: reminderDraft.techStatus,
     };
 
+    if (!alreadyExists) {
+      setScheduledTechStatuses((prev) => [scheduledStatus, ...prev]);
+    }
+
     setDateReminders((prev) => [...prev, reminder]);
+
     appendLog(
-      `Recordatorio creado: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
+      `Estado técnico programado: ${techName} · ${getTechStatusLabel(
+        reminderDraft.techStatus
+      )} · ${reminder.startDate} a ${reminder.endDate}.`
     );
 
     setReminderModalOpen(false);
+
     setReminderDraft({
+      kind: "normal",
       title: "",
       startDate: getTodayKey(),
       endDate: getTodayKey(),
       color: "red",
       notes: "",
+      techName: "",
+      techStatus: "vacaciones",
     });
+
+    return;
   }
 
-  function deleteDateReminder(id: number) {
-    const reminder = dateReminders.find((item) => item.id === id);
-    if (!reminder) return;
-
-    const ok = window.confirm(`¿Eliminar el recordatorio "${reminder.title}"?`);
-    if (!ok) return;
-
-    setDateReminders((prev) => prev.filter((item) => item.id !== id));
-    appendLog(`Recordatorio eliminado: ${reminder.title}.`);
+  if (!reminderDraft.title.trim()) {
+    alert("Escribe un título para el recordatorio.");
+    return;
   }
+
+  const reminder: DateReminder = {
+    id: createDateReminderId(),
+    workshopId: safeSelectedWorkshopId,
+    kind: "normal",
+    title: reminderDraft.title.trim().toUpperCase(),
+    startDate: reminderDraft.startDate,
+    endDate: reminderDraft.endDate,
+    color: reminderDraft.color,
+    notes: reminderDraft.notes.trim(),
+  };
+
+  setDateReminders((prev) => [...prev, reminder]);
+
+  appendLog(
+    `Recordatorio creado: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
+  );
+
+  setReminderModalOpen(false);
+
+  setReminderDraft({
+    kind: "normal",
+    title: "",
+    startDate: getTodayKey(),
+    endDate: getTodayKey(),
+    color: "red",
+    notes: "",
+    techName: "",
+    techStatus: "vacaciones",
+  });
+}
+
+function deleteDateReminder(id: number) {
+  const reminder = dateReminders.find((item) => item.id === id);
+  if (!reminder) return;
+
+  const ok = window.confirm(`¿Eliminar el recordatorio "${reminder.title}"?`);
+  if (!ok) return;
+
+  setDateReminders((prev) => prev.filter((item) => item.id !== id));
+
+  if (reminder.kind === "tech_status") {
+    setScheduledTechStatuses((prev) =>
+      prev.filter((item) => {
+        if (reminder.techStatusId && item.id === reminder.techStatusId) {
+          return false;
+        }
+
+        const sameLegacyStatus =
+          item.techName === reminder.techName &&
+          item.status === reminder.techStatus &&
+          item.startDate === reminder.startDate &&
+          item.endDate === reminder.endDate;
+
+        return !sameLegacyStatus;
+      })
+    );
+  }
+
+  appendLog(`Recordatorio eliminado: ${reminder.title}.`);
+}
 
   function normalizeMinutes(value: unknown, fallback = 0) {
   if (value === null || value === undefined || value === "") return fallback;
@@ -1624,123 +1790,247 @@ appendLog(
           </div>
         </div>
 
-        {reminderModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-            <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
-              <h3 className="text-xl font-semibold">Nuevo recordatorio por fechas</h3>
+{reminderModalOpen && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+    <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+      <h3 className="text-xl font-semibold">Nuevo recordatorio por fechas</h3>
 
-              <p className="mt-1 text-sm text-slate-500">
-                Se mostrará arriba de la agenda, como un evento de todo el día.
-                Puedes poner unos días concretos o un mes completo, por ejemplo
-                del 01/05 al 31/05.
-              </p>
+      <p className="mt-1 text-sm text-slate-500">
+        Crea un recordatorio normal de agenda o programa el estado de un técnico
+        durante un rango de fechas.
+      </p>
 
-              <div className="mt-5 space-y-4">
-                <input
-                  value={reminderDraft.title}
-                  onChange={(e) =>
-                    setReminderDraft((prev) => ({
-                      ...prev,
-                      title: e.target.value,
-                    }))
-                  }
-                  placeholder="Ej: SUPERVISIÓN TACÓGRAFO JORDI CRUSET"
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
-                />
+      <div className="mt-5 space-y-4">
+        <div className="grid gap-2 md:grid-cols-2">
+          <button
+            type="button"
+            onClick={() =>
+              setReminderDraft((prev) => ({
+                ...prev,
+                kind: "normal",
+                color: prev.color === "orange" ? "red" : prev.color,
+              }))
+            }
+            className={`rounded-2xl border px-3 py-3 text-sm font-black ${
+              reminderDraft.kind === "normal"
+                ? "border-red-300 bg-red-50 text-red-800"
+                : "border-slate-200 bg-white text-slate-500"
+            }`}
+          >
+            Recordatorio normal
+          </button>
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">
-                      Fecha inicio
-                    </label>
+          <button
+            type="button"
+            onClick={() =>
+              setReminderDraft((prev) => ({
+                ...prev,
+                kind: "tech_status",
+                color: "orange",
+                title:
+                  prev.techName && prev.techStatus
+                    ? `${prev.techName} · ${getTechStatusLabel(
+                        prev.techStatus
+                      )}`
+                    : prev.title,
+              }))
+            }
+            className={`rounded-2xl border px-3 py-3 text-sm font-black ${
+              reminderDraft.kind === "tech_status"
+                ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                : "border-slate-200 bg-white text-slate-500"
+            }`}
+          >
+            Estado técnico
+          </button>
+        </div>
 
-                    <input
-                      type="date"
-                      value={reminderDraft.startDate}
-                      onChange={(e) =>
-                        setReminderDraft((prev) => ({
-                          ...prev,
-                          startDate: e.target.value,
-                          endDate:
-                            prev.endDate < e.target.value
-                              ? e.target.value
-                              : prev.endDate,
-                        }))
-                      }
-                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-500">
-                      Fecha final
-                    </label>
-
-                    <input
-                      type="date"
-                      value={reminderDraft.endDate}
-                      onChange={(e) =>
-                        setReminderDraft((prev) => ({
-                          ...prev,
-                          endDate: e.target.value,
-                        }))
-                      }
-                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
+        {reminderDraft.kind === "tech_status" ? (
+          <>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-500">
+                  Técnico
+                </label>
 
                 <select
-                  value={reminderDraft.color}
-                  onChange={(e) =>
-                    setReminderDraft((prev) => ({
-                      ...prev,
-                      color: e.target.value as DateReminderColor,
-                    }))
-                  }
-                  className="w-full rounded-2xl border border-slate-200 px-3 py-3"
-                >
-                  <option value="red">Rojo</option>
-                  <option value="orange">Naranja</option>
-                  <option value="blue">Azul</option>
-                  <option value="green">Verde</option>
-                  <option value="slate">Gris</option>
-                </select>
+                  value={reminderDraft.techName}
+                  onChange={(e) => {
+                    const techName = e.target.value;
 
-                <textarea
-                  value={reminderDraft.notes}
-                  onChange={(e) =>
                     setReminderDraft((prev) => ({
                       ...prev,
-                      notes: e.target.value,
-                    }))
-                  }
-                  placeholder="Observaciones"
-                  rows={3}
-                  className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-3"
-                />
+                      techName,
+                      title: techName
+                        ? `${techName} · ${getTechStatusLabel(
+                            prev.techStatus
+                          )}`
+                        : prev.title,
+                    }));
+                  }}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="">Selecciona técnico</option>
+                  {techs.map((tech) => (
+                    <option key={tech.name} value={tech.name}>
+                      {tech.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="mt-6 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setReminderModalOpen(false)}
-                  className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
-                >
-                  Cancelar
-                </button>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-500">
+                  Estado
+                </label>
 
-                <button
-                  type="button"
-                  onClick={saveDateReminder}
-                  className="flex-1 rounded-2xl bg-red-600 px-4 py-3 text-sm font-medium text-white"
+                <select
+                  value={reminderDraft.techStatus}
+                  onChange={(e) => {
+                    const techStatus = e.target.value as TechStatus;
+
+                    setReminderDraft((prev) => ({
+                      ...prev,
+                      techStatus,
+                      title: prev.techName
+                        ? `${prev.techName} · ${getTechStatusLabel(
+                            techStatus
+                          )}`
+                        : prev.title,
+                    }));
+                  }}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 >
-                  Guardar recordatorio
-                </button>
+                  {SCHEDULED_TECH_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {getTechStatusLabel(status)}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-          </div>
+
+            <input
+              value={reminderDraft.title}
+              onChange={(e) =>
+                setReminderDraft((prev) => ({
+                  ...prev,
+                  title: e.target.value,
+                }))
+              }
+              placeholder="Título del estado técnico"
+              className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+            />
+          </>
+        ) : (
+          <input
+            value={reminderDraft.title}
+            onChange={(e) =>
+              setReminderDraft((prev) => ({
+                ...prev,
+                title: e.target.value,
+              }))
+            }
+            placeholder="Ej: SUPERVISIÓN TACÓGRAFO JORDI CRUSET"
+            className="w-full rounded-2xl border border-slate-200 px-3 py-3 uppercase"
+          />
         )}
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">
+              Fecha inicio
+            </label>
+
+            <input
+              type="date"
+              value={reminderDraft.startDate}
+              onChange={(e) =>
+                setReminderDraft((prev) => ({
+                  ...prev,
+                  startDate: e.target.value,
+                  endDate:
+                    prev.endDate < e.target.value
+                      ? e.target.value
+                      : prev.endDate,
+                }))
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">
+              Fecha final
+            </label>
+
+            <input
+              type="date"
+              value={reminderDraft.endDate}
+              onChange={(e) =>
+                setReminderDraft((prev) => ({
+                  ...prev,
+                  endDate: e.target.value,
+                }))
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+
+        <select
+          value={reminderDraft.color}
+          onChange={(e) =>
+            setReminderDraft((prev) => ({
+              ...prev,
+              color: e.target.value as DateReminderColor,
+            }))
+          }
+          className="w-full rounded-2xl border border-slate-200 px-3 py-3"
+        >
+          <option value="red">Rojo</option>
+          <option value="orange">Naranja</option>
+          <option value="blue">Azul</option>
+          <option value="green">Verde</option>
+          <option value="slate">Gris</option>
+        </select>
+
+        <textarea
+          value={reminderDraft.notes}
+          onChange={(e) =>
+            setReminderDraft((prev) => ({
+              ...prev,
+              notes: e.target.value,
+            }))
+          }
+          placeholder="Observaciones"
+          rows={3}
+          className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-3"
+        />
+      </div>
+
+      <div className="mt-6 flex gap-3">
+        <button
+          type="button"
+          onClick={() => setReminderModalOpen(false)}
+          className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+        >
+          Cancelar
+        </button>
+
+        <button
+          type="button"
+          onClick={saveDateReminder}
+          className="flex-1 rounded-2xl bg-red-600 px-4 py-3 text-sm font-medium text-white"
+        >
+          {reminderDraft.kind === "tech_status"
+            ? "Guardar estado técnico"
+            : "Guardar recordatorio"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">

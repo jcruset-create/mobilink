@@ -201,7 +201,13 @@ import {
 } from "./modules/v2DataNormalizeHelpers";
 import { checkAllV2Integrity } from "./modules/v2IntegrityCheckHelpers";
 import QuickTemplateV2Fields from "./components/QuickTemplateV2Fields";
-
+import {
+  applyScheduledStatusesToTechs,
+  getScheduledStatusForTech,
+  loadScheduledTechStatuses,
+  saveScheduledTechStatuses,
+  type ScheduledTechStatus,
+} from "./modules/techStatusScheduleHelpers";
 
 function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
   if (tech.currentJobId == null) return jobs;
@@ -265,6 +271,10 @@ export default function SeaTarragonaV1() {
   const [rules, setRules] = useState<string[]>([]);
   const [newRule, setNewRule] = useState("");
   const [techs, setTechs] = useState<Tech[]>(INITIAL_TECHS);
+const [scheduledTechStatuses, setScheduledTechStatuses] = useState<
+  ScheduledTechStatus[]
+>(() => loadScheduledTechStatuses());
+
   const [jobs, setJobs] = useState<Job[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const scheduledJobsLoadedRef = useRef(false);
@@ -302,6 +312,15 @@ const [selectedWorkshopId, setSelectedWorkshopId] = useState<WorkshopId>(() => {
 });
 
 const selectedWorkshop = getWorkshopById(selectedWorkshopId);
+
+const effectiveTechs = useMemo(
+  () =>
+    applyScheduledStatusesToTechs({
+      techs,
+      scheduledStatuses: scheduledTechStatuses,
+    }),
+  [techs, scheduledTechStatuses]
+);
 
 useEffect(() => {
   try {
@@ -489,7 +508,7 @@ const visibleScheduledJobs = useMemo(
 const visibleTechs = useMemo(() => {
   const visibleJobIds = new Set(visibleJobs.map((job) => job.id));
 
-  return techs.filter((tech) => {
+  return effectiveTechs.filter((tech) => {
     if (belongsToWorkshop(tech, selectedWorkshopId)) return true;
 
     return (
@@ -497,7 +516,7 @@ const visibleTechs = useMemo(() => {
       visibleJobIds.has(tech.currentJobId)
     );
   });
-}, [techs, visibleJobs, selectedWorkshopId]);
+}, [effectiveTechs, visibleJobs, selectedWorkshopId]);
 
 const visibleQuickTemplates = useMemo(
   () =>
@@ -880,6 +899,8 @@ const availableTechsSummary = useMemo(() => {
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
 }, [visibleTechs]);
 
+
+
 const pausedJobs = useMemo(() => {
   const map = new Map<string, Job>();
 
@@ -975,6 +996,11 @@ useEffect(() => {
     console.error("Error guardando agenda:", error);
   });
 }, [scheduledJobs, scheduledJobsLoaded]);
+
+useEffect(() => {
+  saveScheduledTechStatuses(scheduledTechStatuses);
+}, [scheduledTechStatuses]);
+
 
 const techHoursReport = useMemo<TechHoursSummary[]>(
   () => buildTechHoursReport(closedJobs, visibleTechs),
@@ -1988,8 +2014,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     template: firstTemplate,
   });
 
-  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true);
-
+const result = allocateJob(firstJob, effectiveTechs, [firstJob, ...jobs], true);
   let jobsToSet = result.jobs;
   let jobsToSave: Job[] = [
     result.jobs.find((item) => item.id === firstJob.id) ?? firstJob,
@@ -2133,8 +2158,7 @@ const baseJob: Job = {
   startedAtMs: null,
   template: (draft.template || null) as TemplateKey | null,
 };
-  const result = allocateJob(baseJob, techs, [baseJob, ...jobs], true,);
-
+const result = allocateJob(baseJob, effectiveTechs, [baseJob, ...jobs], true);
 const finalJob = result.jobs.find((j) => j.id === baseJob.id) ?? baseJob;
 
 // UI rápida: ahora solo crea propuesta en validación.
@@ -2280,11 +2304,11 @@ async function createTemplateEntry() {
   });
 
   const result = allocateJob(
-    builtEntry.firstJob,
-    techs,
-    [builtEntry.firstJob, ...jobs],
-    true
-  );
+  builtEntry.firstJob,
+  effectiveTechs,
+  [builtEntry.firstJob, ...jobs],
+  true
+);
 
   let finalJobs: Job[] = result.jobs;
 
@@ -4374,6 +4398,7 @@ function updateTechPriority(
   });
 }
 
+
 if (userRole === "tv75") {
   return (
     <WorkshopTV75View
@@ -4463,19 +4488,22 @@ if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
 if (view === "agenda" && canAccessView(userRole, "agenda")) {
   return (
     <AgendaView
-      scheduledJobs={scheduledJobs}
-      setScheduledJobs={setScheduledJobsAndSave}
-      quickTemplates={visibleQuickTemplates}
-      selectedWorkshopId={selectedWorkshopId}
-      customExtraTasks={customExtraTasks}
-      linkedTemplates={visibleLinkedTemplates}
-      AREA_META={AREA_META}
-      onBack={() => setView("operativo")}
-      appendLog={appendLog}
-      confirmScheduledArrival={confirmScheduledArrival}
-      cancelScheduledJob={cancelScheduledJob}
-      deleteScheduledJobFromBackend={deleteScheduledJobFromBackend}
-    />
+  scheduledJobs={scheduledJobs}
+  setScheduledJobs={setScheduledJobsAndSave}
+  quickTemplates={visibleQuickTemplates}
+  selectedWorkshopId={selectedWorkshopId}
+  customExtraTasks={customExtraTasks}
+  linkedTemplates={visibleLinkedTemplates}
+  AREA_META={AREA_META}
+  onBack={() => setView("operativo")}
+  appendLog={appendLog}
+  confirmScheduledArrival={confirmScheduledArrival}
+  cancelScheduledJob={cancelScheduledJob}
+  deleteScheduledJobFromBackend={deleteScheduledJobFromBackend}
+  techs={visibleTechs}
+  scheduledTechStatuses={scheduledTechStatuses}
+  setScheduledTechStatuses={setScheduledTechStatuses}
+/>
   );
 }
 
@@ -4809,6 +4837,7 @@ return (
                     {tech.name}
                   </div>
 
+
                   {job && (
                     <div className="mt-0.5 text-xs font-medium text-red-600">
                       {job.customerName?.trim() ? (
@@ -4833,6 +4862,8 @@ return (
             <h2 className="text-sm font-black uppercase tracking-wide text-emerald-800">
               Técnicos disponibles
             </h2>
+
+
 
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
               <span
@@ -4958,14 +4989,14 @@ return (
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {availableTechsSummary.map((tech) => (
-              <div
-                key={`available-summary-${tech.name}`}
-                className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-black text-emerald-900"
-              >
-                {tech.name}
-              </div>
-            ))}
+{availableTechsSummary.map((tech) => (
+  <div
+    key={`available-summary-${tech.name}`}
+    className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-black text-emerald-900"
+  >
+    {tech.name}
+  </div>
+))}
           </div>
         )}
 
@@ -5087,7 +5118,7 @@ return (
     </div>
   </section>
 )}
-      
+    
 
       {view === "ajustes" && (
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -5804,7 +5835,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     Técnicos capacitados
   </div>
         <div className="grid gap-2 md:grid-cols-3">
-          {techs.map((tech) => {
+          {visibleTechs.map((tech) => {
               const checked = newQuickTemplate.allowedTechs.includes(
                 tech.name
               );
@@ -6635,15 +6666,20 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                 </tr>
               </thead>
               <tbody>
-                {techs.map((tech) => {
+                {visibleTechs.map((tech) => {
   const currentJob = jobs.find(
-  (job) => job.id === tech.currentJobId
-);
+    (job) => job.id === tech.currentJobId
+  );
 
-const validationProposal = getValidationProposalForTech(
-  tech.name,
-  jobs
-);
+  const scheduledStatus = getScheduledStatusForTech({
+    techName: tech.name,
+    scheduledStatuses: scheduledTechStatuses,
+  });
+
+  const validationProposal = getValidationProposalForTech(
+    tech.name,
+    jobs
+  );
 
 const isReservedForValidation = Boolean(validationProposal && !currentJob);
 
@@ -6671,13 +6707,25 @@ const textColor = "";
     </div>
   )}
 
-  <select
-    value={tech.status}
-    onChange={(e) =>
-      setTechManual(tech.name, e.target.value as TechStatus)
-    }
-    className="rounded-lg border border-slate-200 bg-white px-2 py-1"
-  >
+<select
+  value={tech.status}
+  disabled={Boolean(scheduledStatus && scheduledStatus.status !== "disponible")}
+  onChange={(e) =>
+    setTechManual(tech.name, e.target.value as TechStatus)
+  }
+  className={`rounded-lg border border-slate-200 px-2 py-1 ${
+    scheduledStatus && scheduledStatus.status !== "disponible"
+      ? "cursor-not-allowed bg-indigo-50 font-bold text-indigo-700"
+      : "bg-white"
+  }`}
+>
+{scheduledStatus && scheduledStatus.status !== "disponible" && (
+  <div className="mt-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold uppercase text-indigo-700">
+    Bloqueado por agenda · {scheduledStatus.startDate} →{" "}
+    {scheduledStatus.endDate}
+  </div>
+)}
+
                           <option value="disponible">disponible</option>
 <option value="refuerzo">refuerzo</option>
 <option value="ocupado">ocupado</option>
@@ -6779,7 +6827,7 @@ const textColor = "";
                     </tr>
                   </thead>
                   <tbody>
-                    {techs.map((tech) => (
+                    {visibleTechs.map((tech) => (
                       <tr
                         key={`cfg-${tech.name}`}
                         className="border-t border-slate-100"
