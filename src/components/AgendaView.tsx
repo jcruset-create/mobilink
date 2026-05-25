@@ -684,14 +684,15 @@ function saveDateReminder() {
       return;
     }
 
-    const scheduledStatus = createScheduledTechStatus({
-      techName,
-      status: reminderDraft.techStatus,
-      startDate: reminderDraft.startDate,
-      endDate: reminderDraft.endDate,
-      label: `${techName} · ${getTechStatusLabel(reminderDraft.techStatus)}`,
-      notes: reminderDraft.notes.trim() || undefined,
-    });
+   const scheduledStatus = createScheduledTechStatus({
+  techName,
+  status: reminderDraft.techStatus,
+  startDate: reminderDraft.startDate,
+  endDate: reminderDraft.endDate,
+  label: `${techName} · ${getTechStatusLabel(reminderDraft.techStatus)}`,
+  notes: reminderDraft.notes.trim() || undefined,
+  workshopId: safeSelectedWorkshopId,
+});
 
     const alreadyExists = scheduledTechStatuses.some(
   (item: ScheduledTechStatus) =>

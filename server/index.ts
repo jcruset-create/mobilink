@@ -2324,7 +2324,111 @@ app.get("/api/scheduled-jobs", async (_req, res) => {
     res.status(500).json({ error: "Error obteniendo citas programadas" });
   }
 });
+app.get("/api/scheduled-tech-statuses", async (_req, res) => {
+  try {
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          "techName",
+          status,
+          "startDate",
+          "endDate",
+          label,
+          notes,
+          "createdAtMs",
+          "workshopId"
+        FROM scheduled_tech_statuses
+        ORDER BY "createdAtMs" DESC
+      `
+    );
 
+    res.json(result.rows);
+  } catch (error) {
+    console.error("GET /api/scheduled-tech-statuses error:", error);
+    res.status(500).json({
+      error: "Error cargando estados técnicos programados",
+    });
+  }
+});
+
+app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body) ? req.body : [];
+
+    await db.query("BEGIN");
+
+    await db.query(`DELETE FROM scheduled_tech_statuses`);
+
+    for (const item of items) {
+      await db.query(
+        `
+          INSERT INTO scheduled_tech_statuses (
+            id,
+            "techName",
+            status,
+            "startDate",
+            "endDate",
+            label,
+            notes,
+            "createdAtMs",
+            "workshopId"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (id)
+          DO UPDATE SET
+            "techName" = EXCLUDED."techName",
+            status = EXCLUDED.status,
+            "startDate" = EXCLUDED."startDate",
+            "endDate" = EXCLUDED."endDate",
+            label = EXCLUDED.label,
+            notes = EXCLUDED.notes,
+            "createdAtMs" = EXCLUDED."createdAtMs",
+            "workshopId" = EXCLUDED."workshopId"
+        `,
+        [
+          String(item.id),
+          String(item.techName || ""),
+          String(item.status || "disponible"),
+          String(item.startDate || ""),
+          String(item.endDate || ""),
+          item.label ?? null,
+          item.notes ?? null,
+          Number(item.createdAtMs || Date.now()),
+          item.workshopId ?? null,
+        ]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          "techName",
+          status,
+          "startDate",
+          "endDate",
+          label,
+          notes,
+          "createdAtMs",
+          "workshopId"
+        FROM scheduled_tech_statuses
+        ORDER BY "createdAtMs" DESC
+      `
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => null);
+
+    console.error("PUT /api/scheduled-tech-statuses error:", error);
+    res.status(500).json({
+      error: "Error guardando estados técnicos programados",
+    });
+  }
+});
 
 
 app.put("/api/scheduled-jobs", async (req, res) => {

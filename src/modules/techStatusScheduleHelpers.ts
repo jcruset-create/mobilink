@@ -9,6 +9,7 @@ export type ScheduledTechStatus = {
   label?: string;
   notes?: string;
   createdAtMs: number;
+  workshopId?: string | null;
 };
 
 const SCHEDULED_TECH_STATUSES_KEY = "scheduledTechStatuses";
@@ -149,6 +150,7 @@ export function createScheduledTechStatus({
   endDate,
   label,
   notes,
+  workshopId,
 }: {
   techName: string;
   status: TechStatus;
@@ -156,6 +158,7 @@ export function createScheduledTechStatus({
   endDate: string;
   label?: string;
   notes?: string;
+  workshopId?: string | null;
 }): ScheduledTechStatus {
   return {
     id: `scheduled-tech-status-${Date.now()}-${Math.random()
@@ -167,6 +170,7 @@ export function createScheduledTechStatus({
     endDate,
     label,
     notes,
+    workshopId: workshopId ?? null,
     createdAtMs: Date.now(),
   };
 }

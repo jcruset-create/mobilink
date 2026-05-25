@@ -208,7 +208,10 @@ import {
   saveScheduledTechStatuses,
   type ScheduledTechStatus,
 } from "./modules/techStatusScheduleHelpers";
-
+import {
+  loadScheduledTechStatusesFromBackend,
+  saveScheduledTechStatusesToBackend,
+} from "./modules/scheduledTechStatusApi";
 function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
   if (tech.currentJobId == null) return jobs;
 
@@ -274,7 +277,36 @@ export default function SeaTarragonaV1() {
 const [scheduledTechStatuses, setScheduledTechStatuses] = useState<
   ScheduledTechStatus[]
 >(() => loadScheduledTechStatuses());
+const [scheduledTechStatusesLoaded, setScheduledTechStatusesLoaded] =
+  useState(false);
 
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadScheduledTechStatuses() {
+    try {
+      const data = await loadScheduledTechStatusesFromBackend();
+
+      if (cancelled) return;
+
+      if (Array.isArray(data)) {
+        setScheduledTechStatuses(data);
+      }
+    } catch (error) {
+      console.error("Error cargando estados técnicos desde backend:", error);
+    } finally {
+      if (!cancelled) {
+        setScheduledTechStatusesLoaded(true);
+      }
+    }
+  }
+
+  void loadScheduledTechStatuses();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const scheduledJobsLoadedRef = useRef(false);
@@ -999,7 +1031,16 @@ useEffect(() => {
 
 useEffect(() => {
   saveScheduledTechStatuses(scheduledTechStatuses);
-}, [scheduledTechStatuses]);
+
+  if (!scheduledTechStatusesLoaded) return;
+
+  void saveScheduledTechStatusesToBackend(scheduledTechStatuses).catch(
+    (error) => {
+      console.error("Error guardando estados técnicos en backend:", error);
+      appendLog("Error guardando estados programados de técnicos.");
+    }
+  );
+}, [scheduledTechStatuses, scheduledTechStatusesLoaded]);
 
 
 const techHoursReport = useMemo<TechHoursSummary[]>(
