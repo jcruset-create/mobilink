@@ -520,11 +520,25 @@ stripePaymentIntentId: job.stripePaymentIntentId ?? null,
 
 function normalizeQuickTemplateRow(t: any) {
   const rawMinutes = t.standardMinutes ?? t.standardminutes ?? null;
+  const rawUnitMinutes = t.unitMinutes ?? t.unitminutes ?? null;
+  const rawUnitPrice = t.unitPrice ?? t.unitprice ?? null;
 
   const standardMinutes =
-    rawMinutes == null || rawMinutes === ""
+    rawMinutes == null || rawMinutes === "" ? null : Number(rawMinutes);
+
+  const unitMinutes =
+    rawUnitMinutes == null || rawUnitMinutes === ""
       ? null
-      : Number(rawMinutes);
+      : Number(rawUnitMinutes);
+
+  const unitPrice =
+    rawUnitPrice == null || rawUnitPrice === "" ? null : Number(rawUnitPrice);
+
+  const usesQuantity =
+    t.usesQuantity === true ||
+    t.usesQuantity === "true" ||
+    t.usesquantity === true ||
+    t.usesquantity === "true";
 
   return {
     ...t,
@@ -533,6 +547,9 @@ function normalizeQuickTemplateRow(t: any) {
     standardMinutes: Number.isFinite(standardMinutes)
       ? standardMinutes
       : null,
+    usesQuantity,
+    unitMinutes: Number.isFinite(unitMinutes) ? unitMinutes : null,
+    unitPrice: Number.isFinite(unitPrice) ? unitPrice : null,
   };
 }
 
@@ -2148,23 +2165,51 @@ app.post("/api/quick-templates", requireSupervisorRole, async (req, res) => {
   try {
     const t = req.body ?? {};
 
+    const standardMinutes =
+      t.standardMinutes == null || t.standardMinutes === ""
+        ? null
+        : Number(t.standardMinutes);
+
+    const unitMinutes =
+      t.unitMinutes == null || t.unitMinutes === ""
+        ? null
+        : Number(t.unitMinutes);
+
+    const unitPrice =
+      t.unitPrice == null || t.unitPrice === ""
+        ? null
+        : Number(t.unitPrice);
+
     const result = await db.query(
-  `
-    INSERT INTO quick_templates
-    (key, label, area, mode, "allowedTechs", "priorityOrder", "standardMinutes")
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING *
-  `,
-  [
-    t.key,
-    t.label,
-    t.area,
-    t.mode,
-    JSON.stringify(Array.isArray(t.allowedTechs) ? t.allowedTechs : []),
-    JSON.stringify(Array.isArray(t.priorityOrder) ? t.priorityOrder : []),
-    t.standardMinutes ?? null,
-  ]
-);
+      `
+        INSERT INTO quick_templates (
+          key,
+          label,
+          area,
+          mode,
+          "allowedTechs",
+          "priorityOrder",
+          "standardMinutes",
+          "usesQuantity",
+          "unitMinutes",
+          "unitPrice"
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING *
+      `,
+      [
+        t.key,
+        t.label,
+        t.area,
+        t.mode,
+        JSON.stringify(Array.isArray(t.allowedTechs) ? t.allowedTechs : []),
+        JSON.stringify(Array.isArray(t.priorityOrder) ? t.priorityOrder : []),
+        Number.isFinite(standardMinutes) ? standardMinutes : null,
+        Boolean(t.usesQuantity),
+        Number.isFinite(unitMinutes) ? unitMinutes : null,
+        Number.isFinite(unitPrice) ? unitPrice : null,
+      ]
+    );
 
     res.json(normalizeQuickTemplateRow(result.rows[0]));
   } catch (error) {
@@ -2187,26 +2232,43 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
         ? null
         : Number(body.standardMinutes);
 
-    await db.query(
+    const unitMinutes =
+      body.unitMinutes == null || body.unitMinutes === ""
+        ? null
+        : Number(body.unitMinutes);
+
+    const unitPrice =
+      body.unitPrice == null || body.unitPrice === ""
+        ? null
+        : Number(body.unitPrice);
+
+    const result = await db.query(
       `
-      INSERT INTO quick_templates (
-        key,
-        label,
-        area,
-        mode,
-        "standardMinutes",
-        "allowedTechs",
-        "priorityOrder"
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (key)
-      DO UPDATE SET
-        label = EXCLUDED.label,
-        area = EXCLUDED.area,
-        mode = EXCLUDED.mode,
-        "standardMinutes" = EXCLUDED."standardMinutes",
-        "allowedTechs" = EXCLUDED."allowedTechs",
-        "priorityOrder" = EXCLUDED."priorityOrder"
+        INSERT INTO quick_templates (
+          key,
+          label,
+          area,
+          mode,
+          "standardMinutes",
+          "usesQuantity",
+          "unitMinutes",
+          "unitPrice",
+          "allowedTechs",
+          "priorityOrder"
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (key)
+        DO UPDATE SET
+          label = EXCLUDED.label,
+          area = EXCLUDED.area,
+          mode = EXCLUDED.mode,
+          "standardMinutes" = EXCLUDED."standardMinutes",
+          "usesQuantity" = EXCLUDED."usesQuantity",
+          "unitMinutes" = EXCLUDED."unitMinutes",
+          "unitPrice" = EXCLUDED."unitPrice",
+          "allowedTechs" = EXCLUDED."allowedTechs",
+          "priorityOrder" = EXCLUDED."priorityOrder"
+        RETURNING *
       `,
       [
         key,
@@ -2214,12 +2276,17 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
         body.area ?? "camion",
         body.mode ?? "single",
         Number.isFinite(standardMinutes) ? standardMinutes : null,
-        JSON.stringify(body.allowedTechs ?? []),
-        JSON.stringify(body.priorityOrder ?? []),
+        Boolean(body.usesQuantity),
+        Number.isFinite(unitMinutes) ? unitMinutes : null,
+        Number.isFinite(unitPrice) ? unitPrice : null,
+        JSON.stringify(Array.isArray(body.allowedTechs) ? body.allowedTechs : []),
+        JSON.stringify(
+          Array.isArray(body.priorityOrder) ? body.priorityOrder : []
+        ),
       ]
     );
 
-    res.json({ ok: true });
+    res.json(normalizeQuickTemplateRow(result.rows[0]));
   } catch (error) {
     console.error("PUT /api/quick-templates/:key error:", error);
     res.status(500).json({ error: "Error guardando entrada rápida" });

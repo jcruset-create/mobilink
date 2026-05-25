@@ -39,6 +39,20 @@ export type QuickTemplate = {
   priorityOrder: string[];
   standardMinutes?: number | null;
   workshopId?: WorkshopId | string | null;
+
+  /**
+   * V2:
+   * - usesQuantity: indica si este servicio se trabaja por cantidad.
+   * - unitMinutes: minutos por unidad.
+   * - unitPrice: precio por unidad.
+   *
+   * Compatibilidad:
+   * Si no existen, la app debe interpretar cantidad = 1,
+   * unitMinutes = standardMinutes y unitPrice = 0.
+   */
+  usesQuantity?: boolean;
+  unitMinutes?: number | null;
+  unitPrice?: number | null;
 };
 
 export type LinkedTemplate = {
@@ -96,7 +110,15 @@ export type Job = {
   template?: TemplateKey | null;
   quickEntryLabel?: string | null;
   quickEntryMode?: QuickEntryMode | null;
-  includedTasks?: IncludedTask[];
+    includedTasks?: IncludedTask[];
+
+  /**
+   * Tiempo estándar total previsto para el trabajo.
+   * En v2 se mantiene como total calculado para compatibilidad:
+   * quantity × unitMinutes.
+   */
+  standardMinutes?: number | null;
+
   actualMinutes?: number | null;
   workedAccumulatedMinutes?: number | null;
   pausedAccumulatedMinutes?: number | null;
@@ -114,6 +136,22 @@ export type Job = {
    */
   reservedTechName?: string | null;
   reservedAtMs?: number | null;
+
+  /**
+   * V2:
+   * Cantidad, tiempo unitario y precio unitario del trabajo.
+   *
+   * Compatibilidad:
+   * - quantity vacío = 1
+   * - unitMinutes vacío = standardMinutes
+   * - unitPrice vacío = 0
+   * - standardMinutes se mantiene como tiempo total calculado
+   *   para no romper pantallas antiguas.
+   */
+  quantity?: number | null;
+  unitMinutes?: number | null;
+  unitPrice?: number | null;
+  totalPrice?: number | null;
 };
 
 export type AllocationResult = {

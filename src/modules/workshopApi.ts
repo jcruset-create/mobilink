@@ -1,7 +1,7 @@
 import type { Job, Tech } from "./workshopTypes";
 
 import { API_BASE } from "./workshopConstants";
-
+import { applyJobV2PayloadFields } from "./jobV2PayloadHelpers";
 import {
   isHardBlockedTechStatus,
   isUnavailableTechStatus,
@@ -9,7 +9,6 @@ import {
 } from "./techStatus";
 
 import { nowMs } from "./time";
-
 export async function fetchWithTimeout(
   url: string,
   options?: RequestInit,
@@ -71,7 +70,7 @@ export async function saveJobToBackend(job: Job) {
       headers: getAdminHeaders({
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify(job),
+      body: JSON.stringify(applyJobV2PayloadFields(job, job)),
     });
 
     if (!response.ok) {

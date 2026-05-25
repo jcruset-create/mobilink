@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Job, QuickTemplate, Tech } from "../modules/workshopTypes";
+import { getWorkV2MoneyLabel } from "../modules/workV2Calculations";
+import { buildWorkRankingV2Rows } from "../modules/workRankingV2Helpers";
 
 type OperationLabelJob = Pick<Job, "template" | "area" | "quickEntryLabel">;
 
@@ -9,41 +11,6 @@ type Props = {
   quickTemplates: QuickTemplate[];
   getOperationLabel: (job: OperationLabelJob) => string;
   onBack: () => void;
-};
-
-type RankingRow = {
-  techName: string;
-  totalPoints: number;
-  responsiblePoints: number;
-  supportPoints: number;
-  responsibleCount: number;
-  supportCount: number;
-  jobsCount: number;
-};
-
-type DetailRow = {
-  jobId: number;
-  dateLabel: string;
-  plate: string;
-  operationLabel: string;
-  techName: string;
-  role: "responsable" | "apoyo";
-  basePoints: number;
-  factor: number;
-  finalPoints: number;
-};
-
-const AREA_FACTORS: Record<Job["area"], number> = {
-  camion: 1.5,
-  movil: 1.25,
-  tacografo: 1.1,
-  turismo: 1,
-  mecanica: 1.25,
-};
-
-const TEMPLATE_FACTORS: Record<string, number> = {
-  alineacion_camion: 1.25,
-  pinchazo_camion: 0.75,
 };
 
 function formatDateInput(date: Date) {
@@ -81,33 +48,6 @@ function getClosedDateMs(job: Job) {
   return Number(job.closedAtMs ?? 0);
 }
 
-function getCorrectionFactor(job: Job, quickTemplates: QuickTemplate[]) {
-  const templateKey = String(job.template ?? "").trim();
-
-  if (templateKey && TEMPLATE_FACTORS[templateKey] != null) {
-    return TEMPLATE_FACTORS[templateKey];
-  }
-
-  const quickLabel = String(job.quickEntryLabel ?? "").trim().toLowerCase();
-
-  const quickTemplate = quickTemplates.find(
-    (template) => template.label.trim().toLowerCase() === quickLabel
-  );
-
-  if (quickTemplate?.key && TEMPLATE_FACTORS[quickTemplate.key] != null) {
-    return TEMPLATE_FACTORS[quickTemplate.key];
-  }
-
-  return AREA_FACTORS[job.area] ?? 1;
-}
-
-function formatPoints(value: number) {
-  return value.toLocaleString("es-ES", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 function formatDateTime(ms: number) {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
 
@@ -120,10 +60,25 @@ function formatDateTime(ms: number) {
   });
 }
 
+function formatPercent(value: number) {
+  return value.toLocaleString("es-ES", {
+    style: "percent",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatQuantity(value: number) {
+  return value.toLocaleString("es-ES", {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export default function WorkRankingView({
   jobs,
   techs,
-  quickTemplates,
+  quickTemplates: _quickTemplates,
   getOperationLabel,
   onBack,
 }: Props) {
@@ -147,132 +102,67 @@ export default function WorkRankingView({
     return Array.from(names).sort((a, b) => a.localeCompare(b, "es"));
   }, [jobs, techs]);
 
-  const { rankingRows, detailRows, closedJobsCount, totalPoints } =
-    useMemo(() => {
-      const fromMs = new Date(`${fromDate}T00:00:00`).getTime();
-      const toMs = new Date(`${toDate}T23:59:59`).getTime();
+  const {
+    rankingRows,
+    detailRows,
+    closedJobsCount,
+    realTotalRevenue,
+    assignedTotalRevenue,
+  } = useMemo(() => {
+    const fromMs = new Date(`${fromDate}T00:00:00`).getTime();
+    const toMs = new Date(`${toDate}T23:59:59`).getTime();
 
-      const closedJobs = jobs
-        .filter((job) => job.status === "cerrado")
-        .filter((job) => {
-          const closedMs = getClosedDateMs(job);
+    const closedJobs = jobs
+      .filter((job) => job.status === "cerrado")
+      .filter((job) => {
+        const closedMs = getClosedDateMs(job);
 
-          if (!Number.isFinite(closedMs) || closedMs <= 0) return false;
+        if (!Number.isFinite(closedMs) || closedMs <= 0) return false;
 
-          return closedMs >= fromMs && closedMs <= toMs;
-        })
-        .filter((job) => {
-          if (!selectedTechName) return true;
+        return closedMs >= fromMs && closedMs <= toMs;
+      })
+      .filter((job) => {
+        if (!selectedTechName) return true;
 
-          return (job.assignedNames ?? []).includes(selectedTechName);
-        })
-        .sort((a, b) => getClosedDateMs(b) - getClosedDateMs(a));
+        return (job.assignedNames ?? []).includes(selectedTechName);
+      })
+      .sort((a, b) => getClosedDateMs(b) - getClosedDateMs(a));
 
-      const rankingMap = new Map<string, RankingRow>();
-      const details: DetailRow[] = [];
-
-      const ensureRow = (techName: string) => {
-        const existing = rankingMap.get(techName);
-
-        if (existing) return existing;
-
-        const row: RankingRow = {
-          techName,
-          totalPoints: 0,
-          responsiblePoints: 0,
-          supportPoints: 0,
-          responsibleCount: 0,
-          supportCount: 0,
-          jobsCount: 0,
-        };
-
-        rankingMap.set(techName, row);
-
-        return row;
-      };
-
-      for (const job of closedJobs) {
-        const assignedNames = Array.isArray(job.assignedNames)
-          ? job.assignedNames.filter(Boolean)
-          : [];
-
-        if (assignedNames.length === 0) continue;
-
-        const factor = getCorrectionFactor(job, quickTemplates);
-        const operationLabel = getOperationLabel(job);
-
-        assignedNames.forEach((techName, index) => {
-          if (selectedTechName && techName !== selectedTechName) {
-            return;
-          }
-
-          const role = index === 0 ? "responsable" : "apoyo";
-          const basePoints = role === "responsable" ? 1 : 0.5;
-          const finalPoints = basePoints * factor;
-
-          const row = ensureRow(techName);
-
-          row.totalPoints += finalPoints;
-          row.jobsCount += 1;
-
-          if (role === "responsable") {
-            row.responsiblePoints += finalPoints;
-            row.responsibleCount += 1;
-          } else {
-            row.supportPoints += finalPoints;
-            row.supportCount += 1;
-          }
-
-          details.push({
-            jobId: job.id,
-            dateLabel: formatDateTime(getClosedDateMs(job)),
-            plate: job.plate,
-            operationLabel,
-            techName,
-            role,
-            basePoints,
-            factor,
-            finalPoints,
-          });
-        });
-      }
-
-      const rows = Array.from(rankingMap.values()).sort((a, b) => {
-        if (b.totalPoints !== a.totalPoints) {
-          return b.totalPoints - a.totalPoints;
-        }
-
-        return a.techName.localeCompare(b.techName, "es");
-      });
-
-      return {
-        rankingRows: rows,
-        detailRows: details,
-        closedJobsCount: closedJobs.length,
-        totalPoints: rows.reduce((sum, row) => sum + row.totalPoints, 0),
-      };
-    }, [
-      jobs,
-      quickTemplates,
-      getOperationLabel,
-      fromDate,
-      toDate,
+    const rankingResult = buildWorkRankingV2Rows({
+      jobs: closedJobs,
       selectedTechName,
-    ]);
+    });
+
+    return {
+      rankingRows: rankingResult.rankingRows,
+      detailRows: rankingResult.detailRows.map((row) => {
+        const job = closedJobs.find((item) => item.id === row.jobId);
+
+        return {
+          ...row,
+          dateLabel: job ? formatDateTime(getClosedDateMs(job)) : "-",
+          operationLabel: job ? getOperationLabel(job) : "-",
+        };
+      }),
+      closedJobsCount: closedJobs.length,
+      realTotalRevenue: rankingResult.realTotalRevenue,
+      assignedTotalRevenue: rankingResult.assignedTotalRevenue,
+    };
+  }, [jobs, getOperationLabel, fromDate, toDate, selectedTechName]);
 
   const knownTechNames = new Set(techs.map((tech) => tech.name));
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
-      <div className="mx-auto max-w-[1600px] space-y-4">
+      <div className="mx-auto max-w-[1700px] space-y-4">
         <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-black">
-              Ranking trabajos cerrados
+              Ranking facturación operarios
             </h1>
             <p className="text-sm font-semibold text-slate-500">
-              Responsable = 1 punto · Apoyo = 0,5 puntos · Aplicando factor por
-              tipo de trabajo
+              Reparto real proporcional: responsable peso 1 · apoyo peso 0,5 ·
+              sin factor de corrección
             </p>
           </div>
 
@@ -368,7 +258,7 @@ export default function WorkRankingView({
             )}
           </div>
 
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-xs font-black uppercase text-slate-400">
                 Trabajos cerrados
@@ -378,16 +268,25 @@ export default function WorkRankingView({
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-xs font-black uppercase text-slate-400">
-                Puntos totales
+                Facturación real
               </div>
               <div className="text-3xl font-black">
-                {formatPoints(totalPoints)}
+                {getWorkV2MoneyLabel(realTotalRevenue)}
               </div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-xs font-black uppercase text-slate-400">
-                Técnicos puntuando
+                Facturación asignada
+              </div>
+              <div className="text-3xl font-black">
+                {getWorkV2MoneyLabel(assignedTotalRevenue)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-black uppercase text-slate-400">
+                Técnicos facturando
               </div>
               <div className="text-3xl font-black">{rankingRows.length}</div>
             </div>
@@ -402,13 +301,13 @@ export default function WorkRankingView({
                 : "Ranking"}
             </h2>
             <span className="text-xs font-bold text-slate-400">
-              Ordenado por puntos
+              Ordenado por facturación asignada
             </span>
           </div>
 
           {rankingRows.length === 0 ? (
             <div className="rounded-2xl bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">
-              No hay trabajos cerrados en el rango seleccionado.
+              No hay trabajos cerrados con facturación en el rango seleccionado.
             </div>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200">
@@ -417,9 +316,11 @@ export default function WorkRankingView({
                   <tr>
                     <th className="px-4 py-3">#</th>
                     <th className="px-4 py-3">Técnico</th>
-                    <th className="px-4 py-3 text-right">Puntos</th>
+                    <th className="px-4 py-3 text-right">Fact. asignada</th>
+                    <th className="px-4 py-3 text-right">Fact. real trabajos</th>
                     <th className="px-4 py-3 text-right">Resp.</th>
                     <th className="px-4 py-3 text-right">Apoyo</th>
+                    <th className="px-4 py-3 text-right">Cantidad</th>
                     <th className="px-4 py-3 text-right">Trabajos</th>
                   </tr>
                 </thead>
@@ -433,6 +334,7 @@ export default function WorkRankingView({
                       <td className="px-4 py-3 font-black text-slate-400">
                         {index + 1}
                       </td>
+
                       <td className="px-4 py-3 font-black">
                         {row.techName}
                         {!knownTechNames.has(row.techName) && (
@@ -441,16 +343,29 @@ export default function WorkRankingView({
                           </span>
                         )}
                       </td>
+
                       <td className="px-4 py-3 text-right text-lg font-black">
-                        {formatPoints(row.totalPoints)}
+                        {getWorkV2MoneyLabel(row.assignedRevenue)}
                       </td>
+
+                      <td className="px-4 py-3 text-right font-bold">
+                        {getWorkV2MoneyLabel(row.realRevenue)}
+                      </td>
+
                       <td className="px-4 py-3 text-right">
                         {row.responsibleCount} ·{" "}
-                        {formatPoints(row.responsiblePoints)}
+                        {getWorkV2MoneyLabel(row.responsibleRevenue)}
                       </td>
+
                       <td className="px-4 py-3 text-right">
-                        {row.supportCount} · {formatPoints(row.supportPoints)}
+                        {row.supportCount} ·{" "}
+                        {getWorkV2MoneyLabel(row.supportRevenue)}
                       </td>
+
+                      <td className="px-4 py-3 text-right font-bold">
+                        {formatQuantity(row.quantityTotal)}
+                      </td>
+
                       <td className="px-4 py-3 text-right font-bold">
                         {row.jobsCount}
                       </td>
@@ -470,7 +385,7 @@ export default function WorkRankingView({
                 : "Detalle histórico"}
             </h2>
             <span className="text-xs font-bold text-slate-400">
-              {detailRows.length} líneas de puntuación
+              {detailRows.length} líneas de facturación
             </span>
           </div>
 
@@ -481,11 +396,13 @@ export default function WorkRankingView({
                   <th className="px-4 py-3">Fecha cierre</th>
                   <th className="px-4 py-3">Matrícula</th>
                   <th className="px-4 py-3">Trabajo</th>
+                  <th className="px-4 py-3 text-right">Cantidad</th>
+                  <th className="px-4 py-3 text-right">Precio unidad</th>
+                  <th className="px-4 py-3 text-right">Importe trabajo</th>
                   <th className="px-4 py-3">Técnico</th>
                   <th className="px-4 py-3">Rol</th>
-                  <th className="px-4 py-3 text-right">Base</th>
-                  <th className="px-4 py-3 text-right">Factor</th>
-                  <th className="px-4 py-3 text-right">Puntos</th>
+                  <th className="px-4 py-3 text-right">% reparto</th>
+                  <th className="px-4 py-3 text-right">Importe asignado</th>
                 </tr>
               </thead>
 
@@ -498,9 +415,25 @@ export default function WorkRankingView({
                     <td className="px-4 py-3 font-bold text-slate-500">
                       {row.dateLabel}
                     </td>
+
                     <td className="px-4 py-3 font-black">{row.plate}</td>
+
                     <td className="px-4 py-3">{row.operationLabel}</td>
+
+                    <td className="px-4 py-3 text-right font-bold">
+                      {row.quantityLabel}
+                    </td>
+
+                    <td className="px-4 py-3 text-right">
+                      {getWorkV2MoneyLabel(row.unitPrice)}
+                    </td>
+
+                    <td className="px-4 py-3 text-right font-bold">
+                      {getWorkV2MoneyLabel(row.totalPrice)}
+                    </td>
+
                     <td className="px-4 py-3 font-bold">{row.techName}</td>
+
                     <td className="px-4 py-3">
                       <span
                         className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${
@@ -512,14 +445,13 @@ export default function WorkRankingView({
                         {row.role === "responsable" ? "Responsable" : "Apoyo"}
                       </span>
                     </td>
+
                     <td className="px-4 py-3 text-right">
-                      {formatPoints(row.basePoints)}
+                      {formatPercent(row.shareRatio)}
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      x{formatPoints(row.factor)}
-                    </td>
+
                     <td className="px-4 py-3 text-right font-black">
-                      {formatPoints(row.finalPoints)}
+                      {getWorkV2MoneyLabel(row.assignedAmount)}
                     </td>
                   </tr>
                 ))}
@@ -527,7 +459,7 @@ export default function WorkRankingView({
                 {detailRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={10}
                       className="px-4 py-10 text-center text-sm font-bold text-slate-400"
                     >
                       Sin detalle para este rango de fechas.

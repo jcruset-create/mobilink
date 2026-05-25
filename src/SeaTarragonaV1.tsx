@@ -15,6 +15,7 @@ import { useMaintenanceAvailability } from "./modules/useMaintenanceAvailability
 import OperariosTVView from "./components/OperariosTVView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
 import WorkRankingView from "./components/WorkRankingView";
+import QuickEntryQuantityBox from "./components/QuickEntryQuantityBox";
 import type {
   AISuggestion,
   AllocationResult,
@@ -47,6 +48,13 @@ import {
   nowTime,
 } from "./modules/time";
 import FinishedAndCancelledJobsView from "./components/FinishedAndCancelledJobsView";
+import {
+  INITIAL_QUICK_DRAFT,
+  type QuickDraftState,
+  resetQuickDraftAfterCreate,
+} from "./modules/quickEntryV2State";
+
+import { buildQuickEntryV2Jobs } from "./modules/quickEntryV2Builder";
 import {
   buildAuthorizedJob,
   buildRejectedValidationJob,
@@ -161,6 +169,39 @@ import {
   normalizeWorkshopId,
   type WorkshopId,
 } from "./modules/workshops";
+import {
+  INITIAL_NEW_QUICK_TEMPLATE_V2,
+  buildNewQuickTemplateV2,
+  getQuickTemplateV2BackendPayload,
+  normalizeExistingQuickTemplateV2,
+  resetNewQuickTemplateV2,
+  validateNewQuickTemplateV2,
+  type NewQuickTemplateV2State,
+} from "./modules/quickTemplateV2Helpers";
+import {
+  INITIAL_NEW_CUSTOM_EXTRA_TASK_V2,
+  buildCustomExtraTaskV2,
+  resetNewCustomExtraTaskV2,
+  validateNewCustomExtraTaskV2,
+  type NewCustomExtraTaskV2State,
+} from "./modules/customExtraTaskV2Helpers";
+import CustomExtraTaskV2Fields from "./components/CustomExtraTaskV2Fields";
+import { applyScheduledJobV2FieldsToJob } from "./modules/scheduledJobToWorkV2Adapter";
+import {
+  getJobDisplayAiMinutes,
+  getJobDisplayPlannedMinutes,
+} from "./modules/workTimeV2Helpers";
+import WorkV2InfoBox from "./components/WorkV2InfoBox";
+import { getWorkV2LogSuffix } from "./modules/workV2LogHelpers";
+import { applyScheduledJobV2PayloadFields } from "./modules/scheduledJobV2PayloadHelpers";
+import { applyJobV2PayloadFields } from "./modules/jobV2PayloadHelpers";
+import {
+  normalizeJobsV2Fields,
+  normalizeScheduledJobsV2Fields,
+} from "./modules/v2DataNormalizeHelpers";
+import { checkAllV2Integrity } from "./modules/v2IntegrityCheckHelpers";
+import QuickTemplateV2Fields from "./components/QuickTemplateV2Fields";
+
 
 function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
   if (tech.currentJobId == null) return jobs;
@@ -355,25 +396,8 @@ useEffect(() => {
   });
 }, [quickTemplates]);
 
-type QuickDraftState = {
-  templateKey: string;
-  linkedTemplateKey: string;
-  plate: string;
-  urgent: boolean;
-  customerName: string;
-  customerPhone: string;
-  includedTaskIds: string[];
-};
-
-const [quickDraft, setQuickDraft] = useState<QuickDraftState>({
-  templateKey: "",
-  linkedTemplateKey: "",
-  plate: "",
-  urgent: false,
-  customerName: "",
-  customerPhone: "",
-  includedTaskIds: [],
-});
+const [quickDraft, setQuickDraft] =
+  useState<QuickDraftState>(INITIAL_QUICK_DRAFT);
 const [quickSelectedArea, setQuickSelectedArea] = useState<AreaKey>("camion");
 const [customExtraTasks, setCustomExtraTasks] = useState<CustomExtraTask[]>(() => {
   try {
@@ -386,15 +410,8 @@ const [customExtraTasks, setCustomExtraTasks] = useState<CustomExtraTask[]>(() =
   }
 });
 
-const [newCustomExtraTask, setNewCustomExtraTask] = useState<{
-  label: string;
-  area: AreaKey;
-  standardMinutes: string;
-}>({
-  label: "",
-  area: "camion",
-  standardMinutes: "",
-});
+const [newCustomExtraTask, setNewCustomExtraTask] =
+  useState<NewCustomExtraTaskV2State>(INITIAL_NEW_CUSTOM_EXTRA_TASK_V2);
 useEffect(() => {
   try {
     if (typeof window !== "undefined") {
@@ -405,21 +422,8 @@ useEffect(() => {
     }
   } catch {}
 }, [customExtraTasks]);
-const [newQuickTemplate, setNewQuickTemplate] = useState<{
-  label: string;
-  area: AreaKey;
-  mode: QuickEntryMode;
-  allowedTechs: string[];
-  priorityOrder: string[];
-  standardMinutes: string;
-}>({
-  label: "",
-  area: "camion",
-  mode: "single",
-  allowedTechs: [],
-  priorityOrder: [],
-  standardMinutes: "",
-});
+const [newQuickTemplate, setNewQuickTemplate] =
+  useState<NewQuickTemplateV2State>(INITIAL_NEW_QUICK_TEMPLATE_V2);
 
 const [editingQuickTemplateKey, setEditingQuickTemplateKey] = useState<string | null>(null);
 
@@ -731,22 +735,37 @@ return {
 }, []);
 
 useEffect(() => {
-  async function loadScheduledJobs() {
-    try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
-      const data = await response.json();
+async function loadScheduledJobs() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
+    const data = await response.json();
 
-      setScheduledJobs(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error("Error cargando agenda:", error);
-      setScheduledJobs([]);
-    } finally {
-      setScheduledJobsLoaded(true);
-    }
+    setScheduledJobs(
+      normalizeScheduledJobsV2Fields(Array.isArray(data) ? data : [])
+    );
+  } catch (error) {
+    console.error("Error cargando agenda:", error);
+    setScheduledJobs([]);
+  } finally {
+    setScheduledJobsLoaded(true);
   }
-
+}
   loadScheduledJobs();
 }, []);
+
+useEffect(() => {
+  const issues = checkAllV2Integrity({
+    jobs,
+    scheduledJobs,
+  });
+
+  if (issues.length === 0) {
+    console.log("CHECK V2 OK: no hay incidencias v2.");
+    return;
+  }
+
+  console.warn("CHECK V2: incidencias encontradas", issues);
+}, [jobs, scheduledJobs]);
 
 useEffect(() => {
   if (initialAutoAssignDone) return;
@@ -947,7 +966,11 @@ useEffect(() => {
     headers: getAdminHeaders({
       "Content-Type": "application/json",
     }),
-    body: JSON.stringify(scheduledJobs),
+    body: JSON.stringify(
+  scheduledJobs.map((job) =>
+    applyScheduledJobV2PayloadFields(job, job)
+  )
+),
   }).catch((error) => {
     console.error("Error guardando agenda:", error);
   });
@@ -1317,7 +1340,7 @@ function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
 async function reloadJobsFromBackend() {
   try {
     const data = await loadJobsFromBackend();
-    setJobs(data);
+    setJobs(normalizeJobsV2Fields(Array.isArray(data) ? data : []));
   } catch (error) {
     console.error("Error recargando trabajos:", error);
   }
@@ -1441,15 +1464,19 @@ async function updateScheduledJobStatusByJobId(
   status: ScheduledJob["status"]
 ) {
   const updatedScheduledJobs = scheduledJobs.map((scheduled) =>
-  scheduled.jobId === jobId || scheduled.secondJobId === jobId
-    ? {
-        ...scheduled,
-        status,
-      }
-    : scheduled
-);
+    scheduled.jobId === jobId || scheduled.secondJobId === jobId
+      ? {
+          ...scheduled,
+          status,
+        }
+      : scheduled
+  );
 
-  setScheduledJobs(updatedScheduledJobs);
+  const payload = updatedScheduledJobs.map((scheduled) =>
+    applyScheduledJobV2PayloadFields(scheduled, scheduled)
+  );
+
+  setScheduledJobs(normalizeScheduledJobsV2Fields(updatedScheduledJobs));
 
   try {
     await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
@@ -1457,7 +1484,7 @@ async function updateScheduledJobStatusByJobId(
       headers: getAdminHeaders({
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify(updatedScheduledJobs),
+      body: JSON.stringify(payload),
     });
   } catch (error) {
     console.error("Error actualizando estado de agenda:", error);
@@ -1882,6 +1909,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
   if (!firstTemplate) return;
 
   const createdAt = nowMs();
+  const arrivedAtMs = nowMs();
 
   const maxExistingJobId = jobs.reduce(
     (max, job) => Math.max(max, Number(job.id) || 0),
@@ -1924,40 +1952,50 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
           currentScheduled.customerName || "cliente"
         }.`;
 
-  const firstJob: Job = {
-  id: firstJobId,
-  workshopId: normalizeWorkshopId(currentScheduled.workshopId ?? selectedWorkshopId),
-  area: firstTemplate.area,
-  plate: currentScheduled.plate.trim().toUpperCase(),
-  urgent: currentScheduled.urgent,
-  status: "espera",
-  assignedNames: [],
-  reason: customerInfo
-    ? `${firstJobReasonBase} ${customerInfo}.`
-    : firstJobReasonBase,
+  const firstJobBase: Job = {
+    id: firstJobId,
+    workshopId: normalizeWorkshopId(
+      currentScheduled.workshopId ?? selectedWorkshopId
+    ),
+    area: firstTemplate.area,
+    plate: currentScheduled.plate.trim().toUpperCase(),
+    urgent: currentScheduled.urgent,
+    status: "espera",
+    assignedNames: [],
+    reason: customerInfo
+      ? `${firstJobReasonBase} ${customerInfo}.`
+      : firstJobReasonBase,
 
-  customerName: currentScheduled.customerName || undefined,
-  customerPhone: currentScheduled.customerPhone || undefined,
+    customerName: currentScheduled.customerName || undefined,
+    customerPhone: currentScheduled.customerPhone || undefined,
 
-  createdAtMs: createdAt,
-  startedAtMs: null,
-  template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
-  quickEntryLabel: firstTemplate.label,
-  quickEntryMode: firstTemplate.mode,
-  includedTasks: scheduledIncludedTasks,
+    createdAtMs: createdAt,
+    startedAtMs: null,
+    template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
+    quickEntryLabel: firstTemplate.label,
+    quickEntryMode: firstTemplate.mode,
+    includedTasks: scheduledIncludedTasks,
 
-  linkedGroupId,
-  linkedOrder: isLinkedJob ? 1 : null,
-  dependsOnJobId: null,
-  blockedReason: null,
-};
+    linkedGroupId,
+    linkedOrder: isLinkedJob ? 1 : null,
+    dependsOnJobId: null,
+    blockedReason: null,
+  };
 
-  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true,);
+  const firstJob = applyScheduledJobV2FieldsToJob({
+    job: firstJobBase,
+    scheduled: currentScheduled,
+    template: firstTemplate,
+  });
+
+  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true);
 
   let jobsToSet = result.jobs;
   let jobsToSave: Job[] = [
     result.jobs.find((item) => item.id === firstJob.id) ?? firstJob,
   ];
+
+  let createdSecondJobId: number | null = null;
 
   if (isLinkedJob) {
     const secondTemplate = quickTemplates.find(
@@ -1967,64 +2005,79 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     if (secondTemplate) {
       const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${currentScheduled.linkedTemplateLabel}.`;
 
-      const secondJob: Job = {
-  id: secondJobId,
-  workshopId: normalizeWorkshopId(currentScheduled.workshopId ?? selectedWorkshopId),
-  area: secondTemplate.area,
-  plate: currentScheduled.plate.trim().toUpperCase(),
-  urgent: currentScheduled.urgent,
-  status: "parado",
-  assignedNames: [],
-  reason: customerInfo
-    ? `${secondJobReasonBase} ${customerInfo}.`
-    : secondJobReasonBase,
+      const secondJobBase: Job = {
+        id: secondJobId,
+        workshopId: normalizeWorkshopId(
+          currentScheduled.workshopId ?? selectedWorkshopId
+        ),
+        area: secondTemplate.area,
+        plate: currentScheduled.plate.trim().toUpperCase(),
+        urgent: currentScheduled.urgent,
+        status: "parado",
+        assignedNames: [],
+        reason: customerInfo
+          ? `${secondJobReasonBase} ${customerInfo}.`
+          : secondJobReasonBase,
 
-  customerName: currentScheduled.customerName || undefined,
-  customerPhone: currentScheduled.customerPhone || undefined,
+        customerName: currentScheduled.customerName || undefined,
+        customerPhone: currentScheduled.customerPhone || undefined,
 
-  createdAtMs: createdAt + 1,
-  startedAtMs: null,
-  pausedAtMs: nowMs(),
-  workedAccumulatedMinutes: 0,
-  pausedAccumulatedMinutes: 0,
-  template: isBuiltInTemplateKey(secondTemplate.key)
-    ? secondTemplate.key
-    : null,
-  quickEntryLabel: secondTemplate.label,
-  quickEntryMode: secondTemplate.mode,
-  includedTasks: [],
+        createdAtMs: createdAt + 1,
+        startedAtMs: null,
+        pausedAtMs: arrivedAtMs,
+        workedAccumulatedMinutes: 0,
+        pausedAccumulatedMinutes: 0,
+        template: isBuiltInTemplateKey(secondTemplate.key)
+          ? secondTemplate.key
+          : null,
+        quickEntryLabel: secondTemplate.label,
+        quickEntryMode: secondTemplate.mode,
+        includedTasks: [],
 
-  linkedGroupId,
-  linkedOrder: 2,
-  dependsOnJobId: firstJob.id,
-  blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
-};
+        linkedGroupId,
+        linkedOrder: 2,
+        dependsOnJobId: firstJob.id,
+        blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
+      };
+
+      const secondJob = applyScheduledJobV2FieldsToJob({
+        job: secondJobBase,
+        scheduled: {
+          ...currentScheduled,
+          templateKey: secondTemplate.key,
+          includedTasks: [],
+        },
+        template: secondTemplate,
+      });
 
       jobsToSet = [secondJob, ...result.jobs];
       jobsToSave = [...jobsToSave, secondJob];
+      createdSecondJobId = secondJob.id;
     }
   }
 
-  setJobs(jobsToSet);
-  setTechs(result.techs);
+setJobs(normalizeJobsV2Fields(jobsToSet));
+setTechs(result.techs);
 
   setNextJobId((value) =>
     Math.max(value, firstJobId + jobsToSave.length)
   );
 
-  setScheduledJobsAndSave((prev) =>
+setScheduledJobsAndSave((prev) =>
+  normalizeScheduledJobsV2Fields(
     prev.map((item) =>
       item.id === currentScheduled.id
         ? {
             ...item,
             status: "en_cola",
-            arrivedAtMs: nowMs(),
+            arrivedAtMs,
             jobId: firstJob.id,
-            secondJobId: isLinkedJob ? secondJobId : null,
+            secondJobId: createdSecondJobId,
           }
         : item
     )
-  );
+  )
+);
 
   try {
     for (const job of jobsToSave) {
@@ -2032,7 +2085,7 @@ async function confirmScheduledArrival(scheduled: ScheduledJob) {
     }
 
     for (const tech of result.techs) {
-      saveTechToBackend(tech);
+      await saveTechToBackend(tech);
     }
 
     appendLog(
@@ -2207,93 +2260,46 @@ async function createTemplateEntry() {
     availableIncludedTasks
   );
 
-  const isLinkedEntry = !!secondTemplate;
-
-  const plate = quickDraft.plate.trim().toUpperCase();
   const createdAtMs = nowMs();
-  const customerName = quickDraft.customerName.trim();
-  const customerPhone = quickDraft.customerPhone.trim();
   const safeJobId = getNextSafeJobId(jobs, nextJobId);
   const secondSafeJobId = safeJobId + 1;
 
-  const linkedGroupId = isLinkedEntry
-    ? `linked-quick-${safeJobId}-${createdAtMs}`
-    : null;
+  const builtEntry = buildQuickEntryV2Jobs({
+    safeJobId,
+    secondSafeJobId,
+    selectedWorkshopId,
+    firstTemplate,
+    secondTemplate,
+    plate: quickDraft.plate,
+    urgent: quickDraft.urgent,
+    customerName: quickDraft.customerName,
+    customerPhone: quickDraft.customerPhone,
+    selectedIncludedTasks,
+    quantity: quickDraft.quantity,
+    createdAtMs,
+  });
 
-  const firstJob: Job = {
-  id: safeJobId,
-  workshopId: selectedWorkshopId,
-  area: firstTemplate.area,
-  plate,
-  urgent: quickDraft.urgent,
-  status: "espera",
-  assignedNames: [],
-  reason: isLinkedEntry
-    ? `Trabajo vinculado iniciado: ${firstTemplate.label} → ${secondTemplate.label}`
-    : selectedIncludedTasks.length > 0
-    ? `Entrada creada desde plantilla: ${firstTemplate.label}. Tareas incluidas: ${selectedIncludedTasks
-        .map((task) => task.label)
-        .join(" + ")}`
-    : `Entrada creada desde plantilla: ${firstTemplate.label}`,
-
-  customerName: customerName || undefined,
-  customerPhone: customerPhone || undefined,
-
-  createdAtMs,
-  startedAtMs: null,
-  template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
-  quickEntryLabel: firstTemplate.label,
-  quickEntryMode: firstTemplate.mode,
-  includedTasks: selectedIncludedTasks,
-
-  linkedGroupId,
-  linkedOrder: isLinkedEntry ? 1 : null,
-  dependsOnJobId: null,
-  blockedReason: null,
-};
-
-  const result = allocateJob(firstJob, techs, [firstJob, ...jobs], true,);
+  const result = allocateJob(
+    builtEntry.firstJob,
+    techs,
+    [builtEntry.firstJob, ...jobs],
+    true
+  );
 
   let finalJobs: Job[] = result.jobs;
+
   let jobsToSave: Job[] = [
-    result.jobs.find((job) => job.id === firstJob.id) ?? firstJob,
+    result.jobs.find((job) => job.id === builtEntry.firstJob.id) ??
+      builtEntry.firstJob,
   ];
 
-  if (isLinkedEntry && secondTemplate) {
-    const secondJob: Job = {
-  id: secondSafeJobId,
-  workshopId: selectedWorkshopId,
-  area: secondTemplate.area,
-  plate,
-  urgent: quickDraft.urgent,
-  status: "parado",
-  assignedNames: [],
-  reason: `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo vinculado: ${firstTemplate.label} → ${secondTemplate.label}`,
-
-  customerName: customerName || undefined,
-  customerPhone: customerPhone || undefined,
-
-  createdAtMs: createdAtMs + 1,
-  startedAtMs: null,
-  pausedAtMs: nowMs(),
-  workedAccumulatedMinutes: 0,
-  pausedAccumulatedMinutes: 0,
-  template: isBuiltInTemplateKey(secondTemplate.key)
-    ? secondTemplate.key
-    : null,
-  quickEntryLabel: secondTemplate.label,
-  quickEntryMode: secondTemplate.mode,
-  includedTasks: [],
-
-  linkedGroupId,
-  linkedOrder: 2,
-  dependsOnJobId: firstJob.id,
-  blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
-};
-
-    finalJobs = [secondJob, ...result.jobs];
-    jobsToSave = [...jobsToSave, secondJob];
+  if (builtEntry.secondJob) {
+    finalJobs = [builtEntry.secondJob, ...result.jobs];
+    jobsToSave = [...jobsToSave, builtEntry.secondJob];
   }
+
+  const plate = builtEntry.firstJob.plate;
+  const isLinkedEntry = Boolean(builtEntry.secondJob);
 
   try {
     for (const job of jobsToSave) {
@@ -2308,29 +2314,52 @@ async function createTemplateEntry() {
     setJobs(finalJobs);
 
     setNextJobId((value) =>
-  Math.max(value, isLinkedEntry ? secondSafeJobId + 1 : safeJobId + 1)
-);
+      Math.max(
+        value,
+        builtEntry.secondJob ? secondSafeJobId + 1 : safeJobId + 1
+      )
+    );
 
-    setQuickDraft((prev) => ({
-  ...prev,
-  linkedTemplateKey: "",
-  plate: "",
-  customerName: "",
-  customerPhone: "",
-  urgent: false,
-  includedTaskIds: [],
-}));
+    setQuickDraft((prev) => resetQuickDraftAfterCreate(prev));
 
     setQuickEntryOpen(false);
 
     appendLog(
       isLinkedEntry && secondTemplate
-        ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}. Pendiente de validar antes de iniciar.`
+        ? `Nueva entrada vinculada creada: ${plate} · ${firstTemplate.label} → ${secondTemplate.label}. Cantidad: ${builtEntry.quantity}. Tiempo previsto: ${formatMinutes(
+            builtEntry.firstJobTotalMinutes
+          )}. Importe: ${builtEntry.firstJobTotalPrice.toLocaleString(
+            "es-ES",
+            {
+              style: "currency",
+              currency: "EUR",
+            }
+          )}. Pendiente de validar antes de iniciar.`
         : selectedIncludedTasks.length > 0
         ? `Nueva entrada creada: ${firstTemplate.label} (${plate}) con tareas: ${selectedIncludedTasks
             .map((task) => task.label)
-            .join(" + ")}. Pendiente de validar antes de iniciar.`
-        : `Nueva entrada creada: ${firstTemplate.label} (${plate}). Pendiente de validar antes de iniciar.`
+            .join(" + ")}. Cantidad: ${
+            builtEntry.quantity
+          }. Tiempo previsto: ${formatMinutes(
+            builtEntry.firstJobTotalMinutes
+          )}. Importe: ${builtEntry.firstJobTotalPrice.toLocaleString(
+            "es-ES",
+            {
+              style: "currency",
+              currency: "EUR",
+            }
+          )}. Pendiente de validar antes de iniciar.`
+        : `Nueva entrada creada: ${firstTemplate.label} (${plate}). Cantidad: ${
+            builtEntry.quantity
+          }. Tiempo previsto: ${formatMinutes(
+            builtEntry.firstJobTotalMinutes
+          )}. Importe: ${builtEntry.firstJobTotalPrice.toLocaleString(
+            "es-ES",
+            {
+              style: "currency",
+              currency: "EUR",
+            }
+          )}. Pendiente de validar antes de iniciar.`
     );
 
     await reloadJobsFromBackend();
@@ -2351,18 +2380,14 @@ async function createTemplateEntry() {
   }
 }
 function addCustomExtraTask() {
-  const label = newCustomExtraTask.label.trim();
+  const validationError = validateNewCustomExtraTaskV2(newCustomExtraTask);
 
-  if (!label) return;
+  if (validationError) {
+    alert(validationError);
+    return;
+  }
 
-  const task: CustomExtraTask = {
-    id: `custom-extra-${Date.now()}`,
-    label,
-    area: newCustomExtraTask.area,
-    standardMinutes: newCustomExtraTask.standardMinutes
-      ? Number(newCustomExtraTask.standardMinutes)
-      : null,
-  };
+  const task = buildCustomExtraTaskV2(newCustomExtraTask);
 
   setCustomExtraTasks((prev) =>
     [...prev, task].sort((a, b) =>
@@ -2370,13 +2395,9 @@ function addCustomExtraTask() {
     )
   );
 
-  setNewCustomExtraTask({
-    label: "",
-    area: newCustomExtraTask.area,
-    standardMinutes: "",
-  });
+  setNewCustomExtraTask(resetNewCustomExtraTaskV2(task.area));
 
-  appendLog(`Tarea extra creada: ${label}.`);
+  appendLog(`Tarea extra creada: ${task.label}.`);
 }
 
 function removeCustomExtraTask(id: string) {
@@ -2389,61 +2410,20 @@ function removeCustomExtraTask(id: string) {
   }
 }
 async function addQuickTemplate() {
-  const label = newQuickTemplate.label.trim();
+  const validationError = validateNewQuickTemplateV2(newQuickTemplate);
 
-  if (!label) {
-    alert("Escribe un nombre para la entrada rápida.");
+  if (validationError) {
+    alert(validationError);
     return;
   }
 
-  if (!newQuickTemplate.area) {
-    alert("Selecciona un área.");
-    return;
-  }
+  const template = buildNewQuickTemplateV2({
+    draft: newQuickTemplate,
+    selectedWorkshopId,
+  });
 
-  const standardMinutesValue = String(
-    newQuickTemplate.standardMinutes ?? ""
-  ).trim();
-
-  const standardMinutes =
-    standardMinutesValue === "" ? null : Number(standardMinutesValue);
-
-  if (
-    standardMinutes !== null &&
-    (!Number.isFinite(standardMinutes) || standardMinutes < 0)
-  ) {
-    alert("El tiempo estándar debe ser un número válido.");
-    return;
-  }
-
-  const keyBase = label
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
-
-  const finalAllowedTechs = [...newQuickTemplate.allowedTechs];
-
-  const finalPriorityOrder =
-    finalAllowedTechs.length === 0
-      ? []
-      : newQuickTemplate.priorityOrder.length > 0
-      ? newQuickTemplate.priorityOrder.filter((name) =>
-          finalAllowedTechs.includes(name)
-        )
-      : finalAllowedTechs;
-
-  const template: QuickTemplate = {
-    key: `${keyBase || "entrada"}_${Date.now()}`,
-    workshopId: selectedWorkshopId,
-    label,
-    area: newQuickTemplate.area,
-    mode: newQuickTemplate.mode,
-    allowedTechs: finalAllowedTechs,
-    priorityOrder: finalPriorityOrder,
-    standardMinutes,
-  };
+  const finalAllowedTechs = template.allowedTechs ?? [];
+  const label = template.label;
 
   try {
     const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`, {
@@ -2451,7 +2431,7 @@ async function addQuickTemplate() {
       headers: getAdminHeaders({
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify(template),
+      body: JSON.stringify(getQuickTemplateV2BackendPayload(template)),
     });
 
     const responseText = await response.text();
@@ -2498,16 +2478,10 @@ async function addQuickTemplate() {
       templateKey: savedTemplate.key,
       linkedTemplateKey: "",
       includedTaskIds: prev.includedTaskIds ?? [],
+      quantity: "1",
     }));
 
-    setNewQuickTemplate({
-      label: "",
-      area: savedTemplate.area,
-      mode: "single",
-      allowedTechs: [],
-      priorityOrder: [],
-      standardMinutes: "",
-    });
+    setNewQuickTemplate(resetNewQuickTemplateV2(savedTemplate.area));
 
     appendLog(
       finalAllowedTechs.length === 0
@@ -2542,13 +2516,8 @@ async function removeQuickTemplate(key: string) {
     setQuickTemplates((prev) => prev.filter((t) => t.key !== key));
 
 setQuickDraft((prev) => ({
-  ...prev,
-  linkedTemplateKey: "",
-  plate: "",
-  urgent: false,
-  customerName: "",
-  customerPhone: "",
-  includedTaskIds: [] as string[],
+  ...resetQuickDraftAfterCreate(prev),
+  templateKey: prev.templateKey,
 }));
 
     appendLog("Entrada rápida eliminada.");
@@ -3458,8 +3427,8 @@ async function finishJob(jobId: number) {
   finalJobs = reservedStartResult.jobs;
   finalTechs = reservedStartResult.techs;
 
-  setJobs(finalJobs);
-  setTechs(finalTechs);
+ setJobs(normalizeJobsV2Fields(finalJobs));
+setTechs(finalTechs);
 
   if (shouldCloseScheduledJobForFinishedJob(jobId)) {
     void updateScheduledJobStatusByJobId(jobId, "cerrado");
@@ -3467,11 +3436,13 @@ async function finishJob(jobId: number) {
     void updateScheduledJobStatusByJobId(jobId, "en_cola");
   }
 
-  appendLog(
-    `Trabajo ${target.plate} finalizado. Trabajado: ${formatMinutes(
-      actualMinutes
-    )}. Parado: ${formatMinutes(pausedMinutes)}.`
-  );
+appendLog(
+  `Trabajo ${target.plate} finalizado. Trabajado: ${formatMinutes(
+    actualMinutes
+  )}. Parado: ${formatMinutes(pausedMinutes)}${getWorkV2LogSuffix(
+    closedJob
+  )}.`
+);
 
   if (reactivatedLinkedJob) {
     appendLog(
@@ -3489,14 +3460,19 @@ async function finishJob(jobId: number) {
       headers: getAdminHeaders({
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify({
-        closedAtMs,
-        actualMinutes,
-        workedAccumulatedMinutes: actualMinutes,
-        pausedAccumulatedMinutes: pausedMinutes,
-        status: "cerrado",
-        startedAtMs: null,
-      }),
+     body: JSON.stringify(
+  applyJobV2PayloadFields(
+    {
+      closedAtMs,
+      actualMinutes,
+      workedAccumulatedMinutes: actualMinutes,
+      pausedAccumulatedMinutes: pausedMinutes,
+      status: "cerrado",
+      startedAtMs: null,
+    },
+    closedJob
+  )
+),
     });
 
     if (!response.ok) {
@@ -3538,29 +3514,10 @@ async function finishJob(jobId: number) {
 }
 
 async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
-  const rawMinutes = updatedTemplate.standardMinutes;
-
-  const parsedMinutes =
-    rawMinutes == null
-      ? null
-      : Number(rawMinutes);
-
-  const safeStandardMinutes =
-    parsedMinutes != null && Number.isFinite(parsedMinutes)
-      ? Math.max(0, Math.round(parsedMinutes))
-      : null;
-
-  const safeTemplate: QuickTemplate = {
-    ...updatedTemplate,
-    label: updatedTemplate.label.trim(),
-    standardMinutes: safeStandardMinutes,
-    allowedTechs: Array.isArray(updatedTemplate.allowedTechs)
-      ? updatedTemplate.allowedTechs
-      : [],
-    priorityOrder: Array.isArray(updatedTemplate.priorityOrder)
-      ? updatedTemplate.priorityOrder
-      : [],
-  };
+const safeTemplate = normalizeExistingQuickTemplateV2(
+  updatedTemplate,
+  selectedWorkshopId
+);
 
   if (!safeTemplate.label) {
     alert("Escribe un nombre para la entrada rápida.");
@@ -3575,24 +3532,15 @@ async function updateQuickTemplate(updatedTemplate: QuickTemplate) {
 
   try {
     const response = await fetchWithTimeout(
-      `${API_BASE}/api/quick-templates/${encodeURIComponent(safeTemplate.key)}`,
-      {
-        method: "PUT",
-        headers: getAdminHeaders({
-          "Content-Type": "application/json",
-        }),
-        body: JSON.stringify({
-          key: safeTemplate.key,
-          workshopId: normalizeWorkshopId(safeTemplate.workshopId ?? selectedWorkshopId),
-          label: safeTemplate.label,
-          area: safeTemplate.area,
-          mode: safeTemplate.mode,
-          standardMinutes: safeTemplate.standardMinutes,
-          allowedTechs: safeTemplate.allowedTechs,
-          priorityOrder: safeTemplate.priorityOrder,
-        }),
-      }
-    );
+  `${API_BASE}/api/quick-templates/${encodeURIComponent(safeTemplate.key)}`,
+  {
+    method: "PUT",
+    headers: getAdminHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(getQuickTemplateV2BackendPayload(safeTemplate)),
+  }
+);
 
     const text = await response.text();
 
@@ -5813,19 +5761,6 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm md:col-span-2"
   />
 
-  <input
-    type="number"
-    min="0"
-    value={newQuickTemplate.standardMinutes ?? ""}
-    onChange={(e) =>
-      setNewQuickTemplate((prev) => ({
-        ...prev,
-        standardMinutes: e.target.value,
-      }))
-    }
-    placeholder="Tiempo estándar en minutos"
-    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-  />
 
   <select
     value={newQuickTemplate.area}
@@ -5859,11 +5794,15 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </select>
 </div>
 
-      <div className="mt-4">
-        <div className="mb-2 text-sm font-medium text-slate-700">
-          Técnicos capacitados
-        </div>
+      <QuickTemplateV2Fields
+  draft={newQuickTemplate}
+  setDraft={setNewQuickTemplate}
+/>
 
+<div className="mt-4">
+  <div className="mb-2 text-sm font-medium text-slate-700">
+    Técnicos capacitados
+  </div>
         <div className="grid gap-2 md:grid-cols-3">
           {techs.map((tech) => {
               const checked = newQuickTemplate.allowedTechs.includes(
@@ -6436,19 +6375,10 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         ))}
       </select>
 
-      <input
-        type="number"
-        min="0"
-        value={newCustomExtraTask.standardMinutes}
-        onChange={(e) =>
-          setNewCustomExtraTask((prev) => ({
-            ...prev,
-            standardMinutes: e.target.value,
-          }))
-        }
-        placeholder="Min"
-        className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"
-      />
+      <CustomExtraTaskV2Fields
+  draft={newCustomExtraTask}
+  setDraft={setNewCustomExtraTask}
+/>
 
       <button
         type="button"
@@ -6968,21 +6898,29 @@ const textColor = "";
   const assignedNames = job.assignedNames ?? [];
 
 const workedMinutes = getWorkedMinutes(job);
-const scheduledMinutes = getScheduledEstimatedMinutesForJob(job);
-const predictedMinutesRaw = Number(prediction.predictedMinutes);
+const templateForJob =
+  job.template != null
+    ? quickTemplates.find((template) => template.key === job.template) ?? null
+    : quickTemplates.find((template) => template.label === job.quickEntryLabel) ??
+      null;
 
-const safePredictedMinutes =
-  Number.isFinite(predictedMinutesRaw) && predictedMinutesRaw > 0
-    ? Math.round(predictedMinutesRaw)
-    : 0;
+const aiMinutes = getJobDisplayAiMinutes({
+  job,
+  prediction,
+  template: templateForJob,
+});
 
-const aiMinutes = scheduledMinutes ?? safePredictedMinutes;
-const previstoMinutes = scheduledMinutes ?? safePredictedMinutes;
+const previstoMinutes = getJobDisplayPlannedMinutes({
+  job,
+  prediction,
+  template: templateForJob,
+});
 console.log("DEBUG tiempos trabajo activo", {
   jobId: job.id,
   plate: job.plate,
-  workedMinutes,
-  scheduledMinutes,
+  quantity: job.quantity,
+  unitMinutes: job.unitMinutes,
+  standardMinutes: job.standardMinutes,
   predictedMinutes: prediction.predictedMinutes,
   aiMinutes,
   previstoMinutes,
@@ -7450,8 +7388,10 @@ console.log("DEBUG tiempos trabajo activo", {
                       {getOperationLabel(job)}
                     </div>
                     <div className="mt-1 text-xs text-amber-700">
-  Tiempo previsto: {formatMinutes(previstoMinutes)}
-</div>
+                    Tiempo previsto: {formatMinutes(previstoMinutes)}
+                    </div>
+
+<WorkV2InfoBox job={job} />
                     <div className="mt-1 text-xs text-amber-700">
                       {job.reason}
                     </div>
@@ -7687,87 +7627,7 @@ console.log("DEBUG tiempos trabajo activo", {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <div className="space-y-4">
-          {(() => {
-            const selectedTemplate = quickTemplates.find(
-              (template) => template.key === quickDraft.templateKey
-            );
-
-            if (!selectedTemplate) return null;
-
-            const availableIncludedTasks = buildSelectableIncludedTasks(
-              selectedTemplate.area,
-              quickTemplates,
-              customExtraTasks,
-              selectedTemplate.key
-            );
-
-            const selectedIncludedTasks = getIncludedTasksByIds(
-              quickDraft.includedTaskIds,
-              availableIncludedTasks
-            );
-
-            if (availableIncludedTasks.length === 0) return null;
-
-            return (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="mb-2 text-sm font-semibold text-slate-700">
-                  Añadir tareas al mismo trabajo
-                </div>
-
-                <div className="space-y-2">
-                  {availableIncludedTasks.map((task) => {
-                    const checked = quickDraft.includedTaskIds.includes(task.id);
-
-                    return (
-                      <label
-                        key={task.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                      >
-                        <span className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => {
-                              setQuickDraft((prev) => ({
-                                ...prev,
-                                includedTaskIds: e.target.checked
-                                  ? [...prev.includedTaskIds, task.id]
-                                  : prev.includedTaskIds.filter(
-                                      (id) => id !== task.id
-                                    ),
-                              }));
-                            }}
-                          />
-
-                          <span className="font-medium text-slate-700">
-                            {task.label}
-                          </span>
-                        </span>
-
-                        {task.standardMinutes != null && (
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                            {task.standardMinutes} min
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {selectedIncludedTasks.length > 0 && (
-                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                    Se añadirán al mismo trabajo:{" "}
-                    <span className="font-semibold">
-                      {selectedIncludedTasks
-                        .map((task) => task.label)
-                        .join(" + ")}
-                    </span>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
+          
           <div>
             <label className="mb-2 block text-sm font-medium">Tipo</label>
 
@@ -7778,16 +7638,17 @@ console.log("DEBUG tiempos trabajo activo", {
                   : quickDraft.templateKey
               }
               onChange={(event) => {
-                const [templateKey, linkedTemplateKey] =
-                  event.target.value.split("|||");
+  const [templateKey, linkedTemplateKey] =
+    event.target.value.split("|||");
 
-                setQuickDraft((prev) => ({
-                  ...prev,
-                  templateKey,
-                  linkedTemplateKey: linkedTemplateKey || "",
-                  includedTaskIds: [],
-                }));
-              }}
+  setQuickDraft((prev) => ({
+    ...prev,
+    templateKey,
+    linkedTemplateKey: linkedTemplateKey || "",
+    includedTaskIds: [],
+    quantity: "1",
+  }));
+}}
               className="w-full rounded-2xl border border-slate-200 px-3 py-3"
             >
               {linkedTemplates
@@ -7824,48 +7685,102 @@ console.log("DEBUG tiempos trabajo activo", {
                     {template.label}
                   </option>
                 ))}
-            </select>
+           </select>
 
-            {(() => {
-              const selectedTemplate = quickTemplates.find(
-                (template) => template.key === quickDraft.templateKey
-              );
+<QuickEntryQuantityBox
+  template={
+    quickTemplates.find((template) => template.key === quickDraft.templateKey) ??
+    null
+  }
+  quantity={quickDraft.quantity}
+  setQuantity={(value) =>
+    setQuickDraft((prev) => ({
+      ...prev,
+      quantity: value,
+    }))
+  }
+/>
 
-              if (!selectedTemplate) return null;
+{(() => {
+  const selectedTemplate = quickTemplates.find(
+    (template) => template.key === quickDraft.templateKey
+  );
 
-              const recommended = getRecommendedTechForJob(
-                {
-                  area: selectedTemplate.area,
-                  template: isBuiltInTemplateKey(selectedTemplate.key)
-                    ? selectedTemplate.key
-                    : null,
-                  quickEntryLabel: selectedTemplate.label,
-                },
-                techs,
-                quickTemplates,
-                techOperationStats
-              );
+  if (!selectedTemplate) return null;
 
-              if (!recommended) return null;
+  const availableIncludedTasks = buildSelectableIncludedTasks(
+    selectedTemplate.area,
+    quickTemplates,
+    customExtraTasks,
+    selectedTemplate.key
+  );
 
-              const recommendedTech = techs.find(
-                (tech) => tech.name === recommended
-              );
+  if (availableIncludedTasks.length === 0) return null;
 
-              return (
-                <div className="mt-2 flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
-                  <img
-                    src={getTechAvatarUrl(recommendedTech)}
-                    alt={recommended}
-                    className="h-7 w-7 rounded-full border object-cover"
-                  />
-                  <div>
-                    Sugerencia IA:{" "}
-                    <span className="font-medium">{recommended}</span>
-                  </div>
-                </div>
-              );
-            })()}
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-black text-slate-800">
+            Trabajos adicionales
+          </div>
+
+          <div className="text-[10px] font-semibold text-slate-400">
+            Selecciona extras si este trabajo incluye más operaciones.
+          </div>
+        </div>
+
+        <div className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500">
+          {quickDraft.includedTaskIds.length} seleccionados
+        </div>
+      </div>
+
+      <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
+        {availableIncludedTasks.map((task) => {
+          const checked = quickDraft.includedTaskIds.includes(task.id);
+
+          return (
+            <label
+              key={task.id}
+              className={`flex cursor-pointer items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${
+                checked
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                  : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => {
+                    const nextIds = event.target.checked
+                      ? [...quickDraft.includedTaskIds, task.id]
+                      : quickDraft.includedTaskIds.filter(
+                          (id) => id !== task.id
+                        );
+
+                    setQuickDraft((prev) => ({
+                      ...prev,
+                      includedTaskIds: nextIds,
+                    }));
+                  }}
+                />
+
+                <span className="truncate">{task.label}</span>
+              </div>
+
+              {task.standardMinutes != null && (
+                <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
+                  {task.standardMinutes} min
+                </span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+})()}
           </div>
 
           <div>

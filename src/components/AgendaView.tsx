@@ -12,6 +12,10 @@ import {
   normalizeWorkshopId,
   type WorkshopId,
 } from "../modules/workshops";
+import ScheduledJobQuantityBox from "./ScheduledJobQuantityBox";
+import { buildScheduledJobV2FieldsFromTemplate } from "../modules/scheduledJobV2Helpers";
+import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpers";
+import ScheduledJobV2MiniLine from "./ScheduledJobV2MiniLine";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -33,6 +37,11 @@ type QuickTemplate = {
   priorityOrder: string[];
   standardMinutes?: number | null;
   workshopId?: WorkshopId | string | null;
+
+  // V2
+  usesQuantity?: boolean;
+  unitMinutes?: number | null;
+  unitPrice?: number | null;
 };
 
 export type ScheduledJob = {
@@ -71,6 +80,18 @@ export type ScheduledJob = {
   firstTemplateKey?: string | null;
   secondTemplateKey?: string | null;
   createdAtMs?: number;
+    /**
+   * V2:
+   * Cantidad, minutos por unidad y precio por unidad para agenda.
+   * Compatibilidad:
+   * - quantity vacío = 1
+   * - unitMinutes vacío = estimatedMinutes o standardMinutes de plantilla
+   * - unitPrice vacío = 0
+   */
+  quantity?: number | null;
+  unitMinutes?: number | null;
+  unitPrice?: number | null;
+  totalPrice?: number | null;
 };
 
 type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate";
@@ -476,22 +497,23 @@ useEffect(() => {
   }, [dateReminders]);
 
   const [draft, setDraft] = useState({
-    templateKey: quickTemplates[0]?.key ?? "",
-    plate: "",
-    customerName: "",
-    customerPhone: "",
-    notes: "",
-    urgent: false,
-    sendWhatsAppOnSave: true,
-    manualReminderEnabled: false,
-    manualReminderDate: "",
-    manualReminderTime: "",
-    sendReminder24h: true,
-    sendReminder1h: true,
-    estimatedMinutes: DEFAULT_ESTIMATED_MINUTES,
-    linkedTemplateKey: "",
-    includedTaskIds: [] as string[],
-  });
+  templateKey: quickTemplates[0]?.key ?? "",
+  plate: "",
+  customerName: "",
+  customerPhone: "",
+  notes: "",
+  urgent: false,
+  sendWhatsAppOnSave: true,
+  manualReminderEnabled: false,
+  manualReminderDate: "",
+  manualReminderTime: "",
+  sendReminder24h: true,
+  sendReminder1h: true,
+  estimatedMinutes: DEFAULT_ESTIMATED_MINUTES,
+  linkedTemplateKey: "",
+  includedTaskIds: [] as string[],
+  quantity: "1",
+});
 
   const [includedTasksOpen, setIncludedTasksOpen] = useState(false);
 
@@ -672,24 +694,25 @@ function getEstimatedMinutesWithIncludedTasks(
 
  
   function resetDraft(templateKey = quickTemplates[0]?.key ?? "") {
-    setDraft({
-      templateKey,
-      plate: "",
-      customerName: "",
-      customerPhone: "",
-      notes: "",
-      urgent: false,
-      sendWhatsAppOnSave: true,
-      manualReminderEnabled: false,
-      manualReminderDate: "",
-      manualReminderTime: "",
-      sendReminder24h: true,
-      sendReminder1h: true,
-      estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
-      linkedTemplateKey: "",
-      includedTaskIds: [],
-    });
-  }
+  setDraft({
+    templateKey,
+    plate: "",
+    customerName: "",
+    customerPhone: "",
+    notes: "",
+    urgent: false,
+    sendWhatsAppOnSave: true,
+    manualReminderEnabled: false,
+    manualReminderDate: "",
+    manualReminderTime: "",
+    sendReminder24h: true,
+    sendReminder1h: true,
+    estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
+    linkedTemplateKey: "",
+    includedTaskIds: [],
+    quantity: "1",
+  });
+}
 
   function getFirstTemplateForArea(area: AreaKey) {
     return (
@@ -739,6 +762,7 @@ function getEstimatedMinutesWithIncludedTasks(
       ),
       linkedTemplateKey: "",
       includedTaskIds: [],
+      quantity: "1",
     });
     setIncludedTasksOpen(false);
     setModalOpen(true);
@@ -785,6 +809,7 @@ function getEstimatedMinutesWithIncludedTasks(
       ),
       linkedTemplateKey: "",
       includedTaskIds: [],
+    quantity: "1",
     });
     setIncludedTasksOpen(false);
     setModalOpen(true);
@@ -819,6 +844,7 @@ function getEstimatedMinutesWithIncludedTasks(
           timeToMinutes(getScheduledStartTime(job))
       ),
       includedTaskIds: (job.includedTasks ?? []).map((task) => task.id),
+    quantity: String(job.quantity ?? 1),
     });
 
     setIncludedTasksOpen((job.includedTasks ?? []).length > 0);
@@ -862,14 +888,15 @@ function getEstimatedMinutesWithIncludedTasks(
       availableTasksForSave
     );
 
-    const estimatedMinutes = getEstimatedMinutesWithIncludedTasks(
-  template.key,
-  draft.includedTaskIds
-);
+    const v2Fields = buildScheduledJobV2FieldsFromTemplate({
+  template,
+  quantity: draft.quantity,
+  includedTasks,
+});
 
 const safeEstimatedMinutes = Math.max(
   15,
-  normalizeMinutes(estimatedMinutes, DEFAULT_ESTIMATED_MINUTES)
+  normalizeMinutes(v2Fields.estimatedMinutes, DEFAULT_ESTIMATED_MINUTES)
 );
 
     const nextData = {
@@ -901,7 +928,11 @@ area: template.area,
       whatsappReminder1hSentAtMs: null,
       manualReminderSentAtMs: null,
       includedTasks,
-estimatedMinutes: safeEstimatedMinutes,    };
+      estimatedMinutes: safeEstimatedMinutes,
+      quantity: v2Fields.quantity,
+      unitMinutes: v2Fields.unitMinutes,
+      unitPrice: v2Fields.unitPrice,
+      totalPrice: v2Fields.totalPrice,    };
 
     const logLabel = selectedLinkedTemplate
       ? selectedLinkedTemplate.label
@@ -943,10 +974,13 @@ estimatedMinutes: safeEstimatedMinutes,    };
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
+body: JSON.stringify({
   customerName: scheduled.customerName,
   customerPhone: scheduled.customerPhone,
-  jobDescription: logLabel,
+  jobDescription: getAgendaWhatsappV2Description({
+    scheduled,
+    baseDescription: logLabel,
+  }),
   plate: scheduled.plate,
   date: scheduled.date,
   time: scheduled.startTime,
@@ -1057,7 +1091,10 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
       body: JSON.stringify({
   customerName: job.customerName || "cliente",
   customerPhone: job.customerPhone,
-  jobDescription,
+  jobDescription: getAgendaWhatsappV2Description({
+  scheduled: job,
+  baseDescription: jobDescription,
+}),
   plate: job.plate,
   date: job.date,
   time: job.startTime,
@@ -1461,6 +1498,7 @@ appendLog(
                         <div className="text-xs font-normal">
                           {jobStartTime} – {jobEndTime}
                         </div>
+                        <ScheduledJobV2MiniLine job={job} />
 
                         {job.customerName && (
                           <div className="truncate text-xs font-normal opacity-90">
@@ -1932,16 +1970,26 @@ appendLog(
 
   setIncludedTasksOpen(false);
 
-  setDraft((prev) => ({
-    ...prev,
-    templateKey,
-    linkedTemplateKey: linkedTemplateKey || "",
-    includedTaskIds: nextIncludedTaskIds,
-    estimatedMinutes: getEstimatedMinutesWithIncludedTasks(
-      templateKey,
-      nextIncludedTaskIds
-    ),
-  }));
+  const nextTemplate = quickTemplates.find((item) => item.key === templateKey);
+
+const nextV2 = nextTemplate
+  ? buildScheduledJobV2FieldsFromTemplate({
+      template: nextTemplate,
+      quantity: "1",
+      includedTasks: [],
+    })
+  : null;
+
+setDraft((prev) => ({
+  ...prev,
+  templateKey,
+  linkedTemplateKey: linkedTemplateKey || "",
+  includedTaskIds: nextIncludedTaskIds,
+  quantity: "1",
+  estimatedMinutes: nextV2
+    ? Math.max(15, nextV2.estimatedMinutes)
+    : getEstimatedMinutesWithIncludedTasks(templateKey, nextIncludedTaskIds),
+}));
 }}
                           className="w-full rounded-2xl border-2 border-yellow-300 bg-yellow-100 px-3 py-3 font-black text-red-700 shadow-sm disabled:bg-slate-100 disabled:text-slate-400"
                         >
@@ -1984,6 +2032,29 @@ appendLog(
                         </select>
                       );
                     })()}
+
+                    <ScheduledJobQuantityBox
+                      template={selectedTemplate ?? null}
+                      quantity={draft.quantity}
+                      includedTasks={selectedIncludedTasks}
+                      onQuantityChange={(value) => {
+                        const nextV2 = selectedTemplate
+                          ? buildScheduledJobV2FieldsFromTemplate({
+                              template: selectedTemplate,
+                              quantity: value,
+                              includedTasks: selectedIncludedTasks,
+                            })
+                          : null;
+
+                        setDraft((prev) => ({
+                          ...prev,
+                          quantity: value,
+                          estimatedMinutes: nextV2
+                            ? Math.max(15, nextV2.estimatedMinutes)
+                            : prev.estimatedMinutes,
+                        }));
+                      }}
+                    />
                   </div>
 
                   {availableIncludedTasks.length > 0 && (

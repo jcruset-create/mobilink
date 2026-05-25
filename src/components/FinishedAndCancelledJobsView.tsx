@@ -1,3 +1,5 @@
+import WorkHistoryV2Line from "./WorkHistoryV2Line";
+
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
 type JobStatus =
@@ -118,16 +120,18 @@ function HistoryCard({
           : "border-emerald-200 bg-emerald-50"
       }`}
     >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <div className="text-2xl font-black tracking-wide text-slate-950">
-            {job.plate || "Sin matrícula"}
-          </div>
+     <div className="mb-3 flex items-start justify-between gap-3">
+  <div>
+    <div className="text-2xl font-black tracking-wide text-slate-950">
+      {job.plate || "Sin matrícula"}
+    </div>
 
-          <div className="mt-1 text-sm font-bold text-slate-700">
-            {getOperationLabel(job)}
-          </div>
-        </div>
+    <div className="mt-1 text-sm font-bold text-slate-700">
+      {getOperationLabel(job)}
+    </div>
+
+    <WorkHistoryV2Line job={job} />
+  </div>
 
         <span
           className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getAreaBadgeClass(
