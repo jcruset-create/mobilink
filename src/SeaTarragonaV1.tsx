@@ -12,6 +12,11 @@ import { APP_VERSION } from "./version";
 import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import { useMaintenanceAvailability } from "./modules/useMaintenanceAvailability";
+import {
+  assignMaintenanceTaskToBackend,
+  loadMaintenanceTasksFromBackend,
+  type MaintenanceTask,
+} from "./modules/maintenanceApi";
 import OperariosTVView from "./components/OperariosTVView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
 import WorkRankingView from "./components/WorkRankingView";
@@ -450,6 +455,16 @@ useEffect(() => {
 const [quickDraft, setQuickDraft] =
   useState<QuickDraftState>(INITIAL_QUICK_DRAFT);
 const [quickSelectedArea, setQuickSelectedArea] = useState<AreaKey>("camion");
+const [quickSelectedMode, setQuickSelectedMode] =
+  useState<"quick" | "maintenance">("quick");
+const [maintenanceTasks, setMaintenanceTasks] = useState<MaintenanceTask[]>([]);
+const [maintenanceDraft, setMaintenanceDraft] = useState<{
+  techName: string;
+  taskId: string;
+}>({
+  techName: "",
+  taskId: "",
+});
 const [customExtraTasks, setCustomExtraTasks] = useState<CustomExtraTask[]>(() => {
   try {
     if (typeof window === "undefined") return [];
@@ -565,6 +580,61 @@ const visibleLinkedTemplates = useMemo(
     ),
   [linkedTemplates, selectedWorkshopId]
 );
+
+const maintenanceTechCandidates = useMemo(() => {
+  return visibleTechs
+    .filter((tech) => {
+      const status = tech.status === "supervisor" ? "disponible" : tech.status;
+
+      return (
+        tech.currentJobId == null &&
+        !tech.blocked &&
+        !isUnavailableTechStatus(status)
+      );
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+}, [visibleTechs]);
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadMaintenanceTasks() {
+    try {
+      const data = await loadMaintenanceTasksFromBackend();
+
+      if (!cancelled) {
+        setMaintenanceTasks(data);
+      }
+    } catch (error) {
+      console.error("Error cargando tareas de mantenimiento:", error);
+    }
+  }
+
+  if (isAuthenticated) {
+    void loadMaintenanceTasks();
+  }
+
+  return () => {
+    cancelled = true;
+  };
+}, [isAuthenticated]);
+
+useEffect(() => {
+  setMaintenanceDraft((prev) => {
+    const techExists = maintenanceTechCandidates.some(
+      (tech) => tech.name === prev.techName
+    );
+
+    const taskExists = maintenanceTasks.some((task) => task.id === prev.taskId);
+
+    return {
+      techName: techExists
+        ? prev.techName
+        : maintenanceTechCandidates[0]?.name ?? "",
+      taskId: taskExists ? prev.taskId : maintenanceTasks[0]?.id ?? "",
+    };
+  });
+}, [maintenanceTechCandidates, maintenanceTasks]);
 
 
 
@@ -2444,6 +2514,51 @@ async function createTemplateEntry() {
     appendLog(`Error guardando entrada rápida ${plate}.`);
   }
 }
+
+async function assignQuickMaintenanceTask() {
+  const techName = maintenanceDraft.techName.trim();
+
+  const task = maintenanceTasks.find(
+    (item) => item.id === maintenanceDraft.taskId
+  );
+
+  if (!techName || !task) {
+    alert("Selecciona técnico y tarea de mantenimiento.");
+    return;
+  }
+
+  const tech = maintenanceTechCandidates.find((item) => item.name === techName);
+
+  if (!tech) {
+    alert("El técnico seleccionado no está disponible para mantenimiento.");
+    return;
+  }
+
+  try {
+    await assignMaintenanceTaskToBackend({
+      task,
+      techName,
+    });
+
+    appendLog(
+      `Mantenimiento asignado a ${techName}: ${task.label} (${
+        task.type === "fuera_taller" ? "fuera de taller" : "en taller"
+      }).`
+    );
+
+    await reloadMaintenanceAvailabilityFromBackend();
+  } catch (error) {
+    console.error("Error asignando mantenimiento rápido:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "No se pudo asignar la tarea de mantenimiento.";
+
+    alert(message);
+  }
+}
+
 function addCustomExtraTask() {
   const validationError = validateNewCustomExtraTaskV2(newCustomExtraTask);
 
@@ -6163,7 +6278,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 <div className="space-y-4">
-<div className="grid grid-cols-5 gap-2">
+<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
   {(["camion", "movil", "tacografo", "turismo", "mecanica"] as AreaKey[]).map(
     (area) => {
       const areaTemplates = quickTemplates.filter(
@@ -6180,7 +6295,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
       const meta = AREA_META[area];
       const Icon = meta.icon;
-      const active = quickSelectedArea === area;
+      const active = quickSelectedMode === "quick" && quickSelectedArea === area;
       const totalEntries = areaTemplates.length + areaLinkedTemplates.length;
 
       return (
@@ -6188,6 +6303,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
           key={`quick-icon-${area}`}
           type="button"
           onClick={() => {
+            setQuickSelectedMode("quick");
             setQuickSelectedArea(area);
 
             const firstLinked = [...areaLinkedTemplates].sort((a, b) =>
@@ -6240,9 +6356,119 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
       );
     }
   )}
+
+  <button
+    key="quick-icon-maintenance"
+    type="button"
+    onClick={() => setQuickSelectedMode("maintenance")}
+    className={`rounded-2xl border px-3 py-3 text-xs font-semibold transition ${
+      quickSelectedMode === "maintenance"
+        ? "border-amber-300 bg-amber-100 text-amber-950 ring-2 ring-slate-900 ring-offset-2"
+        : "border-amber-200 bg-amber-50 text-amber-900 opacity-80 hover:opacity-100"
+    }`}
+    title="Mantenimiento"
+  >
+    <ShieldAlert className="mx-auto mb-1 h-6 w-6" />
+
+    <span className="block truncate text-[11px] font-bold">
+      Mantenimiento
+    </span>
+
+    <span className="mt-1 block text-[10px] font-medium opacity-70">
+      {maintenanceTasks.length} tareas
+    </span>
+  </button>
 </div>
 
-  {(() => {
+  {quickSelectedMode === "maintenance" && (
+    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-amber-950">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <ShieldAlert className="h-4 w-4" />
+          Mantenimiento
+        </div>
+
+        <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] uppercase opacity-80">
+          {maintenanceTasks.length} tareas
+        </span>
+      </div>
+
+      {maintenanceTasks.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-amber-200 bg-white/60 px-3 py-2 text-xs text-amber-700">
+          No hay tareas de mantenimiento cargadas.
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+          <select
+            value={maintenanceDraft.techName}
+            onChange={(event) =>
+              setMaintenanceDraft((prev) => ({
+                ...prev,
+                techName: event.target.value,
+              }))
+            }
+            className="w-full rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 shadow-sm"
+          >
+            {maintenanceTechCandidates.length === 0 ? (
+              <option value="">Sin técnicos libres</option>
+            ) : (
+              maintenanceTechCandidates.map((tech) => (
+                <option key={`maintenance-tech-${tech.name}`} value={tech.name}>
+                  {tech.name}
+                </option>
+              ))
+            )}
+          </select>
+
+          <select
+            value={maintenanceDraft.taskId}
+            onChange={(event) =>
+              setMaintenanceDraft((prev) => ({
+                ...prev,
+                taskId: event.target.value,
+              }))
+            }
+            className="w-full rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 shadow-sm"
+          >
+            {maintenanceTasks
+              .slice()
+              .sort((a, b) => {
+                if (a.type !== b.type) {
+                  return a.type === "fuera_taller" ? -1 : 1;
+                }
+
+                return a.label.localeCompare(b.label, "es", {
+                  sensitivity: "base",
+                });
+              })
+              .map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.type === "fuera_taller" ? "Fuera taller" : "En taller"} ·{" "}
+                  {task.label}
+                </option>
+              ))}
+          </select>
+
+          <button
+            type="button"
+            onClick={() => {
+              void assignQuickMaintenanceTask();
+            }}
+            disabled={!maintenanceDraft.techName || !maintenanceDraft.taskId}
+            className="rounded-2xl bg-amber-700 px-5 py-3 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            Asignar mantenimiento
+          </button>
+        </div>
+      )}
+
+      <div className="mt-3 rounded-xl border border-amber-200 bg-white/70 px-3 py-2 text-xs font-semibold text-amber-800">
+        En taller: no bloquea trabajos reales · Fuera taller: bloquea trabajos reales.
+      </div>
+    </div>
+  )}
+
+  {quickSelectedMode === "quick" && (() => {
     const areaMeta = AREA_META[quickSelectedArea];
     const Icon = areaMeta.icon;
 
