@@ -6951,9 +6951,17 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
 const isReservedForValidation = Boolean(validationProposal && !currentJob);
 
-const rowColor = isReservedForValidation
-  ? "bg-violet-50 border-violet-200 text-violet-800"
-  : getTechStatusColor(tech.status);
+const isOutsideMaintenance = isTechBlockedByOutsideMaintenance(tech.name);
+
+const displayedTechStatus = isOutsideMaintenance
+  ? ("no_disponible" as TechStatus)
+  : tech.status;
+
+const rowColor = isOutsideMaintenance
+  ? "bg-red-50 border-red-200 text-red-800"
+  : isReservedForValidation
+    ? "bg-violet-50 border-violet-200 text-violet-800"
+    : getTechStatusColor(displayedTechStatus);
 
 const textColor = "";
   return (
@@ -6976,7 +6984,7 @@ const textColor = "";
   )}
 
 <select
-  value={tech.status}
+  value={displayedTechStatus}
   disabled={Boolean(scheduledStatus && scheduledStatus.status !== "disponible")}
   onChange={(e) =>
     setTechManual(tech.name, e.target.value as TechStatus)
@@ -6998,6 +7006,7 @@ const textColor = "";
 <option value="refuerzo">refuerzo</option>
 <option value="ocupado">ocupado</option>
 <option value="nodisponible">nodisponible</option>
+<option value="no_disponible">no disponible</option>
 <option value="permiso">permiso</option>
 <option value="vacaciones">vacaciones</option>
 <option value="baja">baja</option>
@@ -7006,15 +7015,17 @@ const textColor = "";
                         </select>
                       </td>
 <td className={`py-2 text-xs ${textColor}`}>
-  <div>
-    {currentJob
-      ? `${AREA_META[currentJob.area].label} · ${currentJob.plate}`
-      : validationProposal
-      ? `Propuesto en ${validationProposal.plate} · ${getOperationLabel(
-          validationProposal
-        )}`
-      : "-"}
-  </div>
+ <div>
+  {isOutsideMaintenance
+    ? "Mantenimiento fuera de taller"
+    : currentJob
+    ? `${AREA_META[currentJob.area].label} · ${currentJob.plate}`
+    : validationProposal
+    ? `Propuesto en ${validationProposal.plate} · ${getOperationLabel(
+        validationProposal
+      )}`
+    : "-"}
+</div>
 
   {validationProposal && !currentJob && (
     <div className="mt-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
