@@ -995,11 +995,12 @@ const availableTechsSummary = useMemo(() => {
       return (
         status === "disponible" &&
         tech.currentJobId == null &&
-        !isUnavailableTechStatus(status)
+        !isUnavailableTechStatus(status) &&
+        !isTechBlockedByOutsideMaintenance(tech.name)
       );
     })
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-}, [visibleTechs]);
+}, [visibleTechs, isTechBlockedByOutsideMaintenance]);
 
 
 
