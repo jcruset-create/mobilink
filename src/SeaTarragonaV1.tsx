@@ -218,6 +218,7 @@ import {
   saveScheduledTechStatusesToBackend,
 } from "./modules/scheduledTechStatusApi";
 import RoadsideAssistanceView from "./components/RoadsideAssistanceView";
+import RoadsideAssistanceAdminView from "./components/RoadsideAssistanceAdminView";
 import {
   createRoadsideAssistanceInBackend,
   createRoadsideVehicleInBackend,
@@ -678,8 +679,10 @@ useEffect(() => {
 
   void reloadRoadsideAssistancesFromBackend();
   void reloadRoadsideVehiclesFromBackend();
-  void reloadRoadsideOperatorCodesFromBackend();
-}, [isAuthenticated, isSupervisor]);
+  if (isAdmin) {
+    void reloadRoadsideOperatorCodesFromBackend();
+  }
+}, [isAuthenticated, isSupervisor, isAdmin]);
 
 useEffect(() => {
   setMaintenanceDraft((prev) => {
@@ -4983,27 +4986,52 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
       assistances={visibleRoadsideAssistances}
       techs={visibleTechs}
       vehicles={visibleRoadsideVehicles}
-      operatorCodes={roadsideOperatorCodes}
       loading={roadsideAssistancesLoading}
       error={
         roadsideAssistanceError ||
-        roadsideVehicleError ||
-        roadsideOperatorCodeError
+        roadsideVehicleError
       }
       onBack={() => setView("operativo")}
       onRefresh={() => {
         void reloadRoadsideAssistancesFromBackend();
         void reloadRoadsideVehiclesFromBackend();
-        void reloadRoadsideOperatorCodesFromBackend();
       }}
+      onOpenSettings={
+        isAdmin
+          ? () => {
+              setView("asistencias_config");
+              void reloadRoadsideVehiclesFromBackend();
+              void reloadRoadsideOperatorCodesFromBackend();
+            }
+          : undefined
+      }
       onCreate={createRoadsideAssistance}
       onUpdate={updateRoadsideAssistance}
+      onSendTrackingWhatsapp={sendRoadsideTrackingWhatsapp}
+      onStatusChange={updateRoadsideAssistanceStatus}
+    />
+  );
+}
+
+if (
+  view === "asistencias_config" &&
+  canAccessView(userRole, "asistencias_config")
+) {
+  return (
+    <RoadsideAssistanceAdminView
+      techs={visibleTechs}
+      vehicles={visibleRoadsideVehicles}
+      operatorCodes={roadsideOperatorCodes}
+      error={roadsideVehicleError || roadsideOperatorCodeError}
+      onBack={() => setView("asistencias")}
+      onRefresh={() => {
+        void reloadRoadsideVehiclesFromBackend();
+        void reloadRoadsideOperatorCodesFromBackend();
+      }}
       onCreateVehicle={createRoadsideVehicle}
       onUpdateVehicle={updateRoadsideVehicle}
       onDeactivateVehicle={deactivateRoadsideVehicle}
       onUpdateOperatorCode={updateRoadsideOperatorCode}
-      onSendTrackingWhatsapp={sendRoadsideTrackingWhatsapp}
-      onStatusChange={updateRoadsideAssistanceStatus}
     />
   );
 }
@@ -5170,6 +5198,24 @@ return (
       }`}
     >
       Asistencias
+    </button>
+  )}
+
+  {canAccessView(userRole, "asistencias_config") && (
+    <button
+      type="button"
+      onClick={() => {
+        setView("asistencias_config");
+        void reloadRoadsideVehiclesFromBackend();
+        void reloadRoadsideOperatorCodesFromBackend();
+      }}
+      className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+        view === "asistencias_config"
+          ? "border border-red-300 bg-red-100 text-red-950 shadow-sm"
+          : "border border-red-200 bg-white text-red-800 hover:bg-red-50"
+      }`}
+    >
+      Config. asistencia
     </button>
   )}
 

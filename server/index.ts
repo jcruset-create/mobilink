@@ -1611,7 +1611,7 @@ app.get("/api/roadside-vehicles", async (req, res) => {
   }
 });
 
-app.post("/api/roadside-vehicles", requireSupervisorRole, async (req, res) => {
+app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
   try {
     const body = req.body ?? {};
     const now = Date.now();
@@ -1654,7 +1654,7 @@ app.post("/api/roadside-vehicles", requireSupervisorRole, async (req, res) => {
   }
 });
 
-app.put("/api/roadside-vehicles/:id", requireSupervisorRole, async (req, res) => {
+app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const body = req.body ?? {};
@@ -1708,7 +1708,7 @@ app.put("/api/roadside-vehicles/:id", requireSupervisorRole, async (req, res) =>
 
 app.delete(
   "/api/roadside-vehicles/:id",
-  requireSupervisorRole,
+  requireAdminRole,
   async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -1815,7 +1815,7 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
 app.get(
   "/api/roadside-operator-codes",
-  requireSupervisorRole,
+  requireAdminRole,
   async (_req, res) => {
     try {
       const result = await db.query(`
@@ -1834,7 +1834,7 @@ app.get(
 
 app.put(
   "/api/roadside-operator-codes/:name",
-  requireSupervisorRole,
+  requireAdminRole,
   async (req, res) => {
     try {
       const name = String(req.params.name || "").trim();
