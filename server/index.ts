@@ -4,6 +4,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import multer from "multer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
@@ -518,6 +519,186 @@ stripePaymentIntentId: job.stripePaymentIntentId ?? null,
   };
 }
 
+const ROADSIDE_ASSISTANCE_STATUSES = new Set([
+  "pendiente",
+  "asignada",
+  "en_camino",
+  "en_punto",
+  "finalizada",
+  "llegada_taller",
+  "cancelada",
+]);
+
+const ROADSIDE_ASSISTANCE_PRIORITIES = new Set(["normal", "urgente"]);
+
+function normalizeRoadsideAssistanceStatus(value: unknown) {
+  const status = String(value || "").trim().toLowerCase();
+  return ROADSIDE_ASSISTANCE_STATUSES.has(status) ? status : "pendiente";
+}
+
+function normalizeRoadsideAssistancePriority(value: unknown) {
+  const priority = String(value || "").trim().toLowerCase();
+  return ROADSIDE_ASSISTANCE_PRIORITIES.has(priority) ? priority : "normal";
+}
+
+function normalizeNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function normalizeRoadsideAssistanceRow(row: any) {
+  return {
+    id: Number(row.id),
+    workshopId: row.workshopId ?? null,
+    status: normalizeRoadsideAssistanceStatus(row.status),
+    priority: normalizeRoadsideAssistancePriority(row.priority),
+    customerName: row.customerName ?? "",
+    customerPhone: row.customerPhone ?? "",
+    address: row.address ?? "",
+    googleMapsUrl: row.googleMapsUrl ?? null,
+    latitude: normalizeNullableNumber(row.latitude),
+    longitude: normalizeNullableNumber(row.longitude),
+    plate: row.plate ?? "",
+    vehicleDescription: row.vehicleDescription ?? null,
+    webfleetVehicleId: row.webfleetVehicleId ?? null,
+    assignedTechName: row.assignedTechName ?? null,
+    assignedVehicleName: row.assignedVehicleName ?? null,
+    trackingToken: row.trackingToken ?? "",
+    trackingWhatsappSentAtMs: row.trackingWhatsappSentAtMs ?? null,
+    trackingWhatsappSid: row.trackingWhatsappSid ?? null,
+    notes: row.notes ?? null,
+    createdAtMs: Number(row.createdAtMs ?? Date.now()),
+    assignedAtMs: row.assignedAtMs ?? null,
+    departedAtMs: row.departedAtMs ?? null,
+    arrivedAtPointMs: row.arrivedAtPointMs ?? null,
+    finishedAtMs: row.finishedAtMs ?? null,
+    arrivedAtWorkshopMs: row.arrivedAtWorkshopMs ?? null,
+    cancelledAtMs: row.cancelledAtMs ?? null,
+    updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
+  };
+}
+
+function normalizeRoadsideVehicleRow(row: any) {
+  return {
+    id: Number(row.id),
+    workshopId: row.workshopId ?? null,
+    name: row.name ?? "",
+    plate: row.plate ?? null,
+    webfleetVehicleId: row.webfleetVehicleId ?? null,
+    notes: row.notes ?? null,
+    active: row.active !== false,
+    createdAtMs: Number(row.createdAtMs ?? Date.now()),
+    updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
+  };
+}
+
+function getRoadsideStatusTimestampField(status: string) {
+  if (status === "asignada") return "assignedAtMs";
+  if (status === "en_camino") return "departedAtMs";
+  if (status === "en_punto") return "arrivedAtPointMs";
+  if (status === "finalizada") return "finishedAtMs";
+  if (status === "llegada_taller") return "arrivedAtWorkshopMs";
+  if (status === "cancelada") return "cancelledAtMs";
+  return null;
+}
+
+function getWhatsAppFromNumber() {
+  return (
+    process.env.TWILIO_WHATSAPP_FROM ||
+    process.env.TWILIO_WHATSAPP_NUMBER ||
+    "whatsapp:+34610473079"
+  );
+}
+
+function getPublicAppBaseUrl(req: express.Request, preferredUrl?: unknown) {
+  const preferred = String(preferredUrl || "").trim();
+
+  if (/^https?:\/\//i.test(preferred)) {
+    return preferred.replace(/\/+$/, "");
+  }
+
+  const configured = String(process.env.PUBLIC_APP_URL || "").trim();
+
+  if (
+    /^https?:\/\//i.test(configured) &&
+    !configured.includes("tu-app.onrender.com")
+  ) {
+    return configured.replace(/\/+$/, "");
+  }
+
+  return `${req.protocol}://${req.get("host")}`.replace(/\/+$/, "");
+}
+
+function buildRoadsideTrackingUrl(
+  req: express.Request,
+  assistance: { trackingToken?: string },
+  preferredBaseUrl?: unknown
+) {
+  return `${getPublicAppBaseUrl(req, preferredBaseUrl)}/seguimiento/${
+    assistance.trackingToken
+  }`;
+}
+
+function buildRoadsideTrackingMessage(assistance: any, trackingUrl: string) {
+  const customerName = assistance.customerName || "cliente";
+  const plate = assistance.plate || assistance.vehicleDescription || "vehiculo";
+  const techLine = assistance.assignedTechName
+    ? `Operario asignado: ${assistance.assignedTechName}.\n`
+    : "";
+
+  return (
+    `Hola ${customerName},\n\n` +
+    `Tu asistencia de SEA Tarragona para ${plate} esta registrada.\n` +
+    techLine +
+    `Puedes seguir el estado aqui:\n${trackingUrl}\n\n` +
+    `Gracias.`
+  );
+}
+
+async function sendRoadsideTrackingWhatsApp(
+  req: express.Request,
+  assistance: any,
+  preferredBaseUrl?: unknown
+) {
+  const customerPhone = String(assistance.customerPhone || "").trim();
+
+  if (!customerPhone) {
+    throw new Error("La asistencia no tiene telefono de cliente.");
+  }
+
+  const trackingUrl = buildRoadsideTrackingUrl(
+    req,
+    assistance,
+    preferredBaseUrl
+  );
+
+  const contentSid = String(
+    process.env.TWILIO_ROADSIDE_CONTENT_SID || ""
+  ).trim();
+
+  if (contentSid) {
+    return twilioClient.messages.create({
+      from: getWhatsAppFromNumber(),
+      to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
+      contentSid,
+      contentVariables: JSON.stringify({
+        "1": assistance.customerName || "cliente",
+        "2": assistance.plate || assistance.vehicleDescription || "vehiculo",
+        "3": trackingUrl,
+        "4": assistance.assignedTechName || "-",
+      }),
+    });
+  }
+
+  return twilioClient.messages.create({
+    from: getWhatsAppFromNumber(),
+    to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
+    body: buildRoadsideTrackingMessage(assistance, trackingUrl),
+  });
+}
+
 function normalizeQuickTemplateRow(t: any) {
   const rawMinutes = t.standardMinutes ?? t.standardminutes ?? null;
   const rawUnitMinutes = t.unitMinutes ?? t.unitminutes ?? null;
@@ -621,6 +802,81 @@ if (
   return null;
 }
 
+function getRoadsideOperatorCode() {
+  return (
+    process.env.ROADSIDE_OPERATOR_CODE ||
+    process.env.APP_PASSWORD ||
+    process.env.ADMIN_TOKEN ||
+    ""
+  );
+}
+
+function normalizeRoadsideOperatorCodeRow(row: any) {
+  const code = String(row.roadsideOperatorCode || "").trim();
+
+  return {
+    techName: row.name ?? "",
+    code,
+    hasCustomCode: Boolean(code),
+  };
+}
+
+async function getExpectedRoadsideOperatorCode(techName: string) {
+  const result = await db.query(
+    `
+      SELECT name, "roadsideOperatorCode"
+      FROM techs
+      WHERE name = $1
+      LIMIT 1
+    `,
+    [techName]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return String(
+    result.rows[0].roadsideOperatorCode || getRoadsideOperatorCode() || ""
+  ).trim();
+}
+
+async function getRoadsideOperatorFromRequest(req: express.Request) {
+  const techName = String(req.headers["x-roadside-operator-name"] ?? "").trim();
+  const code = String(req.headers["x-roadside-operator-code"] ?? "").trim();
+  const expectedCode = await getExpectedRoadsideOperatorCode(techName);
+
+  if (!techName || !code || !expectedCode || code !== expectedCode) {
+    return null;
+  }
+
+  return {
+    techName,
+  };
+}
+
+function requireRoadsideOperator(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const operator = await getRoadsideOperatorFromRequest(req);
+
+    if (!operator) {
+      return res.status(401).json({
+        error: "Operario no autorizado",
+      });
+    }
+
+    (req as any).roadsideOperator = operator;
+    next();
+  })().catch((error) => {
+    console.error("requireRoadsideOperator error:", error);
+    res.status(500).json({ error: "Error validando operario" });
+  });
+}
+
 function requireRole(allowedRoles: UserRole[]) {
   return (
     req: express.Request,
@@ -662,7 +918,7 @@ app.use("/uploads", express.static(uploadsDir));
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024,
+    fileSize: 10 * 1024 * 1024,
   },
 });
 
@@ -1332,6 +1588,899 @@ app.delete("/api/jobs/:id", async (req, res) => {
     res.status(500).json({ error: "Error eliminando trabajo" });
   }
 });
+
+/* =========================================================
+   ROADSIDE ASSISTANCES
+========================================================= */
+
+app.get("/api/roadside-vehicles", async (req, res) => {
+  try {
+    const includeInactive = String(req.query.includeInactive || "") === "true";
+
+    const result = await db.query(`
+      SELECT *
+      FROM roadside_vehicles
+      ${includeInactive ? "" : "WHERE active = true"}
+      ORDER BY active DESC, name ASC
+    `);
+
+    res.json(result.rows.map(normalizeRoadsideVehicleRow));
+  } catch (error) {
+    console.error("GET /api/roadside-vehicles error:", error);
+    res.status(500).json({ error: "Error obteniendo furgonetas" });
+  }
+});
+
+app.post("/api/roadside-vehicles", requireSupervisorRole, async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const now = Date.now();
+    const name = String(body.name || "").trim();
+
+    if (!name) {
+      return res.status(400).json({ error: "El nombre es obligatorio" });
+    }
+
+    const result = await db.query(
+      `
+        INSERT INTO roadside_vehicles (
+          "workshopId",
+          name,
+          plate,
+          "webfleetVehicleId",
+          notes,
+          active,
+          "createdAtMs",
+          "updatedAtMs"
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        RETURNING *
+      `,
+      [
+        body.workshopId ?? null,
+        name,
+        body.plate ? String(body.plate).trim().toUpperCase() : null,
+        body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
+        body.notes ? String(body.notes).trim() : null,
+        body.active !== false,
+        now,
+      ]
+    );
+
+    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/roadside-vehicles error:", error);
+    res.status(500).json({ error: "Error creando furgoneta" });
+  }
+});
+
+app.put("/api/roadside-vehicles/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const body = req.body ?? {};
+    const now = Date.now();
+    const name = String(body.name || "").trim();
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de furgoneta no valido" });
+    }
+
+    if (!name) {
+      return res.status(400).json({ error: "El nombre es obligatorio" });
+    }
+
+    const result = await db.query(
+      `
+        UPDATE roadside_vehicles
+        SET
+          "workshopId" = $2,
+          name = $3,
+          plate = $4,
+          "webfleetVehicleId" = $5,
+          notes = $6,
+          active = $7,
+          "updatedAtMs" = $8
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        id,
+        body.workshopId ?? null,
+        name,
+        body.plate ? String(body.plate).trim().toUpperCase() : null,
+        body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
+        body.notes ? String(body.notes).trim() : null,
+        body.active !== false,
+        now,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Furgoneta no encontrada" });
+    }
+
+    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/roadside-vehicles/:id error:", error);
+    res.status(500).json({ error: "Error actualizando furgoneta" });
+  }
+});
+
+app.delete(
+  "/api/roadside-vehicles/:id",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de furgoneta no valido" });
+      }
+
+      const result = await db.query(
+        `
+          UPDATE roadside_vehicles
+          SET
+            active = false,
+            "updatedAtMs" = $2
+          WHERE id = $1
+          RETURNING *
+        `,
+        [id, Date.now()]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Furgoneta no encontrada" });
+      }
+
+      res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    } catch (error) {
+      console.error("DELETE /api/roadside-vehicles/:id error:", error);
+      res.status(500).json({ error: "Error desactivando furgoneta" });
+    }
+  }
+);
+
+app.get("/api/roadside-assistances", async (req, res) => {
+  try {
+    const includeClosed = String(req.query.includeClosed || "") === "true";
+
+    const result = await db.query(`
+      SELECT *
+      FROM roadside_assistances
+      ${
+        includeClosed
+          ? ""
+          : `WHERE status NOT IN ('llegada_taller', 'cancelada')`
+      }
+      ORDER BY "createdAtMs" DESC
+      LIMIT 200
+    `);
+
+    res.json(result.rows.map(normalizeRoadsideAssistanceRow));
+  } catch (error) {
+    console.error("GET /api/roadside-assistances error:", error);
+    res.status(500).json({ error: "Error obteniendo asistencias" });
+  }
+});
+
+app.get("/api/roadside-tracking/:token", async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+
+    if (!token) {
+      return res.status(400).json({ error: "Token de seguimiento no valido" });
+    }
+
+    const assistanceResult = await db.query(
+      `
+        SELECT *
+        FROM roadside_assistances
+        WHERE "trackingToken" = $1
+        LIMIT 1
+      `,
+      [token]
+    );
+
+    if (assistanceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Seguimiento no encontrado" });
+    }
+
+    const assistance = normalizeRoadsideAssistanceRow(
+      assistanceResult.rows[0]
+    );
+
+    const eventsResult = await db.query(
+      `
+        SELECT status, "createdAtMs"
+        FROM roadside_assistance_events
+        WHERE "assistanceId" = $1
+        ORDER BY "createdAtMs" ASC
+      `,
+      [assistance.id]
+    );
+
+    res.json({
+      assistance,
+      events: eventsResult.rows,
+      expired:
+        assistance.status === "llegada_taller" ||
+        assistance.status === "cancelada",
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-tracking/:token error:", error);
+    res.status(500).json({ error: "Error obteniendo seguimiento" });
+  }
+});
+
+app.get(
+  "/api/roadside-operator-codes",
+  requireSupervisorRole,
+  async (_req, res) => {
+    try {
+      const result = await db.query(`
+        SELECT name, "roadsideOperatorCode"
+        FROM techs
+        ORDER BY id ASC
+      `);
+
+      res.json(result.rows.map(normalizeRoadsideOperatorCodeRow));
+    } catch (error) {
+      console.error("GET /api/roadside-operator-codes error:", error);
+      res.status(500).json({ error: "Error obteniendo codigos de operario" });
+    }
+  }
+);
+
+app.put(
+  "/api/roadside-operator-codes/:name",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const name = String(req.params.name || "").trim();
+      const code = String(req.body?.code || "").trim();
+
+      if (!name) {
+        return res.status(400).json({ error: "Operario no valido" });
+      }
+
+      if (!code || code.length < 4) {
+        return res.status(400).json({
+          error: "El codigo debe tener al menos 4 caracteres",
+        });
+      }
+
+      const result = await db.query(
+        `
+          UPDATE techs
+          SET "roadsideOperatorCode" = $2
+          WHERE name = $1
+          RETURNING name, "roadsideOperatorCode"
+        `,
+        [name, code]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Operario no encontrado" });
+      }
+
+      res.json(normalizeRoadsideOperatorCodeRow(result.rows[0]));
+    } catch (error) {
+      console.error("PUT /api/roadside-operator-codes/:name error:", error);
+      res.status(500).json({ error: "Error guardando codigo de operario" });
+    }
+  }
+);
+
+app.post("/api/roadside-operator/login", async (req, res) => {
+  try {
+    const techName = String(req.body?.techName || "").trim();
+    const code = String(req.body?.code || "").trim();
+    const expectedCode = await getExpectedRoadsideOperatorCode(techName);
+
+    if (!techName || !code || !expectedCode || code !== expectedCode) {
+      return res.status(401).json({
+        error: "Operario o codigo incorrecto",
+      });
+    }
+
+    const techResult = await db.query(
+      `
+        SELECT name
+        FROM techs
+        WHERE name = $1
+        LIMIT 1
+      `,
+      [techName]
+    );
+
+    if (techResult.rows.length === 0) {
+      return res.status(404).json({
+        error: "Operario no encontrado",
+      });
+    }
+
+    res.json({
+      ok: true,
+      techName,
+    });
+  } catch (error) {
+    console.error("POST /api/roadside-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesion operario" });
+  }
+});
+
+app.get(
+  "/api/roadside-operator/assistances",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const includeClosed = String(req.query.includeClosed || "") === "true";
+
+      const result = await db.query(
+        `
+          SELECT *
+          FROM roadside_assistances
+          WHERE "assignedTechName" = $1
+          ${
+            includeClosed
+              ? ""
+              : `AND status NOT IN ('llegada_taller', 'cancelada')`
+          }
+          ORDER BY "createdAtMs" DESC
+          LIMIT 100
+        `,
+        [operator.techName]
+      );
+
+      res.json(result.rows.map(normalizeRoadsideAssistanceRow));
+    } catch (error) {
+      console.error("GET /api/roadside-operator/assistances error:", error);
+      res.status(500).json({ error: "Error obteniendo asistencias operario" });
+    }
+  }
+);
+
+app.post(
+  "/api/roadside-operator/assistances/:id/status",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+      const now = Date.now();
+      const status = normalizeRoadsideAssistanceStatus(req.body?.status);
+      const allowedStatuses = new Set([
+        "en_camino",
+        "en_punto",
+        "finalizada",
+        "llegada_taller",
+      ]);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de asistencia no valido" });
+      }
+
+      if (!allowedStatuses.has(status)) {
+        return res.status(400).json({
+          error: "Estado no permitido para operario",
+        });
+      }
+
+      const currentResult = await db.query(
+        `
+          SELECT id, "assignedTechName"
+          FROM roadside_assistances
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [id]
+      );
+
+      if (currentResult.rows.length === 0) {
+        return res.status(404).json({ error: "Asistencia no encontrada" });
+      }
+
+      if (currentResult.rows[0].assignedTechName !== operator.techName) {
+        return res.status(403).json({
+          error: "Esta asistencia no esta asignada a este operario",
+        });
+      }
+
+      const timestampField = getRoadsideStatusTimestampField(status);
+
+      const result = await db.query(
+        `
+          UPDATE roadside_assistances
+          SET
+            status = $2,
+            "updatedAtMs" = $3
+            ${
+              timestampField
+                ? `, "${timestampField}" = COALESCE("${timestampField}", $3)`
+                : ""
+            }
+          WHERE id = $1
+          RETURNING *
+        `,
+        [id, status, now]
+      );
+
+      await db.query(
+        `
+          INSERT INTO roadside_assistance_events (
+            "assistanceId",
+            status,
+            note,
+            "createdBy",
+            "createdAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          id,
+          status,
+          req.body?.note ? String(req.body.note).trim() : null,
+          operator.techName,
+          now,
+        ]
+      );
+
+      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    } catch (error) {
+      console.error("POST /api/roadside-operator/assistances/:id/status error:", error);
+      res.status(500).json({ error: "Error cambiando estado operario" });
+    }
+  }
+);
+
+app.get("/api/roadside-assistances/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de asistencia no valido" });
+    }
+
+    const assistanceResult = await db.query(
+      `
+        SELECT *
+        FROM roadside_assistances
+        WHERE id = $1
+      `,
+      [id]
+    );
+
+    if (assistanceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Asistencia no encontrada" });
+    }
+
+    const eventsResult = await db.query(
+      `
+        SELECT *
+        FROM roadside_assistance_events
+        WHERE "assistanceId" = $1
+        ORDER BY "createdAtMs" ASC
+      `,
+      [id]
+    );
+
+    const filesResult = await db.query(
+      `
+        SELECT *
+        FROM roadside_assistance_files
+        WHERE "assistanceId" = $1
+        ORDER BY "createdAtMs" ASC
+      `,
+      [id]
+    );
+
+    res.json({
+      assistance: normalizeRoadsideAssistanceRow(assistanceResult.rows[0]),
+      events: eventsResult.rows,
+      files: filesResult.rows,
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id error:", error);
+    res.status(500).json({ error: "Error obteniendo asistencia" });
+  }
+});
+
+app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const now = Date.now();
+    const customerName = String(body.customerName || "").trim();
+    const customerPhone = String(body.customerPhone || "").trim();
+    const address = String(body.address || "").trim();
+    const googleMapsUrl = String(body.googleMapsUrl || "").trim();
+    const latitude = normalizeNullableNumber(body.latitude);
+    const longitude = normalizeNullableNumber(body.longitude);
+    const assignedTechName = String(body.assignedTechName || "").trim();
+    const incomingStatus = body.status
+      ? normalizeRoadsideAssistanceStatus(body.status)
+      : assignedTechName
+        ? "asignada"
+        : "pendiente";
+    const timestampField = getRoadsideStatusTimestampField(incomingStatus);
+
+    if (!customerName && !customerPhone) {
+      return res.status(400).json({
+        error: "Indica cliente o telefono para crear la asistencia",
+      });
+    }
+
+    if (!address && !googleMapsUrl && latitude == null && longitude == null) {
+      return res.status(400).json({
+        error: "Indica direccion, enlace de Google Maps o coordenadas",
+      });
+    }
+
+    const result = await db.query(
+      `
+        INSERT INTO roadside_assistances (
+          "workshopId",
+          status,
+          priority,
+          "customerName",
+          "customerPhone",
+          address,
+          "googleMapsUrl",
+          latitude,
+          longitude,
+          plate,
+          "vehicleDescription",
+          "webfleetVehicleId",
+          "assignedTechName",
+          "assignedVehicleName",
+          "trackingToken",
+          notes,
+          "createdAtMs",
+          "assignedAtMs",
+          "departedAtMs",
+          "arrivedAtPointMs",
+          "finishedAtMs",
+          "arrivedAtWorkshopMs",
+          "cancelledAtMs",
+          "updatedAtMs"
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, $13, $14, $15, $16,
+          $17, $18, $19, $20, $21, $22, $23, $24
+        )
+        RETURNING *
+      `,
+      [
+        body.workshopId ?? null,
+        incomingStatus,
+        normalizeRoadsideAssistancePriority(body.priority),
+        customerName,
+        customerPhone,
+        address,
+        googleMapsUrl || null,
+        latitude,
+        longitude,
+        String(body.plate || "").trim().toUpperCase(),
+        body.vehicleDescription ? String(body.vehicleDescription).trim() : null,
+        body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
+        assignedTechName || null,
+        body.assignedVehicleName ? String(body.assignedVehicleName).trim() : null,
+        crypto.randomUUID(),
+        body.notes ? String(body.notes).trim() : null,
+        now,
+        timestampField === "assignedAtMs" ? now : null,
+        timestampField === "departedAtMs" ? now : null,
+        timestampField === "arrivedAtPointMs" ? now : null,
+        timestampField === "finishedAtMs" ? now : null,
+        timestampField === "arrivedAtWorkshopMs" ? now : null,
+        timestampField === "cancelledAtMs" ? now : null,
+        now,
+      ]
+    );
+
+    const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+    await db.query(
+      `
+        INSERT INTO roadside_assistance_events (
+          "assistanceId",
+          status,
+          note,
+          "createdBy",
+          "createdAtMs"
+        )
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [
+        assistance.id,
+        assistance.status,
+        "Asistencia creada desde oficina",
+        body.createdBy ?? "oficina",
+        now,
+      ]
+    );
+
+    res.json(assistance);
+  } catch (error) {
+    console.error("POST /api/roadside-assistances error:", error);
+    res.status(500).json({ error: "Error creando asistencia" });
+  }
+});
+
+app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const body = req.body ?? {};
+    const now = Date.now();
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de asistencia no valido" });
+    }
+
+    const status = normalizeRoadsideAssistanceStatus(body.status);
+    const timestampField = getRoadsideStatusTimestampField(status);
+
+    const existingResult = await db.query(
+      `
+        SELECT status
+        FROM roadside_assistances
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id]
+    );
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: "Asistencia no encontrada" });
+    }
+
+    const previousStatus = normalizeRoadsideAssistanceStatus(
+      existingResult.rows[0].status
+    );
+
+    const result = await db.query(
+      `
+        UPDATE roadside_assistances
+        SET
+          "workshopId" = $2,
+          status = $3,
+          priority = $4,
+          "customerName" = $5,
+          "customerPhone" = $6,
+          address = $7,
+          "googleMapsUrl" = $8,
+          latitude = $9,
+          longitude = $10,
+          plate = $11,
+          "vehicleDescription" = $12,
+          "webfleetVehicleId" = $13,
+          "assignedTechName" = $14,
+          "assignedVehicleName" = $15,
+          notes = $16,
+          "updatedAtMs" = $17
+          ${
+            timestampField
+              ? `, "${timestampField}" = COALESCE("${timestampField}", $17)`
+              : ""
+          }
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        id,
+        body.workshopId ?? null,
+        status,
+        normalizeRoadsideAssistancePriority(body.priority),
+        String(body.customerName || "").trim(),
+        String(body.customerPhone || "").trim(),
+        String(body.address || "").trim(),
+        body.googleMapsUrl ? String(body.googleMapsUrl).trim() : null,
+        normalizeNullableNumber(body.latitude),
+        normalizeNullableNumber(body.longitude),
+        String(body.plate || "").trim().toUpperCase(),
+        body.vehicleDescription ? String(body.vehicleDescription).trim() : null,
+        body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
+        body.assignedTechName ? String(body.assignedTechName).trim() : null,
+        body.assignedVehicleName ? String(body.assignedVehicleName).trim() : null,
+        body.notes ? String(body.notes).trim() : null,
+        now,
+      ]
+    );
+
+    if (previousStatus !== status) {
+      await db.query(
+        `
+          INSERT INTO roadside_assistance_events (
+            "assistanceId",
+            status,
+            note,
+            "createdBy",
+            "createdAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          id,
+          status,
+          "Estado actualizado desde edicion de oficina",
+          body.updatedBy ?? "oficina",
+          now,
+        ]
+      );
+    }
+
+    res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/roadside-assistances/:id error:", error);
+    res.status(500).json({ error: "Error actualizando asistencia" });
+  }
+});
+
+app.post(
+  "/api/roadside-assistances/:id/send-tracking-whatsapp",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const now = Date.now();
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de asistencia no valido" });
+      }
+
+      const assistanceResult = await db.query(
+        `
+          SELECT *
+          FROM roadside_assistances
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [id]
+      );
+
+      if (assistanceResult.rows.length === 0) {
+        return res.status(404).json({ error: "Asistencia no encontrada" });
+      }
+
+      const assistance = normalizeRoadsideAssistanceRow(
+        assistanceResult.rows[0]
+      );
+
+      const message = await sendRoadsideTrackingWhatsApp(
+        req,
+        assistance,
+        req.body?.trackingBaseUrl
+      );
+
+      const updatedResult = await db.query(
+        `
+          UPDATE roadside_assistances
+          SET
+            "trackingWhatsappSentAtMs" = $2,
+            "trackingWhatsappSid" = $3,
+            "updatedAtMs" = $2
+          WHERE id = $1
+          RETURNING *
+        `,
+        [id, now, message.sid]
+      );
+
+      await db.query(
+        `
+          INSERT INTO roadside_assistance_events (
+            "assistanceId",
+            status,
+            note,
+            "createdBy",
+            "createdAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          id,
+          assistance.status,
+          "Enlace de seguimiento enviado por WhatsApp",
+          req.body?.createdBy ?? "oficina",
+          now,
+        ]
+      );
+
+      res.json({
+        success: true,
+        sid: message.sid,
+        trackingUrl: buildRoadsideTrackingUrl(
+          req,
+          assistance,
+          req.body?.trackingBaseUrl
+        ),
+        assistance: normalizeRoadsideAssistanceRow(updatedResult.rows[0]),
+      });
+    } catch (error: any) {
+      console.error("POST /api/roadside-assistances/:id/send-tracking-whatsapp error:", {
+        message: error.message,
+        code: error.code,
+        status: error.status,
+        moreInfo: error.moreInfo,
+      });
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+        status: error.status,
+        moreInfo: error.moreInfo,
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/roadside-assistances/:id/status",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const body = req.body ?? {};
+      const now = Date.now();
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de asistencia no valido" });
+      }
+
+      const status = normalizeRoadsideAssistanceStatus(body.status);
+      const timestampField = getRoadsideStatusTimestampField(status);
+
+      const result = await db.query(
+        `
+          UPDATE roadside_assistances
+          SET
+            status = $2,
+            "updatedAtMs" = $3
+            ${
+              timestampField
+                ? `, "${timestampField}" = COALESCE("${timestampField}", $3)`
+                : ""
+            }
+          WHERE id = $1
+          RETURNING *
+        `,
+        [id, status, now]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Asistencia no encontrada" });
+      }
+
+      await db.query(
+        `
+          INSERT INTO roadside_assistance_events (
+            "assistanceId",
+            status,
+            note,
+            "createdBy",
+            "createdAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          id,
+          status,
+          body.note ? String(body.note).trim() : null,
+          body.createdBy ?? "oficina",
+          now,
+        ]
+      );
+
+      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    } catch (error) {
+      console.error("POST /api/roadside-assistances/:id/status error:", error);
+      res.status(500).json({ error: "Error cambiando estado de asistencia" });
+    }
+  }
+);
+
 /* =========================================================
    MAINTENANCE TASKS
 ========================================================= */
@@ -2352,6 +3501,122 @@ app.get("/api/scheduled-tech-statuses", async (_req, res) => {
   }
 });
 
+app.get("/api/agenda-date-reminders", async (_req, res) => {
+  try {
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          "workshopId",
+          kind,
+          title,
+          "startDate",
+          "endDate",
+          color,
+          notes,
+          "techStatusId",
+          "techName",
+          "techStatus"
+        FROM agenda_date_reminders
+        ORDER BY "startDate" ASC, id ASC
+      `
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error("GET /api/agenda-date-reminders error:", error);
+    res.status(500).json({
+      error: "Error cargando recordatorios de agenda",
+    });
+  }
+});
+
+app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body) ? req.body : [];
+
+    await db.query("BEGIN");
+
+    await db.query(`DELETE FROM agenda_date_reminders`);
+
+    for (const item of items) {
+      await db.query(
+        `
+          INSERT INTO agenda_date_reminders (
+            id,
+            "workshopId",
+            kind,
+            title,
+            "startDate",
+            "endDate",
+            color,
+            notes,
+            "techStatusId",
+            "techName",
+            "techStatus"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT (id)
+          DO UPDATE SET
+            "workshopId" = EXCLUDED."workshopId",
+            kind = EXCLUDED.kind,
+            title = EXCLUDED.title,
+            "startDate" = EXCLUDED."startDate",
+            "endDate" = EXCLUDED."endDate",
+            color = EXCLUDED.color,
+            notes = EXCLUDED.notes,
+            "techStatusId" = EXCLUDED."techStatusId",
+            "techName" = EXCLUDED."techName",
+            "techStatus" = EXCLUDED."techStatus"
+        `,
+        [
+          Number(item.id || Date.now()),
+          item.workshopId ?? null,
+          item.kind ?? "normal",
+          String(item.title || ""),
+          String(item.startDate || ""),
+          String(item.endDate || ""),
+          item.color ?? "red",
+          item.notes ?? null,
+          item.techStatusId ?? null,
+          item.techName ?? null,
+          item.techStatus ?? null,
+        ]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    const result = await db.query(
+      `
+        SELECT
+          id,
+          "workshopId",
+          kind,
+          title,
+          "startDate",
+          "endDate",
+          color,
+          notes,
+          "techStatusId",
+          "techName",
+          "techStatus"
+        FROM agenda_date_reminders
+        ORDER BY "startDate" ASC, id ASC
+      `
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => null);
+
+    console.error("PUT /api/agenda-date-reminders error:", error);
+    res.status(500).json({
+      error: "Error guardando recordatorios de agenda",
+    });
+  }
+});
+
 app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
@@ -2928,6 +4193,532 @@ function startAgendaWhatsAppReminderChecker() {
     void checkAgendaWhatsAppReminders();
   }, REMINDER_CHECK_INTERVAL_MS);
 }
+
+
+/* =========================================================
+   ALMACEN NEUMATICOS - OCR ALBARANES
+========================================================= */
+
+type DatosAlbaranAlmacen = {
+  pagina: number;
+  albaran: string | null;
+  fecha: string | null;
+  cliente: string | null;
+  matricula: string | null;
+  numeroVehiculo: string | null;
+  producto: string | null;
+  cantidad: number | null;
+  duplicado: boolean;
+  confianza: "alta" | "media" | "baja";
+  observaciones: string[];
+};
+
+function limpiarJsonOpenAI(texto: string) {
+  const limpio = String(texto || "").trim();
+
+  if (limpio.startsWith("```")) {
+    return limpio
+      .replace(/^```json/i, "")
+      .replace(/^```/i, "")
+      .replace(/```$/i, "")
+      .trim();
+  }
+
+  return limpio;
+}
+
+function normalizarMatricula(valor: unknown) {
+  const texto = String(valor || "")
+    .replace(/\s+/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toUpperCase();
+
+  return texto || null;
+}
+
+function normalizarTextoSimple(valor: unknown) {
+  const texto = String(valor || "").trim();
+  return texto || null;
+}
+
+function normalizarCantidad(valor: unknown) {
+  const numero = Number(
+    String(valor ?? "")
+      .replace(",", ".")
+      .replace(/[^\d.-]/g, "")
+  );
+
+  if (!Number.isFinite(numero) || numero === 0) return null;
+
+  return Math.abs(numero);
+}
+
+function normalizarConfianza(valor: unknown): "alta" | "media" | "baja" {
+  if (valor === "alta" || valor === "media" || valor === "baja") {
+    return valor;
+  }
+
+  return "media";
+}
+
+function normalizarDatosAlbaran(datos: any, indice: number): DatosAlbaranAlmacen {
+  return {
+    pagina: Number(datos?.pagina || indice + 1),
+    albaran: normalizarTextoSimple(datos?.albaran),
+    fecha: normalizarTextoSimple(datos?.fecha),
+    cliente: normalizarTextoSimple(datos?.cliente),
+    matricula: normalizarMatricula(datos?.matricula),
+    numeroVehiculo: normalizarTextoSimple(
+      datos?.numeroVehiculo ??
+        datos?.numero_vehiculo ??
+        datos?.numeroVehículo ??
+        datos?.["NºVEHICULO"]
+    ),
+    producto: normalizarTextoSimple(datos?.producto),
+    cantidad: normalizarCantidad(datos?.cantidad),
+    duplicado: false,
+    confianza: normalizarConfianza(datos?.confianza),
+    observaciones: Array.isArray(datos?.observaciones)
+      ? datos.observaciones.map((item: unknown) => String(item))
+      : [],
+  };
+}
+
+async function comprobarDuplicadoAlbaran(albaran: string | null) {
+  if (!albaran) return false;
+
+  const { data, error } = await supabase
+    .from("movimientos_stock")
+    .select("id")
+    .eq("tipo", "SALIDA")
+    .eq("documento_tipo", "GENES")
+    .eq("documento_numero", albaran)
+    .limit(1);
+
+  if (error) {
+    console.error("Error comprobando duplicado:", error);
+    return false;
+  }
+
+  return Boolean(data && data.length > 0);
+}
+
+async function guardarHistorialOcrAlbaran(
+  datos: DatosAlbaranAlmacen,
+  pdfNombre: string
+) {
+  const { error } = await supabase.from("ocr_albaranes_importados").insert({
+    albaran: datos.albaran,
+    fecha: datos.fecha,
+    cliente: datos.cliente,
+    matricula: datos.matricula,
+    numero_vehiculo: datos.numeroVehiculo,
+    producto: datos.producto,
+    cantidad: datos.cantidad,
+    pdf_nombre: pdfNombre,
+    pagina: datos.pagina,
+    estado: datos.duplicado ? "duplicado" : "pendiente",
+    datos_json: datos,
+  });
+
+  if (error) {
+    console.error("Error guardando historial OCR:", error);
+  }
+}
+
+app.post(
+  "/api/almacen/leer-albaran-pdf",
+  upload.single("albaran"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No se recibió ningún PDF.",
+        });
+      }
+
+      if (req.file.mimetype !== "application/pdf") {
+        return res.status(400).json({
+          success: false,
+          message: "El archivo debe ser un PDF.",
+        });
+      }
+
+      const base64Pdf = req.file.buffer.toString("base64");
+
+      const prompt = `
+Eres un extractor de datos para albaranes escaneados de Comercial Sea / Grupo Soledad.
+
+El PDF puede contener 1 o varios albaranes. Normalmente cada página es un albarán distinto.
+
+Devuelve SOLO JSON válido, sin markdown, con esta estructura exacta:
+
+{
+  "albaranes": [
+    {
+      "pagina": 1,
+      "albaran": "B2_0002525",
+      "fecha": "30/05/2026",
+      "cliente": "EMPRESA PLANA S.L.",
+      "matricula": "9035LVV",
+      "numeroVehiculo": "1234",
+      "producto": "295/80R22.5 HANKOOK AH51",
+      "cantidad": 2,
+      "confianza": "alta",
+      "observaciones": []
+    }
+  ]
+}
+
+Reglas obligatorias:
+- Si el PDF tiene varias páginas, devuelve un objeto por cada albarán detectado.
+- No mezcles datos de páginas distintas.
+- El número de albarán está junto a "Albarán:".
+- La fecha está junto a "Fecha:".
+- La matrícula está en el bloque "Vehículo".
+- El cliente está en el bloque "Cliente".
+- El producto y la cantidad salen de la línea que empieza por "Salidas Almacen Cliente".
+- La cantidad puede venir negativa, por ejemplo -2,00. Devuelve siempre cantidad positiva.
+- Normaliza medidas: 295/80x22.5 y 295/80R22.5 deben devolverse como 295/80R22.5.
+- Si aparece "NºVEHICULO:", "Nº VEHICULO:", "NUMERO VEHICULO:" o "Nº VEHÍCULO:", extrae ese valor en "numeroVehiculo".
+- Si no aparece número de vehículo, devuelve "numeroVehiculo": null.
+- Devuelve null si un campo no se puede leer.
+- "confianza" debe ser "alta", "media" o "baja".
+- Si una página no parece un albarán, no la incluyas.
+`;
+
+      const response = await (openai.responses.create as any)({
+        model: "gpt-4o-mini",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: prompt,
+              },
+              {
+                type: "input_file",
+                filename: req.file.originalname || "albaranes.pdf",
+                file_data: `data:application/pdf;base64,${base64Pdf}`,
+              },
+            ],
+          },
+        ],
+      });
+
+      const textoRespuesta = String(response.output_text || "");
+      const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
+
+      let datosRaw: any;
+
+      try {
+        datosRaw = JSON.parse(jsonTexto);
+      } catch (error) {
+        console.error("Respuesta OCR no parseable:", textoRespuesta);
+
+        return res.status(500).json({
+          success: false,
+          message: "No se pudo interpretar la respuesta del OCR.",
+          raw: textoRespuesta,
+        });
+      }
+
+      const listaRaw = Array.isArray(datosRaw?.albaranes)
+        ? datosRaw.albaranes
+        : Array.isArray(datosRaw)
+          ? datosRaw
+          : datosRaw
+            ? [datosRaw]
+            : [];
+
+      const albaranes: DatosAlbaranAlmacen[] = [];
+
+      for (let i = 0; i < listaRaw.length; i += 1) {
+        const datos = normalizarDatosAlbaran(listaRaw[i], i);
+
+        if (
+          !datos.albaran &&
+          !datos.cliente &&
+          !datos.matricula &&
+          !datos.producto
+        ) {
+          continue;
+        }
+
+        datos.duplicado = await comprobarDuplicadoAlbaran(datos.albaran);
+
+        if (datos.duplicado) {
+          datos.observaciones = [
+            ...datos.observaciones,
+            "Albarán duplicado: ya existe una salida registrada con este número.",
+          ];
+        }
+
+        await guardarHistorialOcrAlbaran(
+          datos,
+          req.file.originalname || "albaranes.pdf"
+        );
+
+        albaranes.push(datos);
+      }
+
+      if (albaranes.length === 0) {
+        return res.status(422).json({
+          success: false,
+          message: "No se detectó ningún albarán válido en el PDF.",
+        });
+      }
+
+      return res.json({
+        success: true,
+        albaranes,
+        datos: albaranes[0],
+      });
+    } catch (error: any) {
+      console.error("POST /api/almacen/leer-albaran-pdf error:", error);
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error?.message || "Error leyendo el albarán PDF con OCR.",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/almacen/leer-entrada-pdf",
+  upload.single("albaran"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No se recibió ningún PDF.",
+        });
+      }
+
+      if (req.file.mimetype !== "application/pdf") {
+        return res.status(400).json({
+          success: false,
+          message: "El archivo debe ser un PDF.",
+        });
+      }
+
+      const base64Pdf = req.file.buffer.toString("base64");
+
+      const prompt = `
+Eres un extractor de datos para ALBARANES DE ENTRADA de neumáticos en el almacén de un CLIENTE.
+
+IMPORTANTE:
+Estos documentos NO son compras a proveedor.
+Son entradas de neumáticos al almacén de un cliente.
+
+El PDF puede contener 1 o varios albaranes. Normalmente cada página es un albarán distinto.
+
+Debes leer:
+- número de albarán
+- fecha
+- número/código de cliente
+- nombre del cliente
+- dirección del cliente
+- SOLO los neumáticos resaltados, subrayados o marcados en amarillo o gris
+- cantidad de cada neumático resaltado
+
+Devuelve SOLO JSON válido, sin markdown, con esta estructura exacta:
+
+{
+  "entradas": [
+    {
+      "pagina": 1,
+      "albaran": "123456",
+      "fecha": "30/05/2026",
+      "codigoCliente": "4300123",
+      "cliente": "TRANSPORTES EJEMPLO S.L.",
+      "direccionCliente": "CALLE EJEMPLO 1, TARRAGONA",
+      "producto": "315/80R22.5 HANKOOK AH51",
+      "cantidad": 4,
+      "ubicacion": null,
+      "confianza": "alta",
+      "observaciones": []
+    }
+  ]
+}
+
+Reglas obligatorias:
+- Extrae el número de albarán.
+- Extrae la fecha.
+- Extrae el número o código de cliente si aparece.
+- Extrae el nombre del cliente.
+- Extrae la dirección del cliente si aparece.
+- Los productos válidos son SOLO neumáticos resaltados, subrayados o marcados en amarillo o gris.
+- Ignora neumáticos no resaltados.
+- Si hay varias líneas resaltadas, devuelve una entrada por cada línea.
+- Si una línea resaltada contiene medida, marca, modelo y cantidad, extrae todo.
+- Si no puedes confirmar visualmente que una línea está resaltada, añade en observaciones: "No se pudo confirmar resaltado".
+- Extrae producto/neumático completo.
+- Extrae cantidad.
+- Si la cantidad aparece negativa, devuelve siempre cantidad positiva.
+- Normaliza medidas: 295/80x22.5 debe ser 295/80R22.5.
+- Si aparece ubicación o almacén, devuélvelo en "ubicacion".
+- Si no aparece ubicación, devuelve null.
+- Devuelve null si un campo no se puede leer.
+- "confianza" debe ser "alta", "media" o "baja".
+- Si una página no parece un albarán de entrada de cliente, no la incluyas.
+`;
+
+      const response = await (openai.responses.create as any)({
+        model: "gpt-4o-mini",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: prompt,
+              },
+              {
+                type: "input_file",
+                filename: req.file.originalname || "entrada.pdf",
+                file_data: `data:application/pdf;base64,${base64Pdf}`,
+              },
+            ],
+          },
+        ],
+      });
+
+      const textoRespuesta = String(response.output_text || "");
+      const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
+
+      let datosRaw: any;
+
+      try {
+        datosRaw = JSON.parse(jsonTexto);
+      } catch (error) {
+        console.error("Respuesta OCR entrada no parseable:", textoRespuesta);
+
+        return res.status(500).json({
+          success: false,
+          message: "No se pudo interpretar la respuesta del OCR de entrada.",
+          raw: textoRespuesta,
+        });
+      }
+
+      const listaRaw = Array.isArray(datosRaw?.entradas)
+        ? datosRaw.entradas
+        : Array.isArray(datosRaw)
+          ? datosRaw
+          : datosRaw
+            ? [datosRaw]
+            : [];
+
+      const entradas = [];
+
+      for (let i = 0; i < listaRaw.length; i += 1) {
+        const item = listaRaw[i];
+
+        const albaran = normalizarTextoSimple(item?.albaran);
+        const fecha = normalizarTextoSimple(item?.fecha);
+        const codigoCliente = normalizarTextoSimple(
+          item?.codigoCliente ?? item?.codigo_cliente ?? item?.numeroCliente
+        );
+        const cliente = normalizarTextoSimple(
+          item?.cliente ?? item?.nombreCliente ?? item?.nombre_cliente
+        );
+        const direccionCliente = normalizarTextoSimple(
+          item?.direccionCliente ?? item?.direccion_cliente ?? item?.direccion
+        );
+        const producto = normalizarTextoSimple(item?.producto);
+        const cantidad = normalizarCantidad(item?.cantidad);
+        const ubicacion = normalizarTextoSimple(item?.ubicacion);
+
+        if (!albaran && !codigoCliente && !cliente && !producto) {
+          continue;
+        }
+
+        const { data: duplicadoData, error: duplicadoError } = await supabase
+          .from("movimientos_stock")
+          .select("id")
+          .eq("tipo", "ENTRADA")
+          .eq("documento_tipo", "GENES")
+          .eq("documento_numero", albaran)
+          .limit(1);
+
+        if (duplicadoError) {
+          console.error("Error comprobando duplicado entrada:", duplicadoError);
+        }
+
+        const duplicado = Boolean(duplicadoData && duplicadoData.length > 0);
+
+        let estado:
+          | "listo"
+          | "duplicado"
+          | "sin_cliente"
+          | "sin_producto"
+          | "sin_ubicacion"
+          | "error" = "listo";
+
+        const observaciones = Array.isArray(item?.observaciones)
+          ? item.observaciones.map((x: unknown) => String(x))
+          : [];
+
+        if (duplicado) {
+          estado = "duplicado";
+          observaciones.push(
+            "Albarán duplicado: ya existe una entrada registrada con este número."
+          );
+        } else if (!codigoCliente && !cliente) {
+          estado = "sin_cliente";
+        } else if (!producto) {
+          estado = "sin_producto";
+        } else if (!ubicacion) {
+          estado = "sin_ubicacion";
+        }
+
+        entradas.push({
+          pagina: Number(item?.pagina || i + 1),
+          albaran,
+          fecha,
+          codigoCliente,
+          cliente,
+          direccionCliente,
+          producto,
+          cantidad,
+          ubicacion,
+          estado,
+          confianza: normalizarConfianza(item?.confianza),
+          observaciones,
+        });
+      }
+
+      if (entradas.length === 0) {
+        return res.status(422).json({
+          success: false,
+          message:
+            "No se detectó ningún albarán de entrada válido en el PDF.",
+        });
+      }
+
+      return res.json({
+        success: true,
+        entradas,
+        datos: entradas[0],
+      });
+    } catch (error: any) {
+      console.error("POST /api/almacen/leer-entrada-pdf error:", error);
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error?.message || "Error leyendo el albarán de entrada PDF con OCR.",
+      });
+    }
+  }
+);
+
+
 
 /* =========================================================
    FRONTEND REACT / VITE

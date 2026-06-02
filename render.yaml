@@ -1,0 +1,61 @@
+services:
+  - type: web
+    name: sea-tarragona
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AGENDA_TIME_ZONE
+        value: Europe/Madrid
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: avatars
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SUPERVISOR_PASSWORD
+        sync: false
+      - key: SCREENS_PASSWORD
+        sync: false
+      - key: TV75_PASSWORD
+        sync: false
+      - key: BACKUP_PASSWORD
+        sync: false
+      - key: ROADSIDE_OPERATOR_CODE
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        sync: false
+      - key: TWILIO_CONTENT_SID
+        sync: false
+      - key: TWILIO_ROADSIDE_CONTENT_SID
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false

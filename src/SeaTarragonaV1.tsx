@@ -217,6 +217,29 @@ import {
   loadScheduledTechStatusesFromBackend,
   saveScheduledTechStatusesToBackend,
 } from "./modules/scheduledTechStatusApi";
+import RoadsideAssistanceView from "./components/RoadsideAssistanceView";
+import {
+  createRoadsideAssistanceInBackend,
+  createRoadsideVehicleInBackend,
+  deactivateRoadsideVehicleInBackend,
+  loadRoadsideAssistancesFromBackend,
+  loadRoadsideOperatorCodesFromBackend,
+  loadRoadsideVehiclesFromBackend,
+  sendRoadsideTrackingWhatsappInBackend,
+  updateRoadsideAssistanceInBackend,
+  updateRoadsideAssistanceStatusInBackend,
+  updateRoadsideOperatorCodeInBackend,
+  updateRoadsideVehicleInBackend,
+} from "./modules/roadsideAssistanceApi";
+import type {
+  RoadsideAssistance,
+  RoadsideAssistanceDraft,
+  RoadsideAssistanceEditDraft,
+  RoadsideAssistanceStatus,
+  RoadsideOperatorCode,
+  RoadsideVehicle,
+  RoadsideVehicleDraft,
+} from "./modules/roadsideAssistanceTypes";
 function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
   if (tech.currentJobId == null) return jobs;
 
@@ -314,6 +337,21 @@ useEffect(() => {
 }, []);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
+  const [roadsideAssistances, setRoadsideAssistances] = useState<
+    RoadsideAssistance[]
+  >([]);
+  const [roadsideVehicles, setRoadsideVehicles] = useState<RoadsideVehicle[]>(
+    []
+  );
+  const [roadsideOperatorCodes, setRoadsideOperatorCodes] = useState<
+    RoadsideOperatorCode[]
+  >([]);
+  const [roadsideAssistancesLoading, setRoadsideAssistancesLoading] =
+    useState(false);
+  const [roadsideAssistanceError, setRoadsideAssistanceError] = useState("");
+  const [roadsideVehicleError, setRoadsideVehicleError] = useState("");
+  const [roadsideOperatorCodeError, setRoadsideOperatorCodeError] =
+    useState("");
   const scheduledJobsLoadedRef = useRef(false);
   const scheduledJobsDirtyRef = useRef(false);
   const scheduledJobsSaveVersionRef = useRef(0);
@@ -552,6 +590,22 @@ const visibleScheduledJobs = useMemo(
   [scheduledJobs, selectedWorkshopId]
 );
 
+const visibleRoadsideAssistances = useMemo(
+  () =>
+    roadsideAssistances.filter((assistance) =>
+      belongsToWorkshop(assistance, selectedWorkshopId)
+    ),
+  [roadsideAssistances, selectedWorkshopId]
+);
+
+const visibleRoadsideVehicles = useMemo(
+  () =>
+    roadsideVehicles.filter((vehicle) =>
+      belongsToWorkshop(vehicle, selectedWorkshopId)
+    ),
+  [roadsideVehicles, selectedWorkshopId]
+);
+
 const visibleTechs = useMemo(() => {
   const visibleJobIds = new Set(visibleJobs.map((job) => job.id));
 
@@ -618,6 +672,14 @@ useEffect(() => {
     cancelled = true;
   };
 }, [isAuthenticated]);
+
+useEffect(() => {
+  if (!isAuthenticated || !isSupervisor) return;
+
+  void reloadRoadsideAssistancesFromBackend();
+  void reloadRoadsideVehiclesFromBackend();
+  void reloadRoadsideOperatorCodesFromBackend();
+}, [isAuthenticated, isSupervisor]);
 
 useEffect(() => {
   setMaintenanceDraft((prev) => {
@@ -1424,6 +1486,257 @@ async function reloadScheduledJobsFromBackend() {
   } catch (error) {
     console.error("Error recargando agenda:", error);
   }
+}
+
+async function reloadRoadsideAssistancesFromBackend() {
+  setRoadsideAssistancesLoading(true);
+  setRoadsideAssistanceError("");
+
+  try {
+    const data = await loadRoadsideAssistancesFromBackend(true);
+    setRoadsideAssistances(data);
+  } catch (error) {
+    console.error("Error recargando asistencias carretera:", error);
+    setRoadsideAssistanceError(
+      error instanceof Error
+        ? error.message
+        : "Error cargando asistencias carretera."
+    );
+  } finally {
+    setRoadsideAssistancesLoading(false);
+  }
+}
+
+async function reloadRoadsideVehiclesFromBackend() {
+  setRoadsideVehicleError("");
+
+  try {
+    const data = await loadRoadsideVehiclesFromBackend(true);
+    setRoadsideVehicles(data);
+  } catch (error) {
+    console.error("Error recargando furgonetas carretera:", error);
+    setRoadsideVehicleError(
+      error instanceof Error ? error.message : "Error cargando furgonetas."
+    );
+  }
+}
+
+async function reloadRoadsideOperatorCodesFromBackend() {
+  setRoadsideOperatorCodeError("");
+
+  try {
+    const data = await loadRoadsideOperatorCodesFromBackend();
+    setRoadsideOperatorCodes(data);
+  } catch (error) {
+    console.error("Error recargando codigos de operario:", error);
+    setRoadsideOperatorCodeError(
+      error instanceof Error
+        ? error.message
+        : "Error cargando codigos de operario."
+    );
+  }
+}
+
+async function createRoadsideVehicle(draft: RoadsideVehicleDraft) {
+  const created = await createRoadsideVehicleInBackend({
+    ...draft,
+    workshopId: selectedWorkshopId,
+  });
+
+  setRoadsideVehicles((prev) => [
+    created,
+    ...prev.filter((item) => item.id !== created.id),
+  ]);
+
+  appendLog(`Furgoneta creada: ${created.name}.`);
+}
+
+async function updateRoadsideVehicle(
+  vehicle: RoadsideVehicle,
+  draft: RoadsideVehicleDraft
+) {
+  const updated = await updateRoadsideVehicleInBackend(vehicle.id, {
+    ...draft,
+    workshopId: vehicle.workshopId ?? selectedWorkshopId,
+  });
+
+  setRoadsideVehicles((prev) =>
+    prev.map((item) => (item.id === updated.id ? updated : item))
+  );
+
+  appendLog(`Furgoneta actualizada: ${updated.name}.`);
+}
+
+async function deactivateRoadsideVehicle(vehicle: RoadsideVehicle) {
+  const updated = await deactivateRoadsideVehicleInBackend(vehicle.id);
+
+  setRoadsideVehicles((prev) =>
+    prev.map((item) => (item.id === updated.id ? updated : item))
+  );
+
+  appendLog(`Furgoneta desactivada: ${updated.name}.`);
+}
+
+async function updateRoadsideOperatorCode(techName: string, code: string) {
+  const updated = await updateRoadsideOperatorCodeInBackend(techName, code);
+
+  setRoadsideOperatorCodes((prev) => {
+    const exists = prev.some((item) => item.techName === updated.techName);
+
+    if (!exists) {
+      return [...prev, updated];
+    }
+
+    return prev.map((item) =>
+      item.techName === updated.techName ? updated : item
+    );
+  });
+
+  appendLog(`Codigo operario actualizado: ${updated.techName}.`);
+}
+
+async function createRoadsideAssistance(draft: RoadsideAssistanceDraft) {
+  const created = await createRoadsideAssistanceInBackend({
+    ...draft,
+    workshopId: selectedWorkshopId,
+  });
+
+  let assistanceToStore = created;
+
+  if (draft.sendTrackingWhatsapp && created.customerPhone) {
+    try {
+      const result = await sendRoadsideTrackingWhatsappInBackend(created.id);
+      assistanceToStore = result.assistance;
+      appendLog(
+        `WhatsApp seguimiento enviado a ${created.customerPhone}: ${
+          created.plate || created.customerName || created.id
+        }.`
+      );
+    } catch (error) {
+      console.error("Error enviando WhatsApp seguimiento:", error);
+      appendLog(
+        `Asistencia creada pero WhatsApp no enviado: ${
+          created.plate || created.customerName || created.id
+        }.`
+      );
+    }
+  }
+
+  setRoadsideAssistances((prev) => [
+    assistanceToStore,
+    ...prev.filter((item) => item.id !== assistanceToStore.id),
+  ]);
+
+  appendLog(
+    `Asistencia carretera creada: ${
+      assistanceToStore.plate ||
+      assistanceToStore.customerName ||
+      assistanceToStore.customerPhone
+    }.`
+  );
+}
+
+async function updateRoadsideAssistance(
+  assistance: RoadsideAssistance,
+  draft: RoadsideAssistanceEditDraft
+) {
+  let updated = await updateRoadsideAssistanceInBackend(assistance.id, {
+    ...draft,
+    workshopId: assistance.workshopId ?? selectedWorkshopId,
+  });
+
+  const assignedNow =
+    !assistance.assignedTechName && Boolean(updated.assignedTechName);
+
+  if (
+    (draft.sendTrackingWhatsapp || assignedNow) &&
+    updated.customerPhone &&
+    !updated.trackingWhatsappSentAtMs
+  ) {
+    try {
+      const result = await sendRoadsideTrackingWhatsappInBackend(updated.id);
+      updated = result.assistance;
+      appendLog(
+        `WhatsApp seguimiento enviado a ${updated.customerPhone}: ${
+          updated.plate || updated.customerName || updated.id
+        }.`
+      );
+    } catch (error) {
+      console.error("Error enviando WhatsApp seguimiento:", error);
+      appendLog(
+        `Asistencia actualizada pero WhatsApp no enviado: ${
+          updated.plate || updated.customerName || updated.id
+        }.`
+      );
+    }
+  }
+
+  setRoadsideAssistances((prev) =>
+    prev.map((item) => (item.id === updated.id ? updated : item))
+  );
+
+  appendLog(
+    `Asistencia carretera actualizada: ${
+      updated.plate || updated.customerName || updated.customerPhone
+    }.`
+  );
+}
+
+async function sendRoadsideTrackingWhatsapp(assistance: RoadsideAssistance) {
+  const result = await sendRoadsideTrackingWhatsappInBackend(assistance.id);
+
+  setRoadsideAssistances((prev) =>
+    prev.map((item) =>
+      item.id === result.assistance.id ? result.assistance : item
+    )
+  );
+
+  appendLog(
+    `WhatsApp seguimiento enviado a ${assistance.customerPhone}: ${
+      assistance.plate || assistance.customerName || assistance.id
+    }.`
+  );
+}
+
+async function updateRoadsideAssistanceStatus(
+  assistance: RoadsideAssistance,
+  status: RoadsideAssistanceStatus
+) {
+  let updated = await updateRoadsideAssistanceStatusInBackend(
+    assistance.id,
+    status
+  );
+
+  if (
+    status === "asignada" &&
+    updated.customerPhone &&
+    !updated.trackingWhatsappSentAtMs
+  ) {
+    try {
+      const result = await sendRoadsideTrackingWhatsappInBackend(updated.id);
+      updated = result.assistance;
+      appendLog(
+        `WhatsApp seguimiento enviado a ${updated.customerPhone}: ${
+          updated.plate || updated.customerName || updated.id
+        }.`
+      );
+    } catch (error) {
+      console.error("Error enviando WhatsApp seguimiento:", error);
+      appendLog(
+        `Estado actualizado pero WhatsApp no enviado: ${
+          updated.plate || updated.customerName || updated.id
+        }.`
+      );
+    }
+  }
+
+  setRoadsideAssistances((prev) =>
+    prev.map((item) => (item.id === updated.id ? updated : item))
+  );
+
+  appendLog(
+    `Asistencia carretera ${updated.id}: estado ${updated.status}.`
+  );
 }
 
 async function saveScheduledJobsToBackend(
@@ -4664,6 +4977,37 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
   );
 }
 
+if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
+  return (
+    <RoadsideAssistanceView
+      assistances={visibleRoadsideAssistances}
+      techs={visibleTechs}
+      vehicles={visibleRoadsideVehicles}
+      operatorCodes={roadsideOperatorCodes}
+      loading={roadsideAssistancesLoading}
+      error={
+        roadsideAssistanceError ||
+        roadsideVehicleError ||
+        roadsideOperatorCodeError
+      }
+      onBack={() => setView("operativo")}
+      onRefresh={() => {
+        void reloadRoadsideAssistancesFromBackend();
+        void reloadRoadsideVehiclesFromBackend();
+        void reloadRoadsideOperatorCodesFromBackend();
+      }}
+      onCreate={createRoadsideAssistance}
+      onUpdate={updateRoadsideAssistance}
+      onCreateVehicle={createRoadsideVehicle}
+      onUpdateVehicle={updateRoadsideVehicle}
+      onDeactivateVehicle={deactivateRoadsideVehicle}
+      onUpdateOperatorCode={updateRoadsideOperatorCode}
+      onSendTrackingWhatsapp={sendRoadsideTrackingWhatsapp}
+      onStatusChange={updateRoadsideAssistanceStatus}
+    />
+  );
+}
+
 if (view === "ranking" && canAccessView(userRole, "ranking")) {
   return (
     <WorkRankingView
@@ -4808,6 +5152,25 @@ return (
 </button>
 
 
+  )}
+
+  {canAccessView(userRole, "asistencias") && (
+    <button
+      type="button"
+      onClick={() => {
+        setView("asistencias");
+        void reloadRoadsideAssistancesFromBackend();
+        void reloadRoadsideVehiclesFromBackend();
+        void reloadRoadsideOperatorCodesFromBackend();
+      }}
+      className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+        view === "asistencias"
+          ? "border border-red-300 bg-red-100 text-red-950 shadow-sm"
+          : "border border-red-200 bg-red-50 text-red-800 hover:bg-red-100"
+      }`}
+    >
+      Asistencias
+    </button>
   )}
 
 {canAccessView(userRole, "entradas") && (

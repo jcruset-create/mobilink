@@ -1,0 +1,1652 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  Ambulance,
+  CheckCircle2,
+  Clock3,
+  Copy,
+  Edit3,
+  ExternalLink,
+  Home,
+  KeyRound,
+  MapPin,
+  Navigation,
+  Phone,
+  Plus,
+  RefreshCw,
+  Save,
+  Send,
+  Trash2,
+  Truck,
+  XCircle,
+} from "lucide-react";
+
+import type { Tech } from "../modules/workshopTypes";
+import type {
+  RoadsideAssistance,
+  RoadsideAssistanceDraft,
+  RoadsideAssistanceEditDraft,
+  RoadsideAssistanceStatus,
+  RoadsideOperatorCode,
+  RoadsideVehicle,
+  RoadsideVehicleDraft,
+} from "../modules/roadsideAssistanceTypes";
+import {
+  ROADSIDE_ASSISTANCE_STATUS_FLOW,
+  ROADSIDE_ASSISTANCE_STATUS_LABELS,
+} from "../modules/roadsideAssistanceTypes";
+
+const INITIAL_DRAFT: RoadsideAssistanceDraft = {
+  customerName: "",
+  customerPhone: "",
+  address: "",
+  googleMapsUrl: "",
+  plate: "",
+  vehicleDescription: "",
+  webfleetVehicleId: "",
+  assignedTechName: "",
+  assignedVehicleName: "",
+  priority: "normal",
+  notes: "",
+  sendTrackingWhatsapp: true,
+};
+
+const INITIAL_EDIT_DRAFT: RoadsideAssistanceEditDraft = {
+  ...INITIAL_DRAFT,
+  status: "pendiente",
+  webfleetVehicleId: "",
+  latitude: "",
+  longitude: "",
+};
+
+const INITIAL_VEHICLE_DRAFT: RoadsideVehicleDraft = {
+  name: "",
+  plate: "",
+  webfleetVehicleId: "",
+  notes: "",
+  active: true,
+};
+
+const STATUS_BADGES: Record<RoadsideAssistanceStatus, string> = {
+  pendiente: "border-amber-200 bg-amber-50 text-amber-800",
+  asignada: "border-sky-200 bg-sky-50 text-sky-800",
+  en_camino: "border-blue-200 bg-blue-50 text-blue-800",
+  en_punto: "border-violet-200 bg-violet-50 text-violet-800",
+  finalizada: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  llegada_taller: "border-slate-200 bg-slate-100 text-slate-700",
+  cancelada: "border-red-200 bg-red-50 text-red-800",
+};
+
+function formatTime(value?: number | null) {
+  if (!value) return "-";
+
+  return new Date(value).toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getNextStatus(
+  status: RoadsideAssistanceStatus
+): RoadsideAssistanceStatus | null {
+  const index = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
+  if (index === -1) return null;
+
+  return ROADSIDE_ASSISTANCE_STATUS_FLOW[index + 1] ?? null;
+}
+
+function getActionLabel(status: RoadsideAssistanceStatus) {
+  if (status === "pendiente") return "Asignar";
+  if (status === "asignada") return "En camino";
+  if (status === "en_camino") return "Llegada";
+  if (status === "en_punto") return "Finalizar";
+  if (status === "finalizada") return "Taller";
+  return "";
+}
+
+function getActionIcon(status: RoadsideAssistanceStatus) {
+  if (status === "asignada") return Navigation;
+  if (status === "en_camino") return MapPin;
+  if (status === "en_punto") return CheckCircle2;
+  if (status === "finalizada") return Home;
+  return Send;
+}
+
+function isClosed(status: RoadsideAssistanceStatus) {
+  return status === "llegada_taller" || status === "cancelada";
+}
+
+function getTrackingUrl(assistance: RoadsideAssistance) {
+  const path = `/seguimiento/${assistance.trackingToken}`;
+
+  if (typeof window === "undefined") return path;
+
+  return `${window.location.origin}${path}`;
+}
+
+function getMapUrl(assistance: RoadsideAssistance) {
+  if (assistance.googleMapsUrl) return assistance.googleMapsUrl;
+
+  if (assistance.latitude != null && assistance.longitude != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${assistance.latitude},${assistance.longitude}`;
+  }
+
+  if (assistance.address) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      assistance.address
+    )}`;
+  }
+
+  return "";
+}
+
+function buildEditDraft(
+  assistance: RoadsideAssistance
+): RoadsideAssistanceEditDraft {
+  return {
+    customerName: assistance.customerName || "",
+    customerPhone: assistance.customerPhone || "",
+    address: assistance.address || "",
+    googleMapsUrl: assistance.googleMapsUrl || "",
+    plate: assistance.plate || "",
+    vehicleDescription: assistance.vehicleDescription || "",
+    assignedTechName: assistance.assignedTechName || "",
+    assignedVehicleName: assistance.assignedVehicleName || "",
+    priority: assistance.priority || "normal",
+    notes: assistance.notes || "",
+    status: assistance.status || "pendiente",
+    webfleetVehicleId: assistance.webfleetVehicleId || "",
+    latitude:
+      assistance.latitude == null ? "" : String(assistance.latitude),
+    longitude:
+      assistance.longitude == null ? "" : String(assistance.longitude),
+    sendTrackingWhatsapp: false,
+  };
+}
+
+function buildVehicleDraft(vehicle: RoadsideVehicle): RoadsideVehicleDraft {
+  return {
+    name: vehicle.name || "",
+    plate: vehicle.plate || "",
+    webfleetVehicleId: vehicle.webfleetVehicleId || "",
+    notes: vehicle.notes || "",
+    active: vehicle.active !== false,
+  };
+}
+
+function getVehicleLabel(vehicle: RoadsideVehicle) {
+  return [vehicle.name, vehicle.plate].filter(Boolean).join(" - ");
+}
+
+type Props = {
+  assistances: RoadsideAssistance[];
+  techs: Tech[];
+  vehicles: RoadsideVehicle[];
+  operatorCodes: RoadsideOperatorCode[];
+  loading: boolean;
+  error: string;
+  onBack: () => void;
+  onRefresh: () => void;
+  onCreate: (draft: RoadsideAssistanceDraft) => Promise<void>;
+  onUpdate: (
+    assistance: RoadsideAssistance,
+    draft: RoadsideAssistanceEditDraft
+  ) => Promise<void>;
+  onCreateVehicle: (draft: RoadsideVehicleDraft) => Promise<void>;
+  onUpdateVehicle: (
+    vehicle: RoadsideVehicle,
+    draft: RoadsideVehicleDraft
+  ) => Promise<void>;
+  onDeactivateVehicle: (vehicle: RoadsideVehicle) => Promise<void>;
+  onUpdateOperatorCode: (
+    techName: string,
+    code: string
+  ) => Promise<void>;
+  onSendTrackingWhatsapp: (assistance: RoadsideAssistance) => Promise<void>;
+  onStatusChange: (
+    assistance: RoadsideAssistance,
+    status: RoadsideAssistanceStatus
+  ) => Promise<void>;
+};
+
+export default function RoadsideAssistanceView({
+  assistances,
+  techs,
+  vehicles,
+  operatorCodes,
+  loading,
+  error,
+  onBack,
+  onRefresh,
+  onCreate,
+  onUpdate,
+  onCreateVehicle,
+  onUpdateVehicle,
+  onDeactivateVehicle,
+  onUpdateOperatorCode,
+  onSendTrackingWhatsapp,
+  onStatusChange,
+}: Props) {
+  const [draft, setDraft] = useState<RoadsideAssistanceDraft>(INITIAL_DRAFT);
+  const [editingAssistance, setEditingAssistance] =
+    useState<RoadsideAssistance | null>(null);
+  const [editDraft, setEditDraft] =
+    useState<RoadsideAssistanceEditDraft>(INITIAL_EDIT_DRAFT);
+  const [saving, setSaving] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [editError, setEditError] = useState("");
+  const [vehicleDraft, setVehicleDraft] =
+    useState<RoadsideVehicleDraft>(INITIAL_VEHICLE_DRAFT);
+  const [editingVehicle, setEditingVehicle] = useState<RoadsideVehicle | null>(
+    null
+  );
+  const [vehicleSaving, setVehicleSaving] = useState(false);
+  const [vehicleError, setVehicleError] = useState("");
+  const [operatorCodeDrafts, setOperatorCodeDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [operatorCodeSavingName, setOperatorCodeSavingName] = useState<
+    string | null
+  >(null);
+  const [operatorCodeError, setOperatorCodeError] = useState("");
+  const [changingId, setChangingId] = useState<number | null>(null);
+  const [sendingWhatsappId, setSendingWhatsappId] = useState<number | null>(
+    null
+  );
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+
+  const activeAssistances = useMemo(
+    () => assistances.filter((item) => !isClosed(item.status)),
+    [assistances]
+  );
+
+  const closedAssistances = useMemo(
+    () => assistances.filter((item) => isClosed(item.status)).slice(0, 8),
+    [assistances]
+  );
+
+  const statusCounts = useMemo(() => {
+    return ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status) => ({
+      status,
+      count: assistances.filter((item) => item.status === status).length,
+    }));
+  }, [assistances]);
+
+  const activeVehicles = useMemo(
+    () => vehicles.filter((vehicle) => vehicle.active),
+    [vehicles]
+  );
+
+  const operatorCodesByTech = useMemo(() => {
+    return new Map(operatorCodes.map((item) => [item.techName, item]));
+  }, [operatorCodes]);
+
+  useEffect(() => {
+    const nextDrafts: Record<string, string> = {};
+
+    operatorCodes.forEach((item) => {
+      nextDrafts[item.techName] = item.code || "";
+    });
+
+    techs.forEach((tech) => {
+      if (!(tech.name in nextDrafts)) {
+        nextDrafts[tech.name] = "";
+      }
+    });
+
+    setOperatorCodeDrafts(nextDrafts);
+  }, [operatorCodes, techs]);
+
+  async function handleCreate() {
+    setLocalError("");
+
+    const hasCustomer =
+      draft.customerName.trim() || draft.customerPhone.trim();
+    const hasLocation =
+      draft.address.trim() || draft.googleMapsUrl.trim();
+
+    if (!hasCustomer) {
+      setLocalError("Indica cliente o telefono.");
+      return;
+    }
+
+    if (!hasLocation) {
+      setLocalError("Indica direccion o enlace de Google Maps.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await onCreate(draft);
+      setDraft(INITIAL_DRAFT);
+    } catch (createError) {
+      setLocalError(
+        createError instanceof Error
+          ? createError.message
+          : "No se pudo crear la asistencia."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function applyVehicleToDraft(vehicleName: string) {
+    const vehicle = activeVehicles.find((item) => item.name === vehicleName);
+
+    setDraft((prev) => ({
+      ...prev,
+      assignedVehicleName: vehicleName,
+      webfleetVehicleId: vehicle?.webfleetVehicleId ?? prev.webfleetVehicleId,
+    }));
+  }
+
+  function applyVehicleToEditDraft(vehicleName: string) {
+    const vehicle = activeVehicles.find((item) => item.name === vehicleName);
+
+    setEditDraft((prev) => ({
+      ...prev,
+      assignedVehicleName: vehicleName,
+      webfleetVehicleId: vehicle?.webfleetVehicleId || prev.webfleetVehicleId,
+    }));
+  }
+
+  function startVehicleEdit(vehicle: RoadsideVehicle) {
+    setEditingVehicle(vehicle);
+    setVehicleDraft(buildVehicleDraft(vehicle));
+    setVehicleError("");
+  }
+
+  function resetVehicleForm() {
+    setEditingVehicle(null);
+    setVehicleDraft(INITIAL_VEHICLE_DRAFT);
+    setVehicleError("");
+  }
+
+  async function handleSaveVehicle() {
+    setVehicleError("");
+
+    if (!vehicleDraft.name.trim()) {
+      setVehicleError("El nombre de la furgoneta es obligatorio.");
+      return;
+    }
+
+    setVehicleSaving(true);
+
+    try {
+      if (editingVehicle) {
+        await onUpdateVehicle(editingVehicle, vehicleDraft);
+      } else {
+        await onCreateVehicle(vehicleDraft);
+      }
+
+      resetVehicleForm();
+    } catch (saveError) {
+      setVehicleError(
+        saveError instanceof Error
+          ? saveError.message
+          : "No se pudo guardar la furgoneta."
+      );
+    } finally {
+      setVehicleSaving(false);
+    }
+  }
+
+  async function handleDeactivateVehicle(vehicle: RoadsideVehicle) {
+    setVehicleError("");
+    setVehicleSaving(true);
+
+    try {
+      await onDeactivateVehicle(vehicle);
+
+      if (editingVehicle?.id === vehicle.id) {
+        resetVehicleForm();
+      }
+    } catch (deleteError) {
+      setVehicleError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "No se pudo desactivar la furgoneta."
+      );
+    } finally {
+      setVehicleSaving(false);
+    }
+  }
+
+  function generateOperatorCode(techName: string) {
+    const number =
+      typeof window !== "undefined" && window.crypto
+        ? window.crypto.getRandomValues(new Uint32Array(1))[0] % 9000
+        : Math.floor(Math.random() * 9000);
+
+    setOperatorCodeDrafts((prev) => ({
+      ...prev,
+      [techName]: String(1000 + number),
+    }));
+  }
+
+  async function handleSaveOperatorCode(techName: string) {
+    const code = String(operatorCodeDrafts[techName] || "").trim();
+
+    setOperatorCodeError("");
+
+    if (code.length < 4) {
+      setOperatorCodeError("El codigo debe tener al menos 4 caracteres.");
+      return;
+    }
+
+    setOperatorCodeSavingName(techName);
+
+    try {
+      await onUpdateOperatorCode(techName, code);
+    } catch (saveError) {
+      setOperatorCodeError(
+        saveError instanceof Error
+          ? saveError.message
+          : "No se pudo guardar el codigo."
+      );
+    } finally {
+      setOperatorCodeSavingName(null);
+    }
+  }
+
+  async function handleStatusChange(
+    assistance: RoadsideAssistance,
+    status: RoadsideAssistanceStatus
+  ) {
+    setChangingId(assistance.id);
+
+    try {
+      await onStatusChange(assistance, status);
+    } finally {
+      setChangingId(null);
+    }
+  }
+
+  function openEditor(assistance: RoadsideAssistance) {
+    setEditingAssistance(assistance);
+    setEditDraft(buildEditDraft(assistance));
+    setEditError("");
+  }
+
+  function closeEditor() {
+    setEditingAssistance(null);
+    setEditDraft(INITIAL_EDIT_DRAFT);
+    setEditError("");
+  }
+
+  async function handleUpdate() {
+    if (!editingAssistance) return;
+
+    setEditError("");
+
+    const hasCustomer =
+      editDraft.customerName.trim() || editDraft.customerPhone.trim();
+    const hasLocation =
+      editDraft.address.trim() ||
+      editDraft.googleMapsUrl.trim() ||
+      (editDraft.latitude.trim() && editDraft.longitude.trim());
+
+    if (!hasCustomer) {
+      setEditError("Indica cliente o telefono.");
+      return;
+    }
+
+    if (!hasLocation) {
+      setEditError("Indica direccion, enlace de Google Maps o coordenadas.");
+      return;
+    }
+
+    setSavingEdit(true);
+
+    try {
+      await onUpdate(editingAssistance, editDraft);
+      closeEditor();
+    } catch (updateError) {
+      setEditError(
+        updateError instanceof Error
+          ? updateError.message
+          : "No se pudo guardar la asistencia."
+      );
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function copyTrackingLink(assistance: RoadsideAssistance) {
+    const url = getTrackingUrl(assistance);
+
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedId(assistance.id);
+      window.setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setLocalError("No se pudo copiar el enlace.");
+    }
+  }
+
+  async function handleSendTrackingWhatsapp(assistance: RoadsideAssistance) {
+    setLocalError("");
+    setSendingWhatsappId(assistance.id);
+
+    try {
+      await onSendTrackingWhatsapp(assistance);
+    } catch (sendError) {
+      setLocalError(
+        sendError instanceof Error
+          ? sendError.message
+          : "No se pudo enviar el WhatsApp."
+      );
+    } finally {
+      setSendingWhatsappId(null);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900">
+      <div className="mx-auto max-w-[1500px] space-y-5">
+        <header className="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-red-200 bg-red-50">
+              <Ambulance className="h-6 w-6 text-red-700" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black">Asistencias carretera</h1>
+              <div className="text-sm font-medium text-slate-500">
+                {activeAssistances.length} activas
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Actualizar
+            </button>
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+            >
+              Volver
+            </button>
+          </div>
+        </header>
+
+        <section className="grid gap-3 md:grid-cols-6">
+          {statusCounts.map(({ status, count }) => (
+            <div
+              key={status}
+              className={`rounded-lg border px-3 py-2 ${STATUS_BADGES[status]}`}
+            >
+              <div className="text-[11px] font-black uppercase">
+                {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
+              </div>
+              <div className="mt-1 text-2xl font-black">{count}</div>
+            </div>
+          ))}
+        </section>
+
+        <div className="grid gap-5 xl:grid-cols-[390px_minmax(0,1fr)]">
+          <div className="space-y-5">
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-black uppercase text-slate-700">
+                Nueva asistencia
+              </h2>
+              <Plus className="h-5 w-5 text-slate-500" />
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Cliente
+                  </span>
+                  <input
+                    value={draft.customerName}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        customerName: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Telefono WhatsApp
+                  </span>
+                  <input
+                    value={draft.customerPhone}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        customerPhone: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+              </div>
+
+              <label className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={draft.sendTrackingWhatsapp}
+                  onChange={(event) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      sendTrackingWhatsapp: event.target.checked,
+                    }))
+                  }
+                />
+                <span className="text-sm font-black text-emerald-800">
+                  Enviar WhatsApp con enlace privado al crear
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Direccion
+                </span>
+                <input
+                  value={draft.address}
+                  onChange={(event) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      address: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Enlace Google Maps
+                </span>
+                <input
+                  value={draft.googleMapsUrl}
+                  onChange={(event) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      googleMapsUrl: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </label>
+
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Matricula
+                  </span>
+                  <input
+                    value={draft.plate}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        plate: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Vehiculo
+                  </span>
+                  <input
+                    value={draft.vehicleDescription}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        vehicleDescription: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Operario
+                  </span>
+                  <select
+                    value={draft.assignedTechName}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        assignedTechName: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    <option value="">Sin asignar</option>
+                    {techs.map((tech) => (
+                      <option key={tech.name} value={tech.name}>
+                        {tech.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Furgoneta
+                  </span>
+                  <select
+                    value={draft.assignedVehicleName}
+                    onChange={(event) =>
+                      applyVehicleToDraft(event.target.value)
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    <option value="">Sin asignar</option>
+                    {activeVehicles.map((vehicle) => (
+                      <option key={vehicle.id} value={vehicle.name}>
+                        {getVehicleLabel(vehicle)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {(["normal", "urgente"] as const).map((priority) => (
+                  <button
+                    key={priority}
+                    type="button"
+                    onClick={() =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        priority,
+                      }))
+                    }
+                    className={`rounded-lg border px-3 py-2 text-sm font-black ${
+                      draft.priority === priority
+                        ? "border-red-300 bg-red-50 text-red-800"
+                        : "border-slate-200 bg-white text-slate-600"
+                    }`}
+                  >
+                    {priority === "urgente" ? "Urgente" : "Normal"}
+                  </button>
+                ))}
+              </div>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Observaciones
+                </span>
+                <textarea
+                  value={draft.notes}
+                  onChange={(event) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      notes: event.target.value,
+                    }))
+                  }
+                  rows={3}
+                  className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </label>
+
+              {(localError || error) && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  {localError || error}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleCreate}
+                disabled={saving}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Plus className="h-4 w-4" />
+                {saving ? "Guardando..." : "Crear asistencia"}
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-black uppercase text-slate-700">
+                Furgonetas
+              </h2>
+              <Truck className="h-5 w-5 text-slate-500" />
+            </div>
+
+            <div className="space-y-3">
+              <input
+                value={vehicleDraft.name}
+                onChange={(event) =>
+                  setVehicleDraft((prev) => ({
+                    ...prev,
+                    name: event.target.value,
+                  }))
+                }
+                placeholder="Nombre, ejemplo: Furgoneta 1"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+              />
+
+              <input
+                value={vehicleDraft.plate}
+                onChange={(event) =>
+                  setVehicleDraft((prev) => ({
+                    ...prev,
+                    plate: event.target.value.toUpperCase(),
+                  }))
+                }
+                placeholder="Matricula"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+              />
+
+              <input
+                value={vehicleDraft.webfleetVehicleId}
+                onChange={(event) =>
+                  setVehicleDraft((prev) => ({
+                    ...prev,
+                    webfleetVehicleId: event.target.value,
+                  }))
+                }
+                placeholder="ID Webfleet"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+              />
+
+              <textarea
+                value={vehicleDraft.notes}
+                onChange={(event) =>
+                  setVehicleDraft((prev) => ({
+                    ...prev,
+                    notes: event.target.value,
+                  }))
+                }
+                rows={2}
+                placeholder="Notas"
+                className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+              />
+
+              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={vehicleDraft.active}
+                  onChange={(event) =>
+                    setVehicleDraft((prev) => ({
+                      ...prev,
+                      active: event.target.checked,
+                    }))
+                  }
+                />
+                <span className="text-sm font-black text-slate-700">
+                  Furgoneta activa
+                </span>
+              </label>
+
+              {vehicleError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  {vehicleError}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveVehicle}
+                  disabled={vehicleSaving}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {editingVehicle ? "Guardar" : "Crear"}
+                </button>
+
+                {editingVehicle && (
+                  <button
+                    type="button"
+                    onClick={resetVehicleForm}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {vehicles.length === 0 && (
+                  <div className="rounded-lg bg-slate-50 px-3 py-3 text-sm font-bold text-slate-400">
+                    No hay furgonetas creadas.
+                  </div>
+                )}
+
+                {vehicles.map((vehicle) => (
+                  <div
+                    key={vehicle.id}
+                    className={`rounded-lg border px-3 py-2 ${
+                      vehicle.active
+                        ? "border-slate-200 bg-slate-50"
+                        : "border-slate-200 bg-white opacity-60"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-slate-800">
+                          {getVehicleLabel(vehicle)}
+                        </div>
+                        {vehicle.webfleetVehicleId && (
+                          <div className="mt-0.5 truncate text-xs font-bold text-slate-500">
+                            Webfleet: {vehicle.webfleetVehicleId}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex shrink-0 gap-1">
+                        <button
+                          type="button"
+                          onClick={() => startVehicleEdit(vehicle)}
+                          className="rounded-md border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50"
+                        >
+                          <Edit3 className="h-4 w-4" />
+                        </button>
+
+                        {vehicle.active && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeactivateVehicle(vehicle)}
+                            className="rounded-md border border-red-200 bg-white p-2 text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-black uppercase text-slate-700">
+                Codigos operario
+              </h2>
+              <KeyRound className="h-5 w-5 text-slate-500" />
+            </div>
+
+            <div className="space-y-2">
+              {operatorCodeError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  {operatorCodeError}
+                </div>
+              )}
+
+              {techs.map((tech) => {
+                const codeRecord = operatorCodesByTech.get(tech.name);
+                const draftCode = operatorCodeDrafts[tech.name] || "";
+                const isSaving = operatorCodeSavingName === tech.name;
+
+                return (
+                  <div
+                    key={`operator-code-${tech.name}`}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="min-w-0 truncate text-sm font-black text-slate-800">
+                        {tech.name}
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${
+                          codeRecord?.hasCustomCode
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {codeRecord?.hasCustomCode ? "Individual" : "Pendiente"}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-[minmax(0,1fr)_40px_40px] gap-2">
+                      <input
+                        value={draftCode}
+                        inputMode="numeric"
+                        onChange={(event) =>
+                          setOperatorCodeDrafts((prev) => ({
+                            ...prev,
+                            [tech.name]: event.target.value,
+                          }))
+                        }
+                        className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
+                      />
+
+                      <button
+                        type="button"
+                        title="Generar codigo"
+                        onClick={() => generateOperatorCode(tech.name)}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        title="Guardar codigo"
+                        onClick={() => handleSaveOperatorCode(tech.name)}
+                        disabled={isSaving}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60"
+                      >
+                        <Save className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+          </div>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-black uppercase text-slate-700">
+                Asistencias activas
+              </h2>
+              {loading && (
+                <span className="inline-flex items-center gap-2 text-xs font-bold text-slate-500">
+                  <Clock3 className="h-4 w-4" />
+                  Cargando
+                </span>
+              )}
+            </div>
+
+            {activeAssistances.length === 0 && (
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                Sin asistencias activas.
+              </div>
+            )}
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              {activeAssistances.map((assistance) => {
+                const nextStatus = getNextStatus(assistance.status);
+                const ActionIcon = getActionIcon(assistance.status);
+                const mapUrl = getMapUrl(assistance);
+                const trackingUrl = getTrackingUrl(assistance);
+
+                return (
+                  <article
+                    key={assistance.id}
+                    className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full border px-2 py-1 text-[11px] font-black ${STATUS_BADGES[assistance.status]}`}
+                          >
+                            {
+                              ROADSIDE_ASSISTANCE_STATUS_LABELS[
+                                assistance.status
+                              ]
+                            }
+                          </span>
+                          {assistance.priority === "urgente" && (
+                            <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-black text-red-700">
+                              Urgente
+                            </span>
+                          )}
+                        </div>
+
+                        <h3 className="mt-3 truncate text-lg font-black">
+                          {assistance.plate || "Sin matricula"}
+                        </h3>
+                        <div className="mt-1 truncate text-sm font-semibold text-slate-600">
+                          {assistance.customerName || "Cliente sin nombre"}
+                        </div>
+                      </div>
+
+                      <div className="text-right text-xs font-bold text-slate-400">
+                        #{assistance.id}
+                        <div>{formatTime(assistance.createdAtMs)}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-2 text-sm">
+                      {assistance.customerPhone && (
+                        <a
+                          href={`tel:${assistance.customerPhone}`}
+                          className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 font-semibold text-slate-700"
+                        >
+                          <Phone className="h-4 w-4 shrink-0 text-slate-500" />
+                          <span className="truncate">
+                            {assistance.customerPhone}
+                          </span>
+                        </a>
+                      )}
+
+                      {mapUrl && (
+                        <a
+                          href={mapUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 font-semibold text-slate-700"
+                        >
+                          <MapPin className="h-4 w-4 shrink-0 text-slate-500" />
+                          <span className="truncate">
+                            {assistance.address ||
+                              assistance.googleMapsUrl ||
+                              "Ubicacion"}
+                          </span>
+                        </a>
+                      )}
+
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg bg-slate-50 px-3 py-2">
+                          <div className="text-[11px] font-black uppercase text-slate-400">
+                            Operario
+                          </div>
+                          <div className="truncate font-bold text-slate-700">
+                            {assistance.assignedTechName || "Sin asignar"}
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 px-3 py-2">
+                          <div className="text-[11px] font-black uppercase text-slate-400">
+                            Furgoneta
+                          </div>
+                          <div className="truncate font-bold text-slate-700">
+                            {assistance.assignedVehicleName || "-"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">
+                        WhatsApp seguimiento:{" "}
+                        {assistance.trackingWhatsappSentAtMs
+                          ? `enviado ${formatTime(
+                              assistance.trackingWhatsappSentAtMs
+                            )}`
+                          : "pendiente"}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500">
+                      <div>Salida: {formatTime(assistance.departedAtMs)}</div>
+                      <div>Punto: {formatTime(assistance.arrivedAtPointMs)}</div>
+                      <div>Fin: {formatTime(assistance.finishedAtMs)}</div>
+                      <div>Taller: {formatTime(assistance.arrivedAtWorkshopMs)}</div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEditor(assistance)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                      >
+                        <Edit3 className="h-4 w-4" />
+                        Editar
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => copyTrackingLink(assistance)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100"
+                      >
+                        <Copy className="h-4 w-4" />
+                        {copiedId === assistance.id ? "Copiado" : "Copiar enlace"}
+                      </button>
+
+                      <a
+                        href={trackingUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-800 hover:bg-emerald-100"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        Seguimiento
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSendTrackingWhatsapp(assistance)}
+                        disabled={
+                          sendingWhatsappId === assistance.id ||
+                          !assistance.customerPhone
+                        }
+                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-black text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                      >
+                        <Send className="h-4 w-4" />
+                        {sendingWhatsappId === assistance.id
+                          ? "Enviando..."
+                          : "Enviar WhatsApp"}
+                      </button>
+
+                      {nextStatus && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleStatusChange(assistance, nextStatus)
+                          }
+                          disabled={changingId === assistance.id}
+                          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                        >
+                          <ActionIcon className="h-4 w-4" />
+                          {getActionLabel(assistance.status)}
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleStatusChange(assistance, "cancelada")
+                        }
+                        disabled={changingId === assistance.id}
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-black text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        <XCircle className="h-4 w-4" />
+                        Cancelar
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {closedAssistances.length > 0 && (
+              <section className="rounded-lg border border-slate-200 bg-white p-4">
+                <h2 className="mb-3 text-sm font-black uppercase text-slate-700">
+                  Ultimas cerradas
+                </h2>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {closedAssistances.map((assistance) => (
+                    <div
+                      key={`closed-${assistance.id}`}
+                      className="rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="truncate text-sm font-black">
+                          {assistance.plate || assistance.customerName}
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${STATUS_BADGES[assistance.status]}`}
+                        >
+                          {
+                            ROADSIDE_ASSISTANCE_STATUS_LABELS[
+                              assistance.status
+                            ]
+                          }
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs font-semibold text-slate-500">
+                        {formatTime(
+                          assistance.arrivedAtWorkshopMs ||
+                            assistance.cancelledAtMs ||
+                            assistance.finishedAtMs
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </section>
+        </div>
+      </div>
+
+      {editingAssistance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-black">
+                  Editar asistencia #{editingAssistance.id}
+                </h2>
+                <div className="mt-1 text-sm font-semibold text-slate-500">
+                  {editingAssistance.plate || editingAssistance.customerName}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeEditor}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Estado
+                  </span>
+                  <select
+                    value={editDraft.status}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        status: event.target.value as RoadsideAssistanceStatus,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    {[
+                      ...ROADSIDE_ASSISTANCE_STATUS_FLOW,
+                      "cancelada" as RoadsideAssistanceStatus,
+                    ].map((status) => (
+                      <option key={status} value={status}>
+                        {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div>
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Prioridad
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["normal", "urgente"] as const).map((priority) => (
+                      <button
+                        key={priority}
+                        type="button"
+                        onClick={() =>
+                          setEditDraft((prev) => ({
+                            ...prev,
+                            priority,
+                          }))
+                        }
+                        className={`rounded-lg border px-3 py-2 text-sm font-black ${
+                          editDraft.priority === priority
+                            ? "border-red-300 bg-red-50 text-red-800"
+                            : "border-slate-200 bg-white text-slate-600"
+                        }`}
+                      >
+                        {priority === "urgente" ? "Urgente" : "Normal"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Cliente
+                  </span>
+                  <input
+                    value={editDraft.customerName}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        customerName: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Telefono WhatsApp
+                  </span>
+                  <input
+                    value={editDraft.customerPhone}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        customerPhone: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Direccion
+                  </span>
+                  <input
+                    value={editDraft.address}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        address: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Enlace Google Maps
+                  </span>
+                  <input
+                    value={editDraft.googleMapsUrl}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        googleMapsUrl: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Latitud
+                  </span>
+                  <input
+                    value={editDraft.latitude}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        latitude: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Longitud
+                  </span>
+                  <input
+                    value={editDraft.longitude}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        longitude: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Matricula
+                  </span>
+                  <input
+                    value={editDraft.plate}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        plate: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Vehiculo cliente
+                  </span>
+                  <input
+                    value={editDraft.vehicleDescription}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        vehicleDescription: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Operario
+                  </span>
+                  <select
+                    value={editDraft.assignedTechName}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        assignedTechName: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    <option value="">Sin asignar</option>
+                    {techs.map((tech) => (
+                      <option key={tech.name} value={tech.name}>
+                        {tech.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Furgoneta
+                  </span>
+                  <select
+                    value={editDraft.assignedVehicleName}
+                    onChange={(event) =>
+                      applyVehicleToEditDraft(event.target.value)
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    <option value="">Sin asignar</option>
+                    {activeVehicles.map((vehicle) => (
+                      <option key={vehicle.id} value={vehicle.name}>
+                        {getVehicleLabel(vehicle)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Vehiculo Webfleet
+                  </span>
+                  <input
+                    value={editDraft.webfleetVehicleId}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        webfleetVehicleId: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Enlace privado cliente
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      value={getTrackingUrl(editingAssistance)}
+                      readOnly
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyTrackingLink(editingAssistance)}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100"
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copiar
+                    </button>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 md:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={editDraft.sendTrackingWhatsapp}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        sendTrackingWhatsapp: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span className="text-sm font-black text-emerald-800">
+                    Enviar WhatsApp con enlace privado al guardar
+                  </span>
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Observaciones
+                  </span>
+                  <textarea
+                    value={editDraft.notes}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        notes: event.target.value,
+                      }))
+                    }
+                    rows={3}
+                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+              </div>
+
+              {editError && (
+                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  {editError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={closeEditor}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={handleUpdate}
+                disabled={savingEdit}
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {savingEdit ? "Guardando..." : "Guardar cambios"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

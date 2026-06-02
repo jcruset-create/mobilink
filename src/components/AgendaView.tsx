@@ -32,6 +32,12 @@ import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpe
 
 import ScheduledJobQuantityBox from "./ScheduledJobQuantityBox";
 import ScheduledJobV2MiniLine from "./ScheduledJobV2MiniLine";
+import {
+  loadAgendaDateRemindersFromBackend,
+  saveAgendaDateRemindersToBackend,
+  type AgendaDateReminderPayload,
+} from "../modules/agendaDateReminderApi";
+
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
 type ScheduledJobStatus =
@@ -457,6 +463,24 @@ function layoutOverlappingJobs(jobs: ScheduledJob[]) {
   return result;
 }
 
+function normalizeAgendaDateReminder(
+  item: AgendaDateReminderPayload
+): DateReminder {
+  return {
+    id: Number(item.id),
+    workshopId: item.workshopId ?? null,
+    kind: item.kind ?? "normal",
+    title: String(item.title || ""),
+    startDate: String(item.startDate || ""),
+    endDate: String(item.endDate || ""),
+    color: (item.color || "red") as DateReminderColor,
+    notes: item.notes ?? "",
+    techStatusId: item.techStatusId ?? undefined,
+    techName: item.techName ?? undefined,
+    techStatus: item.techStatus as TechStatus | undefined,
+  };
+}
+
 export default function AgendaView({
   scheduledJobs,
   setScheduledJobs,
@@ -521,6 +545,37 @@ useEffect(() => {
     }
   });
 
+const [dateRemindersLoaded, setDateRemindersLoaded] = useState(false);
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadAgendaDateReminders() {
+    try {
+      const data = await loadAgendaDateRemindersFromBackend();
+
+      if (cancelled) return;
+
+      const normalized = Array.isArray(data)
+        ? data.map(normalizeAgendaDateReminder)
+        : [];
+
+      setDateReminders(normalized);
+    } catch (error) {
+      console.error("Error cargando recordatorios de agenda:", error);
+    } finally {
+      if (!cancelled) {
+        setDateRemindersLoaded(true);
+      }
+    }
+  }
+
+  void loadAgendaDateReminders();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
 
 const [reminderDraft, setReminderDraft] = useState<ReminderDraft>({
@@ -534,16 +589,23 @@ const [reminderDraft, setReminderDraft] = useState<ReminderDraft>({
   techStatus: "vacaciones",
 });
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "agendaDateReminders",
-        JSON.stringify(dateReminders)
-      );
-    } catch {
-      // Si localStorage no está disponible, la agenda seguirá funcionando.
-    }
-  }, [dateReminders]);
+useEffect(() => {
+  try {
+    window.localStorage.setItem(
+      "agendaDateReminders",
+      JSON.stringify(dateReminders)
+    );
+  } catch {
+    // Si localStorage no está disponible, la agenda seguirá funcionando.
+  }
+
+  if (!dateRemindersLoaded) return;
+
+  void saveAgendaDateRemindersToBackend(dateReminders).catch((error) => {
+    console.error("Error guardando recordatorios de agenda:", error);
+    appendLog("Error guardando recordatorios de agenda.");
+  });
+}, [dateReminders, dateRemindersLoaded]);
 
   const [draft, setDraft] = useState({
   templateKey: quickTemplates[0]?.key ?? "",

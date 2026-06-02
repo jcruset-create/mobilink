@@ -25,14 +25,17 @@
     "lucide-react": "^0.539.0",
     "multer": "^2.1.1",
     "openai": "^6.34.0",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-qr-code": "^2.0.21",
     "react-router-dom": "^7.15.0",
     "stripe": "^22.1.1",
+    "tesseract.js": "^7.0.0",
     "tsx": "^4.21.0",
-    "twilio": "^6.0.2"
+    "twilio": "^6.0.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
@@ -45,6 +48,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "supabase": "^2.101.0",
     "tailwindcss": "^4.2.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",

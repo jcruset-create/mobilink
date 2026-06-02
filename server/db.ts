@@ -43,6 +43,7 @@ export async function initDb() {
       competencies TEXT NOT NULL DEFAULT '{}',
       priorities TEXT NOT NULL DEFAULT '{}',
       avatar TEXT,
+      "roadsideOperatorCode" TEXT,
       "statusChangedAtMs" BIGINT,
       "statusTotals" TEXT NOT NULL DEFAULT '{}'
     );
@@ -85,6 +86,66 @@ export async function initDb() {
       data JSONB NOT NULL,
       "updatedAtMs" BIGINT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS roadside_assistances (
+      id SERIAL PRIMARY KEY,
+      "workshopId" TEXT,
+      status TEXT NOT NULL DEFAULT 'pendiente',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      "customerName" TEXT NOT NULL DEFAULT '',
+      "customerPhone" TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      "googleMapsUrl" TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      plate TEXT NOT NULL DEFAULT '',
+      "vehicleDescription" TEXT,
+      "webfleetVehicleId" TEXT,
+      "assignedTechName" TEXT,
+      "assignedVehicleName" TEXT,
+      "trackingToken" TEXT NOT NULL UNIQUE,
+      "trackingWhatsappSentAtMs" BIGINT,
+      "trackingWhatsappSid" TEXT,
+      notes TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      "assignedAtMs" BIGINT,
+      "departedAtMs" BIGINT,
+      "arrivedAtPointMs" BIGINT,
+      "finishedAtMs" BIGINT,
+      "arrivedAtWorkshopMs" BIGINT,
+      "cancelledAtMs" BIGINT,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roadside_assistance_events (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES roadside_assistances(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      note TEXT,
+      "createdBy" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roadside_assistance_files (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES roadside_assistances(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      url TEXT NOT NULL,
+      "fileName" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roadside_vehicles (
+      id SERIAL PRIMARY KEY,
+      "workshopId" TEXT,
+      name TEXT NOT NULL,
+      plate TEXT,
+      "webfleetVehicleId" TEXT,
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
   `);
 
   await pool.query(`
@@ -99,6 +160,11 @@ export async function initDb() {
 
   await pool.query(`
     ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "roadsideOperatorCode" TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE techs
     ADD COLUMN IF NOT EXISTS "statusTotals" TEXT NOT NULL DEFAULT '{}';
   `);
 
@@ -108,6 +174,74 @@ export async function initDb() {
       data JSONB NOT NULL,
       "updatedAtMs" BIGINT NOT NULL
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "vehicleDescription" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "webfleetVehicleId" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "assignedVehicleName" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "trackingWhatsappSentAtMs" BIGINT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "trackingWhatsappSid" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS notes TEXT;
+
+    CREATE INDEX IF NOT EXISTS roadside_assistances_status_idx
+      ON roadside_assistances(status);
+
+    CREATE INDEX IF NOT EXISTS roadside_assistances_workshop_idx
+      ON roadside_assistances("workshopId");
+
+    CREATE INDEX IF NOT EXISTS roadside_assistance_events_assistance_idx
+      ON roadside_assistance_events("assistanceId");
+
+    CREATE TABLE IF NOT EXISTS roadside_vehicles (
+      id SERIAL PRIMARY KEY,
+      "workshopId" TEXT,
+      name TEXT NOT NULL,
+      plate TEXT,
+      "webfleetVehicleId" TEXT,
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS plate TEXT;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "webfleetVehicleId" TEXT;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS notes TEXT;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+    CREATE INDEX IF NOT EXISTS roadside_vehicles_workshop_idx
+      ON roadside_vehicles("workshopId");
+
+    CREATE INDEX IF NOT EXISTS roadside_vehicles_active_idx
+      ON roadside_vehicles(active);
   `);
 
   console.log("PostgreSQL/Supabase inicializado correctamente");

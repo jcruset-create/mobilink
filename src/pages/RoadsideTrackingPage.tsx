@@ -1,0 +1,302 @@
+import { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import {
+  CheckCircle2,
+  Clock3,
+  Home,
+  MapPin,
+  Navigation,
+  Phone,
+  Truck,
+} from "lucide-react";
+
+import { loadRoadsideTrackingFromBackend } from "../modules/roadsideAssistanceApi";
+import type {
+  RoadsideAssistance,
+  RoadsideAssistanceStatus,
+  RoadsideTrackingResponse,
+} from "../modules/roadsideAssistanceTypes";
+import {
+  ROADSIDE_ASSISTANCE_STATUS_FLOW,
+  ROADSIDE_ASSISTANCE_STATUS_LABELS,
+} from "../modules/roadsideAssistanceTypes";
+
+const STATUS_STYLES: Record<RoadsideAssistanceStatus, string> = {
+  pendiente: "border-amber-200 bg-amber-50 text-amber-800",
+  asignada: "border-sky-200 bg-sky-50 text-sky-800",
+  en_camino: "border-blue-200 bg-blue-50 text-blue-800",
+  en_punto: "border-violet-200 bg-violet-50 text-violet-800",
+  finalizada: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  llegada_taller: "border-slate-200 bg-slate-100 text-slate-700",
+  cancelada: "border-red-200 bg-red-50 text-red-800",
+};
+
+function formatTime(value?: number | null) {
+  if (!value) return "-";
+
+  return new Date(value).toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getCurrentStep(status: RoadsideAssistanceStatus) {
+  const index = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
+  return index === -1 ? 0 : index;
+}
+
+function getMapUrl(assistance: RoadsideAssistance) {
+  if (assistance.googleMapsUrl) return assistance.googleMapsUrl;
+
+  if (assistance.latitude != null && assistance.longitude != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${assistance.latitude},${assistance.longitude}`;
+  }
+
+  if (assistance.address) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      assistance.address
+    )}`;
+  }
+
+  return "";
+}
+
+export default function RoadsideTrackingPage() {
+  const { token } = useParams();
+  const [data, setData] = useState<RoadsideTrackingResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTracking() {
+      if (!token) {
+        setError("Enlace de seguimiento no valido.");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError("");
+
+      try {
+        const response = await loadRoadsideTrackingFromBackend(token);
+
+        if (!cancelled) {
+          setData(response);
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "No se pudo cargar el seguimiento."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadTracking();
+
+    const timer = window.setInterval(() => {
+      void loadTracking();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [token]);
+
+  const assistance = data?.assistance ?? null;
+  const mapUrl = assistance ? getMapUrl(assistance) : "";
+
+  const currentStep = useMemo(
+    () => (assistance ? getCurrentStep(assistance.status) : 0),
+    [assistance]
+  );
+
+  if (loading && !data) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-slate-900">
+        <div className="inline-flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-5 py-4 text-sm font-black shadow-sm">
+          <Clock3 className="h-5 w-5 text-slate-500" />
+          Cargando seguimiento
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !assistance) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-slate-900">
+        <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="text-xl font-black">Seguimiento no disponible</h1>
+          <p className="mt-3 text-sm font-semibold text-slate-500">
+            {error || "No se ha encontrado esta asistencia."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (data?.expired) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
+        <main className="mx-auto max-w-2xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-slate-100">
+            <CheckCircle2 className="h-7 w-7 text-slate-700" />
+          </div>
+          <h1 className="mt-4 text-2xl font-black">
+            Seguimiento finalizado
+          </h1>
+          <p className="mt-2 text-sm font-semibold text-slate-500">
+            Esta asistencia ya no muestra seguimiento activo.
+          </p>
+          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+            Estado final: {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
+      <main className="mx-auto max-w-4xl space-y-4">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div
+                className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${STATUS_STYLES[assistance.status]}`}
+              >
+                {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
+              </div>
+              <h1 className="mt-4 text-2xl font-black">
+                Seguimiento asistencia
+              </h1>
+              <div className="mt-2 text-sm font-semibold text-slate-500">
+                {assistance.plate || assistance.vehicleDescription || "Vehiculo"}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">
+              Actualizado: {formatTime(assistance.updatedAtMs)}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-3 md:grid-cols-5">
+            {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
+              const done = index <= currentStep;
+
+              return (
+                <div
+                  key={status}
+                  className={`rounded-lg border px-3 py-3 ${
+                    done
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-slate-200 bg-slate-50 text-slate-400"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {done ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : (
+                      <Clock3 className="h-4 w-4" />
+                    )}
+                    <div className="text-xs font-black">
+                      {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
+              <Truck className="h-4 w-4" />
+              Asistencia
+            </div>
+            <div className="space-y-2 text-sm font-semibold text-slate-700">
+              <div>Operario: {assistance.assignedTechName || "Pendiente"}</div>
+              <div>Furgoneta: {assistance.assignedVehicleName || "Pendiente"}</div>
+              <div>Salida: {formatTime(assistance.departedAtMs)}</div>
+              <div>Llegada al punto: {formatTime(assistance.arrivedAtPointMs)}</div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
+              <MapPin className="h-4 w-4" />
+              Ubicacion
+            </div>
+            <div className="text-sm font-semibold text-slate-700">
+              {assistance.address || "Ubicacion recibida"}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {mapUrl && (
+                <a
+                  href={mapUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800"
+                >
+                  <Navigation className="h-4 w-4" />
+                  Ver mapa
+                </a>
+              )}
+
+              {assistance.customerPhone && (
+                <a
+                  href={`tel:${assistance.customerPhone}`}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                >
+                  <Phone className="h-4 w-4" />
+                  Llamar
+                </a>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
+            <Home className="h-4 w-4" />
+            Ultimos eventos
+          </div>
+          <div className="space-y-2">
+            {data.events.length === 0 && (
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400">
+                Sin eventos registrados.
+              </div>
+            )}
+
+            {data.events.map((event, index) => (
+              <div
+                key={`${event.status}-${event.createdAtMs}-${index}`}
+                className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"
+              >
+                <span className="font-black text-slate-700">
+                  {ROADSIDE_ASSISTANCE_STATUS_LABELS[event.status]}
+                </span>
+                <span className="shrink-0 font-semibold text-slate-500">
+                  {formatTime(event.createdAtMs)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
