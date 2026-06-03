@@ -223,6 +223,7 @@ import {
   createRoadsideAssistanceInBackend,
   createRoadsideVehicleInBackend,
   deactivateRoadsideVehicleInBackend,
+  deleteRoadsideOperatorCodeInBackend,
   loadRoadsideAssistancesFromBackend,
   loadRoadsideOperatorCodesFromBackend,
   loadRoadsideVehiclesFromBackend,
@@ -620,6 +621,21 @@ const visibleTechs = useMemo(() => {
   });
 }, [effectiveTechs, visibleJobs, selectedWorkshopId]);
 
+const roadsideEligibleTechNames = useMemo(
+  () =>
+    new Set(
+      roadsideOperatorCodes
+        .filter((item) => item.hasCustomCode)
+        .map((item) => item.techName)
+    ),
+  [roadsideOperatorCodes]
+);
+
+const visibleRoadsideTechs = useMemo(
+  () => visibleTechs.filter((tech) => roadsideEligibleTechNames.has(tech.name)),
+  [visibleTechs, roadsideEligibleTechNames]
+);
+
 const visibleQuickTemplates = useMemo(
   () =>
     quickTemplates.filter((template) =>
@@ -679,10 +695,8 @@ useEffect(() => {
 
   void reloadRoadsideAssistancesFromBackend();
   void reloadRoadsideVehiclesFromBackend();
-  if (isAdmin) {
-    void reloadRoadsideOperatorCodesFromBackend();
-  }
-}, [isAuthenticated, isSupervisor, isAdmin]);
+  void reloadRoadsideOperatorCodesFromBackend();
+}, [isAuthenticated, isSupervisor]);
 
 useEffect(() => {
   setMaintenanceDraft((prev) => {
@@ -1596,6 +1610,16 @@ async function updateRoadsideOperatorCode(techName: string, code: string) {
   });
 
   appendLog(`Codigo operario actualizado: ${updated.techName}.`);
+}
+
+async function deleteRoadsideOperatorCode(techName: string) {
+  const deleted = await deleteRoadsideOperatorCodeInBackend(techName);
+
+  setRoadsideOperatorCodes((prev) =>
+    prev.filter((item) => item.techName !== deleted.techName)
+  );
+
+  appendLog(`Operario baja asistencia: ${deleted.techName}.`);
 }
 
 async function createRoadsideAssistance(draft: RoadsideAssistanceDraft) {
@@ -4984,7 +5008,7 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
   return (
     <RoadsideAssistanceView
       assistances={visibleRoadsideAssistances}
-      techs={visibleTechs}
+      techs={visibleRoadsideTechs}
       vehicles={visibleRoadsideVehicles}
       loading={roadsideAssistancesLoading}
       error={
@@ -5032,6 +5056,7 @@ if (
       onUpdateVehicle={updateRoadsideVehicle}
       onDeactivateVehicle={deactivateRoadsideVehicle}
       onUpdateOperatorCode={updateRoadsideOperatorCode}
+      onDeleteOperatorCode={deleteRoadsideOperatorCode}
     />
   );
 }

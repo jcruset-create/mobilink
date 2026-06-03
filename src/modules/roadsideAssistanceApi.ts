@@ -140,6 +140,25 @@ export async function updateRoadsideOperatorCodeInBackend(
   return (await response.json()) as RoadsideOperatorCode;
 }
 
+export async function deleteRoadsideOperatorCodeInBackend(techName: string) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/roadside-operator-codes/${encodeURIComponent(techName)}`,
+    {
+      method: "DELETE",
+      headers: getAdminHeaders({
+        "Content-Type": "application/json",
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || "No se pudo dar de baja el operario.");
+  }
+
+  return (await response.json()) as RoadsideOperatorCode;
+}
+
 export async function createRoadsideAssistanceInBackend(
   draft: RoadsideAssistanceDraft & { workshopId?: string | null }
 ) {

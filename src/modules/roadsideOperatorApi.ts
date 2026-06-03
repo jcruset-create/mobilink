@@ -23,7 +23,9 @@ async function readApiError(response: Response) {
 }
 
 export async function loadRoadsideOperatorTechs() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/roadside-operator/techs`
+  );
 
   if (!response.ok) {
     throw new Error(`Error cargando operarios. Codigo ${response.status}.`);

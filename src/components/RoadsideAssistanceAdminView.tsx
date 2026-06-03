@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Edit3,
   KeyRound,
+  Plus,
   RefreshCw,
   Save,
   Trash2,
@@ -52,6 +53,7 @@ type Props = {
   ) => Promise<void>;
   onDeactivateVehicle: (vehicle: RoadsideVehicle) => Promise<void>;
   onUpdateOperatorCode: (techName: string, code: string) => Promise<void>;
+  onDeleteOperatorCode: (techName: string) => Promise<void>;
 };
 
 export default function RoadsideAssistanceAdminView({
@@ -65,6 +67,7 @@ export default function RoadsideAssistanceAdminView({
   onUpdateVehicle,
   onDeactivateVehicle,
   onUpdateOperatorCode,
+  onDeleteOperatorCode,
 }: Props) {
   const [vehicleDraft, setVehicleDraft] =
     useState<RoadsideVehicleDraft>(INITIAL_VEHICLE_DRAFT);
@@ -80,6 +83,9 @@ export default function RoadsideAssistanceAdminView({
     string | null
   >(null);
   const [operatorCodeError, setOperatorCodeError] = useState("");
+  const [newOperatorName, setNewOperatorName] = useState("");
+  const [newOperatorCode, setNewOperatorCode] = useState("");
+  const [addingOperator, setAddingOperator] = useState(false);
 
   const operatorCodesByTech = useMemo(() => {
     return new Map(operatorCodes.map((item) => [item.techName, item]));
@@ -89,6 +95,14 @@ export default function RoadsideAssistanceAdminView({
     (vehicle) => vehicle.active
   ).length;
 
+  const availableTechs = useMemo(
+    () =>
+      techs
+        .filter((tech) => !operatorCodesByTech.has(tech.name))
+        .sort((a, b) => a.name.localeCompare(b.name, "es")),
+    [techs, operatorCodesByTech]
+  );
+
   useEffect(() => {
     const nextDrafts: Record<string, string> = {};
 
@@ -96,14 +110,8 @@ export default function RoadsideAssistanceAdminView({
       nextDrafts[item.techName] = item.code || "";
     });
 
-    techs.forEach((tech) => {
-      if (!(tech.name in nextDrafts)) {
-        nextDrafts[tech.name] = "";
-      }
-    });
-
     setOperatorCodeDrafts(nextDrafts);
-  }, [operatorCodes, techs]);
+  }, [operatorCodes]);
 
   function startVehicleEdit(vehicle: RoadsideVehicle) {
     setEditingVehicle(vehicle);
@@ -179,6 +187,48 @@ export default function RoadsideAssistanceAdminView({
     }));
   }
 
+  function generateNewOperatorCode() {
+    const number =
+      typeof window !== "undefined" && window.crypto
+        ? window.crypto.getRandomValues(new Uint32Array(1))[0] % 9000
+        : Math.floor(Math.random() * 9000);
+
+    setNewOperatorCode(String(1000 + number));
+  }
+
+  async function handleAddOperator() {
+    const techName = newOperatorName.trim();
+    const code = newOperatorCode.trim();
+
+    setOperatorCodeError("");
+
+    if (!techName) {
+      setOperatorCodeError("Selecciona un operario para darlo de alta.");
+      return;
+    }
+
+    if (code.length < 4) {
+      setOperatorCodeError("El codigo debe tener al menos 4 caracteres.");
+      return;
+    }
+
+    setAddingOperator(true);
+
+    try {
+      await onUpdateOperatorCode(techName, code);
+      setNewOperatorName("");
+      setNewOperatorCode("");
+    } catch (saveError) {
+      setOperatorCodeError(
+        saveError instanceof Error
+          ? saveError.message
+          : "No se pudo dar de alta el operario."
+      );
+    } finally {
+      setAddingOperator(false);
+    }
+  }
+
   async function handleSaveOperatorCode(techName: string) {
     const code = String(operatorCodeDrafts[techName] || "").trim();
 
@@ -204,6 +254,35 @@ export default function RoadsideAssistanceAdminView({
     }
   }
 
+  async function handleDeleteOperatorCode(techName: string) {
+    setOperatorCodeError("");
+
+    const confirmed = window.confirm(
+      `Dar de baja a ${techName} de asistencias?\n\nNo se borra el tecnico del taller, solo se le retira el acceso a asistencia movil.`
+    );
+
+    if (!confirmed) return;
+
+    setOperatorCodeSavingName(techName);
+
+    try {
+      await onDeleteOperatorCode(techName);
+      setOperatorCodeDrafts((prev) => {
+        const next = { ...prev };
+        delete next[techName];
+        return next;
+      });
+    } catch (deleteError) {
+      setOperatorCodeError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "No se pudo dar de baja el operario."
+      );
+    } finally {
+      setOperatorCodeSavingName(null);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900">
       <div className="mx-auto max-w-[1500px] space-y-5">
@@ -217,7 +296,7 @@ export default function RoadsideAssistanceAdminView({
                 Configuracion asistencia
               </h1>
               <div className="text-sm font-medium text-slate-500">
-                {activeVehicleCount} furgonetas activas - {techs.length} operarios
+                {activeVehicleCount} furgonetas activas - {operatorCodes.length} operarios asistencia
               </div>
             </div>
           </div>
@@ -408,7 +487,7 @@ export default function RoadsideAssistanceAdminView({
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-sm font-black uppercase text-slate-700">
-                Codigos operario
+                Operarios asistencia
               </h2>
               <KeyRound className="h-5 w-5 text-slate-500" />
             </div>
@@ -419,40 +498,93 @@ export default function RoadsideAssistanceAdminView({
               </div>
             )}
 
+            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-3 text-xs font-black uppercase text-slate-500">
+                Alta operario
+              </div>
+
+              <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_180px_40px_110px]">
+                <select
+                  value={newOperatorName}
+                  onChange={(event) => setNewOperatorName(event.target.value)}
+                  className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
+                >
+                  <option value="">
+                    {availableTechs.length
+                      ? "Selecciona operario"
+                      : "No hay tecnicos pendientes"}
+                  </option>
+                  {availableTechs.map((tech) => (
+                    <option key={tech.name} value={tech.name}>
+                      {tech.name}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  value={newOperatorCode}
+                  inputMode="numeric"
+                  onChange={(event) => setNewOperatorCode(event.target.value)}
+                  placeholder="Codigo"
+                  className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
+                />
+
+                <button
+                  type="button"
+                  title="Generar codigo"
+                  onClick={generateNewOperatorCode}
+                  disabled={!availableTechs.length}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleAddOperator}
+                  disabled={addingOperator || !availableTechs.length}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  <Plus className="h-4 w-4" />
+                  Alta
+                </button>
+              </div>
+            </div>
+
             <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-              {techs.map((tech) => {
-                const codeRecord = operatorCodesByTech.get(tech.name);
-                const draftCode = operatorCodeDrafts[tech.name] || "";
-                const isSaving = operatorCodeSavingName === tech.name;
+              {operatorCodes.length === 0 && (
+                <div className="rounded-lg bg-slate-50 px-3 py-4 text-sm font-bold text-slate-400">
+                  No hay operarios dados de alta para asistencia.
+                </div>
+              )}
+
+              {operatorCodes.map((codeRecord) => {
+                const techName = codeRecord.techName;
+                const draftCode = operatorCodeDrafts[techName] || "";
+                const isSaving = operatorCodeSavingName === techName;
 
                 return (
                   <div
-                    key={`operator-code-${tech.name}`}
+                    key={`operator-code-${techName}`}
                     className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
                   >
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <div className="min-w-0 truncate text-sm font-black text-slate-800">
-                        {tech.name}
+                        {techName}
                       </div>
-                      <span
-                        className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${
-                          codeRecord?.hasCustomCode
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-amber-200 bg-amber-50 text-amber-700"
-                        }`}
-                      >
-                        {codeRecord?.hasCustomCode ? "Individual" : "Pendiente"}
+                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">
+                        Activo
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-[minmax(0,1fr)_40px_40px] gap-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_40px_40px_40px] gap-2">
                       <input
                         value={draftCode}
                         inputMode="numeric"
                         onChange={(event) =>
                           setOperatorCodeDrafts((prev) => ({
                             ...prev,
-                            [tech.name]: event.target.value,
+                            [techName]: event.target.value,
                           }))
                         }
                         className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
@@ -461,7 +593,7 @@ export default function RoadsideAssistanceAdminView({
                       <button
                         type="button"
                         title="Generar codigo"
-                        onClick={() => generateOperatorCode(tech.name)}
+                        onClick={() => generateOperatorCode(techName)}
                         className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
                       >
                         <RefreshCw className="h-4 w-4" />
@@ -470,11 +602,21 @@ export default function RoadsideAssistanceAdminView({
                       <button
                         type="button"
                         title="Guardar codigo"
-                        onClick={() => handleSaveOperatorCode(tech.name)}
+                        onClick={() => handleSaveOperatorCode(techName)}
                         disabled={isSaving}
                         className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60"
                       >
                         <Save className="h-4 w-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        title="Dar de baja"
+                        onClick={() => handleDeleteOperatorCode(techName)}
+                        disabled={isSaving}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   </div>

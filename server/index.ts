@@ -802,21 +802,12 @@ if (
   return null;
 }
 
-function getRoadsideOperatorCode() {
-  return (
-    process.env.ROADSIDE_OPERATOR_CODE ||
-    process.env.APP_PASSWORD ||
-    process.env.ADMIN_TOKEN ||
-    ""
-  );
-}
-
-function normalizeRoadsideOperatorCodeRow(row: any) {
+function normalizeRoadsideOperatorCodeRow(row: any, includeCode = true) {
   const code = String(row.roadsideOperatorCode || "").trim();
 
   return {
     techName: row.name ?? "",
-    code,
+    code: includeCode ? code : "",
     hasCustomCode: Boolean(code),
   };
 }
@@ -836,9 +827,7 @@ async function getExpectedRoadsideOperatorCode(techName: string) {
     return null;
   }
 
-  return String(
-    result.rows[0].roadsideOperatorCode || getRoadsideOperatorCode() || ""
-  ).trim();
+  return String(result.rows[0].roadsideOperatorCode || "").trim();
 }
 
 async function getRoadsideOperatorFromRequest(req: express.Request) {
@@ -1815,16 +1804,24 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
 app.get(
   "/api/roadside-operator-codes",
-  requireAdminRole,
-  async (_req, res) => {
+  requireSupervisorRole,
+  async (req, res) => {
     try {
+      const role = getRoleFromRequest(req);
+      const includeCode = role === "admin";
+
       const result = await db.query(`
         SELECT name, "roadsideOperatorCode"
         FROM techs
+        WHERE NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
         ORDER BY id ASC
       `);
 
-      res.json(result.rows.map(normalizeRoadsideOperatorCodeRow));
+      res.json(
+        result.rows.map((row) =>
+          normalizeRoadsideOperatorCodeRow(row, includeCode)
+        )
+      );
     } catch (error) {
       console.error("GET /api/roadside-operator-codes error:", error);
       res.status(500).json({ error: "Error obteniendo codigos de operario" });
@@ -1871,6 +1868,55 @@ app.put(
     }
   }
 );
+
+app.delete(
+  "/api/roadside-operator-codes/:name",
+  requireAdminRole,
+  async (req, res) => {
+    try {
+      const name = String(req.params.name || "").trim();
+
+      if (!name) {
+        return res.status(400).json({ error: "Operario no valido" });
+      }
+
+      const result = await db.query(
+        `
+          UPDATE techs
+          SET "roadsideOperatorCode" = NULL
+          WHERE name = $1
+          RETURNING name, "roadsideOperatorCode"
+        `,
+        [name]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Operario no encontrado" });
+      }
+
+      res.json(normalizeRoadsideOperatorCodeRow(result.rows[0]));
+    } catch (error) {
+      console.error("DELETE /api/roadside-operator-codes/:name error:", error);
+      res.status(500).json({ error: "Error dando de baja operario" });
+    }
+  }
+);
+
+app.get("/api/roadside-operator/techs", async (_req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT *
+      FROM techs
+      WHERE NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      ORDER BY id ASC
+    `);
+
+    res.json(result.rows.map(normalizeTechRow));
+  } catch (error) {
+    console.error("GET /api/roadside-operator/techs error:", error);
+    res.status(500).json({ error: "Error obteniendo operarios asistencia" });
+  }
+});
 
 app.post("/api/roadside-operator/login", async (req, res) => {
   try {
