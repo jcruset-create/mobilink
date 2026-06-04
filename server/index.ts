@@ -4098,8 +4098,12 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
 const AGENDA_TIME_ZONE = process.env.AGENDA_TIME_ZONE || "Europe/Madrid";
 const REMINDER_CHECK_INTERVAL_MS = 60 * 1000;
 const REMINDER_GRACE_MS = 12 * 60 * 60 * 1000;
+const WORKSHOP_AUTO_STANDBY_TIMES = ["13:30", "18:30"];
+const WORKSHOP_AUTO_STANDBY_GRACE_MINUTES = 20;
 
 let reminderCheckerRunning = false;
+let workshopAutoStandbyRunning = false;
+const workshopAutoStandbyCompletedKeys = new Set<string>();
 
 function getTimeZoneOffsetMs(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -4352,6 +4356,181 @@ function startAgendaWhatsAppReminderChecker() {
 
   setInterval(() => {
     void checkAgendaWhatsAppReminders();
+  }, REMINDER_CHECK_INTERVAL_MS);
+}
+
+function getZonedDateTimeParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const values: Record<string, string> = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+
+  return {
+    dateKey: `${values.year}-${values.month}-${values.day}`,
+    minutesOfDay: Number(values.hour) * 60 + Number(values.minute),
+  };
+}
+
+function getWorkshopAutoStandbyDue(date: Date) {
+  const zoned = getZonedDateTimeParts(date, AGENDA_TIME_ZONE);
+
+  for (const time of WORKSHOP_AUTO_STANDBY_TIMES) {
+    const [hours, minutes] = time.split(":").map(Number);
+    const targetMinutes = hours * 60 + minutes;
+    const elapsedMinutes = zoned.minutesOfDay - targetMinutes;
+
+    if (
+      elapsedMinutes >= 0 &&
+      elapsedMinutes < WORKSHOP_AUTO_STANDBY_GRACE_MINUTES
+    ) {
+      return {
+        time,
+        key: `${zoned.dateKey}:${time}`,
+      };
+    }
+  }
+
+  return null;
+}
+
+function getServerLogTime(date = new Date()) {
+  return new Intl.DateTimeFormat("es-ES", {
+    timeZone: AGENDA_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+}
+
+async function appendServerLog(text: string) {
+  await db.query(
+    `
+      INSERT INTO logs (id, time, text)
+      VALUES ($1, $2, $3)
+    `,
+    [Date.now() + Math.random(), getServerLogTime(), text]
+  );
+}
+
+async function pauseActiveWorkshopJobsForStandby(triggerTime: string) {
+  const now = Date.now();
+  const result = await db.query(`
+    SELECT *
+    FROM jobs
+    WHERE status = 'activo'
+    ORDER BY id ASC
+  `);
+
+  if (result.rows.length === 0) return 0;
+
+  const techNamesToFree = new Set<string>();
+
+  for (const row of result.rows) {
+    const assignedNames = safeJsonParse(row.assignedNames, [] as string[]);
+
+    for (const name of assignedNames) {
+      if (name) techNamesToFree.add(name);
+    }
+
+    const startedAtMs =
+      row.startedAtMs == null ? null : Number(row.startedAtMs);
+    const currentWorked =
+      startedAtMs != null && Number.isFinite(startedAtMs)
+        ? Math.max(0, Math.round((now - startedAtMs) / 60000))
+        : 0;
+    const totalWorked =
+      Number(row.workedAccumulatedMinutes ?? 0) + currentWorked;
+    const reason = String(row.reason || "Trabajo");
+    const nextReason = reason.includes("STAND BY")
+      ? reason
+      : `${reason} · STAND BY automatico ${triggerTime}.`;
+
+    await db.query(
+      `
+        UPDATE jobs
+        SET
+          status = 'parado',
+          "workedAccumulatedMinutes" = $1,
+          "pausedAccumulatedMinutes" = COALESCE("pausedAccumulatedMinutes", 0),
+          "pausedAtMs" = $2,
+          "startedAtMs" = NULL,
+          reason = $3
+        WHERE id = $4
+      `,
+      [totalWorked, now, nextReason, row.id]
+    );
+  }
+
+  const techNames = Array.from(techNamesToFree);
+
+  if (techNames.length > 0) {
+    await db.query(
+      `
+        UPDATE techs
+        SET
+          status = 'disponible',
+          "currentJobId" = NULL
+        WHERE name = ANY($1)
+          AND status IN ('ocupado', 'refuerzo')
+      `,
+      [techNames]
+    );
+  }
+
+  await appendServerLog(
+    `Stand by automatico ${triggerTime}: ${result.rows.length} trabajo(s) activo(s) pausado(s).`
+  );
+
+  return result.rows.length;
+}
+
+async function checkWorkshopAutoStandby() {
+  if (workshopAutoStandbyRunning) return;
+
+  const due = getWorkshopAutoStandbyDue(new Date());
+
+  if (!due) return;
+  if (workshopAutoStandbyCompletedKeys.has(due.key)) return;
+
+  workshopAutoStandbyCompletedKeys.add(due.key);
+  workshopAutoStandbyRunning = true;
+
+  try {
+    const pausedCount = await pauseActiveWorkshopJobsForStandby(due.time);
+
+    if (pausedCount > 0) {
+      console.log(
+        `Stand by automatico ${due.time}: ${pausedCount} trabajo(s) pausado(s).`
+      );
+    }
+  } catch (error) {
+    workshopAutoStandbyCompletedKeys.delete(due.key);
+    console.error("checkWorkshopAutoStandby error:", error);
+  } finally {
+    workshopAutoStandbyRunning = false;
+  }
+}
+
+function startWorkshopAutoStandbyChecker() {
+  console.log("Stand by automatico de taller activo.");
+
+  void checkWorkshopAutoStandby();
+
+  setInterval(() => {
+    void checkWorkshopAutoStandby();
   }, REMINDER_CHECK_INTERVAL_MS);
 }
 
@@ -4919,6 +5098,7 @@ initDb()
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
       startAgendaWhatsAppReminderChecker();
+      startWorkshopAutoStandbyChecker();
     });
   })
   .catch((error) => {
