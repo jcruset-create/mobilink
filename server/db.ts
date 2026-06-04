@@ -56,6 +56,8 @@ export async function initDb() {
       status TEXT NOT NULL,
       "assignedNames" TEXT NOT NULL DEFAULT '[]',
       reason TEXT NOT NULL,
+      "customerName" TEXT NOT NULL DEFAULT '',
+      "customerPhone" TEXT NOT NULL DEFAULT '',
       "createdAtMs" BIGINT NOT NULL,
       "startedAtMs" BIGINT,
       "closedAtMs" BIGINT,
@@ -65,7 +67,9 @@ export async function initDb() {
       "actualMinutes" INTEGER,
       "workedAccumulatedMinutes" INTEGER DEFAULT 0,
       "pausedAccumulatedMinutes" INTEGER DEFAULT 0,
-      "pausedAtMs" BIGINT
+      "pausedAtMs" BIGINT,
+      "finishedWhatsappSentAtMs" BIGINT,
+      "finishedWhatsappSid" TEXT
     );
 
     CREATE TABLE IF NOT EXISTS job_assignments (
@@ -146,6 +150,20 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL,
       "updatedAtMs" BIGINT NOT NULL
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "customerName" TEXT NOT NULL DEFAULT '';
+
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "customerPhone" TEXT NOT NULL DEFAULT '';
+
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "finishedWhatsappSentAtMs" BIGINT;
+
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "finishedWhatsappSid" TEXT;
   `);
 
   await pool.query(`

@@ -32,6 +32,10 @@ Usa `.env.example` como plantilla. Como minimo, antes del primer deploy deben es
 
 Para cobros y WhatsApp tambien hacen falta las claves de Stripe y Twilio.
 
+Para el WhatsApp automatico al finalizar un trabajo, configura
+`TWILIO_JOB_FINISHED_CONTENT_SID` con la plantilla aprobada en Twilio. La app
+envia estas variables a la plantilla: `1` cliente, `2` matricula y `3` trabajo.
+
 ## Primer deploy
 
 1. Sube el commit a GitHub.

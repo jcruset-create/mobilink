@@ -502,6 +502,8 @@ function normalizeJobRow(job: any) {
     ...job,
     urgent: !!job.urgent,
     assignedNames: safeJsonParse(job.assignedNames, [] as string[]),
+    customerName: job.customerName ?? "",
+    customerPhone: job.customerPhone ?? "",
     startedAtMs: job.startedAtMs ?? null,
     closedAtMs: job.closedAtMs ?? null,
     template: job.template ?? null,
@@ -516,6 +518,8 @@ depositAmount: job.depositAmount ?? 0,
 depositPaidAtMs: job.depositPaidAtMs ?? null,
 stripeSessionId: job.stripeSessionId ?? null,
 stripePaymentIntentId: job.stripePaymentIntentId ?? null,
+finishedWhatsappSentAtMs: job.finishedWhatsappSentAtMs ?? null,
+finishedWhatsappSid: job.finishedWhatsappSid ?? null,
   };
 }
 
@@ -697,6 +701,70 @@ async function sendRoadsideTrackingWhatsApp(
     to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
     body: buildRoadsideTrackingMessage(assistance, trackingUrl),
   });
+}
+
+function getJobOperationLabel(job: any) {
+  return (
+    job.quickEntryLabel ||
+    job.template ||
+    job.area ||
+    "trabajo de taller"
+  );
+}
+
+async function sendJobFinishedWhatsApp(job: any) {
+  const customerPhone = String(job.customerPhone || "").trim();
+
+  if (!customerPhone) {
+    return { status: "skipped", reason: "missing_phone" };
+  }
+
+  if (job.finishedWhatsappSentAtMs) {
+    return {
+      status: "skipped",
+      reason: "already_sent",
+      sentAtMs: job.finishedWhatsappSentAtMs,
+      sid: job.finishedWhatsappSid ?? null,
+    };
+  }
+
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+    return { status: "skipped", reason: "missing_twilio_credentials" };
+  }
+
+  const contentSid = String(
+    process.env.TWILIO_JOB_FINISHED_CONTENT_SID || ""
+  ).trim();
+
+  if (!contentSid) {
+    return { status: "skipped", reason: "missing_job_finished_template" };
+  }
+
+  const message = await twilioClient.messages.create({
+    from: getWhatsAppFromNumber(),
+    to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
+    contentSid,
+    contentVariables: JSON.stringify({
+      "1": job.customerName || "cliente",
+      "2": job.plate || "-",
+      "3": getJobOperationLabel(job),
+    }),
+  });
+
+  const sentAtMs = Date.now();
+
+  await db.query(
+    `
+      UPDATE jobs
+      SET
+        "finishedWhatsappSentAtMs" = $1,
+        "finishedWhatsappSid" = $2
+      WHERE id = $3
+    `,
+    [sentAtMs, message.sid, job.id]
+  );
+
+  return { status: "sent", sentAtMs, sid: message.sid };
 }
 
 function normalizeQuickTemplateRow(t: any) {
@@ -1341,6 +1409,8 @@ if (interruptedMaintenanceTasks.length > 0) {
           status,
           "assignedNames",
           reason,
+          "customerName",
+          "customerPhone",
           "createdAtMs",
           "startedAtMs",
           "closedAtMs",
@@ -1354,7 +1424,8 @@ if (interruptedMaintenanceTasks.length > 0) {
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16, $17
+          $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -1363,6 +1434,8 @@ if (interruptedMaintenanceTasks.length > 0) {
           status = EXCLUDED.status,
           "assignedNames" = EXCLUDED."assignedNames",
           reason = EXCLUDED.reason,
+          "customerName" = EXCLUDED."customerName",
+          "customerPhone" = EXCLUDED."customerPhone",
           "createdAtMs" = EXCLUDED."createdAtMs",
           "startedAtMs" = EXCLUDED."startedAtMs",
           "closedAtMs" = EXCLUDED."closedAtMs",
@@ -1383,6 +1456,8 @@ if (interruptedMaintenanceTasks.length > 0) {
         job.status ?? "espera",
         JSON.stringify(assignedNames),
         job.reason ?? "",
+        String(job.customerName || "").trim(),
+        String(job.customerPhone || "").trim(),
         job.createdAtMs ?? Date.now(),
         job.startedAtMs ?? null,
         job.closedAtMs ?? null,
@@ -1465,6 +1540,8 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
           status,
           "assignedNames",
           reason,
+          "customerName",
+          "customerPhone",
           "createdAtMs",
           "startedAtMs",
           "closedAtMs",
@@ -1478,7 +1555,8 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16, $17
+          $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -1487,6 +1565,8 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
           status = EXCLUDED.status,
           "assignedNames" = EXCLUDED."assignedNames",
           reason = EXCLUDED.reason,
+          "customerName" = EXCLUDED."customerName",
+          "customerPhone" = EXCLUDED."customerPhone",
           "createdAtMs" = EXCLUDED."createdAtMs",
           "startedAtMs" = EXCLUDED."startedAtMs",
           "closedAtMs" = EXCLUDED."closedAtMs",
@@ -1507,6 +1587,8 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
         job.status ?? "espera",
         JSON.stringify(assignedNames),
         job.reason ?? "",
+        String(job.customerName || "").trim(),
+        String(job.customerPhone || "").trim(),
         job.createdAtMs ?? Date.now(),
         job.startedAtMs ?? null,
         job.closedAtMs ?? null,
@@ -1530,6 +1612,11 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
 app.post("/api/jobs/:id/finish", async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de trabajo no valido" });
+    }
+
     const {
       closedAtMs,
       actualMinutes,
@@ -1537,7 +1624,7 @@ app.post("/api/jobs/:id/finish", async (req, res) => {
       pausedAccumulatedMinutes,
     } = req.body ?? {};
 
-    await db.query(
+    const result = await db.query(
   `
     UPDATE jobs
     SET
@@ -1548,6 +1635,7 @@ app.post("/api/jobs/:id/finish", async (req, res) => {
       "pausedAccumulatedMinutes" = $4,
       "pausedAtMs" = NULL
     WHERE id = $5
+    RETURNING *
   `,
   [
     closedAtMs ?? Date.now(),
@@ -1558,7 +1646,34 @@ app.post("/api/jobs/:id/finish", async (req, res) => {
   ]
 );
 
-    res.json({ ok: true });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Trabajo no encontrado" });
+    }
+
+    const closedJob = normalizeJobRow(result.rows[0]);
+    let whatsapp: any = { status: "skipped", reason: "not_attempted" };
+
+    try {
+      whatsapp = await sendJobFinishedWhatsApp(closedJob);
+    } catch (whatsappError: any) {
+      whatsapp = {
+        status: "error",
+        message: whatsappError?.message || "Error enviando WhatsApp",
+        code: whatsappError?.code ?? null,
+      };
+
+      console.error("Error enviando WhatsApp de trabajo finalizado:", {
+        jobId: id,
+        to: normalizeSpanishPhone(closedJob.customerPhone),
+        contentSid: process.env.TWILIO_JOB_FINISHED_CONTENT_SID,
+        message: whatsappError?.message,
+        code: whatsappError?.code,
+        status: whatsappError?.status,
+        moreInfo: whatsappError?.moreInfo,
+      });
+    }
+
+    res.json({ ok: true, whatsapp });
   } catch (error) {
     console.error("POST /api/jobs/:id/finish error:", error);
     res.status(500).json({ error: "Error cerrando trabajo" });

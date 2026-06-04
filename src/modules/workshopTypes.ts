@@ -104,6 +104,8 @@ export type Job = {
   reason: string;
   customerName?: string;
   customerPhone?: string;
+  finishedWhatsappSentAtMs?: number | null;
+  finishedWhatsappSid?: string | null;
   createdAtMs: number;
   startedAtMs: number | null;
   closedAtMs?: number;

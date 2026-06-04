@@ -55,6 +55,8 @@ services:
         sync: false
       - key: TWILIO_ROADSIDE_CONTENT_SID
         sync: false
+      - key: TWILIO_JOB_FINISHED_CONTENT_SID
+        sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET

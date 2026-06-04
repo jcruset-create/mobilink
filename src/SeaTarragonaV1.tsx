@@ -299,6 +299,40 @@ function belongsToWorkshop(
   return normalizeWorkshopId(item.workshopId) === selectedWorkshopId;
 }
 
+const AUTO_STANDBY_TIMES = ["13:30", "18:30"] as const;
+const AUTO_STANDBY_GRACE_MINUTES = 20;
+
+function formatLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getAutoStandbyTrigger(date: Date) {
+  for (const time of AUTO_STANDBY_TIMES) {
+    const [hours, minutes] = time.split(":").map(Number);
+    const triggerAt = new Date(date);
+    triggerAt.setHours(hours, minutes, 0, 0);
+
+    const elapsedMs = date.getTime() - triggerAt.getTime();
+
+    if (
+      elapsedMs >= 0 &&
+      elapsedMs < AUTO_STANDBY_GRACE_MINUTES * 60 * 1000
+    ) {
+      return time;
+    }
+  }
+
+  return null;
+}
+
+function getAutoStandbyStorageKey(workshopId: WorkshopId, time: string, date: Date) {
+  return `sea-auto-standby:${workshopId}:${formatLocalDateKey(date)}:${time}`;
+}
+
 export default function SeaTarragonaV1() {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
   const [rules, setRules] = useState<string[]>([]);
@@ -338,6 +372,7 @@ useEffect(() => {
   };
 }, []);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsLoaded, setJobsLoaded] = useState(false);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const [roadsideAssistances, setRoadsideAssistances] = useState<
     RoadsideAssistance[]
@@ -357,6 +392,7 @@ useEffect(() => {
   const scheduledJobsLoadedRef = useRef(false);
   const scheduledJobsDirtyRef = useRef(false);
   const scheduledJobsSaveVersionRef = useRef(0);
+  const autoStandbyRunningRef = useRef(false);
   const [scheduledJobsLoaded, setScheduledJobsLoaded] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
   return localStorage.getItem("sea-authenticated") === "true";
@@ -537,7 +573,7 @@ const [log, setLog] = useState<LogItem[]>([]);
 const [externalAIAnswer, setExternalAIAnswer] = useState("");
 const [externalAILoading, setExternalAILoading] = useState(false);
 const [newTechName, setNewTechName] = useState("");
-const [, setTick] = useState(0);
+const [tick, setTick] = useState(0);
 const [view, setView] = useState<AppView>(() => {
   const storedRole = localStorage.getItem("sea-role");
 
@@ -765,8 +801,10 @@ useEffect(() => {
         0
       );
       setNextJobId(maxId + 1);
+      setJobsLoaded(true);
     } catch (error) {
       console.error("Error cargando trabajos:", error);
+      setJobsLoaded(false);
     }
   }
 
@@ -1053,6 +1091,43 @@ const validationJobs = useMemo(
         ),
     [activeJobs]
   );
+
+useEffect(() => {
+  if (!isAuthenticated || !jobsLoaded) return;
+
+  const checkedAt = new Date();
+  const triggerTime = getAutoStandbyTrigger(checkedAt);
+
+  if (!triggerTime) return;
+
+  const storageKey = getAutoStandbyStorageKey(
+    selectedWorkshopId,
+    triggerTime,
+    checkedAt
+  );
+
+  try {
+    if (window.localStorage.getItem(storageKey)) return;
+  } catch {}
+
+  if (autoStandbyRunningRef.current) return;
+
+  autoStandbyRunningRef.current = true;
+
+  try {
+    window.localStorage.setItem(storageKey, String(checkedAt.getTime()));
+  } catch {}
+
+  void pauseActiveJobsForStandby(triggerTime).finally(() => {
+    autoStandbyRunningRef.current = false;
+  });
+}, [
+  isAuthenticated,
+  jobsLoaded,
+  runningJobs.length,
+  selectedWorkshopId,
+  tick,
+]);
 
   const workingTechsSummary = useMemo(() => {
   return visibleTechs
@@ -3076,6 +3151,79 @@ await fetch(`${API_BASE}/api/jobs/${jobId}`, {
   }
 }
 
+async function pauseActiveJobsForStandby(triggerTime: string) {
+  const activeJobsToPause = jobs.filter(
+    (job) =>
+      job.status === "activo" &&
+      belongsToWorkshop(job, selectedWorkshopId)
+  );
+
+  if (activeJobsToPause.length === 0) return;
+
+  const pausedAtMs = nowMs();
+  const assignedNamesToFree = new Set<string>();
+  const pausedJobsById = new Map<number, Job>();
+
+  for (const job of activeJobsToPause) {
+    const assignedNames = job.assignedNames ?? [];
+
+    for (const name of assignedNames) {
+      assignedNamesToFree.add(name);
+    }
+
+    const currentWorked = getElapsedMinutes(job.startedAtMs, pausedAtMs) ?? 0;
+    const totalWorked = (job.workedAccumulatedMinutes ?? 0) + currentWorked;
+    const reason = job.reason || "Trabajo";
+
+    pausedJobsById.set(job.id, {
+      ...job,
+      status: "parado",
+      workedAccumulatedMinutes: totalWorked,
+      pausedAccumulatedMinutes: job.pausedAccumulatedMinutes ?? 0,
+      pausedAtMs,
+      startedAtMs: null,
+      reason: reason.includes("STAND BY")
+        ? reason
+        : `${reason} · STAND BY automatico ${triggerTime}.`,
+    });
+  }
+
+  const updatedJobs = jobs.map((job) => pausedJobsById.get(job.id) ?? job);
+  const updatedTechs = techs.map((tech) =>
+    assignedNamesToFree.has(tech.name)
+      ? {
+          ...tech,
+          status: "disponible" as TechStatus,
+          currentJobId: null,
+        }
+      : tech
+  );
+
+  setJobs(updatedJobs);
+  setTechs(updatedTechs);
+
+  appendLog(
+    `Stand by automatico ${triggerTime}: ${activeJobsToPause.length} trabajo(s) activo(s) pausado(s).`
+  );
+
+  try {
+    for (const pausedJob of pausedJobsById.values()) {
+      await saveJobToBackend(pausedJob);
+    }
+
+    for (const tech of updatedTechs) {
+      if (assignedNamesToFree.has(tech.name)) {
+        await saveTechToBackend(tech);
+      }
+    }
+
+    recalcWaitingQueue(updatedTechs, updatedJobs);
+  } catch (error) {
+    console.error("Error aplicando stand by automatico:", error);
+    appendLog(`Error al aplicar stand by automatico de las ${triggerTime}.`);
+  }
+}
+
 async function pauseJob(jobId: number) {
   const target = jobs.find((job) => job.id === jobId);
   if (!target || target.status !== "activo") return;
@@ -3837,6 +3985,39 @@ function sendValidationJobToQueue(jobId: number) {
   appendLog(`Trabajo ${job.plate} enviado a cola de trabajo.`);
 }
 
+function appendFinishedWhatsappLog(job: Job, whatsapp: any) {
+  if (!whatsapp) return;
+
+  if (whatsapp.status === "sent") {
+    appendLog(
+      `WhatsApp finalizacion enviado a ${job.customerPhone || "cliente"} · ${
+        job.plate
+      }.`
+    );
+    return;
+  }
+
+  if (whatsapp.status === "error") {
+    appendLog(
+      `Error enviando WhatsApp finalizacion a ${
+        job.customerPhone || "cliente"
+      } · ${job.plate}.`
+    );
+    return;
+  }
+
+  if (whatsapp.reason === "missing_twilio_credentials") {
+    appendLog("WhatsApp finalizacion no enviado: faltan credenciales Twilio.");
+    return;
+  }
+
+  if (whatsapp.reason === "missing_job_finished_template") {
+    appendLog(
+      "WhatsApp finalizacion no enviado: falta TWILIO_JOB_FINISHED_CONTENT_SID."
+    );
+  }
+}
+
 async function finishJob(jobId: number) {
   const target = jobs.find((job) => job.id === jobId);
   if (!target) return;
@@ -3998,6 +4179,9 @@ appendLog(
 
     if (!response.ok) {
       await saveJobToBackend(closedJob);
+    } else {
+      const responseData = await response.json().catch(() => null);
+      appendFinishedWhatsappLog(closedJob, responseData?.whatsapp);
     }
 
     if (reactivatedLinkedJob) {
