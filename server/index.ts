@@ -3303,6 +3303,74 @@ app.delete("/api/assigned-maintenance-tasks/history", async (_req, res) => {
   }
 });
 
+app.delete(
+  "/api/assigned-maintenance-tasks/old-interrupted",
+  async (req, res) => {
+    try {
+      await ensureMaintenanceTables();
+
+      const olderThanMs = Date.now() - 12 * 60 * 60 * 1000;
+      const dryRun = String(req.query.dryRun || "") === "true";
+      const oldInterruptedFilter = `
+        data->>'status' = 'interrumpida'
+        AND data->>'taskType' = 'en_taller'
+        AND COALESCE(
+          CASE
+            WHEN data->>'statusChangedAtMs' ~ '^[0-9]+$'
+              THEN (data->>'statusChangedAtMs')::bigint
+          END,
+          CASE
+            WHEN data->>'assignedAtMs' ~ '^[0-9]+$'
+              THEN (data->>'assignedAtMs')::bigint
+          END,
+          0
+        ) < $1
+      `;
+
+      if (dryRun) {
+        const result = await db.query(
+          `
+            SELECT COUNT(*)::int AS "deletedCount"
+            FROM assigned_maintenance_tasks
+            WHERE ${oldInterruptedFilter}
+          `,
+          [olderThanMs]
+        );
+
+        return res.json({
+          ok: true,
+          dryRun: true,
+          deletedCount: Number(result.rows[0]?.deletedCount ?? 0),
+        });
+      }
+
+      const result = await db.query(
+        `
+          WITH deleted AS (
+            DELETE FROM assigned_maintenance_tasks
+            WHERE ${oldInterruptedFilter}
+            RETURNING id
+          )
+          SELECT COUNT(*)::int AS "deletedCount"
+          FROM deleted
+        `,
+        [olderThanMs]
+      );
+
+      res.json({
+        ok: true,
+        deletedCount: Number(result.rows[0]?.deletedCount ?? 0),
+      });
+    } catch (error) {
+      console.error(
+        "DELETE /api/assigned-maintenance-tasks/old-interrupted error:",
+        error
+      );
+      res.status(500).json({ error: "Error limpiando interrumpidas antiguas" });
+    }
+  }
+);
+
 app.delete("/api/assigned-maintenance-tasks/:id", async (req, res) => {
   try {
     await ensureMaintenanceTables();
