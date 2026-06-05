@@ -107,6 +107,10 @@ export default function AlmacenMenu() {
         <EnlaceMenu href="/almacen-neumaticos/stock">Stock</EnlaceMenu>
       )}
 
+      {puedeVerOperativo && (
+        <EnlaceMenu href="/almacen-neumaticos/mobile">Mobile</EnlaceMenu>
+      )}
+
       {puedeVerEntradas && (
         <EnlaceMenu href="/almacen-neumaticos/entradas">Entradas</EnlaceMenu>
       )}
@@ -159,12 +163,24 @@ export default function AlmacenMenu() {
       )}
 
       {puedeVerAdmin && (
-        <>
-          <EnlaceMenu href="/almacen-neumaticos/usuarios">Usuarios</EnlaceMenu>
-          <EnlaceMenu href="/almacen-neumaticos/auditoria">Auditoría</EnlaceMenu>
-          <EnlaceMenu href="/almacen-neumaticos/sistema">Sistema</EnlaceMenu>
-        </>
-      )}
+  <>
+    <EnlaceMenu href="/almacen-neumaticos/usuarios">
+      Usuarios
+    </EnlaceMenu>
+
+    <EnlaceMenu href="/almacen-neumaticos/auditoria">
+      Auditoría
+    </EnlaceMenu>
+
+    <EnlaceMenu href="/almacen-neumaticos/auditoria-traspasos">
+      Auditoría traspasos
+    </EnlaceMenu>
+
+    <EnlaceMenu href="/almacen-neumaticos/sistema">
+      Sistema
+    </EnlaceMenu>
+  </>
+)}
 
       {cargandoPermisos && (
         <span className="rounded-lg border px-3 py-2 text-sm text-gray-500">

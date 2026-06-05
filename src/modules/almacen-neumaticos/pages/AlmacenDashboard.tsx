@@ -38,6 +38,7 @@ type MovimientoStock = {
 type Traspaso = {
   id: string;
   estado: string | null;
+  recibido_at: string | null;
 };
 
 type SolicitudReposicion = {
@@ -62,7 +63,10 @@ type Kpis = {
   stockEnCamino: number;
   stockNoDisponible: number;
   traspasosPendienteSalida: number;
+  traspasosPendienteRecogida: number;
   traspasosEnCamino: number;
+  traspasosRecibidosHoy: number;
+  traspasosRecibidos30Dias: number;
   reposicionesPendientes: number;
   reposicionesEnTraspaso: number;
   incidenciasAbiertas: number;
@@ -94,7 +98,10 @@ const kpisIniciales: Kpis = {
   stockEnCamino: 0,
   stockNoDisponible: 0,
   traspasosPendienteSalida: 0,
+  traspasosPendienteRecogida: 0,
   traspasosEnCamino: 0,
+  traspasosRecibidosHoy: 0,
+  traspasosRecibidos30Dias: 0,
   reposicionesPendientes: 0,
   reposicionesEnTraspaso: 0,
   incidenciasAbiertas: 0,
@@ -234,7 +241,7 @@ export default function AlmacenDashboard() {
 
     const { data: traspasosData, error: traspasosError } = await supabase
       .from("traspasos")
-      .select("id,estado");
+      .select("id,estado,recibido_at");
 
     if (traspasosError) {
       setMensaje(`Error traspasos: ${traspasosError.message}`);
@@ -312,6 +319,11 @@ export default function AlmacenDashboard() {
     const inicioMes = new Date();
     inicioMes.setDate(1);
     inicioMes.setHours(0, 0, 0, 0);
+
+    const hoyTexto = new Date().toISOString().slice(0, 10);
+    const hace30Dias = new Date();
+    hace30Dias.setDate(hace30Dias.getDate() - 29);
+    hace30Dias.setHours(0, 0, 0, 0);
 
     const movimientosMes = movimientos.filter(
       (movimiento) => new Date(movimiento.created_at) >= inicioMes
@@ -399,10 +411,24 @@ export default function AlmacenDashboard() {
       traspasosPendienteSalida: traspasos.filter(
         (traspaso) => traspaso.estado === "pendiente_salida"
       ).length,
+      traspasosPendienteRecogida: traspasos.filter(
+        (traspaso) => traspaso.estado === "preparado"
+      ).length,
       traspasosEnCamino: traspasos.filter(
         (traspaso) =>
           traspaso.estado === "en_camino" ||
           traspaso.estado === "recibido_parcial"
+      ).length,
+      traspasosRecibidosHoy: traspasos.filter(
+        (traspaso) =>
+          traspaso.estado === "recibido" &&
+          traspaso.recibido_at?.slice(0, 10) === hoyTexto
+      ).length,
+      traspasosRecibidos30Dias: traspasos.filter(
+        (traspaso) =>
+          traspaso.estado === "recibido" &&
+          traspaso.recibido_at &&
+          new Date(traspaso.recibido_at) >= hace30Dias
       ).length,
       reposicionesPendientes: reposiciones.filter(
         (reposicion) => reposicion.estado === "pendiente"
@@ -443,10 +469,17 @@ export default function AlmacenDashboard() {
       visible: true,
     },
     {
+      titulo: "Traspasos pendientes de recogida",
+      valor: kpis.traspasosPendienteRecogida,
+      texto: "Preparados y pendientes de recoger desde móvil.",
+      url: "/almacen-neumaticos/mobile",
+      visible: true,
+    },
+    {
       titulo: "Traspasos en camino",
       valor: kpis.traspasosEnCamino,
       texto: "Pendientes de recepción o recepción parcial.",
-      url: "/almacen-neumaticos/traspasos",
+      url: "/almacen-neumaticos/mobile",
       visible: true,
     },
     {
@@ -521,7 +554,7 @@ export default function AlmacenDashboard() {
       titulo: "Traspasos acumulados",
       valor: kpis.traspasosEnCamino,
       texto: "Hay muchos traspasos pendientes de recepción.",
-      url: "/almacen-neumaticos/traspasos",
+      url: "/almacen-neumaticos/mobile",
       visible: kpis.traspasosEnCamino > 10,
     },
   ].filter((alerta) => alerta.visible && alerta.valor > 0);
@@ -621,8 +654,12 @@ export default function AlmacenDashboard() {
       <div className="grid gap-4 md:grid-cols-4">
         <TarjetaKpi
           titulo="Traspasos activos"
-          valor={kpis.traspasosPendienteSalida + kpis.traspasosEnCamino}
-          texto="Pendientes de salida o recepción."
+          valor={
+            kpis.traspasosPendienteSalida +
+            kpis.traspasosPendienteRecogida +
+            kpis.traspasosEnCamino
+          }
+          texto="Pendientes de salida, recogida o recepción."
         />
 
         <TarjetaKpi
@@ -648,6 +685,32 @@ export default function AlmacenDashboard() {
           titulo="Incidencias abiertas"
           valor={kpis.incidenciasAbiertas}
           texto={`Críticas: ${kpis.incidenciasCriticas}`}
+        />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <TarjetaKpi
+          titulo="Pendientes recogida"
+          valor={kpis.traspasosPendienteRecogida}
+          texto="Traspasos preparados pendientes de recoger."
+        />
+
+        <TarjetaKpi
+          titulo="En camino"
+          valor={kpis.traspasosEnCamino}
+          texto="Traspasos pendientes de recepción."
+        />
+
+        <TarjetaKpi
+          titulo="Recibidos hoy"
+          valor={kpis.traspasosRecibidosHoy}
+          texto="Recepciones confirmadas hoy."
+        />
+
+        <TarjetaKpi
+          titulo="Recibidos 30 días"
+          valor={kpis.traspasosRecibidos30Dias}
+          texto="Recepciones confirmadas en los últimos 30 días."
         />
       </div>
 
@@ -831,6 +894,14 @@ export default function AlmacenDashboard() {
         </a>
 
         <a
+          href="/almacen-neumaticos/mobile"
+          className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+        >
+          <p className="font-semibold">Mobile</p>
+          <p className="text-sm text-gray-500">Vista móvil de traspasos.</p>
+        </a>
+
+        <a
           href="/almacen-neumaticos/traspasos"
           className="rounded-xl border bg-white p-4 hover:bg-gray-50"
         >
@@ -897,6 +968,16 @@ export default function AlmacenDashboard() {
               <p className="font-semibold">Auditoría</p>
               <p className="text-sm text-gray-500">
                 Ver acciones críticas registradas.
+              </p>
+            </a>
+
+            <a
+              href="/almacen-neumaticos/auditoria-traspasos"
+              className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+            >
+              <p className="font-semibold">Auditoría traspasos</p>
+              <p className="text-sm text-gray-500">
+                Ver recogidas y recepciones móviles.
               </p>
             </a>
           </>
