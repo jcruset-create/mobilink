@@ -111,7 +111,7 @@ if (Number.isFinite(jobId)) {
     }
   }
 );
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", async (req, res) => {
   try {
@@ -1056,6 +1056,23 @@ const techs = techsResult.rows;
 app.post("/api/ai/taller", async (req, res) => {
   try {
     const { jobs, techs, operationReport, techOperationStats } = req.body;
+    const safeJobs = Array.isArray(jobs) ? jobs : [];
+    const safeTechs = Array.isArray(techs) ? techs : [];
+    const summarizeJobForAI = (job: any) => ({
+      id: job.id,
+      area: job.area,
+      plate: job.plate,
+      urgent: !!job.urgent,
+      status: job.status,
+      assignedNames: Array.isArray(job.assignedNames) ? job.assignedNames : [],
+      reason: job.reason || "",
+      template: job.template || null,
+      quickEntryLabel: job.quickEntryLabel || null,
+      quickEntryMode: job.quickEntryMode || null,
+      startedAtMs: job.startedAtMs ?? null,
+      workedAccumulatedMinutes: job.workedAccumulatedMinutes ?? 0,
+      pausedAccumulatedMinutes: job.pausedAccumulatedMinutes ?? 0,
+    });
 
     const prompt = `
 Eres un asistente de asignación para un taller.
@@ -1074,9 +1091,13 @@ Reglas obligatorias:
 
 Datos actuales:
 ${JSON.stringify({
-  waitingJobs: jobs.filter((j: any) => j.status === "espera"),
-runningJobs: jobs.filter((j: any) => j.status === "activo"),
-techs: techs.map((t: any) => ({
+  waitingJobs: safeJobs
+    .filter((j: any) => j.status === "espera")
+    .map(summarizeJobForAI),
+runningJobs: safeJobs
+  .filter((j: any) => j.status === "activo")
+  .map(summarizeJobForAI),
+techs: safeTechs.map((t: any) => ({
     name: t.name,
     status: t.status,
     blocked: t.blocked,

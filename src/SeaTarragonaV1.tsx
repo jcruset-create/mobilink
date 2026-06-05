@@ -1407,23 +1407,27 @@ async function askExternalAIWorkshop() {
     setExternalAILoading(true);
     setExternalAIAnswer("");
 
+    const aiJobs = activeJobs.filter(
+      (job) => job.status === "espera" || job.status === "activo"
+    );
+
     const response = await fetch(`${API_BASE}/api/ai/taller`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        jobs: visibleJobs,
+        jobs: aiJobs,
         techs: visibleTechs,
         operationReport,
         techOperationStats,
       }),
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new Error(data?.error || "Error IA");
+      throw new Error(data?.error || data?.message || "Error IA");
     }
 
     const cleanText = (data.text || "")
@@ -1435,7 +1439,11 @@ setExternalAIAnswer(cleanText || "La IA no devolvió respuesta.");
     appendLog("Consulta enviada a ChatGPT.");
   } catch (error) {
     console.error("Error consultando IA externa:", error);
-    setExternalAIAnswer("Error consultando ChatGPT.");
+    setExternalAIAnswer(
+      error instanceof Error
+        ? `Error consultando ChatGPT: ${error.message}`
+        : "Error consultando ChatGPT."
+    );
     appendLog("Error consultando ChatGPT.");
   } finally {
     setExternalAILoading(false);
