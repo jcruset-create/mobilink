@@ -406,6 +406,167 @@ export default function UsuariosAlmacen() {
     cargarUsuarios();
   }
 
+  async function eliminarUsuario(usuario: PerfilUsuario) {
+    setMensaje("");
+
+    if (!permisos.esAdmin) {
+      setMensaje("Solo admin puede eliminar usuarios.");
+      return;
+    }
+
+    const confirmado = window.confirm(
+      `¿Eliminar/desactivar el usuario ${
+        usuario.email || usuario.nombre || usuario.id
+      }?`
+    );
+
+    if (!confirmado) return;
+
+    const { error } = await supabase
+      .from("perfiles_usuario")
+      .update({
+        activo: false,
+      })
+      .eq("id", usuario.id);
+
+    if (error) {
+      setMensaje(`Error eliminando usuario: ${error.message}`);
+      return;
+    }
+
+    await supabase
+      .from("usuario_clientes")
+      .update({
+        activo: false,
+      })
+      .eq("perfil_usuario_id", usuario.id);
+
+    await registrarAuditoria({
+      modulo: "usuarios",
+      accion: "eliminar_usuario_logico",
+      tabla_afectada: "perfiles_usuario",
+      registro_id: usuario.id,
+      descripcion: `Usuario eliminado/desactivado desde pantalla admin: ${
+        usuario.email || usuario.nombre || usuario.id
+      }`,
+      datos: {
+        usuario_email: usuario.email,
+        usuario_nombre: usuario.nombre,
+        user_id: usuario.user_id,
+      },
+    });
+
+    setMensaje("Usuario eliminado/desactivado correctamente.");
+    await cargarDatos();
+  }
+
+  async function actualizarNombre(usuario: PerfilUsuario, nuevoNombre: string) {
+    setMensaje("");
+
+    if (!permisos.esAdmin) {
+      setMensaje("Solo admin puede cambiar nombres.");
+      return;
+    }
+
+    const nombreLimpio = nuevoNombre.trim();
+
+    if (!nombreLimpio) {
+      setMensaje("El nombre no puede estar vacío.");
+      return;
+    }
+
+    if (usuario.nombre === nombreLimpio) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("perfiles_usuario")
+      .update({
+        nombre: nombreLimpio,
+      })
+      .eq("id", usuario.id);
+
+    if (error) {
+      setMensaje(`Error actualizando nombre: ${error.message}`);
+      return;
+    }
+
+    await registrarAuditoria({
+      modulo: "usuarios",
+      accion: "cambiar_nombre_usuario",
+      tabla_afectada: "perfiles_usuario",
+      registro_id: usuario.id,
+      descripcion: `Cambio de nombre de ${
+        usuario.email || usuario.nombre || usuario.id
+      }`,
+      datos: {
+        usuario_email: usuario.email,
+        nombre_anterior: usuario.nombre,
+        nombre_nuevo: nombreLimpio,
+      },
+    });
+
+    setMensaje("Nombre actualizado correctamente.");
+    cargarUsuarios();
+  }
+
+  async function actualizarEmail(usuario: PerfilUsuario, nuevoEmail: string) {
+    setMensaje("");
+
+    if (!permisos.esAdmin) {
+      setMensaje("Solo admin puede cambiar emails.");
+      return;
+    }
+
+    const emailLimpio = nuevoEmail.trim().toLowerCase();
+
+    if (!emailLimpio) {
+      setMensaje("El email no puede estar vacío.");
+      return;
+    }
+
+    if (!emailLimpio.includes("@")) {
+      setMensaje("Introduce un email válido.");
+      return;
+    }
+
+    if (usuario.email === emailLimpio) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("perfiles_usuario")
+      .update({
+        email: emailLimpio,
+      })
+      .eq("id", usuario.id);
+
+    if (error) {
+      setMensaje(`Error actualizando email: ${error.message}`);
+      return;
+    }
+
+    await registrarAuditoria({
+      modulo: "usuarios",
+      accion: "cambiar_email_usuario",
+      tabla_afectada: "perfiles_usuario",
+      registro_id: usuario.id,
+      descripcion: `Cambio de email de ${
+        usuario.email || usuario.nombre || usuario.id
+      }`,
+      datos: {
+        email_anterior: usuario.email,
+        email_nuevo: emailLimpio,
+        user_id: usuario.user_id,
+      },
+    });
+
+    setMensaje(
+      "Email actualizado en perfil. Si tiene Auth vinculado, el login de Auth no cambia automáticamente."
+    );
+    cargarUsuarios();
+  }
+
   async function actualizarRol(usuario: PerfilUsuario, nuevoRol: string) {
     setMensaje("");
 
@@ -950,8 +1111,8 @@ export default function UsuariosAlmacen() {
         {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
       </div>
 
-      <div className="overflow-hidden rounded-xl border bg-white">
-        <table className="w-full text-sm">
+      <div className="overflow-auto rounded-xl border bg-white">
+        <table className="w-full min-w-[1200px] text-sm">
           <thead className="bg-gray-50 text-left">
             <tr>
               <th className="p-3">Nombre</th>
@@ -969,8 +1130,23 @@ export default function UsuariosAlmacen() {
           <tbody>
             {usuarios.map((usuario) => (
               <tr key={usuario.id} className="border-t">
-                <td className="p-3">{usuario.nombre || "-"}</td>
-                <td className="p-3">{usuario.email || "-"}</td>
+                <td className="p-3">
+                  <input
+                    defaultValue={usuario.nombre || ""}
+                    onBlur={(e) => actualizarNombre(usuario, e.target.value)}
+                    className="w-40 rounded-lg border px-2 py-1 text-sm"
+                    disabled={!permisos.esAdmin}
+                  />
+                </td>
+
+                <td className="p-3">
+                  <input
+                    defaultValue={usuario.email || ""}
+                    onBlur={(e) => actualizarEmail(usuario, e.target.value)}
+                    className="w-56 rounded-lg border px-2 py-1 text-sm"
+                    disabled={!permisos.esAdmin}
+                  />
+                </td>
 
                 <td className="p-3">
                   {usuario.user_id ? (
@@ -1063,14 +1239,25 @@ export default function UsuariosAlmacen() {
                 </td>
 
                 <td className="p-3">
-                  <button
-                    type="button"
-                    onClick={() => cambiarActivo(usuario)}
-                    className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50"
-                    disabled={!permisos.esAdmin}
-                  >
-                    {usuario.activo ? "Desactivar" : "Activar"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => cambiarActivo(usuario)}
+                      className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50"
+                      disabled={!permisos.esAdmin}
+                    >
+                      {usuario.activo ? "Desactivar" : "Activar"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => eliminarUsuario(usuario)}
+                      className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 disabled:opacity-50"
+                      disabled={!permisos.esAdmin || !usuario.activo}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
