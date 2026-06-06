@@ -4,25 +4,77 @@ import { supabase } from "../services/supabase";
 type Traspaso = {
   id: string;
   codigo: string | null;
-  tipo_entrega: string | null;
   estado: string;
-  created_at: string;
-  origen_nombre: string | null;
-  destino_nombre: string | null;
+  fecha_salida: string | null;
+  fecha_recepcion: string | null;
+  cantidad: number;
+  cantidad_recibida: number | null;
+  ubicacion_origen: string | null;
+  ubicacion_destino: string | null;
+  productos_neumaticos:
+    | {
+        marca: string;
+        modelo: string | null;
+        medida: string;
+        dot: string | null;
+      }
+    | {
+        marca: string;
+        modelo: string | null;
+        medida: string;
+        dot: string | null;
+      }[]
+    | null;
 };
 
 function estadoTexto(estado: string) {
-  if (estado === "preparado") return "Pendiente de recogida";
+  if (estado === "pendiente_salida") return "Pendiente salida";
+  if (estado === "preparado") return "Pendiente salida";
   if (estado === "en_camino") return "Pendiente de recepción";
+  if (estado === "recibido_parcial") return "Recibido parcial";
   if (estado === "recibido") return "Recibido";
   return estado;
 }
 
 function estadoClase(estado: string) {
+  if (estado === "pendiente_salida") return "bg-yellow-100 text-yellow-800";
   if (estado === "preparado") return "bg-yellow-100 text-yellow-800";
   if (estado === "en_camino") return "bg-blue-100 text-blue-800";
+  if (estado === "recibido_parcial") return "bg-orange-100 text-orange-800";
   if (estado === "recibido") return "bg-green-100 text-green-800";
   return "bg-gray-100 text-gray-800";
+}
+
+function obtenerPrimero<T>(valor: T | T[] | null): T | null {
+  if (!valor) return null;
+  if (Array.isArray(valor)) return valor[0] || null;
+  return valor;
+}
+
+function textoProducto(
+  producto:
+    | {
+        marca: string;
+        modelo: string | null;
+        medida: string;
+        dot: string | null;
+      }
+    | null
+) {
+  if (!producto) return "-";
+
+  return `${producto.medida} - ${producto.marca}${
+    producto.modelo ? ` ${producto.modelo}` : ""
+  }${producto.dot ? ` - DOT ${producto.dot}` : ""}`;
+}
+
+function codigoTraspaso(traspaso: Traspaso) {
+  return traspaso.codigo || `TR-${traspaso.id.slice(0, 8).toUpperCase()}`;
+}
+
+function cantidadPendiente(traspaso: Traspaso) {
+  const pendiente = traspaso.cantidad - (traspaso.cantidad_recibida || 0);
+  return pendiente > 0 ? pendiente : 0;
 }
 
 export default function MobileAlmacen() {
@@ -35,10 +87,31 @@ export default function MobileAlmacen() {
     setMensaje("");
 
     const { data, error } = await supabase
-      .from("traspasos_detalle")
-      .select("*")
-      .in("estado", ["preparado", "en_camino"])
-      .order("created_at", { ascending: false });
+      .from("traspasos")
+      .select(`
+        id,
+        codigo,
+        fecha_salida,
+        fecha_recepcion,
+        cantidad,
+        cantidad_recibida,
+        ubicacion_origen,
+        ubicacion_destino,
+        estado,
+        productos_neumaticos (
+          marca,
+          modelo,
+          medida,
+          dot
+        )
+      `)
+      .in("estado", [
+        "pendiente_salida",
+        "preparado",
+        "en_camino",
+        "recibido_parcial",
+      ])
+      .order("fecha_salida", { ascending: false });
 
     if (error) {
       setMensaje(`Error cargando traspasos: ${error.message}`);
@@ -46,7 +119,7 @@ export default function MobileAlmacen() {
       return;
     }
 
-    setTraspasos((data || []) as Traspaso[]);
+    setTraspasos((data || []) as unknown as Traspaso[]);
     setLoading(false);
   }
 
@@ -60,7 +133,7 @@ export default function MobileAlmacen() {
         <div className="rounded-2xl bg-white p-4 shadow-sm">
           <h1 className="text-2xl font-bold">Almacén móvil</h1>
           <p className="text-sm text-gray-500">
-            Recogida y recepción de traspasos.
+            Aceptación de transporte y recepción de traspasos.
           </p>
         </div>
 
@@ -114,14 +187,19 @@ export default function MobileAlmacen() {
 
         {traspasos.map((tr) => (
           <div key={tr.id} className="rounded-2xl bg-white p-4 shadow-sm">
+            {(() => {
+              const producto = obtenerPrimero(tr.productos_neumaticos);
+
+              return (
+                <>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold">
-                  {tr.codigo || "Sin código"}
+                  {codigoTraspaso(tr)}
                 </h2>
 
                 <p className="text-sm text-gray-500">
-                  {tr.origen_nombre || "-"} → {tr.destino_nombre || "-"}
+                  {tr.ubicacion_origen || "-"} → {tr.ubicacion_destino || "-"}
                 </p>
               </div>
 
@@ -134,6 +212,20 @@ export default function MobileAlmacen() {
               </span>
             </div>
 
+            <div className="mt-3 rounded-xl bg-gray-50 p-3">
+              <p className="text-sm">
+                Cantidad: <strong>{tr.cantidad}</strong>
+              </p>
+
+              <p className="mt-1 text-sm">
+                Pendiente: <strong>{cantidadPendiente(tr)}</strong>
+              </p>
+
+              <p className="mt-1 text-sm text-gray-600">
+                Neumático: <strong>{textoProducto(producto)}</strong>
+              </p>
+            </div>
+
             <div className="mt-4 grid gap-2">
               <a
                 href={`/almacen-neumaticos/mobile/traspaso/${tr.id}`}
@@ -142,6 +234,9 @@ export default function MobileAlmacen() {
                 Ver traspaso
               </a>
             </div>
+                </>
+              );
+            })()}
           </div>
         ))}
 

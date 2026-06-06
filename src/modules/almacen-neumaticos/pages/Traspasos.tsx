@@ -441,16 +441,6 @@ export default function Traspasos() {
     return clientePermitido && tocaUbicacion;
   }
 
-  function usuarioPuedeAutorizarSalida(traspaso: Traspaso) {
-    if (!permisos.perfil) return false;
-    if (permisos.esAdmin) return true;
-
-    return (
-      usuarioPuedeUsarCliente(traspaso.cliente_id) &&
-      usuarioPuedeUsarUbicacion(traspaso.ubicacion_origen)
-    );
-  }
-
   function usuarioPuedeRecibirTraspaso(traspaso: Traspaso) {
     if (!permisos.perfil) return false;
     if (permisos.esAdmin) return true;
@@ -522,8 +512,6 @@ export default function Traspasos() {
       return;
     }
 
-    const codigoSalida = codigoPerfil();
-
     const { data: traspasoCreado, error: traspasoError } = await supabase
       .from("traspasos")
       .insert({
@@ -536,10 +524,12 @@ export default function Traspasos() {
             ? null
             : lineaSeleccionada.ubicacion,
         ubicacion_destino: ubicacionDestino,
-        estado: "en_camino",
-        codigo_operario_salida: codigoSalida,
-        fecha_salida: new Date().toISOString(),
-        observaciones: observaciones.trim() || null,
+        estado: "pendiente_salida",
+        codigo_operario_salida: null,
+        fecha_salida: null,
+        observaciones:
+          observaciones.trim() ||
+          `Traspaso creado desde PC. Pendiente de aceptacion mobile por operario.`,
       })
       .select("id")
       .single();
@@ -549,51 +539,12 @@ export default function Traspasos() {
       return;
     }
 
-    const movimientos = [
-      {
-        empresa_id: lineaSeleccionada.empresaId,
-        cliente_id: lineaSeleccionada.clienteId,
-        producto_id: lineaSeleccionada.productoId,
-        tipo: "SALIDA",
-        cantidad: cantidadNumero,
-        ubicacion:
-          lineaSeleccionada.ubicacion === "-"
-            ? null
-            : lineaSeleccionada.ubicacion,
-        traspaso_id: traspasoCreado.id,
-        solicitud_reposicion_id: null,
-        origen_movimiento: "traspaso_manual",
-        observaciones: `Traspaso a ${ubicacionDestino}. Operario salida: ${codigoSalida}`,
-      },
-      {
-        empresa_id: lineaSeleccionada.empresaId,
-        cliente_id: lineaSeleccionada.clienteId,
-        producto_id: lineaSeleccionada.productoId,
-        tipo: "ENTRADA",
-        cantidad: cantidadNumero,
-        ubicacion: "En camino",
-        traspaso_id: traspasoCreado.id,
-        solicitud_reposicion_id: null,
-        origen_movimiento: "traspaso_manual",
-        observaciones: `Traspaso desde ${lineaSeleccionada.ubicacion} hacia ${ubicacionDestino}. Operario salida: ${codigoSalida}`,
-      },
-    ];
-
-    const { error: movimientosError } = await supabase
-      .from("movimientos_stock")
-      .insert(movimientos);
-
-    if (movimientosError) {
-      setMensaje(`Error movimientos: ${movimientosError.message}`);
-      return;
-    }
-
     await registrarAuditoria({
       modulo: "traspasos",
       accion: "crear_traspaso",
       tabla_afectada: "traspasos",
       registro_id: traspasoCreado.id,
-      descripcion: `Traspaso manual creado de ${lineaSeleccionada.ubicacion} a ${ubicacionDestino}.`,
+      descripcion: `Traspaso manual creado pendiente de salida de ${lineaSeleccionada.ubicacion} a ${ubicacionDestino}.`,
       datos: {
         traspaso_id: traspasoCreado.id,
         empresa_id: lineaSeleccionada.empresaId,
@@ -604,113 +555,15 @@ export default function Traspasos() {
         cantidad: cantidadNumero,
         ubicacion_origen: lineaSeleccionada.ubicacion,
         ubicacion_destino: ubicacionDestino,
-        codigo_operario_salida: codigoSalida,
+        estado: "pendiente_salida",
+        generado_por: codigoPerfil(),
       },
     });
 
-    setMensaje("Traspaso creado correctamente. Stock movido a En camino.");
+    setMensaje(
+      "Traspaso creado correctamente. Queda pendiente de aceptacion en la pantalla mobile."
+    );
     limpiarFormularioTraspaso();
-    cargarDatos();
-  }
-
-  async function autorizarSalidaTraspaso(traspaso: Traspaso) {
-    setMensaje("");
-
-    if (!permisos.perfil) {
-      setMensaje("No hay perfil activo para el usuario conectado.");
-      return;
-    }
-
-    if (traspaso.estado !== "pendiente_salida") {
-      setMensaje("Solo se puede autorizar salida de traspasos pendientes.");
-      return;
-    }
-
-    if (!usuarioPuedeAutorizarSalida(traspaso)) {
-      setMensaje("No tienes permiso para autorizar la salida de este traspaso.");
-      return;
-    }
-
-    if (!traspaso.ubicacion_origen || !traspaso.ubicacion_destino) {
-      setMensaje("El traspaso no tiene origen o destino.");
-      return;
-    }
-
-    const codigoSalida = codigoPerfil();
-    const solicitudReposicion = obtenerPrimero(traspaso.solicitudes_reposicion);
-
-    const movimientos = [
-      {
-        empresa_id: traspaso.empresa_id,
-        cliente_id: traspaso.cliente_id,
-        producto_id: traspaso.producto_id,
-        tipo: "SALIDA",
-        cantidad: traspaso.cantidad,
-        ubicacion: traspaso.ubicacion_origen,
-        traspaso_id: traspaso.id,
-        solicitud_reposicion_id: solicitudReposicion?.id || null,
-        origen_movimiento: solicitudReposicion ? "reposicion" : "traspaso_manual",
-        observaciones: `Salida autorizada de traspaso ${traspaso.id}. Operario salida: ${codigoSalida}`,
-      },
-      {
-        empresa_id: traspaso.empresa_id,
-        cliente_id: traspaso.cliente_id,
-        producto_id: traspaso.producto_id,
-        tipo: "ENTRADA",
-        cantidad: traspaso.cantidad,
-        ubicacion: "En camino",
-        traspaso_id: traspaso.id,
-        solicitud_reposicion_id: solicitudReposicion?.id || null,
-        origen_movimiento: solicitudReposicion ? "reposicion" : "traspaso_manual",
-        observaciones: `Traspaso en camino hacia ${traspaso.ubicacion_destino}. Operario salida: ${codigoSalida}`,
-      },
-    ];
-
-    const { error: movimientosError } = await supabase
-      .from("movimientos_stock")
-      .insert(movimientos);
-
-    if (movimientosError) {
-      setMensaje(
-        `Error creando movimientos de salida: ${movimientosError.message}`
-      );
-      return;
-    }
-
-    const { error: updateError } = await supabase
-      .from("traspasos")
-      .update({
-        estado: "en_camino",
-        codigo_operario_salida: codigoSalida,
-        fecha_salida: new Date().toISOString(),
-      })
-      .eq("id", traspaso.id);
-
-    if (updateError) {
-      setMensaje(`Error actualizando traspaso: ${updateError.message}`);
-      return;
-    }
-
-    await registrarAuditoria({
-      modulo: "traspasos",
-      accion: "autorizar_salida_traspaso",
-      tabla_afectada: "traspasos",
-      registro_id: traspaso.id,
-      descripcion: `Salida autorizada de traspaso hacia ${traspaso.ubicacion_destino}.`,
-      datos: {
-        traspaso_id: traspaso.id,
-        solicitud_reposicion_id: solicitudReposicion?.id || null,
-        empresa_id: traspaso.empresa_id,
-        cliente_id: traspaso.cliente_id,
-        producto_id: traspaso.producto_id,
-        cantidad: traspaso.cantidad,
-        ubicacion_origen: traspaso.ubicacion_origen,
-        ubicacion_destino: traspaso.ubicacion_destino,
-        codigo_operario_salida: codigoSalida,
-      },
-    });
-
-    setMensaje("Salida autorizada. Stock movido a En camino.");
     cargarDatos();
   }
 
@@ -1580,15 +1433,10 @@ export default function Traspasos() {
                     )}
                   </td>
                   <td className="p-3">
-                    {traspaso.estado === "pendiente_salida" &&
-                    usuarioPuedeAutorizarSalida(traspaso) ? (
-                      <button
-                        type="button"
-                        onClick={() => autorizarSalidaTraspaso(traspaso)}
-                        className="rounded-lg border px-3 py-1 text-xs"
-                      >
-                        Autorizar salida
-                      </button>
+                    {traspaso.estado === "pendiente_salida" ? (
+                      <span className="rounded-lg bg-yellow-50 px-3 py-1 text-xs font-semibold text-yellow-800">
+                        Aceptar en mobile
+                      </span>
                     ) : (traspaso.estado === "en_camino" ||
                         traspaso.estado === "recibido_parcial") &&
                       usuarioPuedeRecibirTraspaso(traspaso) ? (
