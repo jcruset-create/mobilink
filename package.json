@@ -6,8 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:mobile": "tsc -b && vite build --mode mobile",
     "preview": "vite preview --host",
     "serve:prod": "vite preview --host --port 4173",
+    "mobile:sync": "npm run build:mobile && cap sync",
+    "mobile:android": "npm run build:mobile && cap sync android && cap open android",
+    "mobile:ios": "npm run build:mobile && cap sync ios && cap open ios",
     "backup": "node scripts/backup.cjs",
     "server": "tsx server/index.ts",
     "start": "tsx server/index.ts",
@@ -16,6 +20,9 @@
     "restore:postgres": "tsx server/restore-postgres.ts"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
+    "@capacitor/ios": "^8.4.0",
     "@supabase/supabase-js": "^2.105.1",
     "better-sqlite3": "^12.8.0",
     "cors": "^2.8.6",
@@ -38,6 +45,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.0",
     "@tailwindcss/vite": "^4.2.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",

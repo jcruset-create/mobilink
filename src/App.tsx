@@ -30,6 +30,7 @@ import AuditoriaAlmacen from "./modules/almacen-neumaticos/pages/AuditoriaAlmace
 import SistemaAlmacen from "./modules/almacen-neumaticos/pages/SistemaAlmacen";
 import NotFound from "./pages/NotFound";
 import MobileAlmacen from "./modules/almacen-neumaticos/pages/MobileAlmacen";
+import MobileAuditoria from "./modules/almacen-neumaticos/pages/MobileAuditoria";
 import MobileTraspasoDetalle from "./modules/almacen-neumaticos/pages/MobileTraspasoDetalle";
 
 type RolAlmacen = "admin" | "responsable" | "operario";
@@ -210,12 +211,16 @@ export default function App() {
         path="/payment-cancelled"
         element={<PaymentResult type="cancelled" />}
       />
-      <Route path="*" element={<NotFound />} />
       <Route path="/almacen-neumaticos/mobile" element={<MobileAlmacen />} />
       <Route
-  path="/almacen-neumaticos/mobile/traspaso/:id"
-  element={<MobileTraspasoDetalle />}
-/>
+        path="/almacen-neumaticos/mobile/auditoria"
+        element={<MobileAuditoria />}
+      />
+      <Route
+        path="/almacen-neumaticos/mobile/traspaso/:id"
+        element={<MobileTraspasoDetalle />}
+      />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }
