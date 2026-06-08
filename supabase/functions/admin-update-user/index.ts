@@ -181,15 +181,15 @@ serve(async (req: Request) => {
       );
     }
 
-const usuarioAuth = usersList.users.find(
-  (item: { id: string; email?: string }) =>
-    item.email?.toLowerCase() === perfilActual.email?.toLowerCase()
-);
+    const usuarioAuth = usersList.users.find(
+      (item: { id: string; email?: string }) =>
+        item.email?.toLowerCase() === perfilActual.email?.toLowerCase()
+    );
 
     authUserId = usuarioAuth?.id || null;
   }
 
-  if (!authUserId) {
+  if (!authUserId && body.password) {
     return jsonResponse(
       {
         error:
@@ -199,35 +199,37 @@ const usuarioAuth = usersList.users.find(
     );
   }
 
-  const authUpdate: {
-    email?: string;
-    password?: string;
-    user_metadata?: Record<string, unknown>;
-  } = {
-    user_metadata: {
-      nombre: nuevoNombre,
-      codigo_operario: nuevoCodigo,
-      rol: nuevoRol,
-      ubicacion: nuevaUbicacion,
-    },
-  };
+  if (authUserId) {
+    const authUpdate: {
+      email?: string;
+      password?: string;
+      user_metadata?: Record<string, unknown>;
+    } = {
+      user_metadata: {
+        nombre: nuevoNombre,
+        codigo_operario: nuevoCodigo,
+        rol: nuevoRol,
+        ubicacion: nuevaUbicacion,
+      },
+    };
 
-  if (nuevoEmail && nuevoEmail !== perfilActual.email) {
-    authUpdate.email = nuevoEmail;
-  }
+    if (nuevoEmail && nuevoEmail !== perfilActual.email) {
+      authUpdate.email = nuevoEmail;
+    }
 
-  if (body.password) {
-    authUpdate.password = body.password;
-  }
+    if (body.password) {
+      authUpdate.password = body.password;
+    }
 
-  const { error: authUpdateError } =
-    await supabaseAdmin.auth.admin.updateUserById(authUserId, authUpdate);
+    const { error: authUpdateError } =
+      await supabaseAdmin.auth.admin.updateUserById(authUserId, authUpdate);
 
-  if (authUpdateError) {
-    return jsonResponse(
-      { error: `Error actualizando Auth: ${authUpdateError.message}` },
-      400
-    );
+    if (authUpdateError) {
+      return jsonResponse(
+        { error: `Error actualizando Auth: ${authUpdateError.message}` },
+        400
+      );
+    }
   }
 
   const { data: perfilActualizado, error: perfilUpdateError } =

@@ -52,6 +52,17 @@ type UsuarioCliente = {
     | null;
 };
 
+type ActualizarUsuarioAdminPayload = {
+  perfil_id: string;
+  nombre?: string;
+  email?: string;
+  password?: string;
+  codigo_operario?: string;
+  rol?: string;
+  ubicacion?: string;
+  activo?: boolean;
+};
+
 const ROLES = ["admin", "responsable", "operario"];
 
 const UBICACIONES = [
@@ -217,6 +228,43 @@ export default function UsuariosAlmacen() {
     }));
   }
 
+  async function actualizarUsuarioAdmin(
+    body: ActualizarUsuarioAdminPayload,
+    etiquetaError: string
+  ) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      setMensaje("No hay sesion activa.");
+      return null;
+    }
+
+    const { data, error } = await supabase.functions.invoke(
+      "admin-update-user",
+      {
+        body,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      }
+    );
+
+    if (error) {
+      const detalle = await obtenerDetalleErrorFuncion(error);
+      setMensaje(`${etiquetaError}: ${detalle}`);
+      return null;
+    }
+
+    if (data?.error) {
+      setMensaje(`${etiquetaError}: ${data.error}`);
+      return null;
+    }
+
+    return (data?.perfil || null) as PerfilUsuario | null;
+  }
+
   async function crearUsuario() {
     setMensaje("");
 
@@ -315,36 +363,15 @@ export default function UsuariosAlmacen() {
         return;
       }
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        setMensaje("No hay sesión activa.");
-        return;
-      }
-
-      const { data, error } = await supabase.functions.invoke(
-        "admin-update-user",
+      const perfilActualizado = await actualizarUsuarioAdmin(
         {
-          body: {
-            perfil_id: perfilId,
-            password: password.trim(),
-          },
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        }
+          perfil_id: perfilId,
+          password: password.trim(),
+        },
+        "Error cambiando contraseña"
       );
 
-      if (error) {
-        const detalle = await obtenerDetalleErrorFuncion(error);
-        setMensaje(`Error cambiando contraseña: ${detalle}`);
-        return;
-      }
-
-      if (data?.error) {
-        setMensaje(`Error: ${data.error}`);
+      if (!perfilActualizado) {
         return;
       }
 
@@ -375,15 +402,15 @@ export default function UsuariosAlmacen() {
       return;
     }
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         activo: !usuario.activo,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error actualizando usuario"
+    );
 
-    if (error) {
-      setMensaje(`Error actualizando usuario: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
@@ -422,15 +449,15 @@ export default function UsuariosAlmacen() {
 
     if (!confirmado) return;
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         activo: false,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error eliminando usuario"
+    );
 
-    if (error) {
-      setMensaje(`Error eliminando usuario: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
@@ -479,15 +506,15 @@ export default function UsuariosAlmacen() {
       return;
     }
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         nombre: nombreLimpio,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error actualizando nombre"
+    );
 
-    if (error) {
-      setMensaje(`Error actualizando nombre: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
@@ -534,15 +561,15 @@ export default function UsuariosAlmacen() {
       return;
     }
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         email: emailLimpio,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error actualizando email"
+    );
 
-    if (error) {
-      setMensaje(`Error actualizando email: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
@@ -579,15 +606,15 @@ export default function UsuariosAlmacen() {
       return;
     }
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         rol: nuevoRol,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error actualizando rol"
+    );
 
-    if (error) {
-      setMensaje(`Error actualizando rol: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
@@ -625,15 +652,15 @@ export default function UsuariosAlmacen() {
       return;
     }
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         ubicacion: nuevaUbicacion,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error actualizando ubicación"
+    );
 
-    if (error) {
-      setMensaje(`Error actualizando ubicación: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
@@ -678,15 +705,15 @@ export default function UsuariosAlmacen() {
       return;
     }
 
-    const { error } = await supabase
-      .from("perfiles_usuario")
-      .update({
+    const perfilActualizado = await actualizarUsuarioAdmin(
+      {
+        perfil_id: usuario.id,
         codigo_operario: codigoLimpio,
-      })
-      .eq("id", usuario.id);
+      },
+      "Error actualizando código"
+    );
 
-    if (error) {
-      setMensaje(`Error actualizando código: ${error.message}`);
+    if (!perfilActualizado) {
       return;
     }
 
