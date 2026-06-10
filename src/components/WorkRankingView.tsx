@@ -15,6 +15,34 @@ type MaintTask = {
   statusChangedAtMs?: number | null;
 };
 
+type SchedTechStatus = {
+  techName: string;
+  status: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+};
+
+/** Estados que cuentan como ausencia (no disponible para trabajar en el taller). */
+const ABSENCE_STATUS_LABELS: Record<string, string> = {
+  vacaciones: "Vacaciones",
+  baja: "Baja",
+  permiso: "Permiso",
+  nodisponible: "No disponible",
+  otro_taller: "Otro taller",
+};
+
+const ABSENCE_STATUS_COLORS: Record<string, string> = {
+  vacaciones: "bg-sky-100 text-sky-700",
+  baja: "bg-red-100 text-red-700",
+  permiso: "bg-amber-100 text-amber-700",
+  nodisponible: "bg-slate-200 text-slate-600",
+  otro_taller: "bg-violet-100 text-violet-700",
+};
+
+function isAbsenceStatus(status: string): boolean {
+  return status in ABSENCE_STATUS_LABELS;
+}
+
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
 const AREA_LABELS: Record<AreaKey, string> = {
@@ -150,6 +178,7 @@ export default function WorkRankingView({
   const [toDate, setToDate] = useState(getToday());
   const [selectedTechName, setSelectedTechName] = useState("");
   const [maintTasks, setMaintTasks] = useState<MaintTask[]>([]);
+  const [techStatuses, setTechStatuses] = useState<SchedTechStatus[]>([]);
 
   useEffect(() => {
     async function loadMaint() {
@@ -162,7 +191,18 @@ export default function WorkRankingView({
         // silencioso
       }
     }
+    async function loadStatuses() {
+      try {
+        const res = await fetch(`${API_BASE}/api/scheduled-tech-statuses`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data)) setTechStatuses(data);
+      } catch {
+        // silencioso
+      }
+    }
     void loadMaint();
+    void loadStatuses();
   }, []);
 
   const filterTechNames = useMemo(() => {
@@ -271,14 +311,62 @@ export default function WorkRankingView({
       maintCountByTech[task.techName] = (maintCountByTech[task.techName] ?? 0) + 1;
     }
 
-    // Unimos técnicos con trabajos y/o mantenimiento
+    // ── Disponibilidad por técnico (descontando ausencias) ────────────
+    // Días laborables del período con sus minutos de jornada.
+    const workingDays: { date: string; minutes: number }[] = [];
+    {
+      const cur = new Date(`${fromDate}T00:00:00`);
+      const end = new Date(`${toDate}T00:00:00`);
+      while (cur <= end) {
+        const mins = workshopMinutesForDayOfWeek(cur.getDay());
+        if (mins > 0) {
+          const y = cur.getFullYear();
+          const m = String(cur.getMonth() + 1).padStart(2, "0");
+          const d = String(cur.getDate()).padStart(2, "0");
+          workingDays.push({ date: `${y}-${m}-${d}`, minutes: mins });
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+    }
+    const fullAvailableMinutes = workingDays.reduce((s, wd) => s + wd.minutes, 0);
+
+    function absenceForTechOnDate(techName: string, date: string): string | null {
+      for (const st of techStatuses) {
+        if (st.techName !== techName) continue;
+        if (!isAbsenceStatus(st.status)) continue;
+        if (st.startDate && st.endDate && st.startDate <= date && date <= st.endDate) {
+          return st.status;
+        }
+      }
+      return null;
+    }
+
+    function computeTechAvailability(techName: string) {
+      let available = 0;
+      const absenceMinutesByStatus: Record<string, number> = {};
+      for (const wd of workingDays) {
+        const abs = absenceForTechOnDate(techName, wd.date);
+        if (abs) {
+          absenceMinutesByStatus[abs] = (absenceMinutesByStatus[abs] ?? 0) + wd.minutes;
+        } else {
+          available += wd.minutes;
+        }
+      }
+      return { available, absenceMinutesByStatus };
+    }
+
+    // Unimos: todos los técnicos conocidos + los que tienen trabajos/mantenimiento
     const allTechNames = new Set<string>([
+      ...techs.map((t) => t.name).filter(Boolean),
       ...Object.keys(timeByTechArea),
       ...Object.keys(maintByTech),
     ]);
+    const filteredTechNames = selectedTechName
+      ? [selectedTechName]
+      : Array.from(allTechNames);
 
     // Convertimos a array ordenado por total desc
-    const timeRows = Array.from(allTechNames)
+    const timeRows = filteredTechNames
       .map((techName) => {
         const areas = timeByTechArea[techName] ?? emptyAreas();
         const counts = countByTechArea[techName] ?? emptyAreas();
@@ -286,6 +374,7 @@ export default function WorkRankingView({
         const mantenimientoCount = maintCountByTech[techName] ?? 0;
         const areasTotal = Object.values(areas).reduce((a, b) => a + b, 0);
         const areasCount = Object.values(counts).reduce((a, b) => a + b, 0);
+        const { available, absenceMinutesByStatus } = computeTechAvailability(techName);
         return {
           techName,
           areas,
@@ -294,11 +383,13 @@ export default function WorkRankingView({
           mantenimientoCount,
           total: areasTotal + mantenimiento,
           totalCount: areasCount + mantenimientoCount,
+          available,
+          absenceMinutesByStatus,
         };
       })
       .sort((a, b) => b.total - a.total);
 
-    const availableMinutes = computeAvailableMinutes(fromDate, toDate);
+    const availableMinutes = fullAvailableMinutes;
 
     return {
       availableMinutes,
@@ -317,7 +408,7 @@ export default function WorkRankingView({
       assignedTotalRevenue: rankingResult.assignedTotalRevenue,
       timeRows,
     };
-  }, [jobs, getOperationLabel, fromDate, toDate, selectedTechName, maintTasks]);
+  }, [jobs, techs, getOperationLabel, fromDate, toDate, selectedTechName, maintTasks, techStatuses]);
 
   const knownTechNames = new Set(techs.map((tech) => tech.name));
 
@@ -742,13 +833,26 @@ export default function WorkRankingView({
                             </span>
                           </div>
                         </td>
-                        <td className="pl-3 py-3 text-right text-slate-500 text-xs font-bold">
-                          {formatMinutesShort(availableMinutes)}
+                        <td className="pl-3 py-3 text-right">
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="text-slate-600 text-xs font-bold">
+                              {formatMinutesShort(row.available)}
+                            </span>
+                            {Object.entries(row.absenceMinutesByStatus).map(([st, mins]) => (
+                              <span
+                                key={st}
+                                className={`inline-block rounded-md px-1.5 py-0.5 text-[10px] font-black ${ABSENCE_STATUS_COLORS[st] ?? "bg-slate-100 text-slate-600"}`}
+                                title={`${ABSENCE_STATUS_LABELS[st] ?? st}: ${formatMinutesShort(mins)} no disponibles`}
+                              >
+                                {ABSENCE_STATUS_LABELS[st] ?? st} {formatMinutesShort(mins)}
+                              </span>
+                            ))}
+                          </div>
                         </td>
                         <td className="pl-3 py-3 text-right">
-                          {availableMinutes > 0 ? (
+                          {row.available > 0 ? (
                             (() => {
-                              const pct = Math.round((row.total / availableMinutes) * 100);
+                              const pct = Math.round((row.total / row.available) * 100);
                               const color = pct >= 80 ? "bg-emerald-100 text-emerald-800" : pct >= 50 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800";
                               return (
                                 <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${color}`}>
@@ -810,9 +914,20 @@ export default function WorkRankingView({
                       </div>
                     </td>
                     <td className="pl-3 pt-3 text-right text-xs font-bold text-slate-400">
-                      {formatMinutesShort(availableMinutes)}
+                      {formatMinutesShort(timeRows.reduce((s, r) => s + r.available, 0))}
                     </td>
-                    <td className="pl-3 pt-3 text-right"></td>
+                    <td className="pl-3 pt-3 text-right">
+                      {(() => {
+                        const totAvail = timeRows.reduce((s, r) => s + r.available, 0);
+                        const totWorked = timeRows.reduce((s, r) => s + r.total, 0);
+                        if (totAvail <= 0) return <span className="text-slate-300">—</span>;
+                        const pct = Math.round((totWorked / totAvail) * 100);
+                        const color = pct >= 80 ? "bg-emerald-100 text-emerald-800" : pct >= 50 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800";
+                        return (
+                          <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${color}`}>{pct}%</span>
+                        );
+                      })()}
+                    </td>
                   </tr>
                 </tfoot>
               </table>
