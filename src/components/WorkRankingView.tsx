@@ -218,7 +218,11 @@ export default function WorkRankingView({
     // Para cada trabajo cerrado, sumamos los minutos trabajados
     // (workedAccumulatedMinutes o actualMinutes) al técnico responsable.
     // Si hay varios técnicos, se reparte: responsable cuenta 100%, apoyo 50%.
+    const emptyAreas = (): Record<AreaKey, number> => ({
+      camion: 0, movil: 0, tacografo: 0, turismo: 0, mecanica: 0,
+    });
     const timeByTechArea: Record<string, Record<AreaKey, number>> = {};
+    const countByTechArea: Record<string, Record<AreaKey, number>> = {};
 
     for (const job of closedJobs) {
       const area = job.area as AreaKey;
@@ -241,16 +245,17 @@ export default function WorkRankingView({
         const weight = idx === 0 ? 1 : 0.5;
         const techMin = Math.round((workedMin * weight) / totalWeight);
 
-        if (!timeByTechArea[name]) {
-          timeByTechArea[name] = { camion: 0, movil: 0, tacografo: 0, turismo: 0, mecanica: 0 };
-        }
+        if (!timeByTechArea[name]) timeByTechArea[name] = emptyAreas();
+        if (!countByTechArea[name]) countByTechArea[name] = emptyAreas();
         timeByTechArea[name][area] += techMin;
+        countByTechArea[name][area] += 1;
       });
     }
 
     // ── Tiempo de mantenimiento por técnico ───────────────────────────
     // Tareas de mantenimiento finalizadas/interrumpidas dentro del rango.
     const maintByTech: Record<string, number> = {};
+    const maintCountByTech: Record<string, number> = {};
     for (const task of maintTasks) {
       const endMs = task.statusChangedAtMs ?? null;
       // Sólo contamos tareas terminadas dentro del período filtrado.
@@ -263,6 +268,7 @@ export default function WorkRankingView({
       );
       if (durMin <= 0) continue;
       maintByTech[task.techName] = (maintByTech[task.techName] ?? 0) + durMin;
+      maintCountByTech[task.techName] = (maintCountByTech[task.techName] ?? 0) + 1;
     }
 
     // Unimos técnicos con trabajos y/o mantenimiento
@@ -274,15 +280,20 @@ export default function WorkRankingView({
     // Convertimos a array ordenado por total desc
     const timeRows = Array.from(allTechNames)
       .map((techName) => {
-        const areas =
-          timeByTechArea[techName] ?? { camion: 0, movil: 0, tacografo: 0, turismo: 0, mecanica: 0 };
+        const areas = timeByTechArea[techName] ?? emptyAreas();
+        const counts = countByTechArea[techName] ?? emptyAreas();
         const mantenimiento = maintByTech[techName] ?? 0;
+        const mantenimientoCount = maintCountByTech[techName] ?? 0;
         const areasTotal = Object.values(areas).reduce((a, b) => a + b, 0);
+        const areasCount = Object.values(counts).reduce((a, b) => a + b, 0);
         return {
           techName,
           areas,
+          counts,
           mantenimiento,
+          mantenimientoCount,
           total: areasTotal + mantenimiento,
+          totalCount: areasCount + mantenimientoCount,
         };
       })
       .sort((a, b) => b.total - a.total);
@@ -635,9 +646,9 @@ export default function WorkRankingView({
             <div>
               <h2 className="text-xl font-black">Tiempo por área</h2>
               <p className="text-sm text-slate-500">
-                Minutos trabajados por operario desglosados por tipo de trabajo
-                · responsable 100 % · apoyo 50 % · incluye mantenimiento
-                · máx. {Math.floor(MAX_MINUTES_PER_JOB / 60)}h por trabajo
+                Minutos trabajados y nº de intervenciones (×N) por operario
+                desglosados por tipo de trabajo · responsable 100 % · apoyo 50 %
+                · incluye mantenimiento · máx. {Math.floor(MAX_MINUTES_PER_JOB / 60)}h por trabajo
               </p>
             </div>
           </div>
@@ -682,12 +693,18 @@ export default function WorkRankingView({
                         <td className="py-3 pr-4 font-black">{row.techName}</td>
                         {ALL_AREAS.map((area) => {
                           const min = row.areas[area];
+                          const cnt = row.counts[area];
                           return (
                             <td key={area} className="px-3 py-3 text-right">
                               {min > 0 ? (
-                                <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${AREA_COLORS[area]}`}>
-                                  {formatMinutesShort(min)}
-                                </span>
+                                <div className="flex items-center justify-end gap-1">
+                                  <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${AREA_COLORS[area]}`}>
+                                    {formatMinutesShort(min)}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-slate-400">
+                                    ×{cnt}
+                                  </span>
+                                </div>
                               ) : (
                                 <span className="text-slate-300">—</span>
                               )}
@@ -696,9 +713,14 @@ export default function WorkRankingView({
                         })}
                         <td className="px-3 py-3 text-right">
                           {row.mantenimiento > 0 ? (
-                            <span className="inline-block rounded-lg px-2 py-0.5 text-xs font-black bg-violet-100 text-violet-700">
-                              {formatMinutesShort(row.mantenimiento)}
-                            </span>
+                            <div className="flex items-center justify-end gap-1">
+                              <span className="inline-block rounded-lg px-2 py-0.5 text-xs font-black bg-violet-100 text-violet-700">
+                                {formatMinutesShort(row.mantenimiento)}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-400">
+                                ×{row.mantenimientoCount}
+                              </span>
+                            </div>
                           ) : (
                             <span className="text-slate-300">—</span>
                           )}
@@ -714,6 +736,9 @@ export default function WorkRankingView({
                             </div>
                             <span className="font-black text-slate-900">
                               {formatMinutesShort(row.total)}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-400">
+                              ×{row.totalCount}
                             </span>
                           </div>
                         </td>
@@ -744,12 +769,16 @@ export default function WorkRankingView({
                     <td className="pt-3 pr-4 text-slate-500">TOTAL</td>
                     {ALL_AREAS.map((area) => {
                       const total = timeRows.reduce((s, r) => s + r.areas[area], 0);
+                      const cnt = timeRows.reduce((s, r) => s + r.counts[area], 0);
                       return (
                         <td key={area} className="px-3 pt-3 text-right">
                           {total > 0 ? (
-                            <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${AREA_COLORS[area]}`}>
-                              {formatMinutesShort(total)}
-                            </span>
+                            <div className="flex items-center justify-end gap-1">
+                              <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${AREA_COLORS[area]}`}>
+                                {formatMinutesShort(total)}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-400">×{cnt}</span>
+                            </div>
                           ) : (
                             <span className="text-slate-300">—</span>
                           )}
@@ -759,17 +788,26 @@ export default function WorkRankingView({
                     <td className="px-3 pt-3 text-right">
                       {(() => {
                         const tot = timeRows.reduce((s, r) => s + r.mantenimiento, 0);
+                        const cnt = timeRows.reduce((s, r) => s + r.mantenimientoCount, 0);
                         return tot > 0 ? (
-                          <span className="inline-block rounded-lg px-2 py-0.5 text-xs font-black bg-violet-100 text-violet-700">
-                            {formatMinutesShort(tot)}
-                          </span>
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="inline-block rounded-lg px-2 py-0.5 text-xs font-black bg-violet-100 text-violet-700">
+                              {formatMinutesShort(tot)}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-400">×{cnt}</span>
+                          </div>
                         ) : (
                           <span className="text-slate-300">—</span>
                         );
                       })()}
                     </td>
                     <td className="pl-3 pt-3 text-right font-black text-slate-900">
-                      {formatMinutesShort(timeRows.reduce((s, r) => s + r.total, 0))}
+                      <div className="flex items-center justify-end gap-1">
+                        <span>{formatMinutesShort(timeRows.reduce((s, r) => s + r.total, 0))}</span>
+                        <span className="text-[10px] font-bold text-slate-400">
+                          ×{timeRows.reduce((s, r) => s + r.totalCount, 0)}
+                        </span>
+                      </div>
                     </td>
                     <td className="pl-3 pt-3 text-right text-xs font-bold text-slate-400">
                       {formatMinutesShort(availableMinutes)}
