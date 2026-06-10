@@ -11,7 +11,6 @@ import {
   Phone,
   RefreshCw,
   ShieldCheck,
-  Trash2,
   Truck,
   Upload,
   X,
