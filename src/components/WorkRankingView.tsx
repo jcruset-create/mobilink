@@ -77,6 +77,27 @@ function getClosedDateMs(job: Job) {
   return Number(job.closedAtMs ?? 0);
 }
 
+/** Minutos del horario del centro para un día de la semana JS (0=Dom,...,6=Sáb) */
+function workshopMinutesForDayOfWeek(jsDay: number): number {
+  if (jsDay === 0) return 0; // domingo cerrado
+  if (jsDay === 6) return 255; // sábado 9:00-13:15
+  // lunes-viernes: mañana 8:30-13:30 (300 min) + tarde 15:00-18:30 (210 min)
+  return 510;
+}
+
+/** Total de minutos del horario del centro en el rango [fromDate, toDate] */
+function computeAvailableMinutes(fromDate: string, toDate: string): number {
+  const from = new Date(`${fromDate}T00:00:00`);
+  const to = new Date(`${toDate}T00:00:00`);
+  let total = 0;
+  const cursor = new Date(from);
+  while (cursor <= to) {
+    total += workshopMinutesForDayOfWeek(cursor.getDay());
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return total;
+}
+
 function formatDateTime(ms: number) {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
 
@@ -138,6 +159,7 @@ export default function WorkRankingView({
     realTotalRevenue,
     assignedTotalRevenue,
     timeRows,
+    availableMinutes,
   } = useMemo(() => {
     const fromMs = new Date(`${fromDate}T00:00:00`).getTime();
     const toMs = new Date(`${toDate}T23:59:59`).getTime();
@@ -203,7 +225,10 @@ export default function WorkRankingView({
       }))
       .sort((a, b) => b.total - a.total);
 
+    const availableMinutes = computeAvailableMinutes(fromDate, toDate);
+
     return {
+      availableMinutes,
       rankingRows: rankingResult.rankingRows,
       detailRows: rankingResult.detailRows.map((row) => {
         const job = closedJobs.find((item) => item.id === row.jobId);
@@ -572,6 +597,12 @@ export default function WorkRankingView({
                       </th>
                     ))}
                     <th className="pb-3 pl-3 text-right">Total</th>
+                    <th className="pb-3 pl-3 text-right">
+                      <span className="rounded-full px-2 py-0.5 bg-slate-100 text-slate-600">Disponible</span>
+                    </th>
+                    <th className="pb-3 pl-3 text-right">
+                      <span className="rounded-full px-2 py-0.5 bg-indigo-100 text-indigo-700">Uso %</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -611,6 +642,24 @@ export default function WorkRankingView({
                             </span>
                           </div>
                         </td>
+                        <td className="pl-3 py-3 text-right text-slate-500 text-xs font-bold">
+                          {formatMinutesShort(availableMinutes)}
+                        </td>
+                        <td className="pl-3 py-3 text-right">
+                          {availableMinutes > 0 ? (
+                            (() => {
+                              const pct = Math.round((row.total / availableMinutes) * 100);
+                              const color = pct >= 80 ? "bg-emerald-100 text-emerald-800" : pct >= 50 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800";
+                              return (
+                                <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${color}`}>
+                                  {pct}%
+                                </span>
+                              );
+                            })()
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -635,6 +684,10 @@ export default function WorkRankingView({
                     <td className="pl-3 pt-3 text-right font-black text-slate-900">
                       {formatMinutesShort(timeRows.reduce((s, r) => s + r.total, 0))}
                     </td>
+                    <td className="pl-3 pt-3 text-right text-xs font-bold text-slate-400">
+                      {formatMinutesShort(availableMinutes)}
+                    </td>
+                    <td className="pl-3 pt-3 text-right"></td>
                   </tr>
                 </tfoot>
               </table>

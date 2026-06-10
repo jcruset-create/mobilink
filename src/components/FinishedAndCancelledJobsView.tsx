@@ -278,16 +278,26 @@ export default function FinishedAndCancelledJobsView({
 }: Props) {
   // Cargamos el historial de tareas de mantenimiento directamente
   const [maintenanceHistory, setMaintenanceHistory] = useState<AssignedMaintenanceTask[]>([]);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
+  const [maintenanceError, setMaintenanceError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
+      setMaintenanceLoading(true);
+      setMaintenanceError(null);
       try {
         const res = await fetch(`${API_BASE}/api/assigned-maintenance-tasks`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          setMaintenanceError(`Error ${res.status}: ${res.statusText}`);
+          return;
+        }
         const data = await res.json();
         if (Array.isArray(data)) setMaintenanceHistory(data);
-      } catch {
-        // silencioso
+        else setMaintenanceError("Respuesta inesperada del servidor");
+      } catch (e) {
+        setMaintenanceError(String(e));
+      } finally {
+        setMaintenanceLoading(false);
       }
     }
     void load();
@@ -474,7 +484,15 @@ export default function FinishedAndCancelledJobsView({
             </div>
 
             <div className="max-h-[calc(100vh-220px)] space-y-5 overflow-y-auto pr-2">
-              {maintenanceGroups.length === 0 ? (
+              {maintenanceLoading ? (
+                <div className="rounded-2xl border border-violet-100 bg-violet-50 p-8 text-center text-sm font-bold text-violet-500">
+                  Cargando tareas...
+                </div>
+              ) : maintenanceError ? (
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-center text-xs font-bold text-red-600">
+                  Error: {maintenanceError}
+                </div>
+              ) : maintenanceGroups.length === 0 ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-sm font-bold text-slate-500">
                   No hay tareas de mantenimiento registradas.
                 </div>
