@@ -295,11 +295,19 @@ async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
 function SmallJobCard({
   job,
   getOperationLabel,
+  nowMs,
 }: {
   job: JobForTV75;
   getOperationLabel: (job: OperationLabelJob) => string;
+  nowMs: number;
 }) {
   const assignedNames = job.assignedNames ?? [];
+
+  // Tiempo esperando en cola desde que se creó el trabajo
+  const waitingMs = job.createdAtMs
+    ? Math.max(0, nowMs - Number(job.createdAtMs))
+    : 0;
+  const waitingMinutes = Math.floor(waitingMs / 60000);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -331,8 +339,8 @@ function SmallJobCard({
         </div>
       )}
 
-      <div className="mt-3 rounded-xl bg-slate-900 px-3 py-2 text-sm font-black text-white">
-        Tiempo: {formatWorkedTime(job)}
+      <div className="mt-3 rounded-xl bg-sky-700 px-3 py-2 text-sm font-black text-white">
+        ⏳ Esperando: {formatMinutes(waitingMinutes)}
       </div>
     </div>
   );
@@ -705,6 +713,7 @@ export default function WorkshopTV75View({
                       key={job.id}
                       job={job}
                       getOperationLabel={getOperationLabel}
+                      nowMs={nowTick}
                     />
                   ))
                 )}
@@ -733,6 +742,7 @@ export default function WorkshopTV75View({
                       key={job.id}
                       job={job}
                       getOperationLabel={getOperationLabel}
+                      nowMs={nowTick}
                     />
                   ))
                 )}
