@@ -144,5 +144,8 @@ AreaKey,
   },
 };
 
-export const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
+// En app nativa (Capacitor) se necesita URL absoluta; VITE_API_BASE la aporta el config de build
+export const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) ||
+  (import.meta.env.PROD ? "" : "http://localhost:4000");
 

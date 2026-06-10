@@ -2623,21 +2623,24 @@ setTechs(result.techs);
     Math.max(value, firstJobId + jobsToSave.length)
   );
 
-setScheduledJobsAndSave((prev) =>
-  normalizeScheduledJobsV2Fields(
-    prev.map((item) =>
-      item.id === currentScheduled.id
-        ? {
-            ...item,
-            status: "en_cola",
-            arrivedAtMs,
-            jobId: firstJob.id,
-            secondJobId: createdSecondJobId,
-          }
-        : item
-    )
+// Calculamos el array actualizado aquí (no dentro del setter) para poder
+// guardarlo explícitamente en el try y evitar el bug de fire-and-forget.
+const updatedScheduledJobs = normalizeScheduledJobsV2Fields(
+  scheduledJobs.map((item) =>
+    item.id === currentScheduled.id
+      ? {
+          ...item,
+          status: "en_cola" as const,
+          arrivedAtMs,
+          jobId: firstJob.id,
+          secondJobId: createdSecondJobId,
+        }
+      : item
   )
 );
+
+// Actualiza UI inmediatamente (sin fire-and-forget)
+setScheduledJobs(updatedScheduledJobs);
 
   try {
     for (const job of jobsToSave) {
@@ -2647,6 +2650,15 @@ setScheduledJobsAndSave((prev) =>
     for (const tech of result.techs) {
       await saveTechToBackend(tech);
     }
+
+    // Guardamos la agenda de forma explícita (awaited) para que el estado
+    // persista en backend aunque el usuario recargue la página enseguida.
+    scheduledJobsDirtyRef.current = true;
+    scheduledJobsSaveVersionRef.current += 1;
+    await saveScheduledJobsToBackend(
+      updatedScheduledJobs,
+      scheduledJobsSaveVersionRef.current
+    );
 
     appendLog(
       scheduledIncludedTasks.length > 0
@@ -3663,54 +3675,34 @@ async function assignWaitingJobManually(jobId: number, techName: string) {
 
   const assignedNames = [techName];
 
+  // Al asignar manualmente desde cola → pasa a "validacion" (pendiente de confirmación)
+  // El supervisor deberá confirmar antes de que empiece, igual que una entrada nueva
   const updatedJob: Job = {
     ...job,
-    status: "activo",
+    status: "validacion",
     assignedNames,
-    startedAtMs: nowMs(),
+    startedAtMs: null,
     reservedTechName: null,
     reservedAtMs: null,
     reason:
       job.status === "validacion"
-        ? `Propuesta reasignada y autorizada manualmente. Responsable: ${techName}.`
-        : `Asignación manual desde cola. Responsable: ${techName}.`,
+        ? `Propuesta reasignada manualmente. Pendiente de confirmar. Responsable: ${techName}.`
+        : `Asignado manualmente desde cola. Pendiente de confirmar. Responsable: ${techName}.`,
   };
 
   const updatedJobs: Job[] = jobs.map((item) =>
     item.id === jobId ? updatedJob : item
   );
 
-  const updatedTechs: Tech[] = techs.map((item) =>
-    item.name === techName
-      ? {
-          ...item,
-          status: "ocupado" as TechStatus,
-          currentJobId: jobId,
-          blocked: isUnavailableTechStatus(item.status),
-        }
-      : item
-  );
-
+  // El técnico queda libre hasta que se confirme — no lo marcamos ocupado todavía
   setJobs(updatedJobs);
-  setTechs(updatedTechs);
-
-  if (job.status === "validacion") {
-    void updateScheduledJobStatusByJobId(jobId, "activo");
-  }
 
   appendLog(
-    job.status === "validacion"
-      ? `Trabajo ${job.plate} reasignado y autorizado manualmente a ${techName}.`
-      : `Trabajo en cola ${job.plate} asignado manualmente a ${techName}.`
+    `Trabajo en cola ${job.plate} asignado a ${techName}. Pendiente de confirmación.`
   );
 
   try {
     await saveJobToBackend(updatedJob);
-
-    const changedTech = updatedTechs.find((item) => item.name === techName);
-    if (changedTech) {
-      saveTechToBackend(changedTech);
-    }
   } catch (error) {
     console.error("Error asignando trabajo en cola:", error);
     appendLog(`Error al asignar ${job.plate}.`);
@@ -5192,6 +5184,7 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
   techs={visibleTechs}
   scheduledTechStatuses={scheduledTechStatuses}
   setScheduledTechStatuses={setScheduledTechStatuses}
+  queueJobs={visibleJobs.filter((j) => j.status === "espera" || j.status === "validacion")}
 />
   );
 }
@@ -8375,6 +8368,15 @@ console.log("DEBUG tiempos trabajo activo", {
                           .filter((tech) => !isHardBlockedTechStatus(tech.status))
                           .filter((tech) => !isManualUnavailableStatus(tech.status))
                           .filter((tech) => !isTechBlockedByOutsideMaintenance(tech.name))
+                          .filter((tech) =>
+                            canAssignTechManuallyToJob(
+                              tech,
+                              job,
+                              jobs,
+                              quickTemplates,
+                              "responsable"
+                            )
+                          )
                           .map((tech) => {
                             const techIsBusy =
                               tech.currentJobId != null ||

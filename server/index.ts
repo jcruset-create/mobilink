@@ -6,9 +6,10 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
+import PDFDocument from "pdfkit";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
-import { supabase, SUPABASE_STORAGE_BUCKET } from "./supabase.ts";
+import { supabase, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import OpenAI from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -701,6 +702,36 @@ async function sendRoadsideTrackingWhatsApp(
     to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
     body: buildRoadsideTrackingMessage(assistance, trackingUrl),
   });
+}
+
+async function sendRoadsideStatusWhatsApp(assistance: any, status: string) {
+  const customerPhone = String(assistance.customerPhone || "").trim();
+  if (!customerPhone) return;
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return;
+
+  const name = assistance.customerName || "cliente";
+  const tech = assistance.assignedTechName || "nuestro operario";
+  const plate = assistance.plate || "tu vehículo";
+
+  const messages: Record<string, string> = {
+    en_camino: `Hola ${name}, ${tech} ya está en camino hacia tu ubicación para la asistencia de ${plate}. Te avisaremos cuando llegue.`,
+    en_punto: `Hola ${name}, ${tech} ha llegado al punto de asistencia para ${plate}.`,
+    finalizada: `Hola ${name}, la asistencia de ${plate} ha finalizado. Gracias por confiar en SEA Tarragona.`,
+    llegada_taller: `Hola ${name}, ${plate} ha llegado al taller de SEA Tarragona.`,
+  };
+
+  const body = messages[status];
+  if (!body) return;
+
+  try {
+    await twilioClient.messages.create({
+      from: getWhatsAppFromNumber(),
+      to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
+      body,
+    });
+  } catch (err: any) {
+    console.error("sendRoadsideStatusWhatsApp error:", err.message);
+  }
 }
 
 function getJobOperationLabel(job: any) {
@@ -1915,19 +1946,27 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       assistanceResult.rows[0]
     );
 
-    const eventsResult = await db.query(
-      `
-        SELECT status, "createdAtMs"
-        FROM roadside_assistance_events
-        WHERE "assistanceId" = $1
-        ORDER BY "createdAtMs" ASC
-      `,
-      [assistance.id]
-    );
+    const [eventsResult, filesResult] = await Promise.all([
+      db.query(
+        `SELECT status, "createdAtMs"
+         FROM roadside_assistance_events
+         WHERE "assistanceId" = $1
+         ORDER BY "createdAtMs" ASC`,
+        [assistance.id]
+      ),
+      db.query(
+        `SELECT id, kind, url, "fileName", "createdAtMs"
+         FROM roadside_assistance_files
+         WHERE "assistanceId" = $1
+         ORDER BY "createdAtMs" ASC`,
+        [assistance.id]
+      ),
+    ]);
 
     res.json({
       assistance,
       events: eventsResult.rows,
+      files: filesResult.rows,
       expired:
         assistance.status === "llegada_taller" ||
         assistance.status === "cancelada",
@@ -2209,7 +2248,9 @@ app.post(
         ]
       );
 
-      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+      const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+      res.json(updated);
+      void sendRoadsideStatusWhatsApp(updated, status);
     } catch (error) {
       console.error("POST /api/roadside-operator/assistances/:id/status error:", error);
       res.status(500).json({ error: "Error cambiando estado operario" });
@@ -2655,10 +2696,289 @@ app.post(
         ]
       );
 
-      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+      const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+      res.json(updated);
+      void sendRoadsideStatusWhatsApp(updated, status);
     } catch (error) {
       console.error("POST /api/roadside-assistances/:id/status error:", error);
       res.status(500).json({ error: "Error cambiando estado de asistencia" });
+    }
+  }
+);
+
+/* =========================================================
+   ROADSIDE FILES (fotos + firma)
+========================================================= */
+
+app.post(
+  "/api/roadside-assistances/:id/files",
+  requireRoadsideOperator,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const kind = String(req.body?.kind || "foto").trim();
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID no válido" });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: "No se recibió archivo" });
+      }
+
+      const mimeToExt: Record<string, string> = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+      };
+      const ext = mimeToExt[req.file.mimetype] ?? "jpg";
+      const storagePath = `roadside/${id}/${kind}_${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(storagePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false,
+        });
+
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: publicData } = supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .getPublicUrl(storagePath);
+
+      const result = await db.query(
+        `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [id, kind, publicData.publicUrl, req.file.originalname, Date.now()]
+      );
+
+      res.json(result.rows[0]);
+    } catch (error: any) {
+      console.error("POST /api/roadside-assistances/:id/files error:", error);
+      res.status(500).json({ error: "Error subiendo archivo" });
+    }
+  }
+);
+
+app.get("/api/roadside-assistances/:id/files", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await db.query(
+      `SELECT * FROM roadside_assistance_files WHERE "assistanceId" = $1 ORDER BY "createdAtMs" ASC`,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/files error:", error);
+    res.status(500).json({ error: "Error cargando archivos" });
+  }
+});
+
+app.delete(
+  "/api/roadside-assistances/:id/files/:fileId",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const fileId = Number(req.params.fileId);
+      const result = await db.query(
+        `DELETE FROM roadside_assistance_files WHERE id = $1 RETURNING *`,
+        [fileId]
+      );
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Archivo no encontrado" });
+      }
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("DELETE /api/roadside-assistances/:id/files/:fileId error:", error);
+      res.status(500).json({ error: "Error eliminando archivo" });
+    }
+  }
+);
+
+/* =========================================================
+   ROADSIDE PDF REPORT
+========================================================= */
+
+function formatDateEs(ms: number | null | undefined): string {
+  if (!ms) return "-";
+  return new Date(ms).toLocaleString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function diffMinutes(a: number | null | undefined, b: number | null | undefined): string {
+  if (!a || !b) return "-";
+  const mins = Math.round(Math.abs(b - a) / 60000);
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}min`;
+}
+
+app.get(
+  "/api/roadside-assistances/:id/report.pdf",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID no válido" });
+      }
+
+      const assistanceResult = await db.query(
+        `SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`,
+        [id]
+      );
+
+      if (assistanceResult.rows.length === 0) {
+        return res.status(404).json({ error: "Asistencia no encontrada" });
+      }
+
+      const a = normalizeRoadsideAssistanceRow(assistanceResult.rows[0]);
+
+      const eventsResult = await db.query(
+        `SELECT * FROM roadside_assistance_events WHERE "assistanceId" = $1 ORDER BY "createdAtMs" ASC`,
+        [id]
+      );
+
+      const filesResult = await db.query(
+        `SELECT * FROM roadside_assistance_files WHERE "assistanceId" = $1 ORDER BY "createdAtMs" ASC`,
+        [id]
+      );
+
+      const doc = new PDFDocument({ margin: 40, size: "A4" });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="asistencia_${id}.pdf"`
+      );
+
+      doc.pipe(res);
+
+      // Header
+      doc
+        .fontSize(18)
+        .font("Helvetica-Bold")
+        .text("SEA Tarragona – Informe de Asistencia", { align: "center" });
+
+      doc.moveDown(0.3);
+      doc
+        .fontSize(11)
+        .font("Helvetica")
+        .text(`Asistencia nº ${a.id}   |   ${formatDateEs(a.createdAtMs)}`, { align: "center" });
+
+      doc.moveDown(1);
+
+      // Helper to draw a row
+      function row(label: string, value: string) {
+        doc
+          .fontSize(10)
+          .font("Helvetica-Bold")
+          .text(label, { continued: true, width: 160 });
+        doc.font("Helvetica").text(value);
+      }
+
+      doc.fontSize(13).font("Helvetica-Bold").text("Datos del cliente");
+      doc.moveDown(0.3);
+      row("Nombre:", a.customerName || "-");
+      row("Teléfono:", a.customerPhone || "-");
+      row("Dirección:", a.address || "-");
+      row("Matrícula:", a.plate || "-");
+      row("Vehículo:", a.vehicleDescription || "-");
+      row("Prioridad:", a.priority === "urgente" ? "URGENTE" : "Normal");
+      if (a.notes) row("Notas:", a.notes);
+
+      doc.moveDown(1);
+      doc.fontSize(13).font("Helvetica-Bold").text("Asignación");
+      doc.moveDown(0.3);
+      row("Operario:", a.assignedTechName || "-");
+      row("Vehículo asignado:", a.assignedVehicleName || "-");
+
+      doc.moveDown(1);
+      doc.fontSize(13).font("Helvetica-Bold").text("Tiempos");
+      doc.moveDown(0.3);
+      row("Creación:", formatDateEs(a.createdAtMs));
+      row("Asignada:", formatDateEs(a.assignedAtMs));
+      row("Salida taller:", formatDateEs(a.departedAtMs));
+      row("Llegada punto:", formatDateEs(a.arrivedAtPointMs));
+      row("Finalización:", formatDateEs(a.finishedAtMs));
+      row("Llegada taller:", formatDateEs(a.arrivedAtWorkshopMs));
+
+      doc.moveDown(0.5);
+      doc.fontSize(10).font("Helvetica-Bold").text("Tiempos calculados:");
+      doc.font("Helvetica");
+      doc.text(`  · Salida → Llegada al punto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}`);
+      doc.text(`  · Punto → Finalización: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}`);
+      doc.text(`  · Tiempo total (salida → taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
+
+      // Events
+      if (eventsResult.rows.length > 0) {
+        doc.moveDown(1);
+        doc.fontSize(13).font("Helvetica-Bold").text("Historial de estados");
+        doc.moveDown(0.3);
+        for (const ev of eventsResult.rows) {
+          const label = ev.status;
+          const by = ev.createdBy ? ` (${ev.createdBy})` : "";
+          const note = ev.note ? ` – ${ev.note}` : "";
+          doc
+            .fontSize(9)
+            .font("Helvetica")
+            .text(`${formatDateEs(ev.createdAtMs)}  →  ${label}${by}${note}`);
+        }
+      }
+
+      // Photos
+      const photos = filesResult.rows.filter((f: any) => f.kind !== "firma");
+      const signature = filesResult.rows.find((f: any) => f.kind === "firma");
+
+      if (photos.length > 0) {
+        doc.addPage();
+        doc.fontSize(13).font("Helvetica-Bold").text("Fotografías");
+        doc.moveDown(0.5);
+
+        for (const photo of photos) {
+          try {
+            const resp = await fetch(photo.url);
+            if (resp.ok) {
+              const buffer = Buffer.from(await resp.arrayBuffer());
+              doc.image(buffer, { fit: [500, 350], align: "center" });
+              doc.moveDown(0.5);
+              doc.fontSize(8).font("Helvetica").text(photo.url, { align: "center" });
+              doc.moveDown(1);
+            }
+          } catch {
+            doc.fontSize(9).font("Helvetica").text(`[Foto no disponible: ${photo.url}]`);
+          }
+        }
+      }
+
+      if (signature) {
+        doc.addPage();
+        doc.fontSize(13).font("Helvetica-Bold").text("Firma del cliente");
+        doc.moveDown(0.5);
+        try {
+          const resp = await fetch(signature.url);
+          if (resp.ok) {
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            doc.image(buffer, { fit: [400, 200], align: "center" });
+          }
+        } catch {
+          doc.fontSize(9).font("Helvetica").text(`[Firma no disponible]`);
+        }
+      }
+
+      doc.end();
+    } catch (error) {
+      console.error("GET /api/roadside-assistances/:id/report.pdf error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Error generando informe PDF" });
+      }
     }
   }
 );
@@ -4291,7 +4611,8 @@ return (
 
 async function sendWhatsAppAgendaReminder(job: any, reminderLabel: string) {
   if (!job.customerPhone || !String(job.customerPhone).trim()) {
-    throw new Error(`La cita ${job.id} no tiene teléfono de cliente.`);
+    // Sin teléfono — saltar silenciosamente sin lanzar error
+    return null;
   }
 
   return twilioClient.messages.create({
@@ -4407,6 +4728,11 @@ async function checkAgendaWhatsAppReminders() {
 
         try {
           const message = await sendWhatsAppAgendaReminder(job, reminder.label);
+
+          if (!message) {
+            // Sin teléfono, saltar
+            continue;
+          }
 
           await markScheduledJobReminderSent(job, reminder.sentField, nowMs);
 

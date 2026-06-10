@@ -89,12 +89,22 @@ export type RoadsideAssistanceEditDraft = RoadsideAssistanceDraft & {
   longitude: string;
 };
 
+export type RoadsideAssistanceFile = {
+  id: number;
+  assistanceId: number;
+  kind: string;
+  url: string;
+  fileName?: string | null;
+  createdAtMs: number;
+};
+
 export type RoadsideTrackingResponse = {
   assistance: RoadsideAssistance;
   events: Array<{
     status: RoadsideAssistanceStatus;
     createdAtMs: number;
   }>;
+  files: RoadsideAssistanceFile[];
   expired: boolean;
 };
 

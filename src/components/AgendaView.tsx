@@ -146,6 +146,20 @@ type ReminderDraft = {
   techStatus: TechStatus;
 };
 
+// Subset mínimo del tipo Job de workshopTypes para mostrar cola en agenda
+type QueueJob = {
+  id: number;
+  workshopId?: string | null;
+  area: string;
+  plate: string;
+  status: string; // "espera" | "validacion"
+  quickEntryLabel?: string | null;
+  reason?: string;
+  customerName?: string;
+  createdAtMs: number;
+  standardMinutes?: number | null;
+};
+
 type Props = {
   scheduledJobs: ScheduledJob[];
   setScheduledJobs: Dispatch<SetStateAction<ScheduledJob[]>>;
@@ -162,6 +176,9 @@ type Props = {
   techs: Tech[];
   scheduledTechStatuses: ScheduledTechStatus[];
   setScheduledTechStatuses: Dispatch<SetStateAction<ScheduledTechStatus[]>>;
+
+  /** Trabajos actualmente en cola de espera (status espera/validacion) */
+  queueJobs?: QueueJob[];
 
   linkedTemplates?: {
     id: string;
@@ -318,6 +335,12 @@ function getFirstAvailableSlotInWeek(
 }
 
 function getScheduledDate(job: any): string {
+  // Trabajos en cola: mostrar en la fecha real de llegada, no en la fecha de la cita
+  if (job.status === "en_cola" && job.arrivedAtMs) {
+    const d = new Date(job.arrivedAtMs);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
   if (job.date) return job.date;
 
   if (job.start) {
@@ -328,6 +351,12 @@ function getScheduledDate(job: any): string {
 }
 
 function getScheduledStartTime(job: any): string {
+  // Trabajos en cola: mostrar a la hora de llegada real
+  if (job.status === "en_cola" && job.arrivedAtMs) {
+    const d = new Date(job.arrivedAtMs);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+
   if (job.startTime) return job.startTime;
 
   if (job.start) {
@@ -496,6 +525,7 @@ export default function AgendaView({
   techs,
   scheduledTechStatuses,
   setScheduledTechStatuses,
+  queueJobs = [],
 }: Props) {
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
@@ -1469,7 +1499,7 @@ appendLog(
           </div>
         </div>
 
-        <div className="h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+<div className="h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div
             className={`sticky top-0 z-40 grid border-b border-slate-200 bg-white ${
               calendarMode === "day"
@@ -1590,7 +1620,27 @@ appendLog(
     endTime: getScheduledEndTime(job),
   }));
 
-              const laidOutJobs = layoutOverlappingJobs(dayJobs);
+              // Para HOY: añadir los trabajos en cola como entradas virtuales
+              // posicionadas en la hora actual, para que el layout los reparta
+              // junto con las citas normales que coincidan en ese slot.
+              const nowTimeStr = `${String(currentClock.getHours()).padStart(2, "0")}:${String(currentClock.getMinutes()).padStart(2, "0")}`;
+              // Para HOY: los trabajos en cola se posicionan en la hora actual.
+              // Para que el algoritmo de layout los agrupe correctamente con las
+              // citas que hay en pantalla en ese momento, usamos un rango que
+              // cubre desde ahora hasta el final del día — así siempre comparte
+              // grupo (y por tanto ancho) con cualquier cita que se vea a la vez.
+              const endOfDayStr = minutesToTime(getDayEnd(day.index));
+              const virtualQueueJobs = day.date === todayKey
+                ? queueJobs.map((qj) => ({
+                    ...qj,
+                    id: -Math.abs(qj.id) - 1,
+                    _queueJobRef: qj,
+                    startTime: nowTimeStr,
+                    endTime: endOfDayStr,
+                  }))
+                : [];
+
+              const laidOutJobs = layoutOverlappingJobs([...dayJobs, ...virtualQueueJobs] as any[]);
 
               const now = new Date();
               const nowMinutes = now.getHours() * 60 + now.getMinutes();
@@ -1652,6 +1702,48 @@ appendLog(
                   )}
 
                   {laidOutJobs.map(({ job, column, columns }) => {
+                    // ── Trabajo en cola virtual ───────────────────────────
+                    if ((job as any)._queueJobRef) {
+                      const qj: QueueJob = (job as any)._queueJobRef;
+                      const ms = typeof qj.createdAtMs === "string" ? Number(qj.createdAtMs) : qj.createdAtMs;
+                      const d = new Date(ms);
+                      const entryStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+                      const qLabel = qj.quickEntryLabel || qj.reason || qj.area;
+                      const isValidacion = qj.status === "validacion";
+                      const areaColorClass = getSolidAreaClass(qj.area as AreaKey);
+
+                      const nowMin = currentClock.getHours() * 60 + currentClock.getMinutes();
+                      const nowTop = ((Math.max(nowMin, dayStart) - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT + 2;
+                      const width = 100 / columns;
+                      const left = column * width;
+
+                      return (
+                        <div
+                          key={`queue-laid-${qj.id}`}
+                          title={`⏳ En cola · ${qj.plate} · ${qLabel}${qj.customerName ? ` · ${qj.customerName}` : ""}\nEspera desde: ${entryStr}`}
+                          className={`absolute z-40 cursor-default overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${areaColorClass}`}
+                          style={{
+                            top: nowTop,
+                            left: `calc(${left}% + 4px)`,
+                            width: `calc(${width}% - 8px)`,
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate uppercase">{qLabel}</div>
+                            <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
+                              {isValidacion ? "Validar" : "Cola"}
+                            </span>
+                          </div>
+                          <div className="truncate">{qj.plate}</div>
+                          <div className="text-xs font-normal opacity-90">⏰ desde {entryStr}</div>
+                          {qj.customerName && (
+                            <div className="truncate text-xs font-normal opacity-90">{qj.customerName}</div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // ── Cita normal de agenda ─────────────────────────────
                     const template = quickTemplates.find(
                       (t) => t.key === job.templateKey
                     );
@@ -1847,6 +1939,7 @@ appendLog(
                       </div>
                     );
                   })}
+
                 </div>
               );
             })}

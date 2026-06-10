@@ -6,6 +6,7 @@ import {
   Copy,
   Edit3,
   ExternalLink,
+  FileText,
   Home,
   MapPin,
   Navigation,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 
 import type { Tech } from "../modules/workshopTypes";
+import { API_BASE } from "../modules/workshopApi";
 import type {
   RoadsideAssistance,
   RoadsideAssistanceDraft,
@@ -817,6 +819,16 @@ export default function RoadsideAssistanceView({
                       >
                         <ExternalLink className="h-4 w-4" />
                         Seguimiento
+                      </a>
+
+                      <a
+                        href={`${API_BASE}/api/roadside-assistances/${assistance.id}/report.pdf`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                      >
+                        <FileText className="h-4 w-4" />
+                        Informe PDF
                       </a>
 
                       <button

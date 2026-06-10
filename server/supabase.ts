@@ -18,3 +18,6 @@ export const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 export const SUPABASE_STORAGE_BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET || "avatars";
+
+export const SUPABASE_ROADSIDE_BUCKET =
+  process.env.SUPABASE_ROADSIDE_BUCKET || "roadside";

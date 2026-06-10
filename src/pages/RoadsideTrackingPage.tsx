@@ -4,8 +4,10 @@ import {
   CheckCircle2,
   Clock3,
   Home,
+  ImageIcon,
   MapPin,
   Navigation,
+  PenLine,
   Phone,
   Truck,
 } from "lucide-react";
@@ -13,6 +15,7 @@ import {
 import { loadRoadsideTrackingFromBackend } from "../modules/roadsideAssistanceApi";
 import type {
   RoadsideAssistance,
+  RoadsideAssistanceFile,
   RoadsideAssistanceStatus,
   RoadsideTrackingResponse,
 } from "../modules/roadsideAssistanceTypes";
@@ -33,7 +36,6 @@ const STATUS_STYLES: Record<RoadsideAssistanceStatus, string> = {
 
 function formatTime(value?: number | null) {
   if (!value) return "-";
-
   return new Date(value).toLocaleTimeString("es-ES", {
     hour: "2-digit",
     minute: "2-digit",
@@ -47,19 +49,100 @@ function getCurrentStep(status: RoadsideAssistanceStatus) {
 
 function getMapUrl(assistance: RoadsideAssistance) {
   if (assistance.googleMapsUrl) return assistance.googleMapsUrl;
-
   if (assistance.latitude != null && assistance.longitude != null) {
     return `https://www.google.com/maps/search/?api=1&query=${assistance.latitude},${assistance.longitude}`;
   }
-
   if (assistance.address) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-      assistance.address
-    )}`;
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(assistance.address)}`;
   }
-
   return "";
 }
+
+// ── Lightbox ────────────────────────────────────────────────────────────────
+
+function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      onClick={onClose}
+    >
+      <img
+        src={url}
+        alt="foto asistencia"
+        className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
+// ── Photos section ───────────────────────────────────────────────────────────
+
+function PhotosSection({ files }: { files: RoadsideAssistanceFile[] }) {
+  const [lightbox, setLightbox] = useState<string | null>(null);
+
+  const photos = files.filter((f) => f.kind !== "firma");
+  const signature = files.find((f) => f.kind === "firma");
+
+  if (photos.length === 0 && !signature) return null;
+
+  return (
+    <>
+      {photos.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
+            <ImageIcon className="h-4 w-4" />
+            Fotografías ({photos.length})
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {photos.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setLightbox(f.url)}
+                className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 focus:outline-none"
+              >
+                <img
+                  src={f.url}
+                  alt="foto asistencia"
+                  className="h-32 w-full object-cover transition-opacity hover:opacity-90"
+                />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {signature && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
+            <PenLine className="h-4 w-4" />
+            Firma del cliente
+          </div>
+          <div className="flex justify-center rounded-lg border border-slate-100 bg-slate-50 p-4">
+            <img
+              src={signature.url}
+              alt="firma cliente"
+              className="max-h-36 object-contain"
+            />
+          </div>
+        </section>
+      )}
+
+      {lightbox && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
+    </>
+  );
+}
+
+// ── Main page ────────────────────────────────────────────────────────────────
 
 export default function RoadsideTrackingPage() {
   const { token } = useParams();
@@ -82,10 +165,7 @@ export default function RoadsideTrackingPage() {
 
       try {
         const response = await loadRoadsideTrackingFromBackend(token);
-
-        if (!cancelled) {
-          setData(response);
-        }
+        if (!cancelled) setData(response);
       } catch (loadError) {
         if (!cancelled) {
           setError(
@@ -95,18 +175,13 @@ export default function RoadsideTrackingPage() {
           );
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
     void loadTracking();
 
-    const timer = window.setInterval(() => {
-      void loadTracking();
-    }, 15000);
-
+    const timer = window.setInterval(() => void loadTracking(), 15000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -145,22 +220,29 @@ export default function RoadsideTrackingPage() {
     );
   }
 
+  const files: RoadsideAssistanceFile[] = data?.files ?? [];
+  const isFinished =
+    assistance.status === "llegada_taller" ||
+    assistance.status === "cancelada";
+
   if (data?.expired) {
     return (
       <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
-        <main className="mx-auto max-w-2xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-slate-100">
-            <CheckCircle2 className="h-7 w-7 text-slate-700" />
+        <main className="mx-auto max-w-2xl space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-slate-100">
+              <CheckCircle2 className="h-7 w-7 text-slate-700" />
+            </div>
+            <h1 className="mt-4 text-2xl font-black">Seguimiento finalizado</h1>
+            <p className="mt-2 text-sm font-semibold text-slate-500">
+              Esta asistencia ya no muestra seguimiento activo.
+            </p>
+            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+              Estado final: {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
+            </div>
           </div>
-          <h1 className="mt-4 text-2xl font-black">
-            Seguimiento finalizado
-          </h1>
-          <p className="mt-2 text-sm font-semibold text-slate-500">
-            Esta asistencia ya no muestra seguimiento activo.
-          </p>
-          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
-            Estado final: {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
-          </div>
+
+          {files.length > 0 && <PhotosSection files={files} />}
         </main>
       </div>
     );
@@ -169,17 +251,15 @@ export default function RoadsideTrackingPage() {
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
       <main className="mx-auto max-w-4xl space-y-4">
+
+        {/* Header */}
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
-              <div
-                className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${STATUS_STYLES[assistance.status]}`}
-              >
+              <div className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${STATUS_STYLES[assistance.status]}`}>
                 {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
               </div>
-              <h1 className="mt-4 text-2xl font-black">
-                Seguimiento asistencia
-              </h1>
+              <h1 className="mt-4 text-2xl font-black">Seguimiento asistencia</h1>
               <div className="mt-2 text-sm font-semibold text-slate-500">
                 {assistance.plate || assistance.vehicleDescription || "Vehiculo"}
               </div>
@@ -191,11 +271,11 @@ export default function RoadsideTrackingPage() {
           </div>
         </section>
 
+        {/* Progress steps */}
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-3 md:grid-cols-5">
             {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
               const done = index <= currentStep;
-
               return (
                 <div
                   key={status}
@@ -221,6 +301,7 @@ export default function RoadsideTrackingPage() {
           </div>
         </section>
 
+        {/* Info cards */}
         <section className="grid gap-4 md:grid-cols-2">
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
@@ -232,6 +313,9 @@ export default function RoadsideTrackingPage() {
               <div>Furgoneta: {assistance.assignedVehicleName || "Pendiente"}</div>
               <div>Salida: {formatTime(assistance.departedAtMs)}</div>
               <div>Llegada al punto: {formatTime(assistance.arrivedAtPointMs)}</div>
+              {isFinished && (
+                <div>Finalización: {formatTime(assistance.finishedAtMs)}</div>
+              )}
             </div>
           </div>
 
@@ -269,6 +353,10 @@ export default function RoadsideTrackingPage() {
           </div>
         </section>
 
+        {/* Photos + signature — solo visibles si hay contenido */}
+        {files.length > 0 && <PhotosSection files={files} />}
+
+        {/* Events timeline */}
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
             <Home className="h-4 w-4" />
@@ -296,6 +384,7 @@ export default function RoadsideTrackingPage() {
             ))}
           </div>
         </section>
+
       </main>
     </div>
   );

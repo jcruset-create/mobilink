@@ -1,6 +1,7 @@
 import { API_BASE, fetchWithTimeout } from "./workshopApi";
 import type {
   RoadsideAssistance,
+  RoadsideAssistanceFile,
   RoadsideAssistanceStatus,
 } from "./roadsideAssistanceTypes";
 import type { Tech } from "./workshopTypes";
@@ -103,4 +104,34 @@ export async function updateRoadsideOperatorAssistanceStatus(
   }
 
   return (await response.json()) as RoadsideAssistance;
+}
+
+export async function uploadRoadsideFile(
+  session: RoadsideOperatorSession,
+  assistanceId: number,
+  file: File,
+  kind: "foto" | "firma"
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("kind", kind);
+
+  const response = await fetch(
+    `${API_BASE}/api/roadside-assistances/${assistanceId}/files`,
+    {
+      method: "POST",
+      headers: {
+        "x-roadside-operator-name": session.techName,
+        "x-roadside-operator-code": session.code,
+      },
+      body: formData,
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || "No se pudo subir el archivo.");
+  }
+
+  return (await response.json()) as RoadsideAssistanceFile;
 }
