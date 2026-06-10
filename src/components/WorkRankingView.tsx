@@ -1,5 +1,19 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Job, QuickTemplate, Tech } from "../modules/workshopTypes";
+
+const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
+
+/** Máximo de minutos que se contabilizan a un solo trabajo (evita datos corruptos
+ *  de trabajos que quedaron abiertos y acumularon horas irreales). Equivale a una
+ *  jornada completa del centro. */
+const MAX_MINUTES_PER_JOB = 510;
+
+type MaintTask = {
+  techName: string;
+  assignedAtMs: number;
+  status: string;
+  statusChangedAtMs?: number | null;
+};
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -135,6 +149,21 @@ export default function WorkRankingView({
   const [fromDate, setFromDate] = useState(getStartOfCurrentMonth());
   const [toDate, setToDate] = useState(getToday());
   const [selectedTechName, setSelectedTechName] = useState("");
+  const [maintTasks, setMaintTasks] = useState<MaintTask[]>([]);
+
+  useEffect(() => {
+    async function loadMaint() {
+      try {
+        const res = await fetch(`${API_BASE}/api/assigned-maintenance-tasks`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data)) setMaintTasks(data);
+      } catch {
+        // silencioso
+      }
+    }
+    void loadMaint();
+  }, []);
 
   const filterTechNames = useMemo(() => {
     const names = new Set<string>();
@@ -198,9 +227,12 @@ export default function WorkRankingView({
       const names = job.assignedNames ?? [];
       if (names.length === 0) continue;
 
-      const workedMin =
+      const rawWorkedMin =
         Number(job.workedAccumulatedMinutes ?? job.actualMinutes ?? 0);
-      if (workedMin <= 0) continue;
+      if (rawWorkedMin <= 0) continue;
+      // Limitamos el tiempo por trabajo para descartar datos corruptos
+      // (trabajos que quedaron abiertos y acumularon horas irreales).
+      const workedMin = Math.min(rawWorkedMin, MAX_MINUTES_PER_JOB);
 
       // Reparto: responsable = primer nombre (peso 1), resto = apoyo (peso 0.5)
       const totalWeight = 1 + (names.length - 1) * 0.5;
@@ -216,13 +248,43 @@ export default function WorkRankingView({
       });
     }
 
+    // ── Tiempo de mantenimiento por técnico ───────────────────────────
+    // Tareas de mantenimiento finalizadas/interrumpidas dentro del rango.
+    const maintByTech: Record<string, number> = {};
+    for (const task of maintTasks) {
+      const endMs = task.statusChangedAtMs ?? null;
+      // Sólo contamos tareas terminadas dentro del período filtrado.
+      if (endMs == null || !Number.isFinite(endMs)) continue;
+      if (endMs < fromMs || endMs > toMs) continue;
+      if (selectedTechName && task.techName !== selectedTechName) continue;
+      const durMin = Math.min(
+        Math.max(0, Math.round((endMs - task.assignedAtMs) / 60000)),
+        MAX_MINUTES_PER_JOB
+      );
+      if (durMin <= 0) continue;
+      maintByTech[task.techName] = (maintByTech[task.techName] ?? 0) + durMin;
+    }
+
+    // Unimos técnicos con trabajos y/o mantenimiento
+    const allTechNames = new Set<string>([
+      ...Object.keys(timeByTechArea),
+      ...Object.keys(maintByTech),
+    ]);
+
     // Convertimos a array ordenado por total desc
-    const timeRows = Object.entries(timeByTechArea)
-      .map(([techName, areas]) => ({
-        techName,
-        areas,
-        total: Object.values(areas).reduce((a, b) => a + b, 0),
-      }))
+    const timeRows = Array.from(allTechNames)
+      .map((techName) => {
+        const areas =
+          timeByTechArea[techName] ?? { camion: 0, movil: 0, tacografo: 0, turismo: 0, mecanica: 0 };
+        const mantenimiento = maintByTech[techName] ?? 0;
+        const areasTotal = Object.values(areas).reduce((a, b) => a + b, 0);
+        return {
+          techName,
+          areas,
+          mantenimiento,
+          total: areasTotal + mantenimiento,
+        };
+      })
       .sort((a, b) => b.total - a.total);
 
     const availableMinutes = computeAvailableMinutes(fromDate, toDate);
@@ -244,7 +306,7 @@ export default function WorkRankingView({
       assignedTotalRevenue: rankingResult.assignedTotalRevenue,
       timeRows,
     };
-  }, [jobs, getOperationLabel, fromDate, toDate, selectedTechName]);
+  }, [jobs, getOperationLabel, fromDate, toDate, selectedTechName, maintTasks]);
 
   const knownTechNames = new Set(techs.map((tech) => tech.name));
 
@@ -574,7 +636,8 @@ export default function WorkRankingView({
               <h2 className="text-xl font-black">Tiempo por área</h2>
               <p className="text-sm text-slate-500">
                 Minutos trabajados por operario desglosados por tipo de trabajo
-                · responsable 100 % · apoyo 50 %
+                · responsable 100 % · apoyo 50 % · incluye mantenimiento
+                · máx. {Math.floor(MAX_MINUTES_PER_JOB / 60)}h por trabajo
               </p>
             </div>
           </div>
@@ -596,6 +659,9 @@ export default function WorkRankingView({
                         </span>
                       </th>
                     ))}
+                    <th className="pb-3 px-3 text-right">
+                      <span className="rounded-full px-2 py-0.5 bg-violet-100 text-violet-700">Mantenim.</span>
+                    </th>
                     <th className="pb-3 pl-3 text-right">Total</th>
                     <th className="pb-3 pl-3 text-right">
                       <span className="rounded-full px-2 py-0.5 bg-slate-100 text-slate-600">Disponible</span>
@@ -628,6 +694,15 @@ export default function WorkRankingView({
                             </td>
                           );
                         })}
+                        <td className="px-3 py-3 text-right">
+                          {row.mantenimiento > 0 ? (
+                            <span className="inline-block rounded-lg px-2 py-0.5 text-xs font-black bg-violet-100 text-violet-700">
+                              {formatMinutesShort(row.mantenimiento)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
                         <td className="pl-3 py-3 text-right">
                           <div className="flex items-center justify-end gap-2">
                             {/* barra proporcional */}
@@ -681,6 +756,18 @@ export default function WorkRankingView({
                         </td>
                       );
                     })}
+                    <td className="px-3 pt-3 text-right">
+                      {(() => {
+                        const tot = timeRows.reduce((s, r) => s + r.mantenimiento, 0);
+                        return tot > 0 ? (
+                          <span className="inline-block rounded-lg px-2 py-0.5 text-xs font-black bg-violet-100 text-violet-700">
+                            {formatMinutesShort(tot)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        );
+                      })()}
+                    </td>
                     <td className="pl-3 pt-3 text-right font-black text-slate-900">
                       {formatMinutesShort(timeRows.reduce((s, r) => s + r.total, 0))}
                     </td>
