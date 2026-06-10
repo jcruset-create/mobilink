@@ -6,7 +6,7 @@ const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 /** Máximo de minutos que se contabilizan a un solo trabajo (evita datos corruptos
  *  de trabajos que quedaron abiertos y acumularon horas irreales). Equivale a una
  *  jornada completa del centro. */
-const MAX_MINUTES_PER_JOB = 510;
+const MAX_MINUTES_PER_JOB = 480;
 
 type MaintTask = {
   techName: string;
@@ -94,9 +94,9 @@ function getClosedDateMs(job: Job) {
 /** Minutos del horario del centro para un día de la semana JS (0=Dom,...,6=Sáb) */
 function workshopMinutesForDayOfWeek(jsDay: number): number {
   if (jsDay === 0) return 0; // domingo cerrado
-  if (jsDay === 6) return 255; // sábado 9:00-13:15
-  // lunes-viernes: mañana 8:30-13:30 (300 min) + tarde 15:00-18:30 (210 min)
-  return 510;
+  if (jsDay === 6) return 240; // sábado media jornada (4 h)
+  // lunes-viernes: jornada de 8 horas
+  return 480;
 }
 
 /** Total de minutos del horario del centro en el rango [fromDate, toDate] */
