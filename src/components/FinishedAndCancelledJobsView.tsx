@@ -293,9 +293,8 @@ export default function FinishedAndCancelledJobsView({
     void load();
   }, []);
 
-  // Solo mostramos las finalizadas e interrumpidas (no las pendientes)
-  const doneMaintenanceTasks = maintenanceHistory
-    .filter((t) => t.status === "finalizada" || t.status === "interrumpida")
+  // Mostramos todas: finalizadas, interrumpidas y pendientes (activas ahora)
+  const sortedMaintenanceTasks = maintenanceHistory
     .slice()
     .sort((a, b) => {
       const msA = a.statusChangedAtMs ?? a.assignedAtMs;
@@ -304,7 +303,7 @@ export default function FinishedAndCancelledJobsView({
     });
 
   const maintenanceGroups = groupJobsByDay(
-    doneMaintenanceTasks.map((t) => ({
+    sortedMaintenanceTasks.map((t) => ({
       ...t,
       closedAtMs: t.statusChangedAtMs ?? t.assignedAtMs,
       createdAtMs: t.assignedAtMs,
@@ -355,7 +354,7 @@ export default function FinishedAndCancelledJobsView({
             </div>
 
             <div className="rounded-2xl bg-violet-100 px-4 py-2 text-sm font-black text-violet-700">
-              Mantenimiento {doneMaintenanceTasks.length}
+              Mantenimiento {sortedMaintenanceTasks.length}
             </div>
 
             <button
@@ -470,7 +469,7 @@ export default function FinishedAndCancelledJobsView({
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-black text-violet-900">Mantenimiento</h2>
               <span className="rounded-full bg-violet-100 px-3 py-1 text-sm font-black text-violet-700">
-                {doneMaintenanceTasks.length}
+                {sortedMaintenanceTasks.length}
               </span>
             </div>
 
@@ -498,7 +497,7 @@ export default function FinishedAndCancelledJobsView({
                       {group.items.map((item) => {
                         const task = item as unknown as AssignedMaintenanceTask & { closedAtMs: number };
                         const durationMs = Math.max(0,
-                          (task.statusChangedAtMs ?? task.assignedAtMs) - task.assignedAtMs
+                          (task.statusChangedAtMs ?? (task.status === "pendiente" ? Date.now() : task.assignedAtMs)) - task.assignedAtMs
                         );
                         const durationMin = Math.floor(durationMs / 60000);
                         const h = Math.floor(durationMin / 60);
@@ -514,16 +513,25 @@ export default function FinishedAndCancelledJobsView({
                             })
                           : "-";
 
+                        const isPending = task.status === "pendiente";
                         const isInterrupted = task.status === "interrumpida";
+
+                        const statusBadge = isPending
+                          ? { cls: "bg-blue-100 text-blue-700", label: "En curso" }
+                          : isInterrupted
+                          ? { cls: "bg-orange-100 text-orange-700", label: "Interrumpida" }
+                          : { cls: "bg-violet-100 text-violet-700", label: "Finalizada" };
+
+                        const cardBorder = isPending
+                          ? "border-blue-200 bg-blue-50"
+                          : isInterrupted
+                          ? "border-orange-200 bg-orange-50"
+                          : "border-violet-200 bg-white";
 
                         return (
                           <div
                             key={task.id}
-                            className={`rounded-2xl border p-4 shadow-sm ${
-                              isInterrupted
-                                ? "border-orange-200 bg-orange-50"
-                                : "border-violet-200 bg-white"
-                            }`}
+                            className={`rounded-2xl border p-4 shadow-sm ${cardBorder}`}
                           >
                             <div className="mb-2 flex items-center gap-2">
                               <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${
@@ -533,12 +541,8 @@ export default function FinishedAndCancelledJobsView({
                               }`}>
                                 {task.taskType === "fuera_taller" ? "Fuera taller" : "En taller"}
                               </span>
-                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
-                                isInterrupted
-                                  ? "bg-orange-100 text-orange-700"
-                                  : "bg-violet-100 text-violet-700"
-                              }`}>
-                                {isInterrupted ? "Interrumpida" : "Finalizada"}
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${statusBadge.cls}`}>
+                                {statusBadge.label}
                               </span>
                             </div>
 
