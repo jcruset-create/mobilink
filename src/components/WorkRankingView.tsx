@@ -1,5 +1,34 @@
 import { useMemo, useState } from "react";
 import type { Job, QuickTemplate, Tech } from "../modules/workshopTypes";
+
+type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
+
+const AREA_LABELS: Record<AreaKey, string> = {
+  camion: "Camión",
+  movil: "Móvil",
+  tacografo: "Tacógrafo",
+  turismo: "Turismo",
+  mecanica: "Mecánica",
+};
+
+const AREA_COLORS: Record<AreaKey, string> = {
+  camion: "bg-red-100 text-red-800",
+  movil: "bg-amber-100 text-amber-800",
+  tacografo: "bg-orange-100 text-orange-800",
+  turismo: "bg-sky-100 text-sky-800",
+  mecanica: "bg-emerald-100 text-emerald-800",
+};
+
+const ALL_AREAS: AreaKey[] = ["camion", "movil", "tacografo", "turismo", "mecanica"];
+
+function formatMinutesShort(minutes: number) {
+  if (minutes <= 0) return "-";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
 import { getWorkV2MoneyLabel } from "../modules/workV2Calculations";
 import { buildWorkRankingV2Rows } from "../modules/workRankingV2Helpers";
 
@@ -108,6 +137,7 @@ export default function WorkRankingView({
     closedJobsCount,
     realTotalRevenue,
     assignedTotalRevenue,
+    timeRows,
   } = useMemo(() => {
     const fromMs = new Date(`${fromDate}T00:00:00`).getTime();
     const toMs = new Date(`${toDate}T23:59:59`).getTime();
@@ -133,6 +163,46 @@ export default function WorkRankingView({
       selectedTechName,
     });
 
+    // ── Tiempo por técnico × área ─────────────────────────────────────
+    // Para cada trabajo cerrado, sumamos los minutos trabajados
+    // (workedAccumulatedMinutes o actualMinutes) al técnico responsable.
+    // Si hay varios técnicos, se reparte: responsable cuenta 100%, apoyo 50%.
+    const timeByTechArea: Record<string, Record<AreaKey, number>> = {};
+
+    for (const job of closedJobs) {
+      const area = job.area as AreaKey;
+      if (!ALL_AREAS.includes(area)) continue;
+
+      const names = job.assignedNames ?? [];
+      if (names.length === 0) continue;
+
+      const workedMin =
+        Number(job.workedAccumulatedMinutes ?? job.actualMinutes ?? 0);
+      if (workedMin <= 0) continue;
+
+      // Reparto: responsable = primer nombre (peso 1), resto = apoyo (peso 0.5)
+      const totalWeight = 1 + (names.length - 1) * 0.5;
+
+      names.forEach((name, idx) => {
+        const weight = idx === 0 ? 1 : 0.5;
+        const techMin = Math.round((workedMin * weight) / totalWeight);
+
+        if (!timeByTechArea[name]) {
+          timeByTechArea[name] = { camion: 0, movil: 0, tacografo: 0, turismo: 0, mecanica: 0 };
+        }
+        timeByTechArea[name][area] += techMin;
+      });
+    }
+
+    // Convertimos a array ordenado por total desc
+    const timeRows = Object.entries(timeByTechArea)
+      .map(([techName, areas]) => ({
+        techName,
+        areas,
+        total: Object.values(areas).reduce((a, b) => a + b, 0),
+      }))
+      .sort((a, b) => b.total - a.total);
+
     return {
       rankingRows: rankingResult.rankingRows,
       detailRows: rankingResult.detailRows.map((row) => {
@@ -147,6 +217,7 @@ export default function WorkRankingView({
       closedJobsCount: closedJobs.length,
       realTotalRevenue: rankingResult.realTotalRevenue,
       assignedTotalRevenue: rankingResult.assignedTotalRevenue,
+      timeRows,
     };
   }, [jobs, getOperationLabel, fromDate, toDate, selectedTechName]);
 
@@ -469,6 +540,106 @@ export default function WorkRankingView({
               </tbody>
             </table>
           </div>
+        </section>
+
+        {/* ── Tiempo por técnico y área ─────────────────────────────── */}
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-black">Tiempo por área</h2>
+              <p className="text-sm text-slate-500">
+                Minutos trabajados por operario desglosados por tipo de trabajo
+                · responsable 100 % · apoyo 50 %
+              </p>
+            </div>
+          </div>
+
+          {timeRows.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-sm font-bold text-slate-400">
+              Sin datos para este período.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs font-black uppercase text-slate-400">
+                    <th className="pb-3 pr-4">Técnico</th>
+                    {ALL_AREAS.map((area) => (
+                      <th key={area} className="pb-3 px-3 text-right">
+                        <span className={`rounded-full px-2 py-0.5 ${AREA_COLORS[area]}`}>
+                          {AREA_LABELS[area]}
+                        </span>
+                      </th>
+                    ))}
+                    <th className="pb-3 pl-3 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {timeRows.map((row, i) => {
+                    const maxTotal = timeRows[0]?.total ?? 1;
+                    return (
+                      <tr
+                        key={row.techName}
+                        className={`border-b border-slate-100 ${i % 2 === 0 ? "bg-white" : "bg-slate-50/50"}`}
+                      >
+                        <td className="py-3 pr-4 font-black">{row.techName}</td>
+                        {ALL_AREAS.map((area) => {
+                          const min = row.areas[area];
+                          return (
+                            <td key={area} className="px-3 py-3 text-right">
+                              {min > 0 ? (
+                                <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${AREA_COLORS[area]}`}>
+                                  {formatMinutesShort(min)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-300">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="pl-3 py-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {/* barra proporcional */}
+                            <div className="hidden md:block w-24 rounded-full bg-slate-100 h-2">
+                              <div
+                                className="h-2 rounded-full bg-slate-700"
+                                style={{ width: `${Math.round((row.total / maxTotal) * 100)}%` }}
+                              />
+                            </div>
+                            <span className="font-black text-slate-900">
+                              {formatMinutesShort(row.total)}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-200 font-black">
+                    <td className="pt-3 pr-4 text-slate-500">TOTAL</td>
+                    {ALL_AREAS.map((area) => {
+                      const total = timeRows.reduce((s, r) => s + r.areas[area], 0);
+                      return (
+                        <td key={area} className="px-3 pt-3 text-right">
+                          {total > 0 ? (
+                            <span className={`inline-block rounded-lg px-2 py-0.5 text-xs font-black ${AREA_COLORS[area]}`}>
+                              {formatMinutesShort(total)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td className="pl-3 pt-3 text-right font-black text-slate-900">
+                      {formatMinutesShort(timeRows.reduce((s, r) => s + r.total, 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
         </section>
       </div>
     </div>
