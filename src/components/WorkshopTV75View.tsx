@@ -194,10 +194,6 @@ function formatMinutes(minutes: number) {
   return `${hours} h ${mins} min`;
 }
 
-function formatWorkedTime(job: JobForTV75) {
-  return formatMinutes(getWorkedMinutes(job));
-}
-
 function getPositiveMinutes(value: unknown): number | null {
   const numberValue = Number(value);
 

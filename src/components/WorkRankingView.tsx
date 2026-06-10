@@ -127,19 +127,6 @@ function workshopMinutesForDayOfWeek(jsDay: number): number {
   return 480;
 }
 
-/** Total de minutos del horario del centro en el rango [fromDate, toDate] */
-function computeAvailableMinutes(fromDate: string, toDate: string): number {
-  const from = new Date(`${fromDate}T00:00:00`);
-  const to = new Date(`${toDate}T00:00:00`);
-  let total = 0;
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    total += workshopMinutesForDayOfWeek(cursor.getDay());
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return total;
-}
-
 function formatDateTime(ms: number) {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
 
@@ -228,7 +215,6 @@ export default function WorkRankingView({
     realTotalRevenue,
     assignedTotalRevenue,
     timeRows,
-    availableMinutes,
   } = useMemo(() => {
     const fromMs = new Date(`${fromDate}T00:00:00`).getTime();
     const toMs = new Date(`${toDate}T23:59:59`).getTime();
@@ -328,7 +314,6 @@ export default function WorkRankingView({
         cur.setDate(cur.getDate() + 1);
       }
     }
-    const fullAvailableMinutes = workingDays.reduce((s, wd) => s + wd.minutes, 0);
 
     function absenceForTechOnDate(techName: string, date: string): string | null {
       for (const st of techStatuses) {
@@ -389,10 +374,7 @@ export default function WorkRankingView({
       })
       .sort((a, b) => b.total - a.total);
 
-    const availableMinutes = fullAvailableMinutes;
-
     return {
-      availableMinutes,
       rankingRows: rankingResult.rankingRows,
       detailRows: rankingResult.detailRows.map((row) => {
         const job = closedJobs.find((item) => item.id === row.jobId);
