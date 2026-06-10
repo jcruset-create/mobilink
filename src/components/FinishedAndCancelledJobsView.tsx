@@ -1,4 +1,20 @@
+import { useEffect, useState } from "react";
 import WorkHistoryV2Line from "./WorkHistoryV2Line";
+
+type MaintenanceTaskType = "en_taller" | "fuera_taller";
+
+type AssignedMaintenanceTask = {
+  id: string;
+  taskId: string;
+  taskLabel: string;
+  taskType: MaintenanceTaskType;
+  techName: string;
+  assignedAtMs: number;
+  status: "pendiente" | "finalizada" | "interrumpida";
+  statusChangedAtMs?: number | null;
+};
+
+const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -260,6 +276,42 @@ export default function FinishedAndCancelledJobsView({
   getOperationLabel,
   onBack,
 }: Props) {
+  // Cargamos el historial de tareas de mantenimiento directamente
+  const [maintenanceHistory, setMaintenanceHistory] = useState<AssignedMaintenanceTask[]>([]);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch(`${API_BASE}/api/assigned-maintenance-tasks`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data)) setMaintenanceHistory(data);
+      } catch {
+        // silencioso
+      }
+    }
+    void load();
+  }, []);
+
+  // Solo mostramos las finalizadas e interrumpidas (no las pendientes)
+  const doneMaintenanceTasks = maintenanceHistory
+    .filter((t) => t.status === "finalizada" || t.status === "interrumpida")
+    .slice()
+    .sort((a, b) => {
+      const msA = a.statusChangedAtMs ?? a.assignedAtMs;
+      const msB = b.statusChangedAtMs ?? b.assignedAtMs;
+      return msB - msA;
+    });
+
+  const maintenanceGroups = groupJobsByDay(
+    doneMaintenanceTasks.map((t) => ({
+      ...t,
+      closedAtMs: t.statusChangedAtMs ?? t.assignedAtMs,
+      createdAtMs: t.assignedAtMs,
+    })),
+    true
+  );
+
  const finishedJobs = jobs
   .filter((job) => job.status === "cerrado")
   .slice()
@@ -302,6 +354,10 @@ export default function FinishedAndCancelledJobsView({
               Cancelados {cancelledJobs.length}
             </div>
 
+            <div className="rounded-2xl bg-violet-100 px-4 py-2 text-sm font-black text-violet-700">
+              Mantenimiento {doneMaintenanceTasks.length}
+            </div>
+
             <button
               type="button"
               onClick={onBack}
@@ -312,7 +368,7 @@ export default function FinishedAndCancelledJobsView({
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid gap-6 xl:grid-cols-3">
           <section className="rounded-3xl border border-emerald-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-black text-emerald-900">
@@ -407,6 +463,114 @@ export default function FinishedAndCancelledJobsView({
     ))
   )}
 </div>
+          </section>
+
+          {/* ── Historial de mantenimiento ─────────────────────────── */}
+          <section className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-black text-violet-900">Mantenimiento</h2>
+              <span className="rounded-full bg-violet-100 px-3 py-1 text-sm font-black text-violet-700">
+                {doneMaintenanceTasks.length}
+              </span>
+            </div>
+
+            <div className="max-h-[calc(100vh-220px)] space-y-5 overflow-y-auto pr-2">
+              {maintenanceGroups.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-sm font-bold text-slate-500">
+                  No hay tareas de mantenimiento registradas.
+                </div>
+              ) : (
+                maintenanceGroups.map((group) => (
+                  <div
+                    key={group.dayKey}
+                    className="rounded-3xl border border-violet-100 bg-violet-50/50 p-3"
+                  >
+                    <div className="sticky top-0 z-10 mb-3 flex items-center justify-between rounded-2xl border border-violet-200 bg-violet-100 px-4 py-2">
+                      <h3 className="text-sm font-black capitalize text-violet-900">
+                        {group.label}
+                      </h3>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-violet-700">
+                        {group.items.length} tareas
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {group.items.map((item) => {
+                        const task = item as unknown as AssignedMaintenanceTask & { closedAtMs: number };
+                        const durationMs = Math.max(0,
+                          (task.statusChangedAtMs ?? task.assignedAtMs) - task.assignedAtMs
+                        );
+                        const durationMin = Math.floor(durationMs / 60000);
+                        const h = Math.floor(durationMin / 60);
+                        const m = durationMin % 60;
+                        const durationStr = h > 0 ? `${h} h ${m} min` : `${m} min`;
+
+                        const startStr = new Date(task.assignedAtMs).toLocaleString("es-ES", {
+                          day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+                        });
+                        const endStr = task.statusChangedAtMs
+                          ? new Date(task.statusChangedAtMs).toLocaleString("es-ES", {
+                              day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+                            })
+                          : "-";
+
+                        const isInterrupted = task.status === "interrumpida";
+
+                        return (
+                          <div
+                            key={task.id}
+                            className={`rounded-2xl border p-4 shadow-sm ${
+                              isInterrupted
+                                ? "border-orange-200 bg-orange-50"
+                                : "border-violet-200 bg-white"
+                            }`}
+                          >
+                            <div className="mb-2 flex items-center gap-2">
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${
+                                task.taskType === "fuera_taller"
+                                  ? "bg-red-100 text-red-700"
+                                  : "bg-emerald-100 text-emerald-700"
+                              }`}>
+                                {task.taskType === "fuera_taller" ? "Fuera taller" : "En taller"}
+                              </span>
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                                isInterrupted
+                                  ? "bg-orange-100 text-orange-700"
+                                  : "bg-violet-100 text-violet-700"
+                              }`}>
+                                {isInterrupted ? "Interrumpida" : "Finalizada"}
+                              </span>
+                            </div>
+
+                            <div className="text-base font-black text-slate-900">
+                              {task.taskLabel}
+                            </div>
+                            <div className="mt-0.5 text-sm font-semibold text-slate-600">
+                              {task.techName}
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                              <div className="rounded-xl bg-slate-100 px-3 py-2">
+                                <span className="text-slate-500">Inicio</span>
+                                <div className="font-black text-slate-800">{startStr}</div>
+                              </div>
+                              <div className="rounded-xl bg-slate-100 px-3 py-2">
+                                <span className="text-slate-500">Fin</span>
+                                <div className="font-black text-slate-800">{endStr}</div>
+                              </div>
+                            </div>
+
+                            <div className="mt-2 rounded-xl bg-violet-900 px-3 py-2 text-sm font-black text-white">
+                              Duración: {durationStr}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </section>
         </div>
       </div>
