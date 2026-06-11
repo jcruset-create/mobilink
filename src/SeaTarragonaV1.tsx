@@ -7680,6 +7680,16 @@ const textColor = "";
       />
     </label>
 
+    {view === "ajustes" && (
+      <button
+        onClick={() => { setWorkshopPinModal({ techName: tech.name }); setWorkshopPinInput(""); setWorkshopPinError(""); }}
+        className="text-xs text-slate-600 hover:text-slate-900"
+        title="Asignar PIN portal móvil"
+      >
+        🔑 PIN
+      </button>
+    )}
+
     {view === "ajustes" && tech.name !== "Ramón" && (
       <button
         onClick={() => removeTech(tech.name)}
