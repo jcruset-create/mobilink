@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SEA Técnicos</string>
+    <string name="title_activity_main">SEA Técnicos</string>
+    <string name="package_name">com.seatarragona.tecnicosmobile</string>
+    <string name="custom_url_scheme">com.seatarragona.tecnicosmobile</string>
+</resources>

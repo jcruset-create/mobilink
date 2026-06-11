@@ -5489,6 +5489,211 @@ app.get(/.*/, (_req, res) => {
    404 / ERROR
 ========================================================= */
 
+/* =========================================================
+   WORKSHOP OPERATOR (TECH MOBILE PORTAL)
+========================================================= */
+
+async function getWorkshopOperatorFromRequest(req: express.Request) {
+  const techName = String(req.headers["x-operator-name"] ?? "").trim();
+  const pin = String(req.headers["x-operator-pin"] ?? "").trim();
+  if (!techName || !pin) return null;
+  const result = await db.query(
+    `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+    [techName, pin]
+  );
+  if (result.rows.length === 0) return null;
+  return { techName };
+}
+
+function requireWorkshopOperatorAuth(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const operator = await getWorkshopOperatorFromRequest(req);
+    if (!operator) {
+      return res.status(401).json({ error: "Operario no autorizado" });
+    }
+    (req as any).workshopOperator = operator;
+    next();
+  })().catch((error) => {
+    console.error("requireWorkshopOperatorAuth error:", error);
+    res.status(500).json({ error: "Error validando operario taller" });
+  });
+}
+
+// Public: list techs
+app.get("/api/workshop-operator/techs-list", async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT name FROM techs ORDER BY name ASC`
+    );
+    res.json(result.rows.map((r: any) => ({ name: r.name })));
+  } catch (error) {
+    console.error("GET /api/workshop-operator/techs-list error:", error);
+    res.status(500).json({ error: "Error obteniendo operarios" });
+  }
+});
+
+// Public: login
+app.post("/api/workshop-operator/login", async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const pin = String(req.body?.pin || "").trim();
+    if (!name || !pin) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+    const result = await db.query(
+      `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+      [name, pin]
+    );
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "PIN incorrecto" });
+    }
+    res.json({ ok: true, techName: name });
+  } catch (error) {
+    console.error("POST /api/workshop-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesion operario taller" });
+  }
+});
+
+// Protected: status
+app.get(
+  "/api/workshop-operator/status",
+  requireWorkshopOperatorAuth,
+  async (req, res) => {
+    try {
+      const { techName } = (req as any).workshopOperator as { techName: string };
+      const techResult = await db.query(
+        `SELECT name, status, "currentJobId" FROM techs WHERE name = $1 LIMIT 1`,
+        [techName]
+      );
+      if (techResult.rows.length === 0) {
+        return res.status(404).json({ error: "Operario no encontrado" });
+      }
+      const tech = techResult.rows[0];
+      let job = null;
+      if (tech.currentJobId) {
+        const jobResult = await db.query(
+          `SELECT id, plate, area, reason, status, "workedAccumulatedMinutes", "startedAtMs", "quickEntryLabel" FROM jobs WHERE id = $1 LIMIT 1`,
+          [tech.currentJobId]
+        );
+        if (jobResult.rows.length > 0) job = jobResult.rows[0];
+      }
+      if (!job) {
+        const jobResult = await db.query(
+          `SELECT id, plate, area, reason, status, "workedAccumulatedMinutes", "startedAtMs", "quickEntryLabel" FROM jobs WHERE status IN ('activo','parado') AND "assignedNames"::jsonb ? $1 ORDER BY "startedAtMs" DESC LIMIT 1`,
+          [techName]
+        );
+        if (jobResult.rows.length > 0) job = jobResult.rows[0];
+      }
+      res.json({
+        tech: { name: tech.name, status: tech.status, currentJobId: tech.currentJobId ?? null },
+        job,
+      });
+    } catch (error) {
+      console.error("GET /api/workshop-operator/status error:", error);
+      res.status(500).json({ error: "Error obteniendo estado operario" });
+    }
+  }
+);
+
+// Protected: start break
+app.post(
+  "/api/workshop-operator/break/start",
+  requireWorkshopOperatorAuth,
+  async (req, res) => {
+    try {
+      const { techName } = (req as any).workshopOperator as { techName: string };
+      const breakType = String(req.body?.breakType || "").trim();
+      if (!["cigarro", "cafe", "descanso", "otro"].includes(breakType)) {
+        return res.status(400).json({ error: "Tipo de pausa inválido" });
+      }
+      const nowMs = Date.now();
+      // End any open break
+      await db.query(
+        `UPDATE tech_breaks SET "endedAtMs" = $1 WHERE "techName" = $2 AND "endedAtMs" IS NULL`,
+        [nowMs, techName]
+      );
+      const insertResult = await db.query(
+        `INSERT INTO tech_breaks ("techName", "breakType", "startedAtMs") VALUES ($1, $2, $3) RETURNING id, "startedAtMs"`,
+        [techName, breakType, nowMs]
+      );
+      const row = insertResult.rows[0];
+      res.json({ ok: true, breakId: row.id, startedAtMs: row.startedAtMs });
+    } catch (error) {
+      console.error("POST /api/workshop-operator/break/start error:", error);
+      res.status(500).json({ error: "Error iniciando pausa" });
+    }
+  }
+);
+
+// Protected: end break
+app.post(
+  "/api/workshop-operator/break/end",
+  requireWorkshopOperatorAuth,
+  async (req, res) => {
+    try {
+      const { techName } = (req as any).workshopOperator as { techName: string };
+      const nowMs = Date.now();
+      const result = await db.query(
+        `UPDATE tech_breaks SET "endedAtMs" = $1 WHERE "techName" = $2 AND "endedAtMs" IS NULL RETURNING "startedAtMs"`,
+        [nowMs, techName]
+      );
+      if (result.rows.length === 0) {
+        return res.json({ ok: true, durationMin: 0 });
+      }
+      const durationMin = Math.round((nowMs - Number(result.rows[0].startedAtMs)) / 60000);
+      res.json({ ok: true, durationMin });
+    } catch (error) {
+      console.error("POST /api/workshop-operator/break/end error:", error);
+      res.status(500).json({ error: "Error finalizando pausa" });
+    }
+  }
+);
+
+// Protected: today's breaks
+app.get(
+  "/api/workshop-operator/breaks/today",
+  requireWorkshopOperatorAuth,
+  async (req, res) => {
+    try {
+      const { techName } = (req as any).workshopOperator as { techName: string };
+      const startOfDayMs = new Date().setHours(0, 0, 0, 0);
+      const result = await db.query(
+        `SELECT id, "breakType", "startedAtMs", "endedAtMs", "jobId" FROM tech_breaks WHERE "techName" = $1 AND "startedAtMs" >= $2 ORDER BY "startedAtMs" DESC`,
+        [techName, startOfDayMs]
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/workshop-operator/breaks/today error:", error);
+      res.status(500).json({ error: "Error obteniendo pausas" });
+    }
+  }
+);
+
+// Supervisor: set workshop PIN
+app.put(
+  "/api/techs/:name/workshop-pin",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const techName = String(req.params.name || "").trim();
+      const pin = String(req.body?.pin || "").trim();
+      if (!techName) return res.status(400).json({ error: "Nombre requerido" });
+      await db.query(
+        `UPDATE techs SET "workshopPin" = $1 WHERE name = $2`,
+        [pin || null, techName]
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("PUT /api/techs/:name/workshop-pin error:", error);
+      res.status(500).json({ error: "Error guardando PIN" });
+    }
+  }
+);
+
 app.use((_req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });
 });

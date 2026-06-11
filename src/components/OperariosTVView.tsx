@@ -56,6 +56,7 @@ type Props = {
   onGoWorkshopScreen?: () => void;
   canGoBack?: boolean;
   onLogout?: () => void;
+  onSetWorkshopPin?: (techName: string) => void;
 };
 
 type MaintenanceTaskType = "en_taller" | "fuera_taller";
@@ -478,6 +479,7 @@ export default function OperariosTVView({
   onGoWorkshopScreen,
   canGoBack = true,
   onLogout,
+  onSetWorkshopPin,
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
@@ -2106,15 +2108,27 @@ export default function OperariosTVView({
                       </div>
                     </div>
 
-                    <span className="shrink-0 rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
-                      {pendingOutsideMaintenanceTask
-                        ? "FUERA TALLER"
-                        : pendingWorkshopMaintenanceTask
-                        ? "MANT. TALLER"
-                        : isReservedForValidation
-                        ? "RESERVADO"
-                        : getTechStatusLabel(tech.status)}
-                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
+                        {pendingOutsideMaintenanceTask
+                          ? "FUERA TALLER"
+                          : pendingWorkshopMaintenanceTask
+                          ? "MANT. TALLER"
+                          : isReservedForValidation
+                          ? "RESERVADO"
+                          : getTechStatusLabel(tech.status)}
+                      </span>
+                      {onSetWorkshopPin && (
+                        <button
+                          type="button"
+                          title="Establecer PIN taller"
+                          onClick={() => onSetWorkshopPin(tech.name)}
+                          className="rounded-full border border-white/60 bg-white/60 px-2 py-1 text-[10px] font-black hover:bg-white/80"
+                        >
+                          🔑 PIN
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

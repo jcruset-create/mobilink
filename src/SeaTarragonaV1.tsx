@@ -568,6 +568,10 @@ const [newQuickTemplate, setNewQuickTemplate] =
   useState<NewQuickTemplateV2State>(INITIAL_NEW_QUICK_TEMPLATE_V2);
 
 const [editingQuickTemplateKey, setEditingQuickTemplateKey] = useState<string | null>(null);
+const [workshopPinModal, setWorkshopPinModal] = useState<{ techName: string } | null>(null);
+const [workshopPinInput, setWorkshopPinInput] = useState("");
+const [workshopPinSaving, setWorkshopPinSaving] = useState(false);
+const [workshopPinError, setWorkshopPinError] = useState("");
 
 const [log, setLog] = useState<LogItem[]>([]);
 const [externalAIAnswer, setExternalAIAnswer] = useState("");
@@ -5138,6 +5142,11 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
         setIsAuthenticated(false);
         setView("operativo");
       }}
+      onSetWorkshopPin={isSupervisor ? (techName) => {
+        setWorkshopPinModal({ techName });
+        setWorkshopPinInput("");
+        setWorkshopPinError("");
+      } : undefined}
     />
   );
 }
@@ -8896,6 +8905,69 @@ console.log("DEBUG tiempos trabajo activo", {
           className="flex-1 rounded-2xl bg-red-600 px-4 py-3 text-sm font-medium text-white hover:bg-red-700"
         >
           Confirmar reset
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{workshopPinModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
+    <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl p-6">
+      <h3 className="text-lg font-semibold mb-1">PIN taller — {workshopPinModal.techName}</h3>
+      <p className="text-sm text-slate-500 mb-4">Introduce un PIN de 4 dígitos para el portal móvil del operario.</p>
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={4}
+        value={workshopPinInput}
+        onChange={(e) => { setWorkshopPinInput(e.target.value.replace(/\D/g, "").slice(0, 4)); setWorkshopPinError(""); }}
+        placeholder="1234"
+        className="w-full rounded-xl border border-slate-200 px-3 py-3 text-center text-2xl font-black tracking-widest outline-none focus:ring-2 focus:ring-slate-300 mb-3"
+      />
+      {workshopPinError && (
+        <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700 mb-3">{workshopPinError}</div>
+      )}
+      <div className="flex gap-3">
+        <button
+          type="button"
+          onClick={() => { setWorkshopPinModal(null); setWorkshopPinInput(""); setWorkshopPinError(""); }}
+          className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          disabled={workshopPinSaving}
+          onClick={async () => {
+            if (workshopPinInput.length !== 4) {
+              setWorkshopPinError("El PIN debe tener 4 dígitos");
+              return;
+            }
+            setWorkshopPinSaving(true);
+            try {
+              const resp = await fetchWithTimeout(`${API_BASE}/api/techs/${encodeURIComponent(workshopPinModal.techName)}/workshop-pin`, {
+                method: "PUT",
+                headers: getAdminHeaders({ "Content-Type": "application/json" }),
+                body: JSON.stringify({ pin: workshopPinInput }),
+              });
+              if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                setWorkshopPinError((data as { error?: string }).error ?? "Error guardando PIN");
+              } else {
+                setWorkshopPinModal(null);
+                setWorkshopPinInput("");
+                setWorkshopPinError("");
+              }
+            } catch {
+              setWorkshopPinError("Error de conexión");
+            } finally {
+              setWorkshopPinSaving(false);
+            }
+          }}
+          className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+        >
+          {workshopPinSaving ? "Guardando..." : "Guardar PIN"}
         </button>
       </div>
     </div>

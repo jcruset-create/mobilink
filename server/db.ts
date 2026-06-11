@@ -262,6 +262,19 @@ export async function initDb() {
       ON roadside_vehicles(active);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tech_breaks (
+      id SERIAL PRIMARY KEY,
+      "techName" TEXT NOT NULL,
+      "breakType" TEXT NOT NULL,
+      "startedAtMs" BIGINT NOT NULL,
+      "endedAtMs" BIGINT DEFAULT NULL,
+      "jobId" INT DEFAULT NULL
+    );
+
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

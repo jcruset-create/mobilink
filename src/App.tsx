@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
 import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
+import WorkshopOperatorPage from "./pages/WorkshopOperatorPage";
 import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
@@ -58,6 +59,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
       <Route path="/operario/asistencias" element={<RoadsideOperatorPage />} />
+      <Route path="/operario/taller" element={<WorkshopOperatorPage />} />
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
       <Route path="/login" element={<Login />} />
 
