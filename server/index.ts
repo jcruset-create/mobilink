@@ -5479,16 +5479,6 @@ Reglas obligatorias:
    FRONTEND REACT / VITE
 ========================================================= */
 
-app.use(express.static(path.join(__dirname, "../dist")));
-
-app.get(/.*/, (_req, res) => {
-  res.sendFile(path.join(__dirname, "../dist/index.html"));
-});
-
-/* =========================================================
-   404 / ERROR
-========================================================= */
-
 /* =========================================================
    WORKSHOP OPERATOR (TECH MOBILE PORTAL)
 ========================================================= */
@@ -5693,6 +5683,16 @@ app.put(
     }
   }
 );
+
+/* =========================================================
+   STATIC / SPA CATCH-ALL (must be after all API routes)
+========================================================= */
+
+app.use(express.static(path.join(__dirname, "../dist")));
+
+app.get(/.*/, (_req, res) => {
+  res.sendFile(path.join(__dirname, "../dist/index.html"));
+});
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });
