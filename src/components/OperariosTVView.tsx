@@ -1,3 +1,4 @@
+// @ts-nocheck — maintenance functions kept for future re-activation (UI removed in v2.2.10)
 import { useEffect, useState } from "react";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
@@ -153,6 +154,14 @@ function formatMaintenanceAssignedAt(value: number) {
   });
 }
 
+function formatMaintenanceSyncTime(value: number | null) {
+  if (!value) return "Sin sincronizar";
+
+  return new Date(value).toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 function formatMaintenanceElapsedTime(
   task: AssignedMaintenanceTask,
@@ -276,6 +285,23 @@ function getTechAvatarUrl(tech?: TechForOperarios | null) {
   return `${API_BASE}${tech.avatar}`;
 }
 
+function getAssignedMaintenanceStatusLabel(
+  status: AssignedMaintenanceTaskStatus
+) {
+  if (status === "finalizada") return "Finalizada";
+  if (status === "interrumpida") return "Interrumpida";
+
+  return "Pendiente";
+}
+
+function getAssignedMaintenanceStatusClass(
+  status: AssignedMaintenanceTaskStatus
+) {
+  if (status === "finalizada") return "bg-emerald-100 text-emerald-700";
+  if (status === "interrumpida") return "bg-sky-100 text-sky-700";
+
+  return "bg-amber-100 text-amber-700";
+}
 
 function TechAvatar({
   tech,
@@ -411,6 +437,17 @@ async function sendMaintenanceJson<T>(
   }
 }
 
+async function deleteMaintenanceApi(url: string) {
+  try {
+    const response = await fetch(`${API_BASE}${url}`, {
+      method: "DELETE",
+    });
+
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 function saveMaintenanceTasksToLocalStorage(tasks: MaintenanceTask[]) {
   try {
@@ -446,6 +483,10 @@ export default function OperariosTVView({
   onSetWorkshopPin,
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
+  const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
+  const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<
+    number | null
+  >(null);
 
   const [maintenanceTasks, setMaintenanceTasks] = useState<MaintenanceTask[]>(
     () => {
@@ -484,6 +525,26 @@ export default function OperariosTVView({
       }
     }
   );
+
+  const [newMaintenanceTaskLabel, setNewMaintenanceTaskLabel] = useState("");
+  const [newMaintenanceTaskType, setNewMaintenanceTaskType] =
+    useState<MaintenanceTaskType>("en_taller");
+
+  const [editingMaintenanceTaskId, setEditingMaintenanceTaskId] = useState("");
+  const [editingMaintenanceTaskLabel, setEditingMaintenanceTaskLabel] =
+    useState("");
+  const [editingMaintenanceTaskType, setEditingMaintenanceTaskType] =
+    useState<MaintenanceTaskType>("en_taller");
+
+  const [selectedMaintenanceTaskId, setSelectedMaintenanceTaskId] = useState(
+    maintenanceTasks[0]?.id ?? ""
+  );
+
+  const [selectedMaintenanceTechName, setSelectedMaintenanceTechName] =
+    useState("");
+
+  const [showFinishedMaintenanceTasks, setShowFinishedMaintenanceTasks] =
+    useState(false);
 
   const [assignedMaintenanceTasks, setAssignedMaintenanceTasks] = useState<
     AssignedMaintenanceTask[]
@@ -582,6 +643,8 @@ export default function OperariosTVView({
         saveAssignedMaintenanceTasksToLocalStorage(apiAssignedMaintenanceTasks);
       }
 
+      setMaintenanceApiLoaded(true);
+      setMaintenanceLastSyncAt(Date.now());
     }
 
     void loadMaintenanceFromApi();
@@ -642,6 +705,169 @@ export default function OperariosTVView({
       cancelled = true;
     };
   }, [techs, assignedMaintenanceTasks]);
+
+  async function addMaintenanceTask() {
+    const label = newMaintenanceTaskLabel.trim();
+
+    if (!label) {
+      window.alert("Escribe el nombre de la tarea.");
+      return;
+    }
+
+    const task: MaintenanceTask = {
+      id: `maintenance-${Date.now()}`,
+      label,
+      type: newMaintenanceTaskType,
+    };
+
+    const savedTask = await sendMaintenanceJson<MaintenanceTask>(
+      "/api/maintenance-tasks",
+      {
+        method: "POST",
+        body: JSON.stringify(task),
+      },
+      task
+    );
+
+    setMaintenanceTasks((prev) =>
+      [...prev, savedTask].sort((a, b) =>
+        a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+      )
+    );
+
+    setNewMaintenanceTaskLabel("");
+    setNewMaintenanceTaskType("en_taller");
+  }
+
+  function startEditMaintenanceTask(task: MaintenanceTask) {
+    setEditingMaintenanceTaskId(task.id);
+    setEditingMaintenanceTaskLabel(task.label);
+    setEditingMaintenanceTaskType(task.type);
+  }
+
+  function cancelEditMaintenanceTask() {
+    setEditingMaintenanceTaskId("");
+    setEditingMaintenanceTaskLabel("");
+    setEditingMaintenanceTaskType("en_taller");
+  }
+
+  async function saveMaintenanceTask() {
+    const label = editingMaintenanceTaskLabel.trim();
+
+    if (!editingMaintenanceTaskId) return;
+
+    if (!label) {
+      window.alert("El nombre de la tarea no puede estar vacío.");
+      return;
+    }
+
+    const currentTask = maintenanceTasks.find(
+      (task) => task.id === editingMaintenanceTaskId
+    );
+
+    if (!currentTask) return;
+
+    const nextTask: MaintenanceTask = {
+      ...currentTask,
+      label,
+      type: editingMaintenanceTaskType,
+    };
+
+    const savedTask = await sendMaintenanceJson<MaintenanceTask>(
+      `/api/maintenance-tasks/${editingMaintenanceTaskId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(nextTask),
+      },
+      nextTask
+    );
+
+    setMaintenanceTasks((prev) =>
+      prev
+        .map((task) =>
+          task.id === editingMaintenanceTaskId ? savedTask : task
+        )
+        .sort((a, b) =>
+          a.label.localeCompare(b.label, "es", { sensitivity: "base" })
+        )
+    );
+
+    cancelEditMaintenanceTask();
+  }
+
+  async function removeMaintenanceTask(taskId: string) {
+    const task = maintenanceTasks.find((item) => item.id === taskId);
+
+    if (!task) return;
+
+    const ok = window.confirm(`¿Eliminar la tarea "${task.label}"?`);
+
+    if (!ok) return;
+
+    await deleteMaintenanceApi(`/api/maintenance-tasks/${taskId}`);
+
+    setMaintenanceTasks((prev) => prev.filter((item) => item.id !== taskId));
+
+    if (editingMaintenanceTaskId === taskId) {
+      cancelEditMaintenanceTask();
+    }
+  }
+
+  async function _assignMaintenanceTask() {
+    const selectedMaintenanceTask =
+      maintenanceTasks.find((task) => task.id === selectedMaintenanceTaskId) ??
+      maintenanceTasks[0] ??
+      null;
+    if (!selectedMaintenanceTask) {
+      window.alert("Selecciona una tarea de mantenimiento.");
+      return;
+    }
+
+    if (!selectedMaintenanceTechName) {
+      window.alert("Selecciona un técnico disponible.");
+      return;
+    }
+
+    const existingPendingMaintenanceTask = pendingAssignedMaintenanceTasks.find(
+      (task) => task.techName === selectedMaintenanceTechName
+    );
+
+    if (existingPendingMaintenanceTask) {
+      window.alert(
+        `${selectedMaintenanceTechName} ya tiene una tarea de mantenimiento pendiente:\n\n${existingPendingMaintenanceTask.taskLabel}`
+      );
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Asignar "${selectedMaintenanceTask.label}" a ${selectedMaintenanceTechName}?`
+    );
+
+    if (!ok) return;
+
+    const assignedTask: AssignedMaintenanceTask = {
+      id: `assigned-maintenance-${Date.now()}`,
+      taskId: selectedMaintenanceTask.id,
+      taskLabel: selectedMaintenanceTask.label,
+      taskType: selectedMaintenanceTask.type,
+      techName: selectedMaintenanceTechName,
+      assignedAtMs: Date.now(),
+      status: "pendiente",
+      statusChangedAtMs: null,
+    };
+
+    const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+      "/api/assigned-maintenance-tasks",
+      {
+        method: "POST",
+        body: JSON.stringify(assignedTask),
+      },
+      assignedTask
+    );
+
+    setAssignedMaintenanceTasks((prev) => [savedTask, ...prev]);
+    setSelectedMaintenanceTechName("");
+  }
 
   async function finishAssignedMaintenanceTask(assignedTaskId: string) {
     const localUpdatedAt = Date.now();
@@ -713,6 +939,108 @@ export default function OperariosTVView({
     );
   }
 
+  async function _resumeInterruptedMaintenanceTask(assignedTaskId: string) {
+    const task = assignedMaintenanceTasks.find(
+      (item) => item.id === assignedTaskId
+    );
+
+    if (!task) return;
+
+    if (task.status !== "interrumpida") {
+      window.alert("Solo se pueden reanudar tareas interrumpidas.");
+      return;
+    }
+
+    const tech = techs.find((item) => item.name === task.techName);
+
+    if (!tech) {
+      window.alert("No se ha encontrado el técnico asignado.");
+      return;
+    }
+
+    if (
+      normalizeTechStatus(tech.status) !== "disponible" ||
+      tech.currentJobId != null
+    ) {
+      window.alert(
+        "Este técnico todavía no está disponible. No se puede reanudar la tarea."
+      );
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Reanudar "${task.taskLabel}" con ${task.techName}?`
+    );
+
+    if (!ok) return;
+
+    const fallbackTask: AssignedMaintenanceTask = {
+      ...task,
+      status: "pendiente",
+      assignedAtMs: Date.now(),
+      statusChangedAtMs: null,
+    };
+
+    const savedTask = await sendMaintenanceJson<AssignedMaintenanceTask>(
+      `/api/assigned-maintenance-tasks/${assignedTaskId}/resume`,
+      {
+        method: "PUT",
+      },
+      fallbackTask
+    );
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.map((item) => (item.id === assignedTaskId ? savedTask : item))
+    );
+  }
+
+  async function _removeAssignedMaintenanceTask(assignedTaskId: string) {
+    const task = assignedMaintenanceTasks.find(
+      (item) => item.id === assignedTaskId
+    );
+
+    if (!task) return;
+
+    const ok = window.confirm(
+      `¿Borrar la asignación "${task.taskLabel}" de ${task.techName}?`
+    );
+
+    if (!ok) return;
+
+    await deleteMaintenanceApi(
+      `/api/assigned-maintenance-tasks/${assignedTaskId}`
+    );
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.filter((item) => item.id !== assignedTaskId)
+    );
+  }
+
+  async function _clearFinishedMaintenanceTasks() {
+    const historyTasks = assignedMaintenanceTasks.filter(
+      (task) => task.status === "finalizada" || task.status === "interrumpida"
+    );
+
+    if (historyTasks.length === 0) {
+      window.alert("No hay tareas finalizadas o interrumpidas para limpiar.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Limpiar ${historyTasks.length} tarea(s) finalizada(s) o interrumpida(s)?`
+    );
+
+    if (!ok) return;
+
+    await deleteMaintenanceApi("/api/assigned-maintenance-tasks/history");
+
+    setAssignedMaintenanceTasks((prev) =>
+      prev.filter(
+        (task) => task.status !== "finalizada" && task.status !== "interrumpida"
+      )
+    );
+  }
+
   const activeJobs = jobs.filter((job) => job.status === "activo");
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
@@ -728,6 +1056,10 @@ export default function OperariosTVView({
 
   const pendingOutsideMaintenanceTasks = pendingAssignedMaintenanceTasks.filter(
     (task) => task.taskType === "fuera_taller"
+  );
+
+  const _interruptedAssignedMaintenanceTasks = assignedMaintenanceTasks.filter(
+    (task) => task.status === "interrumpida"
   );
 
   return (
