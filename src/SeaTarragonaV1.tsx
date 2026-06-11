@@ -8014,13 +8014,6 @@ console.log("DEBUG tiempos trabajo activo", {
 
         <div className="flex flex-col gap-2 md:items-end">
           <button
-            onClick={() => finishJob(job.id)}
-            className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-          >
-            Finalizar
-          </button>
-
-          <button
             onClick={() => pauseJob(job.id)}
             className="rounded-2xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-medium text-orange-700"
           >
