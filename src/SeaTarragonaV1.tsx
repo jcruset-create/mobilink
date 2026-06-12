@@ -5369,7 +5369,9 @@ if (!isAuthenticated) {
 return (
   <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900">
     <div className="mx-auto w-full max-w-[98vw] space-y-6">
-<div className="sticky top-3 z-50 flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between">
+<div className="sticky top-0 z-30 bg-slate-50 pb-3 pt-3">
+  <div className="flex flex-col gap-3">
+<div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
           <UserCog className="h-8 w-8" />
           <div>
@@ -5638,7 +5640,7 @@ return (
       </div>
 
       {view === "operativo" && (
-  <section className="sticky top-[108px] z-10 rounded-3xl border border-slate-200 bg-white p-4 shadow-md">
+  <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-md">
     <div className="grid gap-4 md:grid-cols-2">
       <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -5950,7 +5952,8 @@ return (
     </div>
   </section>
 )}
-    
+  </div>
+</div>
 
       {view === "ajustes" && (
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
