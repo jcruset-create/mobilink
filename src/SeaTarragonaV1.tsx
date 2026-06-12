@@ -5724,7 +5724,7 @@ return (
 
 
 
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold hidden">
               <span
                 className={
                   maintenanceAvailabilitySyncError
@@ -5775,7 +5775,7 @@ return (
           </span>
         </div>
 
-        {(maintenanceSummaryCounts.workshop > 0 ||
+        {false && (maintenanceSummaryCounts.workshop > 0 ||
           maintenanceSummaryCounts.outside > 0 ||
           maintenanceSummaryCounts.interrupted > 0) && (
           <div className="mb-3 grid gap-2 sm:grid-cols-3">
@@ -5859,7 +5859,7 @@ return (
           </div>
         )}
 
-        {outsideMaintenanceTechsSummary.length > 0 && (
+        {false && outsideMaintenanceTechsSummary.length > 0 && (
           <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
@@ -5896,7 +5896,7 @@ return (
           </div>
         )}
 
-        {workshopMaintenanceTechsSummary.length > 0 && (
+        {false && workshopMaintenanceTechsSummary.length > 0 && (
           <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
@@ -5933,7 +5933,7 @@ return (
           </div>
         )}
 
-        {interruptedMaintenanceSummary.length > 0 && (
+        {false && interruptedMaintenanceSummary.length > 0 && (
           <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
