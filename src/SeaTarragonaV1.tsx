@@ -4740,166 +4740,6 @@ function reassignJob(jobId: number, techName: string) {
     setNewTechName("");
     appendLog(`Técnico añadido: ${name}.`);
   }
-function changeSupportForJob(jobId: number, newSupportName: string) {
-  const job = jobs.find((item) => item.id === jobId);
-  if (!job || job.status !== "activo") return;
-
-  const assignedNames = job.assignedNames ?? [];
-  const responsibleName = assignedNames[0] ?? null;
-  const currentSupportNames = assignedNames.slice(1);
-
-  if (!responsibleName) {
-    appendLog(`No se puede cambiar apoyo en ${job.plate}: no tiene responsable.`);
-    return;
-  }
-
-  if (!newSupportName) return;
-
-  if (newSupportName === responsibleName) {
-    appendLog(`No se puede poner al responsable como apoyo en ${job.plate}.`);
-    return;
-  }
-
-  const newSupport = techs.find((tech) => tech.name === newSupportName);
-  if (!newSupport) return;
-
-  if (hasAnyTechBlockedByOutsideMaintenance([newSupportName])) {
-    appendLog(
-      `No se puede poner apoyo ${newSupportName} en ${job.plate}: mantenimiento fuera de taller.`
-    );
-    return;
-  }
-
-  if (
-    !canAssignTechManuallyToJob(
-      newSupport,
-      job,
-      jobs,
-      quickTemplates,
-      "apoyo"
-    )
-  ) {
-    appendLog(
-      `${newSupport.name} no se puede poner como apoyo en ${job.plate}: no está disponible, ya está ocupado o no tiene competencia.`
-    );
-    return;
-  }
-
-  const previousSupportNames = currentSupportNames.filter(
-    (name) => name !== newSupportName
-  );
-
-  const nextAssignedNames = [responsibleName, newSupportName];
-
-  const updatedJob: Job = {
-    ...job,
-    assignedNames: nextAssignedNames,
-    reason: `Apoyo cambiado manualmente. Responsable: ${responsibleName}. Apoyo: ${newSupportName}.`,
-  };
-
-  const updatedJobs: Job[] = jobs.map((item) =>
-    item.id === jobId ? updatedJob : item
-  );
-
-  const updatedTechs: Tech[] = techs.map((tech) => {
-    if (previousSupportNames.includes(tech.name)) {
-      return {
-        ...tech,
-        status: isHardBlockedTechStatus(tech.status)
-  ? tech.status
-  : ("disponible" as TechStatus),
-        currentJobId: null,
-      };
-    }
-
-    if (tech.name === newSupportName) {
-      return {
-        ...tech,
-        status: "refuerzo" as TechStatus,
-        currentJobId: jobId,
-      };
-    }
-
-    return tech;
-  });
-
-  setJobs(updatedJobs);
-  setTechs(updatedTechs);
-
-  saveJobToBackend(updatedJob);
-
-  for (const tech of updatedTechs) {
-    if (
-      previousSupportNames.includes(tech.name) ||
-      tech.name === newSupportName
-    ) {
-      saveTechToBackend(tech);
-    }
-  }
-
-  appendLog(`Apoyo cambiado en ${job.plate}: ${newSupportName}.`);
-}
-
-function removeSupportFromJobManually(jobId: number) {
-  const job = jobs.find((item) => item.id === jobId);
-  if (!job || job.status !== "activo") return;
-
-  const assignedNames = job.assignedNames ?? [];
-  const responsibleName = assignedNames[0] ?? null;
-  const supportNames = assignedNames.slice(1);
-
-  if (!responsibleName) {
-    appendLog(`No se puede quitar apoyo en ${job.plate}: no tiene responsable.`);
-    return;
-  }
-
-  if (supportNames.length === 0) {
-    appendLog(`El trabajo ${job.plate} no tiene apoyo asignado.`);
-    return;
-  }
-
-  const updatedJob: Job = {
-    ...job,
-    assignedNames: [responsibleName],
-    reason: `Apoyo quitado manualmente. Responsable: ${responsibleName}. Sin apoyo activo.`,
-  };
-
-  const updatedJobs: Job[] = jobs.map((item) =>
-    item.id === jobId ? updatedJob : item
-  );
-
-  const updatedTechs: Tech[] = techs.map((tech) => {
-    if (supportNames.includes(tech.name)) {
-      return {
-        ...tech,
-        status: isHardBlockedTechStatus(tech.status)
-  ? tech.status
-  : ("disponible" as TechStatus),
-        currentJobId: null,
-      };
-    }
-
-    return tech;
-  });
-
-  setJobs(updatedJobs);
-  setTechs(updatedTechs);
-
-  saveJobToBackend(updatedJob);
-
-  for (const tech of updatedTechs) {
-    if (supportNames.includes(tech.name)) {
-      saveTechToBackend(tech);
-    }
-  }
-
-  appendLog(
-    `Apoyo quitado en ${job.plate}: ${supportNames.join(
-      " + "
-    )} queda disponible.`
-  );
-}
-
 function addSupportToJob(jobId: number, forcedSupportName?: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "activo") return;
@@ -4997,6 +4837,87 @@ function addSupportToJob(jobId: number, forcedSupportName?: string) {
     console.error("Error cambiando apoyo:", error);
     appendLog(`Error al cambiar apoyo en ${job.plate}.`);
   }
+}
+
+function addExtraSupportToJob(jobId: number, supportName: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "activo") return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const responsibleName = assignedNames[0];
+
+  if (!responsibleName) {
+    appendLog(`No se puede añadir apoyo a ${job.plate}: falta responsable.`);
+    return;
+  }
+
+  if (assignedNames.includes(supportName)) {
+    appendLog(`${supportName} ya está asignado en ${job.plate}.`);
+    return;
+  }
+
+  if (hasAnyTechBlockedByOutsideMaintenance([supportName])) {
+    appendLog(`No se puede añadir apoyo ${supportName} en ${job.plate}: mantenimiento fuera de taller.`);
+    return;
+  }
+
+  const support = techs.find((t) => t.name === supportName);
+  if (!support) return;
+
+  if (!canAssignTechManuallyToJob(support, job, jobs, quickTemplates, "apoyo")) {
+    appendLog(`${supportName} no se puede poner como apoyo en ${job.plate}: no está disponible o no tiene competencia.`);
+    return;
+  }
+
+  const nextAssignedNames = [...assignedNames, supportName];
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: nextAssignedNames,
+    reason: `Apoyo extra añadido manualmente: ${supportName}. Total: ${nextAssignedNames.slice(1).join(" + ")}.`,
+  };
+
+  const updatedTechs = techs.map((tech) =>
+    tech.name === supportName
+      ? { ...tech, status: "refuerzo" as TechStatus, currentJobId: jobId }
+      : tech
+  );
+
+  setJobs((prev) => prev.map((item) => (item.id === jobId ? updatedJob : item)));
+  setTechs(updatedTechs);
+  saveJobToBackend(updatedJob);
+  saveTechToBackend(updatedTechs.find((t) => t.name === supportName)!);
+  appendLog(`Apoyo extra añadido en ${job.plate}: ${supportName}.`);
+}
+
+function removeSupportByNameFromJob(jobId: number, nameToRemove: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "activo") return;
+
+  const assignedNames = job.assignedNames ?? [];
+  const nextNames = assignedNames.filter((n) => n !== nameToRemove);
+
+  const updatedJob: Job = {
+    ...job,
+    assignedNames: nextNames,
+    reason: `Apoyo ${nameToRemove} quitado manualmente. ${nextNames.length > 1 ? `Apoyos restantes: ${nextNames.slice(1).join(" + ")}.` : "Sin apoyo activo."}`,
+  };
+
+  const updatedTechs = techs.map((tech) =>
+    tech.name === nameToRemove
+      ? {
+          ...tech,
+          status: isHardBlockedTechStatus(tech.status) ? tech.status : ("disponible" as TechStatus),
+          currentJobId: null,
+        }
+      : tech
+  );
+
+  setJobs((prev) => prev.map((item) => (item.id === jobId ? updatedJob : item)));
+  setTechs(updatedTechs);
+  saveJobToBackend(updatedJob);
+  saveTechToBackend(updatedTechs.find((t) => t.name === nameToRemove)!);
+  appendLog(`Apoyo ${nameToRemove} quitado de ${job.plate}.`);
 }
 
 function removeSupportFromActiveJob(jobId: number) {
@@ -8092,49 +8013,35 @@ console.log("DEBUG tiempos trabajo activo", {
 
 {["camion", "movil"].includes(job.area) && (
   <>
+    {/* Chips de apoyos actuales con ✕ individual */}
+    {assignedNames.slice(1).map((supportName) => (
+      <span key={supportName} className="inline-flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1 text-sm font-medium text-amber-800">
+        {supportName}
+        <button
+          type="button"
+          onClick={() => removeSupportByNameFromJob(job.id, supportName)}
+          className="ml-1 text-amber-600 hover:text-amber-900 font-bold leading-none"
+          title={`Quitar a ${supportName}`}
+        >✕</button>
+      </span>
+    ))}
+    {/* Selector para añadir apoyo adicional */}
     <select
-      value={assignedNames[1] ?? ""}
+      value=""
       onChange={(event) => {
-        if (event.target.value) {
-          changeSupportForJob(job.id, event.target.value);
-        }
+        if (event.target.value) addExtraSupportToJob(job.id, event.target.value);
       }}
       className="rounded-xl border border-amber-200 bg-amber-50 px-2 py-2 text-sm font-medium text-amber-800"
     >
-      <option value="">Cambiar apoyo</option>
+      <option value="">+ Apoyo…</option>
       {techs
-        .filter((tech) => tech.name !== assignedNames[0])
-        .filter(
-          (tech) =>
-            canAssignTechManuallyToJob(
-              tech,
-              job,
-              jobs,
-              quickTemplates,
-              "apoyo"
-            ) || tech.name === assignedNames[1]
-        )
-        .filter(
-          (tech) =>
-            tech.name === assignedNames[1] ||
-            !isTechBlockedByOutsideMaintenance(tech.name)
-        )
+        .filter((tech) => !assignedNames.includes(tech.name))
+        .filter((tech) => canAssignTechManuallyToJob(tech, job, jobs, quickTemplates, "apoyo"))
+        .filter((tech) => !isTechBlockedByOutsideMaintenance(tech.name))
         .map((tech) => (
-          <option key={tech.name} value={tech.name}>
-            {tech.name}
-          </option>
+          <option key={tech.name} value={tech.name}>{tech.name}</option>
         ))}
     </select>
-
-    {assignedNames.length > 1 && (
-      <button
-        type="button"
-        onClick={() => removeSupportFromJobManually(job.id)}
-        className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
-      >
-        Quitar apoyo
-      </button>
-    )}
   </>
 )}
         </div>
