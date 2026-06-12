@@ -3464,7 +3464,9 @@ function updateValidationResponsible(jobId: number, responsibleName: string) {
   );
 }
 
-function updateValidationSupport(jobId: number, supportName: string) {
+
+
+function addValidationExtraSupport(jobId: number, supportName: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "validacion") return;
 
@@ -3476,72 +3478,47 @@ function updateValidationSupport(jobId: number, supportName: string) {
     return;
   }
 
-  if (supportName === responsibleName) {
-    alert("El apoyo no puede ser el mismo que el responsable.");
+  if (assignedNames.includes(supportName)) {
+    alert(`${supportName} ya está en la propuesta.`);
     return;
   }
 
   const tech = techs.find((item) => item.name === supportName);
   if (!tech) return;
 
-  if (
-  !canSelectTechManuallyForJob(
-  tech,
-  job,
-  jobs,
-  quickTemplates,
-  "apoyo"
-)
-  ) {
-    alert(
-      `${tech.name} no se puede proponer como apoyo.\n\nNo está disponible, ya está ocupado o no tiene competencia.`
-    );
-
+  if (!canSelectTechManuallyForJob(tech, job, jobs, quickTemplates, "apoyo")) {
+    alert(`${tech.name} no se puede proponer como apoyo.\n\nNo está disponible, ya está ocupado o no tiene competencia.`);
     appendLog(`${tech.name} no se puede proponer como apoyo para ${job.plate}.`);
-
     return;
   }
 
   const updatedJob: Job = {
     ...job,
-    assignedNames: [responsibleName, supportName],
-    reason: `Propuesta modificada manualmente. Responsable propuesto: ${responsibleName}. Apoyo propuesto: ${supportName}. Pendiente de autorización.`,
+    assignedNames: [...assignedNames, supportName],
+    reason: `Propuesta modificada manualmente. Responsable: ${responsibleName}. Apoyos: ${[...assignedNames.slice(1), supportName].join(" + ")}. Pendiente de autorización.`,
   };
 
-  setJobs((prev) =>
-    prev.map((item) => (item.id === jobId ? updatedJob : item))
-  );
-
+  setJobs((prev) => prev.map((item) => (item.id === jobId ? updatedJob : item)));
   saveJobToBackend(updatedJob);
-
-  appendLog(`Propuesta modificada para ${job.plate}: apoyo ${supportName}.`);
+  appendLog(`Apoyo extra añadido para ${job.plate}: ${supportName}.`);
 }
 
-function removeValidationSupport(jobId: number) {
+function removeValidationSupportByName(jobId: number, nameToRemove: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "validacion") return;
 
   const assignedNames = job.assignedNames ?? [];
-  const responsibleName = assignedNames[0] ?? "";
-
-  if (!responsibleName) {
-    alert("La propuesta no tiene responsable.");
-    return;
-  }
+  const nextNames = assignedNames.filter((n) => n !== nameToRemove);
 
   const updatedJob: Job = {
     ...job,
-    assignedNames: [responsibleName],
-    reason: `Propuesta modificada manualmente. Responsable propuesto: ${responsibleName}. Sin apoyo propuesto. Pendiente de autorización.`,
+    assignedNames: nextNames,
+    reason: `Propuesta modificada manualmente. Responsable: ${nextNames[0] ?? ""}. ${nextNames.length > 1 ? `Apoyos: ${nextNames.slice(1).join(" + ")}.` : "Sin apoyo."} Pendiente de autorización.`,
   };
 
-  setJobs((prev) =>
-    prev.map((item) => (item.id === jobId ? updatedJob : item))
-  );
-
+  setJobs((prev) => prev.map((item) => (item.id === jobId ? updatedJob : item)));
   saveJobToBackend(updatedJob);
-
-  appendLog(`Apoyo propuesto quitado para ${job.plate}.`);
+  appendLog(`Apoyo ${nameToRemove} quitado de ${job.plate}.`);
 }
 
 async function authorizeProposedJob(jobId: number) {
@@ -7495,25 +7472,26 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                 .map((tech) => <option key={tech.name} value={tech.name}>{tech.name}</option>)}
             </select>
 
-            {["camion", "movil"].includes(job.area) && (
-              <>
-                <select
-                  value={assignedNames[1] ?? ""}
-                  onChange={(e) => { if (e.target.value) updateValidationSupport(job.id, e.target.value); }}
-                  className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
-                >
-                  <option value="">Apoyo…</option>
-                  {techs
-                    .filter((tech) => tech.name !== assignedNames[0])
-                    .filter((tech) => canSelectTechManuallyForJob(tech, job, jobs, quickTemplates, "apoyo") || tech.name === assignedNames[1])
-                    .filter((tech) => tech.name === assignedNames[1] || !isTechBlockedByOutsideMaintenance(tech.name))
-                    .map((tech) => <option key={tech.name} value={tech.name}>{tech.name}</option>)}
-                </select>
-                {assignedNames.length > 1 && (
-                  <button type="button" onClick={() => removeValidationSupport(job.id)} className="rounded-lg border border-amber-200 px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-50">✕ apoyo</button>
-                )}
-              </>
-            )}
+            {/* Apoyos actuales como chips con ✕ individual */}
+            {assignedNames.slice(1).map((supportName) => (
+              <span key={supportName} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+                {supportName}
+                <button type="button" onClick={() => removeValidationSupportByName(job.id, supportName)} className="ml-0.5 text-amber-600 hover:text-amber-900 font-bold leading-none">✕</button>
+              </span>
+            ))}
+            {/* Selector para añadir apoyo adicional */}
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) addValidationExtraSupport(job.id, e.target.value); }}
+              className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
+            >
+              <option value="">+ Apoyo…</option>
+              {techs
+                .filter((tech) => !assignedNames.includes(tech.name))
+                .filter((tech) => canSelectTechManuallyForJob(tech, job, jobs, quickTemplates, "apoyo"))
+                .filter((tech) => !isTechBlockedByOutsideMaintenance(tech.name))
+                .map((tech) => <option key={tech.name} value={tech.name}>{tech.name}</option>)}
+            </select>
 
             <button type="button" onClick={() => authorizeProposedJob(job.id)} disabled={assignedNames.length === 0} className="rounded-lg bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40">✓ Autorizar</button>
             <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">Cola</button>
