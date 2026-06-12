@@ -7457,7 +7457,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{view !== "operativo2" && validationJobs.length > 0 && (
+{(view === "operativo" || view === "operativo2") && validationJobs.length > 0 && (
   <section className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 shadow-sm">
     <div className="mb-2 flex items-center gap-2">
       <span className="text-xs font-semibold text-violet-700 uppercase tracking-wide">Pendientes de validar</span>
