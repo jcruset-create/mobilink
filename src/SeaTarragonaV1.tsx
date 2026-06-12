@@ -573,7 +573,7 @@ const [newQuickTemplate, setNewQuickTemplate] =
 
 const [editingQuickTemplateKey, setEditingQuickTemplateKey] = useState<string | null>(null);
 const stickyHeaderRef = useRef<HTMLDivElement>(null);
-const [stickyHeaderHeight, setStickyHeaderHeight] = useState(0);
+
 
 const [workshopPinModal, setWorkshopPinModal] = useState<{ techName: string } | null>(null);
 const [workshopPinInput, setWorkshopPinInput] = useState("");
@@ -737,17 +737,6 @@ useEffect(() => {
   };
 }, [isAuthenticated]);
 
-// Measure sticky header height for Entradas rápidas offset in operativo2
-useEffect(() => {
-  const el = stickyHeaderRef.current;
-  if (!el) return;
-  const obs = new ResizeObserver(() => {
-    setStickyHeaderHeight(el.offsetHeight);
-  });
-  obs.observe(el);
-  setStickyHeaderHeight(el.offsetHeight);
-  return () => obs.disconnect();
-}, []);
 
 
 useEffect(() => {
@@ -5388,7 +5377,6 @@ return (
 <div
   ref={stickyHeaderRef}
   className="sticky top-0 z-30 bg-slate-50 pb-3 pt-3"
-  style={{ contain: "layout" }}
 >
   <div className="flex flex-col gap-3">
 <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between">
@@ -5989,654 +5977,8 @@ return (
     </div>
   </section>
 )}
-  </div>
-</div>
-
-      {view === "ajustes" && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="text-sm font-medium text-slate-700">
-              Reglas del sistema
-            </div>
-           {isAdmin && (
-  <button
-    onClick={() => {
-      setResetError("");
-      setResetPassword("");
-      setResetConfirmOpen(true);
-    }}
-    className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50"
-  >
-    Reiniciar jornada
-  </button>
-)}
-          </div>
-
-          <div className="space-y-2">
-            {rules.map((rule, i) => (
-              <div key={`${rule}-${i}`} className="flex items-center gap-2">
-                <input
-                  value={rule}
-                  onChange={(e) => {
-                    const updated = [...rules];
-                    updated[i] = e.target.value;
-                    setRules(updated);
-                  }}
-                  className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={() => setRules(rules.filter((_, idx) => idx !== i))}
-                  className="text-xs text-red-600"
-                >
-                  X
-                </button>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-3 flex gap-2">
-            <input
-              value={newRule}
-              onChange={(e) => setNewRule(e.target.value)}
-              placeholder="Nueva regla"
-              className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={() => {
-                if (!newRule.trim()) return;
-                setRules([...rules, newRule.trim()]);
-                setNewRule("");
-              }}
-              className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white"
-            >
-              Añadir
-            </button>
-          </div>
-        </div>
-      )}
-
-      {view === "ajustes" && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-3 text-sm font-medium text-slate-700">
-            Informe de tiempos por operación
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-slate-500">
-                  <th className="py-2 pr-3">Operación</th>
-                  <th className="py-2 pr-3">Realizadas</th>
-                  <th className="py-2 pr-3">Última</th>
-                  <th className="py-2">Media prevista</th>
-                </tr>
-              </thead>
-              <tbody>
-                {operationReport.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="py-4 text-sm text-slate-500">
-                      Todavía no hay trabajos cerrados con duración registrada.
-                    </td>
-                  </tr>
-                ) : (
-                  operationReport.map((item) => (
-                    <tr key={item.key} className="border-t border-slate-100">
-                      <td className="py-2 pr-3 font-medium">{item.label}</td>
-                      <td className="py-2 pr-3">{item.count}</td>
-                      <td className="py-2 pr-3">
-                        {formatMinutes(item.lastMinutes)}
-                      </td>
-                      <td className="py-2 font-semibold">
-                        {formatMinutes(item.averageMinutes)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-            {view === "ajustes" && isAdmin && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-2 text-sm font-semibold text-slate-800">
-            Copia de seguridad
-          </div>
-
-          <p className="mb-4 text-sm text-slate-500">
-            Descarga un archivo JSON con técnicos, trabajos, logs, reglas y entradas rápidas.
-          </p>
-
-          <button
-            type="button"
-            onClick={downloadBackup}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-          >
-            Descargar backup
-          </button>
-        </div>
-      )}
-      {view === "ajustes" && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-3 text-sm font-medium text-slate-700">
-            Horas invertidas por técnico
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-slate-500">
-                  <th className="py-2 pr-3">Técnico</th>
-                  <th className="py-2 pr-3">Resp. día</th>
-                  <th className="py-2 pr-3">Resp. semana</th>
-                  <th className="py-2 pr-3">Resp. mes</th>
-                  <th className="py-2 pr-3">Apoyo día</th>
-                  <th className="py-2 pr-3">Apoyo semana</th>
-                  <th className="py-2">Apoyo mes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {techHoursReport.map((item) => (
-                  <tr key={item.name} className="border-t border-slate-100">
-                    <td className="py-2 pr-3 font-medium">{item.name}</td>
-                    <td className="py-2 pr-3">
-                      {formatMinutes(item.responsable.daily)}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {formatMinutes(item.responsable.weekly)}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {formatMinutes(item.responsable.monthly)}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {formatMinutes(item.apoyo.daily)}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {formatMinutes(item.apoyo.weekly)}
-                    </td>
-                    <td className="py-2">
-                      {formatMinutes(item.apoyo.monthly)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {view === "ajustes" && (
-  <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-    <div className="mb-4 text-sm font-medium text-slate-700">
-      IA de tiempos reales
-    </div>
-
-    <div className="grid gap-4 xl:grid-cols-2">
-      <div className="rounded-2xl border border-slate-200 p-4">
-        <div className="mb-3 text-sm font-medium text-slate-700">
-          Ranking IA por operación
-        </div>
-
-        <div className="space-y-4 text-sm">
-          <div>
-            <div className="mb-2 font-medium">Alineación</div>
-            <div className="space-y-2">
-              {aiRanking.alineacion.length === 0 ? (
-                <div className="text-slate-500">Sin datos todavía.</div>
-              ) : (
-                aiRanking.alineacion.map((item, index) => (
-                  <div
-                    key={`ia-alineacion-${item.techName}-${index}`}
-                    className="rounded-xl border border-slate-200 px-3 py-2"
-                  >
-                    {index + 1}. {item.techName} · {formatMinutes(item.averageMinutes)} de media · {item.count} trabajos
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-2 font-medium">Móvil</div>
-            <div className="space-y-2">
-              {aiRanking.movil.length === 0 ? (
-                <div className="text-slate-500">Sin datos todavía.</div>
-              ) : (
-                aiRanking.movil.map((item, index) => (
-                  <div
-                    key={`ia-movil-${item.techName}-${index}`}
-                    className="rounded-xl border border-slate-200 px-3 py-2"
-                  >
-                    {index + 1}. {item.techName} · {formatMinutes(item.averageMinutes)} de media · {item.count} trabajos
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-2 font-medium">Tacógrafo</div>
-            <div className="space-y-2">
-              {aiRanking.tacografo.length === 0 ? (
-                <div className="text-slate-500">Sin datos todavía.</div>
-              ) : (
-                aiRanking.tacografo.map((item, index) => (
-                  <div
-                    key={`ia-tacografo-${item.techName}-${index}`}
-                    className="rounded-xl border border-slate-200 px-3 py-2"
-                  >
-                    {index + 1}. {item.techName} · {formatMinutes(item.averageMinutes)} de media · {item.count} trabajos
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 p-4">
-        <div className="mb-3 text-sm font-medium text-slate-700">
-          Sugerencias IA
-        </div>
-
-        <div className="space-y-2 text-sm">
-          {aiSuggestions.length === 0 ? (
-            <div className="text-slate-500">
-              Aún no hay suficiente histórico para generar sugerencias.
-            </div>
-          ) : (
-            aiSuggestions.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-violet-900"
-              >
-                {item.text}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  </div>
-)}
-
-     {view === "ajustes" && (
-  <div className="grid gap-4 md:grid-cols-4">
-    {Object.entries(AREA_META).map(([key, meta]) => {
-      const Icon = meta.icon;
-
-      return (
-        <button
-          key={key}
-          onClick={() => {
-            setDraft({
-              area: key as AreaKey,
-              plate: "",
-              urgent: false,
-              template: "",
-            });
-            setFormOpen(true);
-          }}
-          className={`rounded-3xl border p-5 text-left shadow-sm transition hover:shadow-md ${meta.color}`}
-        >
-          <div className="flex items-center justify-between">
-            <Icon className="h-7 w-7" />
-            <Plus className="h-5 w-5" />
-          </div>
-
-          <div className="mt-4 text-lg font-semibold">
-            + {meta.label}
-          </div>
-
-          <p className="mt-1 text-sm opacity-80">
-            Nueva entrada con matrícula y urgencia
-          </p>
-        </button>
-      );
-    })}
-  </div>
-)}
-
-{arrivedPendingValidationScheduledJobs.length > 0 && (
-  <div className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
-    <div className="mb-3 flex items-center justify-between gap-3">
-      <div className="text-sm font-semibold text-violet-900">
-        Citas llegadas pendientes de validar
-      </div>
-
-      <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700">
-        {arrivedPendingValidationScheduledJobs.length}
-      </span>
-    </div>
-
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {arrivedPendingValidationScheduledJobs.map((scheduled) => {
-        const relatedJob =
-  scheduled.jobId != null
-    ? jobs.find((job) => job.id === scheduled.jobId)
-    : null;
-
-const secondRelatedJob =
-  scheduled.secondJobId != null
-    ? jobs.find((job) => job.id === scheduled.secondJobId)
-    : null;
-
-const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
-
-        return (
-          <div
-            key={scheduled.id}
-            className="rounded-2xl border border-violet-200 bg-white p-4"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="font-semibold text-violet-950">
-                  {scheduled.plate || "Sin matrícula"}
-                </div>
-
-                <div className="mt-1 text-sm text-violet-700">
-                  {scheduled.date} · {scheduled.startTime}
-                </div>
-              </div>
-
-              <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-bold uppercase text-violet-700">
-  {phaseLabel}
-</span>
-            </div>
-
-            <div className="mt-2 text-sm text-violet-800">
-              {scheduled.linkedTemplateLabel ||
-                relatedJob?.quickEntryLabel ||
-                "Trabajo pendiente de validar"}
-            </div>
-
-            {relatedJob && (
-              <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs text-violet-900">
-                {relatedJob.assignedNames?.length
-                  ? `Propuesta: ${relatedJob.assignedNames.join(" + ")}`
-                  : "Sin propuesta todavía"}
-              </div>
-            )}
-
-            {secondRelatedJob && (
-  <div className="mt-2 rounded-xl border border-fuchsia-100 bg-fuchsia-50 px-3 py-2 text-xs text-fuchsia-900">
-    <div className="font-semibold">
-      2º trabajo: {getOperationLabel(secondRelatedJob)}
-    </div>
-
-    <div className="mt-1">
-      Estado: {secondRelatedJob.status}
-    </div>
-
-    {secondRelatedJob.assignedNames?.length > 0 && (
-      <div className="mt-1">
-        Propuesta: {secondRelatedJob.assignedNames.join(" + ")}
-      </div>
-    )}
-  </div>
-)}
-
-            <div className="mt-2 text-xs text-slate-500">
-              Cliente: {scheduled.customerName || "Sin nombre"}
-            </div>
-
-            <div className="mt-1 text-xs text-slate-500">
-              Teléfono: {scheduled.customerPhone || "Sin teléfono"}
-            </div>
-
-            <div className="mt-3 text-xs text-violet-700">
-              Autoriza el inicio desde el bloque “Pendientes de validar”.
-              <button
-  type="button"
-  onClick={() => deleteArrivedScheduledJob(scheduled.id)}
-  className="mt-3 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
->
-  Eliminar cita llegada
-</button>
-                    </div>
-          </div>
-        );
-      })}
-    </div>
-  </div>
-)}
-
-{(view === "operativo" || view === "operativo2") && dueScheduledJobs.length > 0 && (
-  <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
-    <div className="mb-2 flex items-center justify-between gap-2">
-      <div>
-        <h2 className="text-sm font-black text-amber-950">
-          Citas pendientes de llegada
-        </h2>
-        <p className="text-[10px] font-medium text-amber-700">
-          Pulsa “Llegó” para pasarlas a operativo.
-        </p>
-      </div>
-
-      <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-black text-amber-800">
-        {dueScheduledJobs.length}
-      </span>
-    </div>
-
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-      {dueScheduledJobs.map((job) => {
-        const secondTemplate = job.secondTemplateKey
-          ? quickTemplates.find(
-              (template) => template.key === job.secondTemplateKey
-            )
-          : null;
-
-        const includedTasks = Array.isArray(job.includedTasks)
-          ? job.includedTasks
-          : [];
-
-        const appointmentMs = new Date(
-          `${job.date}T${job.startTime}`
-        ).getTime();
-
-        const isLate =
-          !Number.isNaN(appointmentMs) && appointmentMs <= Date.now();
-
-        return (
-          <div
-            key={job.id}
-            className={`rounded-xl border bg-white p-2 shadow-sm ${
-              isLate ? "border-red-300" : "border-amber-200"
-            }`}
-          >
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <input
-                  value={job.plate}
-                  onChange={(e) =>
-                    updateScheduledJobField(job.id, "plate", e.target.value)
-                  }
-                  placeholder="Matrícula"
-                  className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-sm font-black uppercase tracking-wide text-slate-950"
-                />
-
-                <div className="mt-1 text-xs font-bold text-amber-900">
-                  {job.date} · {job.startTime}
-                </div>
-              </div>
-
-              <span
-                className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
-                  isLate
-                    ? "bg-red-100 text-red-700"
-                    : "bg-amber-100 text-amber-700"
-                }`}
-              >
-                {isLate ? "Pendiente" : "Próxima"}
-              </span>
-            </div>
-
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-2 py-2">
-              <div className="text-[9px] font-bold uppercase text-amber-600">
-                Trabajo
-              </div>
-
-              <select
-                value={job.firstTemplateKey || job.templateKey}
-                onChange={(e) =>
-                  updateScheduledJobTemplate(job.id, e.target.value)
-                }
-                className="mt-1 w-full rounded-lg border border-yellow-300 bg-yellow-100 px-2 py-1 text-xs font-bold text-red-700"
-              >
-                {quickTemplates
-                  .slice()
-                  .sort((a, b) =>
-                    a.label.localeCompare(b.label, "es", {
-                      sensitivity: "base",
-                    })
-                  )
-                  .map((template) => (
-                    <option
-                      key={template.key}
-                      value={template.key}
-                      className="bg-yellow-100 font-bold text-red-700"
-                    >
-                      {template.label}
-                    </option>
-                  ))}
-              </select>
-
-              {secondTemplate && (
-                <div className="mt-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-800">
-                  Después: {secondTemplate.label}
-                </div>
-              )}
-
-              {includedTasks.length > 0 && (
-                <div className="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-900">
-                  {includedTasks.map((task) => task.label).join(" + ")}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-2 grid gap-1 text-xs">
-              <input
-                value={job.customerName || ""}
-                onChange={(e) =>
-                  updateScheduledJobField(
-                    job.id,
-                    "customerName",
-                    e.target.value
-                  )
-                }
-                placeholder="Cliente"
-                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
-              />
-
-              <input
-                value={job.customerPhone || ""}
-                onChange={(e) =>
-                  updateScheduledJobField(
-                    job.id,
-                    "customerPhone",
-                    e.target.value
-                  )
-                }
-                placeholder="Teléfono"
-                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
-              />
-
-              <textarea
-                value={job.notes || ""}
-                onChange={(e) =>
-                  updateScheduledJobField(job.id, "notes", e.target.value)
-                }
-                placeholder="Observaciones"
-                rows={1}
-                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
-              />
-
-              {job.urgent && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-black text-red-700">
-                  URGENTE
-                </div>
-              )}
-            </div>
-
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => confirmScheduledArrival(job)}
-                className="rounded-xl bg-green-600 px-2 py-2 text-xs font-black text-white hover:bg-green-700"
-              >
-                Llegó
-              </button>
-
-              <button
-                type="button"
-                onClick={() => cancelScheduledJob(job.id)}
-                className="rounded-xl border border-red-200 bg-white px-2 py-2 text-xs font-bold text-red-600 hover:bg-red-50"
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  </div>
-)}
-
-{(view === "operativo" || view === "operativo2") && (
-  <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
-    <div className="mb-3 flex items-center justify-between gap-3">
-      <div className="text-sm font-medium text-violet-700">
-        ChatGPT externo
-      </div>
-
-      <button
-        type="button"
-        onClick={askExternalAIWorkshop}
-        disabled={externalAILoading}
-        className="rounded-2xl bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-      >
-        {externalAILoading ? "Consultando..." : "Consultar ChatGPT"}
-      </button>
-    </div>
-
-    {externalAIAnswer ? (
-      <pre className="whitespace-pre-wrap rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-900">
-        {externalAIAnswer}
-      </pre>
-    ) : (
-      <div className="text-sm text-slate-500">
-        Pulsa el botón para pedir una recomendación externa.
-      </div>
-    )}
-  </div>
-)}
-{(view === "operativo" || view === "operativo2") && (
-<div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-  <div className="mb-3 text-sm font-medium text-slate-700">
-    Alertas IA del taller
-  </div>
-
-  <div className="space-y-2">
-    {workshopAlerts.map((alert) => (
-      <div
-        key={alert.id}
-        className={`rounded-2xl border px-3 py-2 text-sm ${
-          alert.level === "danger"
-            ? "border-red-200 bg-red-50 text-red-800"
-            : alert.level === "warning"
-            ? "border-amber-200 bg-amber-50 text-amber-800"
-            : "border-sky-200 bg-sky-50 text-sky-800"
-        }`}
-      >
-        {alert.text}
-      </div>
-    ))}
-  </div>
-</div>
-)}
-
     <div
   className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
-  style={view === "operativo2" ? { position: "sticky", top: stickyHeaderHeight, zIndex: 15 } : undefined}
 >
   <div className="mb-3 flex items-center justify-between gap-3">
     <div className="text-sm font-medium text-slate-700">
@@ -7523,6 +6865,651 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 </div>
+  </div>
+</div>
+
+      {view === "ajustes" && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-medium text-slate-700">
+              Reglas del sistema
+            </div>
+           {isAdmin && (
+  <button
+    onClick={() => {
+      setResetError("");
+      setResetPassword("");
+      setResetConfirmOpen(true);
+    }}
+    className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50"
+  >
+    Reiniciar jornada
+  </button>
+)}
+          </div>
+
+          <div className="space-y-2">
+            {rules.map((rule, i) => (
+              <div key={`${rule}-${i}`} className="flex items-center gap-2">
+                <input
+                  value={rule}
+                  onChange={(e) => {
+                    const updated = [...rules];
+                    updated[i] = e.target.value;
+                    setRules(updated);
+                  }}
+                  className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                />
+                <button
+                  onClick={() => setRules(rules.filter((_, idx) => idx !== i))}
+                  className="text-xs text-red-600"
+                >
+                  X
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            <input
+              value={newRule}
+              onChange={(e) => setNewRule(e.target.value)}
+              placeholder="Nueva regla"
+              className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={() => {
+                if (!newRule.trim()) return;
+                setRules([...rules, newRule.trim()]);
+                setNewRule("");
+              }}
+              className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white"
+            >
+              Añadir
+            </button>
+          </div>
+        </div>
+      )}
+
+      {view === "ajustes" && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 text-sm font-medium text-slate-700">
+            Informe de tiempos por operación
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-2 pr-3">Operación</th>
+                  <th className="py-2 pr-3">Realizadas</th>
+                  <th className="py-2 pr-3">Última</th>
+                  <th className="py-2">Media prevista</th>
+                </tr>
+              </thead>
+              <tbody>
+                {operationReport.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 text-sm text-slate-500">
+                      Todavía no hay trabajos cerrados con duración registrada.
+                    </td>
+                  </tr>
+                ) : (
+                  operationReport.map((item) => (
+                    <tr key={item.key} className="border-t border-slate-100">
+                      <td className="py-2 pr-3 font-medium">{item.label}</td>
+                      <td className="py-2 pr-3">{item.count}</td>
+                      <td className="py-2 pr-3">
+                        {formatMinutes(item.lastMinutes)}
+                      </td>
+                      <td className="py-2 font-semibold">
+                        {formatMinutes(item.averageMinutes)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+            {view === "ajustes" && isAdmin && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-2 text-sm font-semibold text-slate-800">
+            Copia de seguridad
+          </div>
+
+          <p className="mb-4 text-sm text-slate-500">
+            Descarga un archivo JSON con técnicos, trabajos, logs, reglas y entradas rápidas.
+          </p>
+
+          <button
+            type="button"
+            onClick={downloadBackup}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+          >
+            Descargar backup
+          </button>
+        </div>
+      )}
+      {view === "ajustes" && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 text-sm font-medium text-slate-700">
+            Horas invertidas por técnico
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-2 pr-3">Técnico</th>
+                  <th className="py-2 pr-3">Resp. día</th>
+                  <th className="py-2 pr-3">Resp. semana</th>
+                  <th className="py-2 pr-3">Resp. mes</th>
+                  <th className="py-2 pr-3">Apoyo día</th>
+                  <th className="py-2 pr-3">Apoyo semana</th>
+                  <th className="py-2">Apoyo mes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {techHoursReport.map((item) => (
+                  <tr key={item.name} className="border-t border-slate-100">
+                    <td className="py-2 pr-3 font-medium">{item.name}</td>
+                    <td className="py-2 pr-3">
+                      {formatMinutes(item.responsable.daily)}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {formatMinutes(item.responsable.weekly)}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {formatMinutes(item.responsable.monthly)}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {formatMinutes(item.apoyo.daily)}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {formatMinutes(item.apoyo.weekly)}
+                    </td>
+                    <td className="py-2">
+                      {formatMinutes(item.apoyo.monthly)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {view === "ajustes" && (
+  <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="mb-4 text-sm font-medium text-slate-700">
+      IA de tiempos reales
+    </div>
+
+    <div className="grid gap-4 xl:grid-cols-2">
+      <div className="rounded-2xl border border-slate-200 p-4">
+        <div className="mb-3 text-sm font-medium text-slate-700">
+          Ranking IA por operación
+        </div>
+
+        <div className="space-y-4 text-sm">
+          <div>
+            <div className="mb-2 font-medium">Alineación</div>
+            <div className="space-y-2">
+              {aiRanking.alineacion.length === 0 ? (
+                <div className="text-slate-500">Sin datos todavía.</div>
+              ) : (
+                aiRanking.alineacion.map((item, index) => (
+                  <div
+                    key={`ia-alineacion-${item.techName}-${index}`}
+                    className="rounded-xl border border-slate-200 px-3 py-2"
+                  >
+                    {index + 1}. {item.techName} · {formatMinutes(item.averageMinutes)} de media · {item.count} trabajos
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 font-medium">Móvil</div>
+            <div className="space-y-2">
+              {aiRanking.movil.length === 0 ? (
+                <div className="text-slate-500">Sin datos todavía.</div>
+              ) : (
+                aiRanking.movil.map((item, index) => (
+                  <div
+                    key={`ia-movil-${item.techName}-${index}`}
+                    className="rounded-xl border border-slate-200 px-3 py-2"
+                  >
+                    {index + 1}. {item.techName} · {formatMinutes(item.averageMinutes)} de media · {item.count} trabajos
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 font-medium">Tacógrafo</div>
+            <div className="space-y-2">
+              {aiRanking.tacografo.length === 0 ? (
+                <div className="text-slate-500">Sin datos todavía.</div>
+              ) : (
+                aiRanking.tacografo.map((item, index) => (
+                  <div
+                    key={`ia-tacografo-${item.techName}-${index}`}
+                    className="rounded-xl border border-slate-200 px-3 py-2"
+                  >
+                    {index + 1}. {item.techName} · {formatMinutes(item.averageMinutes)} de media · {item.count} trabajos
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 p-4">
+        <div className="mb-3 text-sm font-medium text-slate-700">
+          Sugerencias IA
+        </div>
+
+        <div className="space-y-2 text-sm">
+          {aiSuggestions.length === 0 ? (
+            <div className="text-slate-500">
+              Aún no hay suficiente histórico para generar sugerencias.
+            </div>
+          ) : (
+            aiSuggestions.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-violet-900"
+              >
+                {item.text}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+     {view === "ajustes" && (
+  <div className="grid gap-4 md:grid-cols-4">
+    {Object.entries(AREA_META).map(([key, meta]) => {
+      const Icon = meta.icon;
+
+      return (
+        <button
+          key={key}
+          onClick={() => {
+            setDraft({
+              area: key as AreaKey,
+              plate: "",
+              urgent: false,
+              template: "",
+            });
+            setFormOpen(true);
+          }}
+          className={`rounded-3xl border p-5 text-left shadow-sm transition hover:shadow-md ${meta.color}`}
+        >
+          <div className="flex items-center justify-between">
+            <Icon className="h-7 w-7" />
+            <Plus className="h-5 w-5" />
+          </div>
+
+          <div className="mt-4 text-lg font-semibold">
+            + {meta.label}
+          </div>
+
+          <p className="mt-1 text-sm opacity-80">
+            Nueva entrada con matrícula y urgencia
+          </p>
+        </button>
+      );
+    })}
+  </div>
+)}
+
+{arrivedPendingValidationScheduledJobs.length > 0 && (
+  <div className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="text-sm font-semibold text-violet-900">
+        Citas llegadas pendientes de validar
+      </div>
+
+      <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700">
+        {arrivedPendingValidationScheduledJobs.length}
+      </span>
+    </div>
+
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {arrivedPendingValidationScheduledJobs.map((scheduled) => {
+        const relatedJob =
+  scheduled.jobId != null
+    ? jobs.find((job) => job.id === scheduled.jobId)
+    : null;
+
+const secondRelatedJob =
+  scheduled.secondJobId != null
+    ? jobs.find((job) => job.id === scheduled.secondJobId)
+    : null;
+
+const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
+
+        return (
+          <div
+            key={scheduled.id}
+            className="rounded-2xl border border-violet-200 bg-white p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold text-violet-950">
+                  {scheduled.plate || "Sin matrícula"}
+                </div>
+
+                <div className="mt-1 text-sm text-violet-700">
+                  {scheduled.date} · {scheduled.startTime}
+                </div>
+              </div>
+
+              <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-bold uppercase text-violet-700">
+  {phaseLabel}
+</span>
+            </div>
+
+            <div className="mt-2 text-sm text-violet-800">
+              {scheduled.linkedTemplateLabel ||
+                relatedJob?.quickEntryLabel ||
+                "Trabajo pendiente de validar"}
+            </div>
+
+            {relatedJob && (
+              <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs text-violet-900">
+                {relatedJob.assignedNames?.length
+                  ? `Propuesta: ${relatedJob.assignedNames.join(" + ")}`
+                  : "Sin propuesta todavía"}
+              </div>
+            )}
+
+            {secondRelatedJob && (
+  <div className="mt-2 rounded-xl border border-fuchsia-100 bg-fuchsia-50 px-3 py-2 text-xs text-fuchsia-900">
+    <div className="font-semibold">
+      2º trabajo: {getOperationLabel(secondRelatedJob)}
+    </div>
+
+    <div className="mt-1">
+      Estado: {secondRelatedJob.status}
+    </div>
+
+    {secondRelatedJob.assignedNames?.length > 0 && (
+      <div className="mt-1">
+        Propuesta: {secondRelatedJob.assignedNames.join(" + ")}
+      </div>
+    )}
+  </div>
+)}
+
+            <div className="mt-2 text-xs text-slate-500">
+              Cliente: {scheduled.customerName || "Sin nombre"}
+            </div>
+
+            <div className="mt-1 text-xs text-slate-500">
+              Teléfono: {scheduled.customerPhone || "Sin teléfono"}
+            </div>
+
+            <div className="mt-3 text-xs text-violet-700">
+              Autoriza el inicio desde el bloque “Pendientes de validar”.
+              <button
+  type="button"
+  onClick={() => deleteArrivedScheduledJob(scheduled.id)}
+  className="mt-3 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
+>
+  Eliminar cita llegada
+</button>
+                    </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+)}
+
+{(view === "operativo" || view === "operativo2") && dueScheduledJobs.length > 0 && (
+  <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <div>
+        <h2 className="text-sm font-black text-amber-950">
+          Citas pendientes de llegada
+        </h2>
+        <p className="text-[10px] font-medium text-amber-700">
+          Pulsa “Llegó” para pasarlas a operativo.
+        </p>
+      </div>
+
+      <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-black text-amber-800">
+        {dueScheduledJobs.length}
+      </span>
+    </div>
+
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      {dueScheduledJobs.map((job) => {
+        const secondTemplate = job.secondTemplateKey
+          ? quickTemplates.find(
+              (template) => template.key === job.secondTemplateKey
+            )
+          : null;
+
+        const includedTasks = Array.isArray(job.includedTasks)
+          ? job.includedTasks
+          : [];
+
+        const appointmentMs = new Date(
+          `${job.date}T${job.startTime}`
+        ).getTime();
+
+        const isLate =
+          !Number.isNaN(appointmentMs) && appointmentMs <= Date.now();
+
+        return (
+          <div
+            key={job.id}
+            className={`rounded-xl border bg-white p-2 shadow-sm ${
+              isLate ? "border-red-300" : "border-amber-200"
+            }`}
+          >
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <input
+                  value={job.plate}
+                  onChange={(e) =>
+                    updateScheduledJobField(job.id, "plate", e.target.value)
+                  }
+                  placeholder="Matrícula"
+                  className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-sm font-black uppercase tracking-wide text-slate-950"
+                />
+
+                <div className="mt-1 text-xs font-bold text-amber-900">
+                  {job.date} · {job.startTime}
+                </div>
+              </div>
+
+              <span
+                className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
+                  isLate
+                    ? "bg-red-100 text-red-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {isLate ? "Pendiente" : "Próxima"}
+              </span>
+            </div>
+
+            <div className="rounded-xl border border-amber-100 bg-amber-50 px-2 py-2">
+              <div className="text-[9px] font-bold uppercase text-amber-600">
+                Trabajo
+              </div>
+
+              <select
+                value={job.firstTemplateKey || job.templateKey}
+                onChange={(e) =>
+                  updateScheduledJobTemplate(job.id, e.target.value)
+                }
+                className="mt-1 w-full rounded-lg border border-yellow-300 bg-yellow-100 px-2 py-1 text-xs font-bold text-red-700"
+              >
+                {quickTemplates
+                  .slice()
+                  .sort((a, b) =>
+                    a.label.localeCompare(b.label, "es", {
+                      sensitivity: "base",
+                    })
+                  )
+                  .map((template) => (
+                    <option
+                      key={template.key}
+                      value={template.key}
+                      className="bg-yellow-100 font-bold text-red-700"
+                    >
+                      {template.label}
+                    </option>
+                  ))}
+              </select>
+
+              {secondTemplate && (
+                <div className="mt-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-800">
+                  Después: {secondTemplate.label}
+                </div>
+              )}
+
+              {includedTasks.length > 0 && (
+                <div className="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-900">
+                  {includedTasks.map((task) => task.label).join(" + ")}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-2 grid gap-1 text-xs">
+              <input
+                value={job.customerName || ""}
+                onChange={(e) =>
+                  updateScheduledJobField(
+                    job.id,
+                    "customerName",
+                    e.target.value
+                  )
+                }
+                placeholder="Cliente"
+                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+              />
+
+              <input
+                value={job.customerPhone || ""}
+                onChange={(e) =>
+                  updateScheduledJobField(
+                    job.id,
+                    "customerPhone",
+                    e.target.value
+                  )
+                }
+                placeholder="Teléfono"
+                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+              />
+
+              <textarea
+                value={job.notes || ""}
+                onChange={(e) =>
+                  updateScheduledJobField(job.id, "notes", e.target.value)
+                }
+                placeholder="Observaciones"
+                rows={1}
+                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+              />
+
+              {job.urgent && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-black text-red-700">
+                  URGENTE
+                </div>
+              )}
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => confirmScheduledArrival(job)}
+                className="rounded-xl bg-green-600 px-2 py-2 text-xs font-black text-white hover:bg-green-700"
+              >
+                Llegó
+              </button>
+
+              <button
+                type="button"
+                onClick={() => cancelScheduledJob(job.id)}
+                className="rounded-xl border border-red-200 bg-white px-2 py-2 text-xs font-bold text-red-600 hover:bg-red-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+)}
+
+{(view === "operativo" || view === "operativo2") && (
+  <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="text-sm font-medium text-violet-700">
+        ChatGPT externo
+      </div>
+
+      <button
+        type="button"
+        onClick={askExternalAIWorkshop}
+        disabled={externalAILoading}
+        className="rounded-2xl bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+      >
+        {externalAILoading ? "Consultando..." : "Consultar ChatGPT"}
+      </button>
+    </div>
+
+    {externalAIAnswer ? (
+      <pre className="whitespace-pre-wrap rounded-2xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-900">
+        {externalAIAnswer}
+      </pre>
+    ) : (
+      <div className="text-sm text-slate-500">
+        Pulsa el botón para pedir una recomendación externa.
+      </div>
+    )}
+  </div>
+)}
+{(view === "operativo" || view === "operativo2") && (
+<div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+  <div className="mb-3 text-sm font-medium text-slate-700">
+    Alertas IA del taller
+  </div>
+
+  <div className="space-y-2">
+    {workshopAlerts.map((alert) => (
+      <div
+        key={alert.id}
+        className={`rounded-2xl border px-3 py-2 text-sm ${
+          alert.level === "danger"
+            ? "border-red-200 bg-red-50 text-red-800"
+            : alert.level === "warning"
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : "border-sky-200 bg-sky-50 text-sky-800"
+        }`}
+      >
+        {alert.text}
+      </div>
+    ))}
+  </div>
+</div>
+)}
+
 {validationJobs.length > 0 && (
   <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
     <div className="mb-4 flex items-center justify-between">
