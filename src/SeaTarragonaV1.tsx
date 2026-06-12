@@ -7458,186 +7458,67 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 {view !== "operativo2" && validationJobs.length > 0 && (
-  <section className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
-    <div className="mb-4 flex items-center justify-between">
-      <h2 className="text-lg font-semibold text-violet-900">
-        Pendientes de validar
-      </h2>
-
-      <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700">
-        {validationJobs.length}
-      </span>
+  <section className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 shadow-sm">
+    <div className="mb-2 flex items-center gap-2">
+      <span className="text-xs font-semibold text-violet-700 uppercase tracking-wide">Pendientes de validar</span>
+      <span className="rounded-full bg-violet-200 px-1.5 py-0.5 text-[10px] font-bold text-violet-800">{validationJobs.length}</span>
     </div>
-
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="flex flex-col gap-2">
       {validationJobs.map((job) => {
         const Icon = AREA_META[job.area].icon;
         const assignedNames = job.assignedNames ?? [];
-
         return (
-          <div
-            key={job.id}
-            className="rounded-2xl border border-violet-200 bg-white p-4"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`rounded-xl border p-2 ${AREA_META[job.area].color}`}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </div>
-
-                  <div>
-                    <div className="font-semibold text-violet-950">
-                      {job.plate}
-                    </div>
-
-                    <div className="text-sm text-violet-700">
-                      {getOperationLabel(job)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-900">
-                  {getValidationLabel(job)}
-                </div>
-
-                {assignedNames.length > 0 && (
-                  <div className="mt-2 text-xs text-slate-500">
-                    Técnicos propuestos: {assignedNames.join(" + ")}
-                  </div>
-                )}
-
-                {job.reason && (
-                  <div className="mt-2 text-xs text-slate-500">
-                    {job.reason}
-                  </div>
-                )}
-              </div>
-
-              {job.urgent && (
-                <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-700">
-                  URGENTE
-                </span>
-              )}
+          <div key={job.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2">
+            {/* icono + matrícula + operación */}
+            <div className={`rounded-lg border p-1 ${AREA_META[job.area].color}`}>
+              <Icon className="h-3 w-3" />
             </div>
+            <span className="text-xs font-bold text-violet-950">{job.plate}</span>
+            {job.urgent && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">URGENTE</span>}
+            <span className="text-xs text-violet-700">{getOperationLabel(job)}</span>
+            <span className="rounded-lg border border-violet-100 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-800">{getValidationLabel(job)}</span>
+            {assignedNames.length > 0 && (
+              <span className="text-[11px] text-slate-500">{assignedNames.join(" + ")}</span>
+            )}
+            {job.reason && <span className="text-[11px] text-slate-400">{job.reason}</span>}
 
-            <div className="mt-4 grid gap-2">
-  <button
-    type="button"
-    onClick={() => authorizeProposedJob(job.id)}
-    disabled={assignedNames.length === 0}
-    className="rounded-2xl bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-40"
-  >
-    Autorizar inicio
-  </button>
+            {/* selects y botones compactos */}
+            <select
+              value={assignedNames[0] ?? ""}
+              onChange={(e) => { if (e.target.value) updateValidationResponsible(job.id, e.target.value); }}
+              className="rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs"
+            >
+              <option value="">Responsable…</option>
+              {techs
+                .filter((tech) => canSelectTechManuallyForJob(tech, job, jobs, quickTemplates, "responsable") || tech.name === assignedNames[0])
+                .filter((tech) => tech.name === assignedNames[0] || !isTechBlockedByOutsideMaintenance(tech.name))
+                .map((tech) => <option key={tech.name} value={tech.name}>{tech.name}</option>)}
+            </select>
 
-  <select
-    value={assignedNames[0] ?? ""}
-    onChange={(event) => {
-      if (event.target.value) {
-        updateValidationResponsible(job.id, event.target.value);
-      }
-    }}
-    className="rounded-xl border border-violet-200 bg-white px-2 py-2 text-sm"
-  >
-    <option value="">Cambiar responsable propuesto</option>
-    {techs
-      .filter(
-        (tech) =>
-          canSelectTechManuallyForJob(
-  tech,
-  job,
-  jobs,
-  quickTemplates,
-  "responsable"
-) || tech.name === assignedNames[0]
-      )
-      .filter(
-        (tech) =>
-          tech.name === assignedNames[0] ||
-          !isTechBlockedByOutsideMaintenance(tech.name)
-      )
-      .map((tech) => (
-        <option key={tech.name} value={tech.name}>
-          {tech.name}
-        </option>
-      ))}
-  </select>
+            {["camion", "movil"].includes(job.area) && (
+              <>
+                <select
+                  value={assignedNames[1] ?? ""}
+                  onChange={(e) => { if (e.target.value) updateValidationSupport(job.id, e.target.value); }}
+                  className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
+                >
+                  <option value="">Apoyo…</option>
+                  {techs
+                    .filter((tech) => tech.name !== assignedNames[0])
+                    .filter((tech) => canSelectTechManuallyForJob(tech, job, jobs, quickTemplates, "apoyo") || tech.name === assignedNames[1])
+                    .filter((tech) => tech.name === assignedNames[1] || !isTechBlockedByOutsideMaintenance(tech.name))
+                    .map((tech) => <option key={tech.name} value={tech.name}>{tech.name}</option>)}
+                </select>
+                {assignedNames.length > 1 && (
+                  <button type="button" onClick={() => removeValidationSupport(job.id)} className="rounded-lg border border-amber-200 px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-50">✕ apoyo</button>
+                )}
+              </>
+            )}
 
-  {["camion", "movil"].includes(job.area) && (
-    <>
-      <select
-        value={assignedNames[1] ?? ""}
-        onChange={(event) => {
-          if (event.target.value) {
-            updateValidationSupport(job.id, event.target.value);
-          }
-        }}
-        className="rounded-xl border border-amber-200 bg-amber-50 px-2 py-2 text-sm font-medium text-amber-800"
-      >
-        <option value="">Cambiar apoyo propuesto</option>
-        {techs
-          .filter((tech) => tech.name !== assignedNames[0])
-          .filter(
-            (tech) =>
-              canSelectTechManuallyForJob(
-  tech,
-  job,
-  jobs,
-  quickTemplates,
-  "apoyo"
-) || tech.name === assignedNames[1]
-          )
-          .filter(
-            (tech) =>
-              tech.name === assignedNames[1] ||
-              !isTechBlockedByOutsideMaintenance(tech.name)
-          )
-          .map((tech) => (
-            <option key={tech.name} value={tech.name}>
-              {tech.name}
-            </option>
-          ))}
-      </select>
-
-      {assignedNames.length > 1 && (
-        <button
-          type="button"
-          onClick={() => removeValidationSupport(job.id)}
-          className="rounded-2xl border border-amber-200 bg-white px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50"
-        >
-          Quitar apoyo propuesto
-        </button>
-      )}
-    </>
-  )}
-
-<button
-  type="button"
-  onClick={() => rejectProposedJob(job.id)}
-  className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
->
-  Rechazar propuesta
-</button>
-
-<button
-  type="button"
-  onClick={() => sendValidationJobToQueue(job.id)}
-  className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-800 hover:bg-amber-100"
->
-  Mandar a cola
-</button>
-
- <button
-  type="button"
-  onClick={() => deleteValidationJob(job.id)}
-  className="mt-2 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
->
-  Eliminar tarea
-</button>
-</div>
+            <button type="button" onClick={() => authorizeProposedJob(job.id)} disabled={assignedNames.length === 0} className="rounded-lg bg-violet-700 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-800 disabled:opacity-40">✓ Autorizar</button>
+            <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">Cola</button>
+            <button type="button" onClick={() => rejectProposedJob(job.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100">Rechazar</button>
+            <button type="button" onClick={() => deleteValidationJob(job.id)} className="rounded-lg border border-red-300 bg-red-600 px-2 py-1 text-xs font-bold text-white hover:bg-red-700">Eliminar</button>
           </div>
         );
       })}
