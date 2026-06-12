@@ -5434,6 +5434,23 @@ return (
     </button>
   )}
 
+  {canAccessView(userRole, "operativo2") && (
+    <button
+      type="button"
+      onClick={() => {
+        setView("operativo2");
+        void reloadMaintenanceAvailabilityFromBackend();
+      }}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "operativo2"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Operativo 2
+    </button>
+  )}
+
   {canAccessView(userRole, "agenda") && (
     <button
   type="button"
@@ -5639,7 +5656,7 @@ return (
 </div>
       </div>
 
-      {view === "operativo" && (
+      {(view === "operativo" || view === "operativo2") && (
   <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-md">
     <div className="grid gap-4 md:grid-cols-2">
       <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
@@ -6363,7 +6380,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{view === "operativo" && dueScheduledJobs.length > 0 && (
+{(view === "operativo" || view === "operativo2") && dueScheduledJobs.length > 0 && (
   <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
     <div className="mb-2 flex items-center justify-between gap-2">
       <div>
@@ -6544,7 +6561,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{view === "operativo" && (
+{(view === "operativo" || view === "operativo2") && (
   <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
     <div className="mb-3 flex items-center justify-between gap-3">
       <div className="text-sm font-medium text-violet-700">
@@ -6572,7 +6589,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     )}
   </div>
 )}
-{view === "operativo" && (
+{(view === "operativo" || view === "operativo2") && (
 <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
   <div className="mb-3 text-sm font-medium text-slate-700">
     Alertas IA del taller

@@ -2,6 +2,7 @@ export type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 export type AppView =
   | "operativo"
+  | "operativo2"
   | "agenda"
   | "asistencias"
   | "asistencias_config"
@@ -30,6 +31,7 @@ export const DEFAULT_VIEW_BY_ROLE: Record<UserRole, AppView> = {
 export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
   admin: [
     "operativo",
+    "operativo2",
     "agenda",
     "asistencias",
     "asistencias_config",
@@ -43,6 +45,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
   ],
   supervisor: [
     "operativo",
+    "operativo2",
     "agenda",
     "asistencias",
     "entradas",
