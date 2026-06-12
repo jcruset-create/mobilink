@@ -5638,7 +5638,7 @@ return (
       </div>
 
       {view === "operativo" && (
-  <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+  <section className="sticky top-[108px] z-10 rounded-3xl border border-slate-200 bg-white p-4 shadow-md">
     <div className="grid gap-4 md:grid-cols-2">
       <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
         <div className="mb-3 flex items-center justify-between">
