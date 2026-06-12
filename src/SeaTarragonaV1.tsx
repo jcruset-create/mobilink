@@ -7515,7 +7515,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               </>
             )}
 
-            <button type="button" onClick={() => authorizeProposedJob(job.id)} disabled={assignedNames.length === 0} className="rounded-lg bg-violet-700 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-800 disabled:opacity-40">✓ Autorizar</button>
+            <button type="button" onClick={() => authorizeProposedJob(job.id)} disabled={assignedNames.length === 0} className="rounded-lg bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40">✓ Autorizar</button>
             <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">Cola</button>
             <button type="button" onClick={() => rejectProposedJob(job.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100">Rechazar</button>
             <button type="button" onClick={() => deleteValidationJob(job.id)} className="rounded-lg border border-red-300 bg-red-600 px-2 py-1 text-xs font-bold text-white hover:bg-red-700">Eliminar</button>
