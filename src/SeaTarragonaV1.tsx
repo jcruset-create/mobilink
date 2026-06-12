@@ -572,6 +572,9 @@ const [newQuickTemplate, setNewQuickTemplate] =
   useState<NewQuickTemplateV2State>(INITIAL_NEW_QUICK_TEMPLATE_V2);
 
 const [editingQuickTemplateKey, setEditingQuickTemplateKey] = useState<string | null>(null);
+const stickyHeaderRef = useRef<HTMLDivElement>(null);
+const [stickyHeaderHeight, setStickyHeaderHeight] = useState(0);
+
 const [workshopPinModal, setWorkshopPinModal] = useState<{ techName: string } | null>(null);
 const [workshopPinInput, setWorkshopPinInput] = useState("");
 const [workshopPinSaving, setWorkshopPinSaving] = useState(false);
@@ -733,6 +736,19 @@ useEffect(() => {
     cancelled = true;
   };
 }, [isAuthenticated]);
+
+// Measure sticky header height for Entradas rápidas offset in operativo2
+useEffect(() => {
+  const el = stickyHeaderRef.current;
+  if (!el) return;
+  const obs = new ResizeObserver(() => {
+    setStickyHeaderHeight(el.offsetHeight);
+  });
+  obs.observe(el);
+  setStickyHeaderHeight(el.offsetHeight);
+  return () => obs.disconnect();
+}, []);
+
 
 useEffect(() => {
   if (!isAuthenticated || !isSupervisor) return;
@@ -5369,7 +5385,11 @@ if (!isAuthenticated) {
 return (
   <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900">
     <div className="mx-auto w-full max-w-[98vw] space-y-6">
-<div className="sticky top-0 z-30 bg-slate-50 pb-3 pt-3">
+<div
+  ref={stickyHeaderRef}
+  className="sticky top-0 z-30 bg-slate-50 pb-3 pt-3"
+  style={{ contain: "layout" }}
+>
   <div className="flex flex-col gap-3">
 <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
@@ -6614,7 +6634,10 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 </div>
 )}
 
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div
+  className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
+  style={view === "operativo2" ? { position: "sticky", top: stickyHeaderHeight, zIndex: 15 } : undefined}
+>
   <div className="mb-3 flex items-center justify-between gap-3">
     <div className="text-sm font-medium text-slate-700">
       Entradas rápidas
