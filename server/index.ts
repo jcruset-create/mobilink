@@ -583,6 +583,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
     arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
     cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
+    whatsappEnCaminoEnviado: row.whatsappEnCaminoEnviado === true || row.whatsappEnCaminoEnviado === "true",
+    whatsappEnCaminoAt: row.whatsappEnCaminoAt != null ? Number(row.whatsappEnCaminoAt) : null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -710,24 +712,36 @@ async function sendRoadsideTrackingWhatsApp(
   });
 }
 
-async function sendRoadsideStatusWhatsApp(assistance: any, status: string) {
+async function sendRoadsideStatusWhatsApp(
+  assistance: any,
+  status: string,
+  extra?: { etaMinutos?: number | null; etaKm?: string | null; trackingUrl?: string }
+) {
   const customerPhone = String(assistance.customerPhone || "").trim();
-  if (!customerPhone) return;
-  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return;
+  if (!customerPhone) return { status: "skipped", reason: "no_phone" };
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return { status: "skipped", reason: "no_twilio_credentials" };
 
   const name = assistance.customerName || "cliente";
   const tech = assistance.assignedTechName || "nuestro operario";
   const plate = assistance.plate || "tu vehículo";
 
+  let enCaminoMsg = `Hola ${name}, ${tech} ya está en camino hacia tu ubicación para la asistencia de ${plate}.`;
+  if (extra?.etaMinutos != null && extra?.etaKm != null) {
+    enCaminoMsg += ` Tiempo estimado: ${extra.etaMinutos} min · ${extra.etaKm} km.`;
+  }
+  if (extra?.trackingUrl) {
+    enCaminoMsg += ` Siga la asistencia aquí: ${extra.trackingUrl}`;
+  }
+
   const messages: Record<string, string> = {
-    en_camino: `Hola ${name}, ${tech} ya está en camino hacia tu ubicación para la asistencia de ${plate}. Te avisaremos cuando llegue.`,
+    en_camino: enCaminoMsg,
     en_punto: `Hola ${name}, ${tech} ha llegado al punto de asistencia para ${plate}.`,
     finalizada: `Hola ${name}, la asistencia de ${plate} ha finalizado. Gracias por confiar en SEA Tarragona.`,
     llegada_taller: `Hola ${name}, ${plate} ha llegado al taller de SEA Tarragona.`,
   };
 
   const body = messages[status];
-  if (!body) return;
+  if (!body) return { status: "skipped", reason: "no_message_for_status" };
 
   try {
     await twilioClient.messages.create({
@@ -735,8 +749,10 @@ async function sendRoadsideStatusWhatsApp(assistance: any, status: string) {
       to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
       body,
     });
+    return { status: "sent" };
   } catch (err: any) {
     console.error("sendRoadsideStatusWhatsApp error:", err.message);
+    return { status: "error", reason: err.message };
   }
 }
 
@@ -2294,7 +2310,7 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
     }
 
     const current = await db.query(
-      `SELECT id, latitude, longitude, "webfleetVehicleId" FROM roadside_assistances WHERE id = $1 LIMIT 1`,
+      `SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`,
       [id]
     );
     if (current.rows.length === 0) {
@@ -2308,7 +2324,6 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
       return res.status(400).json({ error: "La asistencia no tiene coordenadas de destino" });
     }
 
-    // Obtener posición real de Webfleet si hay vehículo asignado, si no usar posición de prueba
     let origen: { lat: number; lng: number };
     if (row.webfleetVehicleId) {
       origen = await getWebfleetVehiclePosition(row.webfleetVehicleId);
@@ -2335,7 +2350,39 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
       [id, now, eta.minutos, eta.kilometros]
     );
 
-    return res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+    // Enviar WhatsApp si tiene teléfono y no se ha enviado ya
+    let whatsappWarning: string | undefined;
+    if (updated.customerPhone && !row.whatsappEnCaminoEnviado) {
+      try {
+        const trackingUrl = buildRoadsideTrackingUrl(req, updated);
+        const waResult = await sendRoadsideStatusWhatsApp(updated, "en_camino", {
+          etaMinutos: updated.etaMinutos,
+          etaKm: updated.etaKm,
+          trackingUrl,
+        });
+
+        if (waResult?.status === "sent") {
+          await db.query(
+            `UPDATE roadside_assistances
+             SET "whatsappEnCaminoEnviado" = true, "whatsappEnCaminoAt" = $2
+             WHERE id = $1`,
+            [id, now]
+          );
+        } else {
+          whatsappWarning = `WhatsApp no enviado: ${waResult?.reason ?? "desconocido"}`;
+        }
+      } catch (waErr: any) {
+        whatsappWarning = `WhatsApp fallido: ${waErr?.message ?? "error desconocido"}`;
+        console.error("en-camino WhatsApp error:", waErr?.message);
+      }
+    }
+
+    return res.json({
+      ...updated,
+      whatsappWarning: whatsappWarning ?? null,
+    });
   } catch (error: any) {
     const noConfig = error?.message?.includes("no configuradas") || error?.message?.includes("no configurada");
     res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error al actualizar asistencia" });
