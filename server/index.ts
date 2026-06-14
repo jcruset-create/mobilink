@@ -804,25 +804,28 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
   vehicleId: string;
   timestamp?: string;
 }> {
-  const { url, headers } = buildWebfleetRequest("showVehicleReportExtern", { objectno: vehicleId });
+  const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno: vehicleId });
   const response = await fetch(url, { headers });
 
   if (!response.ok) throw new Error(`Webfleet error HTTP ${response.status}`);
 
   const data = await response.json();
+  if (data?.errorCode) throw new Error(`Webfleet error ${data.errorCode}: ${data.errorMsg}`);
+
   const vehicles = Array.isArray(data) ? data : data?.data ?? [];
   const vehicle = vehicles.find((v: any) => v.objectno === vehicleId) ?? vehicles[0];
 
   if (!vehicle) throw new Error(`Vehículo ${vehicleId} no encontrado en Webfleet`);
 
-  const lat = parseFloat(vehicle.latitude ?? vehicle.lat ?? vehicle.Latitude);
-  const lng = parseFloat(vehicle.longitude ?? vehicle.lng ?? vehicle.Longitude);
+  // Webfleet devuelve posición en milésimas de grado
+  const lat = Number(vehicle.latitude_mdeg) / 1_000_000;
+  const lng = Number(vehicle.longitude_mdeg) / 1_000_000;
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     throw new Error(`Posición inválida para vehículo ${vehicleId}`);
   }
 
-  return { lat, lng, vehicleId, timestamp: vehicle.postime ?? vehicle.timestamp ?? undefined };
+  return { lat, lng, vehicleId, timestamp: vehicle.pos_time ?? undefined };
 }
 
 function getJobOperationLabel(job: any) {
@@ -2220,7 +2223,7 @@ app.get("/api/webfleet/debug", async (_req, res) => {
 
 app.get("/api/webfleet/vehicles", async (_req, res) => {
   try {
-    const { url, headers } = buildWebfleetRequest("showVehicleReportExtern");
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
     if (!response.ok) return res.status(502).json({ error: `Webfleet error HTTP ${response.status}` });
 
@@ -2232,9 +2235,10 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
       vehicles.map((v: any) => ({
         objectno: v.objectno,
         objectname: v.objectname ?? v.objectno,
-        lat: parseFloat(v.latitude ?? v.lat ?? "0"),
-        lng: parseFloat(v.longitude ?? v.lng ?? "0"),
-        timestamp: v.postime ?? v.timestamp ?? null,
+        lat: Number(v.latitude_mdeg) / 1_000_000,
+        lng: Number(v.longitude_mdeg) / 1_000_000,
+        postext: v.postext_short ?? v.postext ?? null,
+        timestamp: v.pos_time ?? null,
       }))
     );
   } catch (error: any) {
