@@ -2214,6 +2214,50 @@ app.post("/api/roadside-eta", async (req, res) => {
   }
 });
 
+app.get("/api/webfleet/vehicles", async (_req, res) => {
+  try {
+    const account = process.env.WEBFLEET_ACCOUNT;
+    const username = process.env.WEBFLEET_USERNAME;
+    const password = process.env.WEBFLEET_PASSWORD;
+    const apiKey = process.env.WEBFLEET_API_KEY;
+    const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
+
+    if (!account || !username || !password) {
+      return res.status(503).json({ error: "Variables de entorno Webfleet no configuradas" });
+    }
+
+    const params = new URLSearchParams({
+      account,
+      username,
+      password,
+      action: "showVehicleReportExtern",
+      outputformat: "json",
+      useISO8601: "true",
+    });
+    if (apiKey) params.set("apikey", apiKey);
+
+    const response = await fetch(`${baseUrl}?${params.toString()}`);
+    if (!response.ok) {
+      return res.status(502).json({ error: `Webfleet error HTTP ${response.status}` });
+    }
+
+    const data = await response.json();
+    const vehicles = Array.isArray(data) ? data : data?.data ?? [];
+
+    res.json(
+      vehicles.map((v: any) => ({
+        objectno: v.objectno,
+        objectname: v.objectname ?? v.objectno,
+        lat: parseFloat(v.latitude ?? v.lat ?? "0"),
+        lng: parseFloat(v.longitude ?? v.lng ?? "0"),
+        timestamp: v.postime ?? v.timestamp ?? null,
+      }))
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Error listando vehículos Webfleet" });
+  }
+});
+
 app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
   try {
     const { vehicleId } = req.params;
