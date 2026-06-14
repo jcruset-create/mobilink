@@ -2205,13 +2205,13 @@ app.post("/api/roadside-eta", async (req, res) => {
 
 app.get("/api/webfleet/debug", async (_req, res) => {
   try {
-    const { url, headers } = buildWebfleetRequest("showVehicleReportExtern");
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
     const text = await response.text();
     res.json({
       status: response.status,
       authHeader: headers.Authorization ? "Basic ***" : "none",
-      rawResponse: text.slice(0, 2000),
+      rawResponse: text.slice(0, 3000),
     });
   } catch (error: any) {
     res.status(500).json({ error: error?.message });
