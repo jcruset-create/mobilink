@@ -842,6 +842,18 @@ export default function RoadsideAssistanceView({
                       </div>
                     </div>
 
+                    {assistance.status === "en_camino" && (
+                      <div className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800">
+                        <span>🚐</span>
+                        <span>
+                          En camino
+                          {assistance.etaMinutos != null && assistance.etaKm != null
+                            ? ` — ETA: ${assistance.etaMinutos} min · ${assistance.etaKm} km`
+                            : ""}
+                        </span>
+                      </div>
+                    )}
+
                     <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500">
                       <div>Salida: {formatTime(assistance.departedAtMs)}</div>
                       <div>Punto: {formatTime(assistance.arrivedAtPointMs)}</div>
