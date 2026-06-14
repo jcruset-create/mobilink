@@ -2214,6 +2214,47 @@ app.post("/api/roadside-eta", async (req, res) => {
   }
 });
 
+app.get("/api/webfleet/debug", async (_req, res) => {
+  try {
+    const account = process.env.WEBFLEET_ACCOUNT;
+    const username = process.env.WEBFLEET_USERNAME;
+    const password = process.env.WEBFLEET_PASSWORD;
+    const apiKey = process.env.WEBFLEET_API_KEY;
+    const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
+
+    const params = new URLSearchParams({
+      account: account ?? "(no configurado)",
+      username: username ?? "(no configurado)",
+      password: password ? "***" : "(no configurado)",
+      action: "showVehicleReportExtern",
+      outputformat: "json",
+      useISO8601: "true",
+    });
+    if (apiKey) params.set("apikey", "***");
+
+    const realParams = new URLSearchParams({
+      account: account ?? "",
+      username: username ?? "",
+      password: password ?? "",
+      action: "showVehicleReportExtern",
+      outputformat: "json",
+      useISO8601: "true",
+    });
+    if (apiKey) realParams.set("apikey", apiKey);
+
+    const response = await fetch(`${baseUrl}?${realParams.toString()}`);
+    const text = await response.text();
+
+    res.json({
+      status: response.status,
+      paramsUsed: Object.fromEntries(params),
+      rawResponse: text.slice(0, 2000),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message });
+  }
+});
+
 app.get("/api/webfleet/vehicles", async (_req, res) => {
   try {
     const account = process.env.WEBFLEET_ACCOUNT;
