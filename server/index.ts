@@ -776,6 +776,66 @@ async function calcularETA(
   return { minutos, kilometros };
 }
 
+async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
+  lat: number;
+  lng: number;
+  vehicleId: string;
+  timestamp?: string;
+}> {
+  const account = process.env.WEBFLEET_ACCOUNT;
+  const username = process.env.WEBFLEET_USERNAME;
+  const password = process.env.WEBFLEET_PASSWORD;
+  const apiKey = process.env.WEBFLEET_API_KEY;
+  const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
+
+  if (!account || !username || !password) {
+    throw new Error("Variables de entorno Webfleet no configuradas (WEBFLEET_ACCOUNT, WEBFLEET_USERNAME, WEBFLEET_PASSWORD)");
+  }
+
+  const params = new URLSearchParams({
+    account,
+    username,
+    password,
+    action: "showVehicleReportExtern",
+    objectno: vehicleId,
+    outputformat: "json",
+    useISO8601: "true",
+  });
+
+  if (apiKey) params.set("apikey", apiKey);
+
+  const url = `${baseUrl}?${params.toString()}`;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Webfleet error HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  // La API devuelve un array de vehículos
+  const vehicles = Array.isArray(data) ? data : data?.data ?? [];
+  const vehicle = vehicles.find((v: any) => v.objectno === vehicleId) ?? vehicles[0];
+
+  if (!vehicle) {
+    throw new Error(`Vehículo ${vehicleId} no encontrado en Webfleet`);
+  }
+
+  const lat = parseFloat(vehicle.latitude ?? vehicle.lat ?? vehicle.Latitude);
+  const lng = parseFloat(vehicle.longitude ?? vehicle.lng ?? vehicle.Longitude);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new Error(`Posición inválida para vehículo ${vehicleId}`);
+  }
+
+  return {
+    lat,
+    lng,
+    vehicleId,
+    timestamp: vehicle.postime ?? vehicle.timestamp ?? undefined,
+  };
+}
+
 function getJobOperationLabel(job: any) {
   return (
     job.quickEntryLabel ||
@@ -2154,6 +2214,17 @@ app.post("/api/roadside-eta", async (req, res) => {
   }
 });
 
+app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
+  try {
+    const { vehicleId } = req.params;
+    const position = await getWebfleetVehiclePosition(vehicleId);
+    res.json(position);
+  } catch (error: any) {
+    const noConfig = error?.message?.includes("no configuradas");
+    res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error obteniendo posición Webfleet" });
+  }
+});
+
 app.post("/api/asistencias/:id/en-camino", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -2162,7 +2233,7 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
     }
 
     const current = await db.query(
-      `SELECT id, latitude, longitude FROM roadside_assistances WHERE id = $1 LIMIT 1`,
+      `SELECT id, latitude, longitude, "webfleetVehicleId" FROM roadside_assistances WHERE id = $1 LIMIT 1`,
       [id]
     );
     if (current.rows.length === 0) {
@@ -2176,7 +2247,14 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
       return res.status(400).json({ error: "La asistencia no tiene coordenadas de destino" });
     }
 
-    const origen = { lat: 41.1452, lng: 1.3987 };
+    // Obtener posición real de Webfleet si hay vehículo asignado, si no usar posición de prueba
+    let origen: { lat: number; lng: number };
+    if (row.webfleetVehicleId) {
+      origen = await getWebfleetVehiclePosition(row.webfleetVehicleId);
+    } else {
+      origen = { lat: 41.1452, lng: 1.3987 };
+    }
+
     const destino = { lat: destLat, lng: destLng };
     const eta = await calcularETA(origen, destino);
     const now = Date.now();
@@ -2198,8 +2276,8 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
 
     return res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
   } catch (error: any) {
-    const noKey = error?.message?.includes("no configurada");
-    res.status(noKey ? 503 : 500).json({ error: error?.message || "Error al actualizar asistencia" });
+    const noConfig = error?.message?.includes("no configuradas") || error?.message?.includes("no configurada");
+    res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error al actualizar asistencia" });
   }
 });
 
