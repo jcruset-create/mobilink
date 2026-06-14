@@ -734,6 +734,46 @@ async function sendRoadsideStatusWhatsApp(assistance: any, status: string) {
   }
 }
 
+async function calcularETA(
+  origen: { lat: number; lng: number },
+  destino: { lat: number; lng: number }
+): Promise<{ minutos: number; kilometros: string }> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_MAPS_API_KEY no configurada");
+
+  const url = "https://routes.googleapis.com/directions/v2:computeRoutes";
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
+    },
+    body: JSON.stringify({
+      origin: { location: { latLng: { latitude: origen.lat, longitude: origen.lng } } },
+      destination: { location: { latLng: { latitude: destino.lat, longitude: destino.lng } } },
+      travelMode: "DRIVE",
+      routingPreference: "TRAFFIC_AWARE",
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Error Google Routes API: ${response.status} ${text}`);
+  }
+
+  const data = await response.json();
+  const ruta = data.routes?.[0];
+  if (!ruta) throw new Error("No se encontró ruta entre los puntos indicados");
+
+  const segundos = parseInt(String(ruta.duration).replace("s", ""), 10);
+  const minutos = Math.round(segundos / 60);
+  const kilometros = (ruta.distanceMeters / 1000).toFixed(1);
+
+  return { minutos, kilometros };
+}
+
 function getJobOperationLabel(job: any) {
   return (
     job.quickEntryLabel ||
@@ -2076,6 +2116,30 @@ app.delete(
     }
   }
 );
+
+/* ── ETA ─────────────────────────────────────────────────────────────── */
+app.post("/api/roadside-eta", async (req, res) => {
+  try {
+    const { origen, destino } = req.body as {
+      origen?: { lat: number; lng: number };
+      destino?: { lat: number; lng: number };
+    };
+
+    if (
+      !origen || typeof origen.lat !== "number" || typeof origen.lng !== "number" ||
+      !destino || typeof destino.lat !== "number" || typeof destino.lng !== "number"
+    ) {
+      res.status(400).json({ error: "Se requieren origen.lat, origen.lng, destino.lat, destino.lng" });
+      return;
+    }
+
+    const result = await calcularETA(origen, destino);
+    res.json(result);
+  } catch (error: any) {
+    const noKey = error?.message?.includes("no configurada");
+    res.status(noKey ? 503 : 500).json({ error: error?.message || "Error calculando ETA" });
+  }
+});
 
 app.get("/api/roadside-operator/techs", async (_req, res) => {
   try {
