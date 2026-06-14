@@ -21,6 +21,7 @@ const INITIAL_VEHICLE_DRAFT: RoadsideVehicleDraft = {
   name: "",
   plate: "",
   webfleetVehicleId: "",
+  base: "",
   notes: "",
   active: true,
 };
@@ -30,6 +31,7 @@ function buildVehicleDraft(vehicle: RoadsideVehicle): RoadsideVehicleDraft {
     name: vehicle.name || "",
     plate: vehicle.plate || "",
     webfleetVehicleId: vehicle.webfleetVehicleId || "",
+    base: vehicle.base || "",
     notes: vehicle.notes || "",
     active: vehicle.active !== false,
   };
@@ -369,7 +371,19 @@ export default function RoadsideAssistanceAdminView({
                     webfleetVehicleId: event.target.value,
                   }))
                 }
-                placeholder="ID Webfleet"
+                placeholder="ID Webfleet (ej: 012)"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+              />
+
+              <input
+                value={vehicleDraft.base}
+                onChange={(event) =>
+                  setVehicleDraft((prev) => ({
+                    ...prev,
+                    base: event.target.value,
+                  }))
+                }
+                placeholder="Base (ej: Tarragona, Reus...)"
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
               />
 
@@ -454,6 +468,11 @@ export default function RoadsideAssistanceAdminView({
                         {vehicle.webfleetVehicleId && (
                           <div className="mt-0.5 truncate text-xs font-bold text-slate-500">
                             Webfleet: {vehicle.webfleetVehicleId}
+                          </div>
+                        )}
+                        {vehicle.base && (
+                          <div className="mt-0.5 truncate text-xs font-semibold text-slate-400">
+                            Base: {vehicle.base}
                           </div>
                         )}
                       </div>

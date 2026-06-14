@@ -17,6 +17,7 @@ export type RoadsideVehicle = {
   name: string;
   plate?: string | null;
   webfleetVehicleId?: string | null;
+  base?: string | null;
   notes?: string | null;
   active: boolean;
   createdAtMs: number;
@@ -27,6 +28,7 @@ export type RoadsideVehicleDraft = {
   name: string;
   plate: string;
   webfleetVehicleId: string;
+  base: string;
   notes: string;
   active: boolean;
 };
