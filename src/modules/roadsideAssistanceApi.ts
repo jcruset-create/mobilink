@@ -266,6 +266,38 @@ export async function sendRoadsideTrackingWhatsappInBackend(id: number) {
   };
 }
 
+export async function loadWebfleetVehiclesFromBackend(): Promise<
+  { id: string; name: string }[]
+> {
+  const response = await fetchWithTimeout(`${API_BASE}/api/webfleet/vehicles`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  if (!Array.isArray(data)) return [];
+  return data.map((v: any) => ({
+    id: String(v.objectno ?? ""),
+    name: [v.objectno, v.objectname].filter(Boolean).join(" — "),
+  }));
+}
+
+export async function enCaminoRoadsideAssistanceInBackend(
+  id: number
+): Promise<RoadsideAssistance> {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/asistencias/${id}/en-camino`,
+    {
+      method: "POST",
+      headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || "No se pudo calcular ETA.");
+  }
+
+  return (await response.json()) as RoadsideAssistance;
+}
+
 export async function loadRoadsideTrackingFromBackend(token: string) {
   const response = await fetchWithTimeout(
     `${API_BASE}/api/roadside-tracking/${encodeURIComponent(token)}`,

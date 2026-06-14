@@ -60,6 +60,8 @@ export type RoadsideAssistance = {
   createdAtMs: number;
   assignedAtMs?: number | null;
   departedAtMs?: number | null;
+  etaMinutos?: number | null;
+  etaKm?: string | null;
   arrivedAtPointMs?: number | null;
   finishedAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;

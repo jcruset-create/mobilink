@@ -156,10 +156,13 @@ function getVehicleLabel(vehicle: RoadsideVehicle) {
   return [vehicle.name, vehicle.plate].filter(Boolean).join(" - ");
 }
 
+type WebfleetVehicle = { id: string; name: string };
+
 type Props = {
   assistances: RoadsideAssistance[];
   techs: Tech[];
   vehicles: RoadsideVehicle[];
+  webfleetVehicles: WebfleetVehicle[];
   loading: boolean;
   error: string;
   onBack: () => void;
@@ -171,6 +174,7 @@ type Props = {
     draft: RoadsideAssistanceEditDraft
   ) => Promise<void>;
   onSendTrackingWhatsapp: (assistance: RoadsideAssistance) => Promise<void>;
+  onEnCamino: (assistance: RoadsideAssistance) => Promise<void>;
   onStatusChange: (
     assistance: RoadsideAssistance,
     status: RoadsideAssistanceStatus
@@ -181,6 +185,7 @@ export default function RoadsideAssistanceView({
   assistances,
   techs,
   vehicles,
+  webfleetVehicles,
   loading,
   error,
   onBack,
@@ -189,6 +194,7 @@ export default function RoadsideAssistanceView({
   onCreate,
   onUpdate,
   onSendTrackingWhatsapp,
+  onEnCamino,
   onStatusChange,
 }: Props) {
   const [draft, setDraft] = useState<RoadsideAssistanceDraft>(INITIAL_DRAFT);
@@ -290,6 +296,27 @@ export default function RoadsideAssistanceView({
 
     try {
       await onStatusChange(assistance, status);
+    } finally {
+      setChangingId(null);
+    }
+  }
+
+  async function handleEnCamino(assistance: RoadsideAssistance) {
+    if (!assistance.webfleetVehicleId) {
+      setLocalError(
+        "Asigna una furgoneta Webfleet antes de marcar como En camino."
+      );
+      return;
+    }
+
+    setChangingId(assistance.id);
+
+    try {
+      await onEnCamino(assistance);
+    } catch (err) {
+      setLocalError(
+        err instanceof Error ? err.message : "Error al calcular ETA."
+      );
     } finally {
       setChangingId(null);
     }
@@ -604,6 +631,31 @@ export default function RoadsideAssistanceView({
                 </label>
               </div>
 
+              {webfleetVehicles.length > 0 && (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Furgoneta Webfleet
+                  </span>
+                  <select
+                    value={draft.webfleetVehicleId}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        webfleetVehicleId: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    <option value="">Sin asignar</option>
+                    {webfleetVehicles.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
               <div className="grid grid-cols-2 gap-2">
                 {(["normal", "urgente"] as const).map((priority) => (
                   <button
@@ -772,6 +824,11 @@ export default function RoadsideAssistanceView({
                           <div className="truncate font-bold text-slate-700">
                             {assistance.assignedVehicleName || "-"}
                           </div>
+                          {assistance.webfleetVehicleId && (
+                            <div className="mt-0.5 truncate text-[10px] font-bold text-blue-600">
+                              Webfleet: {assistance.webfleetVehicleId}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -847,17 +904,37 @@ export default function RoadsideAssistanceView({
                       </button>
 
                       {nextStatus && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleStatusChange(assistance, nextStatus)
-                          }
-                          disabled={changingId === assistance.id}
-                          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
-                        >
-                          <ActionIcon className="h-4 w-4" />
-                          {getActionLabel(assistance.status)}
-                        </button>
+                        assistance.status === "asignada" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleEnCamino(assistance)}
+                            disabled={
+                              changingId === assistance.id ||
+                              !assistance.webfleetVehicleId
+                            }
+                            title={
+                              !assistance.webfleetVehicleId
+                                ? "Asigna una furgoneta Webfleet primero"
+                                : undefined
+                            }
+                            className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-3 py-2 text-sm font-black text-white hover:bg-blue-800 disabled:opacity-50"
+                          >
+                            <ActionIcon className="h-4 w-4" />
+                            En camino + ETA
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleStatusChange(assistance, nextStatus)
+                            }
+                            disabled={changingId === assistance.id}
+                            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                          >
+                            <ActionIcon className="h-4 w-4" />
+                            {getActionLabel(assistance.status)}
+                          </button>
+                        )
                       )}
 
                       <button
@@ -1167,18 +1244,39 @@ export default function RoadsideAssistanceView({
 
                 <label className="block md:col-span-2">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
-                    Vehiculo Webfleet
+                    Furgoneta Webfleet
                   </span>
-                  <input
-                    value={editDraft.webfleetVehicleId}
-                    onChange={(event) =>
-                      setEditDraft((prev) => ({
-                        ...prev,
-                        webfleetVehicleId: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
-                  />
+                  {webfleetVehicles.length > 0 ? (
+                    <select
+                      value={editDraft.webfleetVehicleId}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({
+                          ...prev,
+                          webfleetVehicleId: event.target.value,
+                        }))
+                      }
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    >
+                      <option value="">Sin asignar</option>
+                      {webfleetVehicles.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={editDraft.webfleetVehicleId}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({
+                          ...prev,
+                          webfleetVehicleId: event.target.value,
+                        }))
+                      }
+                      placeholder="ID Webfleet"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    />
+                  )}
                 </label>
 
                 <label className="block md:col-span-2">

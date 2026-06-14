@@ -224,9 +224,11 @@ import {
   createRoadsideVehicleInBackend,
   deactivateRoadsideVehicleInBackend,
   deleteRoadsideOperatorCodeInBackend,
+  enCaminoRoadsideAssistanceInBackend,
   loadRoadsideAssistancesFromBackend,
   loadRoadsideOperatorCodesFromBackend,
   loadRoadsideVehiclesFromBackend,
+  loadWebfleetVehiclesFromBackend,
   sendRoadsideTrackingWhatsappInBackend,
   updateRoadsideAssistanceInBackend,
   updateRoadsideAssistanceStatusInBackend,
@@ -374,6 +376,10 @@ useEffect(() => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoaded, setJobsLoaded] = useState(false);
   const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
+  const [webfleetVehicles, setWebfleetVehicles] = useState<
+    { id: string; name: string }[]
+  >([]);
+
   const [roadsideAssistances, setRoadsideAssistances] = useState<
     RoadsideAssistance[]
   >([]);
@@ -745,6 +751,7 @@ useEffect(() => {
   void reloadRoadsideAssistancesFromBackend();
   void reloadRoadsideVehiclesFromBackend();
   void reloadRoadsideOperatorCodesFromBackend();
+  void loadWebfleetVehiclesFromBackend().then(setWebfleetVehicles);
 }, [isAuthenticated, isSupervisor]);
 
 useEffect(() => {
@@ -1859,6 +1866,18 @@ async function updateRoadsideAssistanceStatus(
 
   appendLog(
     `Asistencia carretera ${updated.id}: estado ${updated.status}.`
+  );
+}
+
+async function enCaminoRoadsideAssistance(assistance: RoadsideAssistance) {
+  const updated = await enCaminoRoadsideAssistanceInBackend(assistance.id);
+
+  setRoadsideAssistances((prev) =>
+    prev.map((item) => (item.id === updated.id ? updated : item))
+  );
+
+  appendLog(
+    `Asistencia ${updated.id} en camino. ETA: ${updated.etaMinutos ?? "?"} min, ${updated.etaKm ?? "?"} km.`
   );
 }
 
@@ -5163,7 +5182,9 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
       onRefresh={() => {
         void reloadRoadsideAssistancesFromBackend();
         void reloadRoadsideVehiclesFromBackend();
+        void loadWebfleetVehiclesFromBackend().then(setWebfleetVehicles);
       }}
+      webfleetVehicles={webfleetVehicles}
       onOpenSettings={
         isAdmin
           ? () => {
@@ -5176,6 +5197,7 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
       onCreate={createRoadsideAssistance}
       onUpdate={updateRoadsideAssistance}
       onSendTrackingWhatsapp={sendRoadsideTrackingWhatsapp}
+      onEnCamino={enCaminoRoadsideAssistance}
       onStatusChange={updateRoadsideAssistanceStatus}
     />
   );
