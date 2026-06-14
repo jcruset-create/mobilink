@@ -787,7 +787,7 @@ function buildWebfleetRequest(action: string, extra: Record<string, string> = {}
     throw new Error("Variables de entorno Webfleet no configuradas (WEBFLEET_ACCOUNT, WEBFLEET_USERNAME, WEBFLEET_PASSWORD)");
   }
 
-  const params = new URLSearchParams({ account, action, outputformat: "json", useISO8601: "true", ...extra });
+  const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
   if (apiKey) params.set("apikey", apiKey);
 
   const credentials = Buffer.from(`${username}:${password}`).toString("base64");
