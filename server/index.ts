@@ -575,14 +575,14 @@ function normalizeRoadsideAssistanceRow(row: any) {
     trackingWhatsappSid: row.trackingWhatsappSid ?? null,
     notes: row.notes ?? null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
-    assignedAtMs: row.assignedAtMs ?? null,
-    departedAtMs: row.departedAtMs ?? null,
+    assignedAtMs: row.assignedAtMs != null ? Number(row.assignedAtMs) : null,
+    departedAtMs: row.departedAtMs != null ? Number(row.departedAtMs) : null,
     etaMinutos: row.etaMinutos != null ? Number(row.etaMinutos) : null,
     etaKm: row.etaKm ?? null,
-    arrivedAtPointMs: row.arrivedAtPointMs ?? null,
-    finishedAtMs: row.finishedAtMs ?? null,
-    arrivedAtWorkshopMs: row.arrivedAtWorkshopMs ?? null,
-    cancelledAtMs: row.cancelledAtMs ?? null,
+    arrivedAtPointMs: row.arrivedAtPointMs != null ? Number(row.arrivedAtPointMs) : null,
+    finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
+    cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -2079,8 +2079,17 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
     res.json({
       assistance,
-      events: eventsResult.rows,
-      files: filesResult.rows,
+      events: eventsResult.rows.map((e: any) => ({
+        status: e.status,
+        createdAtMs: Number(e.createdAtMs),
+      })),
+      files: filesResult.rows.map((f: any) => ({
+        id: Number(f.id),
+        kind: f.kind,
+        url: f.url,
+        fileName: f.fileName ?? null,
+        createdAtMs: Number(f.createdAtMs),
+      })),
       expired:
         assistance.status === "llegada_taller" ||
         assistance.status === "cancelada",

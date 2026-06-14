@@ -271,6 +271,27 @@ export default function RoadsideTrackingPage() {
           </div>
         </section>
 
+        {/* ETA banner */}
+        {assistance.status === "en_camino" && (
+          <section className="rounded-lg border border-blue-200 bg-blue-600 p-5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">🚐</span>
+              <div className="text-white">
+                <div className="text-lg font-black">El técnico está en camino</div>
+                {assistance.etaMinutos != null && assistance.etaKm != null ? (
+                  <div className="mt-1 text-sm font-semibold text-blue-100">
+                    Tiempo estimado de llegada: <span className="font-black text-white">{assistance.etaMinutos} min · {assistance.etaKm} km</span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm font-semibold text-blue-100">
+                    En camino hacia tu ubicación
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Progress steps */}
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-3 md:grid-cols-5">
