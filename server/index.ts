@@ -2118,6 +2118,17 @@ app.delete(
 );
 
 /* ── ETA ─────────────────────────────────────────────────────────────── */
+app.post("/api/maps/eta", async (req, res) => {
+  try {
+    const { origen, destino } = req.body;
+    const eta = await calcularETA(origen, destino);
+    res.json({ ok: true, eta });
+  } catch (error) {
+    console.error("Error ETA:", error);
+    res.status(500).json({ ok: false, error: "No se pudo calcular el ETA" });
+  }
+});
+
 app.post("/api/roadside-eta", async (req, res) => {
   try {
     const { origen, destino } = req.body as {
