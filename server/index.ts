@@ -776,12 +776,7 @@ async function calcularETA(
   return { minutos, kilometros };
 }
 
-async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
-  lat: number;
-  lng: number;
-  vehicleId: string;
-  timestamp?: string;
-}> {
+function buildWebfleetRequest(action: string, extra: Record<string, string> = {}): { url: string; headers: Record<string, string> } {
   const account = process.env.WEBFLEET_ACCOUNT;
   const username = process.env.WEBFLEET_USERNAME;
   const password = process.env.WEBFLEET_PASSWORD;
@@ -792,34 +787,33 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
     throw new Error("Variables de entorno Webfleet no configuradas (WEBFLEET_ACCOUNT, WEBFLEET_USERNAME, WEBFLEET_PASSWORD)");
   }
 
-  const params = new URLSearchParams({
-    account,
-    username,
-    password,
-    action: "showVehicleReportExtern",
-    objectno: vehicleId,
-    outputformat: "json",
-    useISO8601: "true",
-  });
-
+  const params = new URLSearchParams({ account, action, outputformat: "json", useISO8601: "true", ...extra });
   if (apiKey) params.set("apikey", apiKey);
 
-  const url = `${baseUrl}?${params.toString()}`;
-  const response = await fetch(url);
+  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
 
-  if (!response.ok) {
-    throw new Error(`Webfleet error HTTP ${response.status}`);
-  }
+  return {
+    url: `${baseUrl}?${params.toString()}`,
+    headers: { Authorization: `Basic ${credentials}` },
+  };
+}
+
+async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
+  lat: number;
+  lng: number;
+  vehicleId: string;
+  timestamp?: string;
+}> {
+  const { url, headers } = buildWebfleetRequest("showVehicleReportExtern", { objectno: vehicleId });
+  const response = await fetch(url, { headers });
+
+  if (!response.ok) throw new Error(`Webfleet error HTTP ${response.status}`);
 
   const data = await response.json();
-
-  // La API devuelve un array de vehículos
   const vehicles = Array.isArray(data) ? data : data?.data ?? [];
   const vehicle = vehicles.find((v: any) => v.objectno === vehicleId) ?? vehicles[0];
 
-  if (!vehicle) {
-    throw new Error(`Vehículo ${vehicleId} no encontrado en Webfleet`);
-  }
+  if (!vehicle) throw new Error(`Vehículo ${vehicleId} no encontrado en Webfleet`);
 
   const lat = parseFloat(vehicle.latitude ?? vehicle.lat ?? vehicle.Latitude);
   const lng = parseFloat(vehicle.longitude ?? vehicle.lng ?? vehicle.Longitude);
@@ -828,12 +822,7 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
     throw new Error(`Posición inválida para vehículo ${vehicleId}`);
   }
 
-  return {
-    lat,
-    lng,
-    vehicleId,
-    timestamp: vehicle.postime ?? vehicle.timestamp ?? undefined,
-  };
+  return { lat, lng, vehicleId, timestamp: vehicle.postime ?? vehicle.timestamp ?? undefined };
 }
 
 function getJobOperationLabel(job: any) {
@@ -2216,38 +2205,12 @@ app.post("/api/roadside-eta", async (req, res) => {
 
 app.get("/api/webfleet/debug", async (_req, res) => {
   try {
-    const account = process.env.WEBFLEET_ACCOUNT;
-    const username = process.env.WEBFLEET_USERNAME;
-    const password = process.env.WEBFLEET_PASSWORD;
-    const apiKey = process.env.WEBFLEET_API_KEY;
-    const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
-
-    const params = new URLSearchParams({
-      account: account ?? "(no configurado)",
-      username: username ?? "(no configurado)",
-      password: password ? "***" : "(no configurado)",
-      action: "showVehicleReportExtern",
-      outputformat: "json",
-      useISO8601: "true",
-    });
-    if (apiKey) params.set("apikey", "***");
-
-    const realParams = new URLSearchParams({
-      account: account ?? "",
-      username: username ?? "",
-      password: password ?? "",
-      action: "showVehicleReportExtern",
-      outputformat: "json",
-      useISO8601: "true",
-    });
-    if (apiKey) realParams.set("apikey", apiKey);
-
-    const response = await fetch(`${baseUrl}?${realParams.toString()}`);
+    const { url, headers } = buildWebfleetRequest("showVehicleReportExtern");
+    const response = await fetch(url, { headers });
     const text = await response.text();
-
     res.json({
       status: response.status,
-      paramsUsed: Object.fromEntries(params),
+      authHeader: headers.Authorization ? "Basic ***" : "none",
       rawResponse: text.slice(0, 2000),
     });
   } catch (error: any) {
@@ -2257,34 +2220,14 @@ app.get("/api/webfleet/debug", async (_req, res) => {
 
 app.get("/api/webfleet/vehicles", async (_req, res) => {
   try {
-    const account = process.env.WEBFLEET_ACCOUNT;
-    const username = process.env.WEBFLEET_USERNAME;
-    const password = process.env.WEBFLEET_PASSWORD;
-    const apiKey = process.env.WEBFLEET_API_KEY;
-    const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
-
-    if (!account || !username || !password) {
-      return res.status(503).json({ error: "Variables de entorno Webfleet no configuradas" });
-    }
-
-    const params = new URLSearchParams({
-      account,
-      username,
-      password,
-      action: "showVehicleReportExtern",
-      outputformat: "json",
-      useISO8601: "true",
-    });
-    if (apiKey) params.set("apikey", apiKey);
-
-    const response = await fetch(`${baseUrl}?${params.toString()}`);
-    if (!response.ok) {
-      return res.status(502).json({ error: `Webfleet error HTTP ${response.status}` });
-    }
+    const { url, headers } = buildWebfleetRequest("showVehicleReportExtern");
+    const response = await fetch(url, { headers });
+    if (!response.ok) return res.status(502).json({ error: `Webfleet error HTTP ${response.status}` });
 
     const data = await response.json();
-    const vehicles = Array.isArray(data) ? data : data?.data ?? [];
+    if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
+    const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     res.json(
       vehicles.map((v: any) => ({
         objectno: v.objectno,
