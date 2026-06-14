@@ -595,6 +595,9 @@ function normalizeRoadsideVehicleRow(row: any) {
     plate: row.plate ?? null,
     webfleetVehicleId: row.webfleetVehicleId ?? null,
     base: row.base ?? null,
+    marca: row.marca ?? null,
+    modelo: row.modelo ?? null,
+    esTaller: row.esTaller === true || row.esTaller === "true",
     notes: row.notes ?? null,
     active: row.active !== false,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
@@ -1880,12 +1883,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
           plate,
           "webfleetVehicleId",
           base,
+          marca,
+          modelo,
+          "esTaller",
           notes,
           active,
           "createdAtMs",
           "updatedAtMs"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
         RETURNING *
       `,
       [
@@ -1894,6 +1900,9 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
         body.plate ? String(body.plate).trim().toUpperCase() : null,
         body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
         body.base ? String(body.base).trim() : null,
+        body.marca ? String(body.marca).trim() : null,
+        body.modelo ? String(body.modelo).trim() : null,
+        body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
         body.active !== false,
         now,
@@ -1931,9 +1940,12 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
           plate = $4,
           "webfleetVehicleId" = $5,
           base = $6,
-          notes = $7,
-          active = $8,
-          "updatedAtMs" = $9
+          marca = $7,
+          modelo = $8,
+          "esTaller" = $9,
+          notes = $10,
+          active = $11,
+          "updatedAtMs" = $12
         WHERE id = $1
         RETURNING *
       `,
@@ -1944,6 +1956,9 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
         body.plate ? String(body.plate).trim().toUpperCase() : null,
         body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
         body.base ? String(body.base).trim() : null,
+        body.marca ? String(body.marca).trim() : null,
+        body.modelo ? String(body.modelo).trim() : null,
+        body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
         body.active !== false,
         now,

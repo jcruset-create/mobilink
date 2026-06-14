@@ -18,6 +18,9 @@ export type RoadsideVehicle = {
   plate?: string | null;
   webfleetVehicleId?: string | null;
   base?: string | null;
+  marca?: string | null;
+  modelo?: string | null;
+  esTaller: boolean;
   notes?: string | null;
   active: boolean;
   createdAtMs: number;
@@ -29,6 +32,9 @@ export type RoadsideVehicleDraft = {
   plate: string;
   webfleetVehicleId: string;
   base: string;
+  marca: string;
+  modelo: string;
+  esTaller: boolean;
   notes: string;
   active: boolean;
 };
