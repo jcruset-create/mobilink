@@ -577,6 +577,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
     assignedAtMs: row.assignedAtMs ?? null,
     departedAtMs: row.departedAtMs ?? null,
+    etaMinutos: row.etaMinutos != null ? Number(row.etaMinutos) : null,
+    etaKm: row.etaKm ?? null,
     arrivedAtPointMs: row.arrivedAtPointMs ?? null,
     finishedAtMs: row.finishedAtMs ?? null,
     arrivedAtWorkshopMs: row.arrivedAtWorkshopMs ?? null,
@@ -2149,6 +2151,55 @@ app.post("/api/roadside-eta", async (req, res) => {
   } catch (error: any) {
     const noKey = error?.message?.includes("no configurada");
     res.status(noKey ? 503 : 500).json({ error: error?.message || "Error calculando ETA" });
+  }
+});
+
+app.post("/api/asistencias/:id/en-camino", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de asistencia no valido" });
+    }
+
+    const current = await db.query(
+      `SELECT id, latitude, longitude FROM roadside_assistances WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+    if (current.rows.length === 0) {
+      return res.status(404).json({ error: "Asistencia no encontrada" });
+    }
+
+    const row = current.rows[0];
+    const destLat = normalizeNullableNumber(row.latitude);
+    const destLng = normalizeNullableNumber(row.longitude);
+    if (destLat === null || destLng === null) {
+      return res.status(400).json({ error: "La asistencia no tiene coordenadas de destino" });
+    }
+
+    const origen = { lat: 41.1452, lng: 1.3987 };
+    const destino = { lat: destLat, lng: destLng };
+    const eta = await calcularETA(origen, destino);
+    const now = Date.now();
+
+    const result = await db.query(
+      `
+        UPDATE roadside_assistances
+        SET
+          status = 'en_camino',
+          "departedAtMs" = COALESCE("departedAtMs", $2),
+          "etaMinutos" = $3,
+          "etaKm" = $4,
+          "updatedAtMs" = $2
+        WHERE id = $1
+        RETURNING *
+      `,
+      [id, now, eta.minutos, eta.kilometros]
+    );
+
+    return res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+  } catch (error: any) {
+    const noKey = error?.message?.includes("no configurada");
+    res.status(noKey ? 503 : 500).json({ error: error?.message || "Error al actualizar asistencia" });
   }
 });
 
