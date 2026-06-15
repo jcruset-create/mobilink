@@ -713,6 +713,24 @@ async function sendRoadsideTrackingWhatsApp(
   });
 }
 
+async function getFcmAccessToken(): Promise<string | null> {
+  try {
+    const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (!serviceAccountJson) return null;
+    const { GoogleAuth } = await import("google-auth-library");
+    const auth = new GoogleAuth({
+      credentials: JSON.parse(serviceAccountJson),
+      scopes: ["https://www.googleapis.com/auth/firebase.messaging"],
+    });
+    const client = await auth.getClient();
+    const tokenResponse = await client.getAccessToken();
+    return tokenResponse.token ?? null;
+  } catch (error) {
+    console.error("getFcmAccessToken error:", error);
+    return null;
+  }
+}
+
 async function sendFcmNotification(techName: string, title: string, body: string) {
   try {
     const result = await db.query(
@@ -722,20 +740,22 @@ async function sendFcmNotification(techName: string, title: string, body: string
     const token = result.rows[0]?.fcmToken;
     if (!token) return;
 
-    const fcmUrl = "https://fcm.googleapis.com/fcm/send";
-    const serverKey = process.env.FCM_SERVER_KEY;
-    if (!serverKey) return;
+    const accessToken = await getFcmAccessToken();
+    if (!accessToken) return;
 
-    await fetch(fcmUrl, {
+    const projectId = "sea-tarragona";
+    await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `key=${serverKey}`,
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        to: token,
-        notification: { title, body, sound: "default" },
-        priority: "high",
+        message: {
+          token,
+          notification: { title, body },
+          android: { priority: "high" },
+        },
       }),
     });
   } catch (error) {
