@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Ambulance,
   CheckCircle2,
@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileText,
   Home,
+  Images,
   MapPin,
   Navigation,
   Phone,
@@ -15,8 +16,10 @@ import {
   RefreshCw,
   Save,
   Send,
+  X,
   XCircle,
 } from "lucide-react";
+import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 
 import type { Tech } from "../modules/workshopTypes";
 import { API_BASE } from "../modules/workshopApi";
@@ -211,6 +214,20 @@ export default function RoadsideAssistanceView({
     null
   );
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [photosAssistance, setPhotosAssistance] = useState<RoadsideAssistance | null>(null);
+  const [photos, setPhotos] = useState<RoadsideAssistanceFile[]>([]);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!photosAssistance) return;
+    setPhotosLoading(true);
+    fetch(`${API_BASE}/api/roadside-assistances/${photosAssistance.id}/files`)
+      .then((r) => r.json())
+      .then((data) => setPhotos(Array.isArray(data) ? data : []))
+      .catch(() => setPhotos([]))
+      .finally(() => setPhotosLoading(false));
+  }, [photosAssistance]);
 
   const activeAssistances = useMemo(
     () => assistances.filter((item) => !isClosed(item.status)),
@@ -951,6 +968,15 @@ export default function RoadsideAssistanceView({
 
                       <button
                         type="button"
+                        onClick={() => { setPhotosAssistance(assistance); setPhotos([]); }}
+                        className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-black text-violet-800 hover:bg-violet-100"
+                      >
+                        <Images className="h-4 w-4" />
+                        Fotos
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() =>
                           handleStatusChange(assistance, "cancelada")
                         }
@@ -1373,6 +1399,101 @@ export default function RoadsideAssistanceView({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Modal fotos y firma */}
+      {photosAssistance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <div className="text-sm font-black uppercase text-slate-400">
+                  Fotos y firma
+                </div>
+                <div className="font-black text-slate-800">
+                  #{photosAssistance.id} · {photosAssistance.plate || "Sin matrícula"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhotosAssistance(null)}
+                className="rounded-full p-2 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-5">
+              {photosLoading ? (
+                <div className="py-12 text-center text-sm font-bold text-slate-400">
+                  Cargando fotos...
+                </div>
+              ) : photos.length === 0 ? (
+                <div className="py-12 text-center text-sm font-bold text-slate-400">
+                  Sin fotos adjuntas
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {[
+                    { kind: "matricula_camion", label: "Matrícula camión" },
+                    { kind: "matricula_remolque", label: "Matrícula remolque" },
+                    { kind: "averia", label: "Avería" },
+                    { kind: "trabajo_realizado", label: "Trabajo realizado" },
+                    { kind: "firma", label: "Firma cliente" },
+                    { kind: "foto", label: "Otras fotos" },
+                  ].map(({ kind, label }) => {
+                    const group = photos.filter((f) => f.kind === kind);
+                    if (group.length === 0) return null;
+                    return (
+                      <div key={kind}>
+                        <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                          {label}
+                        </div>
+                        <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
+                          {group.map((file) => (
+                            <button
+                              key={file.id}
+                              type="button"
+                              onClick={() => setLightboxUrl(file.url)}
+                              className="overflow-hidden rounded-lg border border-slate-200 hover:opacity-90"
+                            >
+                              <img
+                                src={file.url}
+                                alt={label}
+                                className="h-32 w-full object-cover"
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Foto ampliada"
+            className="max-h-full max-w-full rounded-lg object-contain"
+          />
+          <button
+            type="button"
+            onClick={() => setLightboxUrl(null)}
+            className="absolute right-4 top-4 rounded-full bg-white/20 p-2 hover:bg-white/30"
+          >
+            <X className="h-6 w-6 text-white" />
+          </button>
         </div>
       )}
     </div>
