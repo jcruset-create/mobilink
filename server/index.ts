@@ -2562,6 +2562,51 @@ app.post(
   }
 );
 
+app.post(
+  "/api/roadside-operator/assistances/:id/en-camino",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de asistencia no valido" });
+      }
+
+      // Verificar que la asistencia pertenece al operario
+      const check = await db.query(
+        `SELECT * FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        [id, operator.techName]
+      );
+
+      if (check.rows.length === 0) {
+        return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
+      }
+
+      if (check.rows[0].status !== "asignada") {
+        return res.status(400).json({ error: "La asistencia no está en estado asignada" });
+      }
+
+      // Reutilizar lógica de en-camino (Webfleet + ETA)
+      const internalRes = await fetch(
+        `http://localhost:${process.env.PORT || 3000}/api/asistencias/${id}/en-camino`,
+        { method: "POST" }
+      );
+      const data = await internalRes.json();
+
+      if (!internalRes.ok) {
+        return res.status(internalRes.status).json(data);
+      }
+
+      res.json(data);
+    } catch (error) {
+      console.error("POST /api/roadside-operator/assistances/:id/en-camino error:", error);
+      res.status(500).json({ error: "Error al salir en camino" });
+    }
+  }
+);
+
 app.get(
   "/api/roadside-operator/assistances",
   requireRoadsideOperator,
