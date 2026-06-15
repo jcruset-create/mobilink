@@ -70,6 +70,7 @@ export type RoadsideAssistance = {
   departedAtMs?: number | null;
   etaMinutos?: number | null;
   etaKm?: string | null;
+  etaActualizadoAt?: number | null;
   arrivedAtPointMs?: number | null;
   finishedAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;
@@ -115,6 +116,8 @@ export type RoadsideTrackingResponse = {
     createdAtMs: number;
   }>;
   files: RoadsideAssistanceFile[];
+  vehiclePosition?: { lat: number; lng: number } | null;
+  etaWarning?: string | null;
   expired: boolean;
 };
 

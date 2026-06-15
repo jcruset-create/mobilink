@@ -585,6 +585,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
     whatsappEnCaminoEnviado: row.whatsappEnCaminoEnviado === true || row.whatsappEnCaminoEnviado === "true",
     whatsappEnCaminoAt: row.whatsappEnCaminoAt != null ? Number(row.whatsappEnCaminoAt) : null,
+    etaActualizadoAt: row.etaActualizadoAt != null ? Number(row.etaActualizadoAt) : null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -2072,9 +2073,45 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       return res.status(404).json({ error: "Seguimiento no encontrado" });
     }
 
-    const assistance = normalizeRoadsideAssistanceRow(
-      assistanceResult.rows[0]
-    );
+    let assistance = normalizeRoadsideAssistanceRow(assistanceResult.rows[0]);
+
+    // Recalcular ETA en tiempo real si la furgoneta está en camino
+    let etaWarning: string | null = null;
+    let vehiclePosition: { lat: number; lng: number } | null = null;
+
+    const canRecalculate =
+      assistance.status === "en_camino" &&
+      assistance.webfleetVehicleId &&
+      assistance.latitude != null &&
+      assistance.longitude != null;
+
+    if (canRecalculate) {
+      try {
+        vehiclePosition = await getWebfleetVehiclePosition(assistance.webfleetVehicleId!);
+        const eta = await calcularETA(
+          vehiclePosition,
+          { lat: assistance.latitude!, lng: assistance.longitude! }
+        );
+        const now = Date.now();
+
+        await db.query(
+          `UPDATE roadside_assistances
+           SET "etaMinutos" = $2, "etaKm" = $3, "etaActualizadoAt" = $4
+           WHERE id = $1`,
+          [assistance.id, eta.minutos, eta.kilometros, now]
+        );
+
+        assistance = {
+          ...assistance,
+          etaMinutos: eta.minutos,
+          etaKm: eta.kilometros,
+          etaActualizadoAt: now,
+        };
+      } catch (etaErr: any) {
+        etaWarning = etaErr?.message ?? "Error recalculando ETA";
+        console.error("tracking ETA recalc error:", etaWarning);
+      }
+    }
 
     const [eventsResult, filesResult] = await Promise.all([
       db.query(
@@ -2106,6 +2143,8 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         fileName: f.fileName ?? null,
         createdAtMs: Number(f.createdAtMs),
       })),
+      vehiclePosition,
+      etaWarning,
       expired:
         assistance.status === "llegada_taller" ||
         assistance.status === "cancelada",

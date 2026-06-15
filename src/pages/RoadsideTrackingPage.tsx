@@ -276,15 +276,25 @@ export default function RoadsideTrackingPage() {
           <section className="rounded-lg border border-blue-200 bg-blue-600 p-5 shadow-sm">
             <div className="flex items-center gap-3">
               <span className="text-3xl">🚐</span>
-              <div className="text-white">
+              <div className="text-white flex-1">
                 <div className="text-lg font-black">El técnico está en camino</div>
                 {assistance.etaMinutos != null && assistance.etaKm != null ? (
                   <div className="mt-1 text-sm font-semibold text-blue-100">
-                    Tiempo estimado de llegada: <span className="font-black text-white">{assistance.etaMinutos} min · {assistance.etaKm} km</span>
+                    Tiempo estimado de llegada:{" "}
+                    <span className="font-black text-white">
+                      {assistance.etaMinutos} min · {assistance.etaKm} km
+                    </span>
                   </div>
                 ) : (
                   <div className="mt-1 text-sm font-semibold text-blue-100">
                     En camino hacia tu ubicación
+                  </div>
+                )}
+                {assistance.etaActualizadoAt != null && (
+                  <div className="mt-1 text-xs text-blue-200">
+                    Actualizado hace{" "}
+                    {Math.round((Date.now() - assistance.etaActualizadoAt) / 1000)}s
+                    {data?.etaWarning ? " · (usando último ETA guardado)" : ""}
                   </div>
                 )}
               </div>
