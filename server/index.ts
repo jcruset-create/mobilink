@@ -713,6 +713,36 @@ async function sendRoadsideTrackingWhatsApp(
   });
 }
 
+async function sendFcmNotification(techName: string, title: string, body: string) {
+  try {
+    const result = await db.query(
+      `SELECT "fcmToken" FROM techs WHERE name = $1 LIMIT 1`,
+      [techName]
+    );
+    const token = result.rows[0]?.fcmToken;
+    if (!token) return;
+
+    const fcmUrl = "https://fcm.googleapis.com/fcm/send";
+    const serverKey = process.env.FCM_SERVER_KEY;
+    if (!serverKey) return;
+
+    await fetch(fcmUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `key=${serverKey}`,
+      },
+      body: JSON.stringify({
+        to: token,
+        notification: { title, body, sound: "default" },
+        priority: "high",
+      }),
+    });
+  } catch (error) {
+    console.error("sendFcmNotification error:", error);
+  }
+}
+
 async function sendRoadsideStatusWhatsApp(
   assistance: any,
   status: string,
@@ -2487,6 +2517,31 @@ app.post("/api/roadside-operator/login", async (req, res) => {
   }
 });
 
+app.post(
+  "/api/roadside-operator/register-token",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const fcmToken = String(req.body?.fcmToken || "").trim();
+
+      if (!fcmToken) {
+        return res.status(400).json({ error: "Token requerido" });
+      }
+
+      await db.query(
+        `UPDATE techs SET "fcmToken" = $1 WHERE name = $2`,
+        [fcmToken, operator.techName]
+      );
+
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("POST /api/roadside-operator/register-token error:", error);
+      res.status(500).json({ error: "Error registrando token" });
+    }
+  }
+);
+
 app.get(
   "/api/roadside-operator/assistances",
   requireRoadsideOperator,
@@ -2781,6 +2836,15 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
       ]
     );
 
+    // Notificación push al técnico asignado
+    if (assistance.assignedTechName && assistance.status === "asignada") {
+      void sendFcmNotification(
+        assistance.assignedTechName,
+        "Nueva asistencia asignada",
+        `${assistance.plate || "Vehículo"} · ${assistance.address || assistance.customerName}`
+      );
+    }
+
     res.json(assistance);
   } catch (error) {
     console.error("POST /api/roadside-assistances error:", error);
@@ -2890,7 +2954,18 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
       );
     }
 
-    res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+    // Notificación push al técnico si se le asigna la asistencia
+    if (updated.assignedTechName && previousStatus === "pendiente" && status === "asignada") {
+      void sendFcmNotification(
+        updated.assignedTechName,
+        "Nueva asistencia asignada",
+        `${updated.plate || "Vehículo"} · ${updated.address || updated.customerName}`
+      );
+    }
+
+    res.json(updated);
   } catch (error) {
     console.error("PUT /api/roadside-assistances/:id error:", error);
     res.status(500).json({ error: "Error actualizando asistencia" });
