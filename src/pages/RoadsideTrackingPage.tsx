@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   CheckCircle2,
@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { loadRoadsideTrackingFromBackend } from "../modules/roadsideAssistanceApi";
+const RoadsideMap = lazy(() => import("../components/RoadsideMap"));
 import type {
   RoadsideAssistance,
   RoadsideAssistanceFile,
@@ -299,6 +300,35 @@ export default function RoadsideTrackingPage() {
                 )}
               </div>
             </div>
+          </section>
+        )}
+
+        {/* Mapa */}
+        {assistance.latitude != null && assistance.longitude != null && (
+          <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <Suspense
+              fallback={
+                <div className="flex h-64 items-center justify-center bg-slate-50 text-sm font-bold text-slate-400">
+                  Cargando mapa…
+                </div>
+              }
+            >
+              <RoadsideMap
+                assistanceLat={assistance.latitude}
+                assistanceLng={assistance.longitude}
+                vehicleLat={data?.vehiclePosition?.lat}
+                vehicleLng={data?.vehiclePosition?.lng}
+                etaMinutos={assistance.etaMinutos}
+                etaKm={assistance.etaKm}
+              />
+            </Suspense>
+            {assistance.etaActualizadoAt != null && (
+              <div className="px-4 py-2 text-xs font-semibold text-slate-400">
+                Última actualización: hace{" "}
+                {Math.round((Date.now() - assistance.etaActualizadoAt) / 1000)}s
+                {data?.etaWarning ? " · usando último ETA guardado" : ""}
+              </div>
+            )}
           </section>
         )}
 

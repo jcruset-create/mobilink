@@ -2143,7 +2143,12 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         fileName: f.fileName ?? null,
         createdAtMs: Number(f.createdAtMs),
       })),
-      vehiclePosition,
+      vehiclePosition: vehiclePosition
+        ? {
+            lat: Math.round(vehiclePosition.lat * 1000) / 1000,
+            lng: Math.round(vehiclePosition.lng * 1000) / 1000,
+          }
+        : null,
       etaWarning,
       expired:
         assistance.status === "llegada_taller" ||
