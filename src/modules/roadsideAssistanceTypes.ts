@@ -74,6 +74,7 @@ export type RoadsideAssistance = {
   operatorLat?: number | null;
   operatorLng?: number | null;
   operatorLocationAtMs?: number | null;
+  plateMismatch?: boolean;
   arrivedAtPointMs?: number | null;
   finishedAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;
