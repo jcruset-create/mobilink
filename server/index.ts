@@ -1591,6 +1591,27 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
   }
 });
 
+app.delete("/api/techs/:name", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+
+    if (name === "Ramón") {
+      return res.status(400).json({ error: "No se puede eliminar a Ramón" });
+    }
+
+    const result = await db.query(`DELETE FROM techs WHERE name = $1 RETURNING name`, [name]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/techs/:name error:", error);
+    res.status(500).json({ error: "Error eliminando técnico" });
+  }
+});
+
 app.post(
   "/api/techs/:name/avatar",
   requireAdminRole,

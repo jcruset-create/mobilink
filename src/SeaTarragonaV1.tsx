@@ -18,6 +18,7 @@ import {
   type MaintenanceTask,
 } from "./modules/maintenanceApi";
 import OperariosTVView from "./components/OperariosTVView";
+import TecnicosView from "./components/TecnicosView";
 import WorkshopTV75View from "./components/WorkshopTV75View";
 import WorkRankingView from "./components/WorkRankingView";
 import QuickEntryQuantityBox from "./components/QuickEntryQuantityBox";
@@ -145,6 +146,7 @@ import {
   fetchWithTimeout,
   loadJobsFromBackend,
   loadLogsFromBackend,
+  deleteTechFromBackend,
   loadQuickTemplatesFromBackend,
   loadScheduledJobsFromBackend,
   loadTechsFromBackend,
@@ -4755,9 +4757,14 @@ function reassignJob(jobId: number, techName: string) {
     if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) {
       return;
     }
-    setTechs((prev) => [...prev, { ...createTech(name), workshopId: selectedWorkshopId }]);
+    const newTech = { ...createTech(name), workshopId: selectedWorkshopId };
+    setTechs((prev) => [...prev, newTech]);
     setNewTechName("");
     appendLog(`Técnico añadido: ${name}.`);
+    saveTechToBackend(newTech).catch((error) => {
+      console.error("Error guardando nuevo técnico:", error);
+      appendLog(`Error guardando el técnico ${name} en el servidor.`);
+    });
   }
 function addSupportToJob(jobId: number, forcedSupportName?: string) {
   const job = jobs.find((item) => item.id === jobId);
@@ -4996,6 +5003,10 @@ function removeSupportFromActiveJob(jobId: number) {
     if (name === "Ramón") return;
     setTechs((prev) => prev.filter((t) => t.name !== name));
     appendLog(`Técnico eliminado: ${name}.`);
+    deleteTechFromBackend(name).catch((error) => {
+      console.error("Error eliminando técnico:", error);
+      appendLog(`Error eliminando al técnico ${name} en el servidor.`);
+    });
   }
 
 function updateTechCompetency(
@@ -5100,6 +5111,28 @@ if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
   );
 }
 
+
+if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
+  return (
+    <TecnicosView
+      techs={visibleTechs}
+      newTechName={newTechName}
+      setNewTechName={setNewTechName}
+      addTech={addTech}
+      removeTech={removeTech}
+      updateTechCompetency={updateTechCompetency}
+      updateTechPriority={updateTechPriority}
+      updateTechRoadsideCapable={updateTechRoadsideCapable}
+      handleTechImageUpload={handleTechImageUpload}
+      onSetWorkshopPin={(techName) => {
+        setWorkshopPinModal({ techName });
+        setWorkshopPinInput("");
+        setWorkshopPinError("");
+      }}
+      onBack={() => setView("operativo")}
+    />
+  );
+}
 
 if (view === "operarios" && canAccessView(userRole, "operarios")) {
   return (
@@ -5574,6 +5607,20 @@ return (
       }`}
     >
       Ajustes
+    </button>
+  )}
+
+  {canAccessView(userRole, "tecnicos") && (
+    <button
+      type="button"
+      onClick={() => setView("tecnicos")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "tecnicos"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Técnicos
     </button>
   )}
 
@@ -7590,7 +7637,6 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                   <th className="py-2">Nombre</th>
                   <th className="py-2">Estado</th>
                   <th className="py-2">Trabajo</th>
-                  <th className="py-2">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -7700,38 +7746,6 @@ const textColor = "";
     </div>
   )}
 </td>
-                      <td className="py-2">
-  <div className="flex items-center gap-3">
-    <label className="cursor-pointer text-xs text-blue-600 hover:text-blue-700">
-      Foto
-      <input
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => handleTechImageUpload(e, tech.name)}
-      />
-    </label>
-
-    {view === "ajustes" && (
-      <button
-        onClick={() => { setWorkshopPinModal({ techName: tech.name }); setWorkshopPinInput(""); setWorkshopPinError(""); }}
-        className="text-xs text-slate-600 hover:text-slate-900"
-        title="Asignar PIN portal móvil"
-      >
-        🔑 PIN
-      </button>
-    )}
-
-    {view === "ajustes" && tech.name !== "Ramón" && (
-      <button
-        onClick={() => removeTech(tech.name)}
-        className="text-xs text-red-600 hover:text-red-700"
-      >
-        Eliminar
-      </button>
-    )}
-  </div>
-</td>
                     </tr>
                   );
                 })}
@@ -7740,148 +7754,20 @@ const textColor = "";
           </div>
 
           {view === "ajustes" && (
-            <div className="mt-6 rounded-2xl border border-slate-200 p-3">
-              <div className="mb-3 text-sm font-medium text-slate-700">
-                Competencias y prioridad de asignación
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-slate-500">
-                      <th className="py-2 pr-2">Técnico</th>
-                      <th className="py-2 pr-2">Apto carretera</th>
-                      <th className="py-2 pr-2">Cam R</th>
-                      <th className="py-2 pr-2">Cam A</th>
-                      <th className="py-2 pr-2">Mov R</th>
-                      <th className="py-2 pr-2">Mov A</th>
-                      <th className="py-2 pr-2">Tac R</th>
-                      <th className="py-2 pr-2">Tac A</th>
-                      <th className="py-2 pr-2">Tur R</th>
-                      <th className="py-2 pr-2">Tur A</th>
-                      <th className="py-2 pr-2">Mec R</th>
-                      <th className="py-2 pr-2">Mec A</th>
-                      <th className="py-2 pr-2">Ali R</th>
-                      <th className="py-2 pr-2">Ali A</th>
-                      <th className="py-2 pr-2">Pin R</th>
-                      <th className="py-2 pr-2">Pin A</th>
-                      <th className="py-2 pr-2">Pr Cam R</th>
-                      <th className="py-2 pr-2">Pr Cam A</th>
-                      <th className="py-2 pr-2">Pr Mov R</th>
-                      <th className="py-2 pr-2">Pr Mov A</th>
-                      <th className="py-2 pr-2">Pr Tac R</th>
-                      <th className="py-2 pr-2">Pr Tac A</th>
-                      <th className="py-2 pr-2">Pr Tur R</th>
-                      <th className="py-2 pr-2">Pr Tur A</th>
-                      <th className="py-2 pr-2">Pr Mec R</th>
-                      <th className="py-2 pr-2">Pr Mec A</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleTechs.map((tech) => (
-                      <tr
-                        key={`cfg-${tech.name}`}
-                        className="border-t border-slate-100"
-                      >
-                        <td className="py-2 pr-2 font-medium">{tech.name}</td>
-                        <td className="py-2 pr-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(tech.roadsideCapable)}
-                            onChange={(e) =>
-                              updateTechRoadsideCapable(tech.name, e.target.checked)
-                            }
-                          />
-                        </td>
-                        {(
-                          [
-                            "camion",
-                            "movil",
-                            "tacografo",
-                            "turismo",
-                            "mecanica",
-                            "alineacion_camion",
-                            "pinchazo_camion",
-                          ] as CompetencyKey[]
-                        ).flatMap((key) =>
-                          (["responsable", "apoyo"] as AssignmentRole[]).map(
-                            (role) => (
-                              <td
-                                key={`${key}-${role}`}
-                                className="py-2 pr-2 text-center"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={tech.competencies[key][role]}
-                                  onChange={(e) =>
-                                    updateTechCompetency(
-                                      tech.name,
-                                      key,
-                                      role,
-                                      e.target.checked
-                                    )
-                                  }
-                                />
-                              </td>
-                            )
-                          )
-                        )}
-                        {(
-                          [
-                            "camion",
-                            "movil",
-                            "tacografo",
-                            "turismo",
-                            "mecanica",
-                          ] as AreaKey[]
-                        ).flatMap((area) =>
-                          (["responsable", "apoyo"] as AssignmentRole[]).map(
-                            (role) => (
-                              <td key={`${area}-${role}`} className="py-2 pr-2">
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={tech.priorities[area][role]}
-                                  onChange={(e) =>
-                                    updateTechPriority(
-                                      tech.name,
-                                      area,
-                                      role,
-                                      Number(e.target.value)
-                                    )
-                                  }
-                                  className="w-16 rounded border border-slate-200 px-2 py-1"
-                                />
-                              </td>
-                            )
-                          )
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            <div className="mt-3 text-xs text-slate-500">
+              La gestión de técnicos (alta, baja, foto, PIN, competencias) se
+              ha movido a la pestaña{" "}
+              <button
+                type="button"
+                onClick={() => setView("tecnicos")}
+                className="font-bold text-blue-600 hover:underline"
+              >
+                Técnicos
+              </button>
+              .
             </div>
           )}
 
-          {view === "ajustes" && (
-            <div className="mt-4 flex gap-2">
-              <input
-                value={newTechName}
-                onChange={(e) => setNewTechName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") addTech();
-                }}
-                placeholder="Nuevo técnico"
-                className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
-              />
-              <button
-                onClick={addTech}
-                className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white"
-              >
-                Añadir
-              </button>
-            </div>
-          )}
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">

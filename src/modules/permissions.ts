@@ -12,7 +12,8 @@ export type AppView =
   | "workshop_tv_75"
   | "pantalla"
   | "historico"
-  | "ranking";
+  | "ranking"
+  | "tecnicos";
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Administrador",
@@ -38,6 +39,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "entradas",
     "ranking",
     "ajustes",
+    "tecnicos",
     "operarios",
     "workshop_tv_75",
     "pantalla",
@@ -50,6 +52,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "asistencias",
     "entradas",
     "ranking",
+    "tecnicos",
     "operarios",
     "workshop_tv_75",
     "pantalla",

@@ -159,6 +159,21 @@ export async function saveTechToBackend(tech: Tech) {
   }
 }
 
+export async function deleteTechFromBackend(name: string) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/techs/${encodeURIComponent(name)}`,
+    {
+      method: "DELETE",
+      headers: getAdminHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await readApiError(response);
+    throw new Error(error?.error || `No se pudo eliminar el técnico ${name}.`);
+  }
+}
+
 export async function deleteScheduledJobFromBackend(id: number) {
   const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs/${id}`, {
     method: "DELETE",
