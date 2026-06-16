@@ -7,6 +7,7 @@ import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
 import PDFDocument from "pdfkit";
+import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
@@ -586,6 +587,10 @@ function normalizeRoadsideAssistanceRow(row: any) {
     whatsappEnCaminoEnviado: row.whatsappEnCaminoEnviado === true || row.whatsappEnCaminoEnviado === "true",
     whatsappEnCaminoAt: row.whatsappEnCaminoAt != null ? Number(row.whatsappEnCaminoAt) : null,
     etaActualizadoAt: row.etaActualizadoAt != null ? Number(row.etaActualizadoAt) : null,
+    operatorLat: normalizeNullableNumber(row.operatorLat),
+    operatorLng: normalizeNullableNumber(row.operatorLng),
+    operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
+    plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -884,7 +889,7 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
   if (data?.errorCode) throw new Error(`Webfleet error ${data.errorCode}: ${data.errorMsg}`);
 
   const vehicles = Array.isArray(data) ? data : data?.data ?? [];
-  const vehicle = vehicles.find((v: any) => v.objectno === vehicleId) ?? vehicles[0];
+  const vehicle = vehicles.find((v: any) => String(v.objectno) === String(vehicleId));
 
   if (!vehicle) throw new Error(`Vehículo ${vehicleId} no encontrado en Webfleet`);
 
@@ -2563,6 +2568,50 @@ app.post(
 );
 
 app.post(
+  "/api/roadside-operator/assistances/:id/location",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+      const lat = normalizeNullableNumber(req.body?.lat);
+      const lng = normalizeNullableNumber(req.body?.lng);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de asistencia no valido" });
+      }
+
+      if (lat == null || lng == null) {
+        return res.status(400).json({ error: "Coordenadas no validas" });
+      }
+
+      const check = await db.query(
+        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        [id, operator.techName]
+      );
+
+      if (check.rows.length === 0) {
+        return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
+      }
+
+      await db.query(
+        `
+          UPDATE roadside_assistances
+          SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+          WHERE id = $1
+        `,
+        [id, lat, lng, Date.now()]
+      );
+
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("POST /api/roadside-operator/assistances/:id/location error:", error);
+      res.status(500).json({ error: "Error guardando ubicacion" });
+    }
+  }
+);
+
+app.post(
   "/api/roadside-operator/assistances/:id/en-camino",
   requireRoadsideOperator,
   async (req, res) => {
@@ -3206,6 +3255,46 @@ app.post(
    ROADSIDE FILES (fotos + firma)
 ========================================================= */
 
+const PLATE_KINDS = new Set(["matricula_camion", "matricula_remolque"]);
+
+function normalizePlateText(value: unknown) {
+  const cleaned = String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  return cleaned;
+}
+
+async function detectPlateFromImage(imageUrl: string): Promise<string | null> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                "Esta es una foto de la matrícula de un vehículo español. " +
+                "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
+                "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
+            },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ] as any,
+        },
+      ],
+      max_tokens: 20,
+    });
+
+    const text = response.choices[0]?.message?.content?.trim() ?? "";
+    const plate = normalizePlateText(text);
+    return plate && plate !== "NONE" && plate.length >= 5 ? plate : null;
+  } catch (error) {
+    console.error("detectPlateFromImage error:", error);
+    return null;
+  }
+}
+
 app.post(
   "/api/roadside-assistances/:id/files",
   requireRoadsideOperator,
@@ -3244,11 +3333,36 @@ app.post(
         .from(SUPABASE_ROADSIDE_BUCKET)
         .getPublicUrl(storagePath);
 
+      let detectedPlate: string | null = null;
+      if (PLATE_KINDS.has(kind)) {
+        detectedPlate = await detectPlateFromImage(publicData.publicUrl);
+      }
+
       const result = await db.query(
-        `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, kind, publicData.publicUrl, req.file.originalname, Date.now()]
+        `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate")
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
+
+      if (kind === "matricula_camion" && detectedPlate) {
+        const assistanceResult = await db.query(
+          `SELECT plate FROM roadside_assistances WHERE id = $1 LIMIT 1`,
+          [id]
+        );
+        const currentPlate = normalizePlateText(assistanceResult.rows[0]?.plate);
+
+        if (!currentPlate) {
+          await db.query(
+            `UPDATE roadside_assistances SET plate = $2 WHERE id = $1`,
+            [id, detectedPlate]
+          );
+        } else if (currentPlate !== detectedPlate) {
+          await db.query(
+            `UPDATE roadside_assistances SET "plateMismatch" = true WHERE id = $1`,
+            [id]
+          );
+        }
+      }
 
       res.json(result.rows[0]);
     } catch (error: any) {
@@ -3315,24 +3429,14 @@ function diffMinutes(a: number | null | undefined, b: number | null | undefined)
   return `${Math.floor(mins / 60)}h ${mins % 60}min`;
 }
 
-app.get(
-  "/api/roadside-assistances/:id/report.pdf",
-  requireSupervisorRole,
-  async (req, res) => {
-    try {
-      const id = Number(req.params.id);
-
-      if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "ID no válido" });
-      }
-
+async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buffer; assistance: any }> {
       const assistanceResult = await db.query(
         `SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`,
         [id]
       );
 
       if (assistanceResult.rows.length === 0) {
-        return res.status(404).json({ error: "Asistencia no encontrada" });
+        throw new Error("Asistencia no encontrada");
       }
 
       const a = normalizeRoadsideAssistanceRow(assistanceResult.rows[0]);
@@ -3348,14 +3452,11 @@ app.get(
       );
 
       const doc = new PDFDocument({ margin: 40, size: "A4" });
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="asistencia_${id}.pdf"`
-      );
-
-      doc.pipe(res);
+      const chunks: Buffer[] = [];
+      doc.on("data", (chunk) => chunks.push(chunk));
+      const finished = new Promise<Buffer>((resolve) => {
+        doc.on("end", () => resolve(Buffer.concat(chunks)));
+      });
 
       // Header
       doc
@@ -3409,9 +3510,9 @@ app.get(
       doc.moveDown(0.5);
       doc.fontSize(10).font("Helvetica-Bold").text("Tiempos calculados:");
       doc.font("Helvetica");
-      doc.text(`  · Salida → Llegada al punto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}`);
-      doc.text(`  · Punto → Finalización: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}`);
-      doc.text(`  · Tiempo total (salida → taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
+      doc.text(`  · Salida -> Llegada al punto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}`);
+      doc.text(`  · Punto -> Finalización: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}`);
+      doc.text(`  · Tiempo total (salida -> taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
 
       // Events
       if (eventsResult.rows.length > 0) {
@@ -3425,7 +3526,7 @@ app.get(
           doc
             .fontSize(9)
             .font("Helvetica")
-            .text(`${formatDateEs(ev.createdAtMs)}  →  ${label}${by}${note}`);
+            .text(`${formatDateEs(ev.createdAtMs)}  ->  ${label}${by}${note}`);
         }
       }
 
@@ -3470,11 +3571,146 @@ app.get(
       }
 
       doc.end();
-    } catch (error) {
+      const buffer = await finished;
+      return { buffer, assistance: a };
+}
+
+app.get(
+  "/api/roadside-assistances/:id/report.pdf",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID no válido" });
+      }
+
+      const { buffer } = await buildAssistanceReportPdfBuffer(id);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="asistencia_${id}.pdf"`
+      );
+      res.send(buffer);
+    } catch (error: any) {
       console.error("GET /api/roadside-assistances/:id/report.pdf error:", error);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Error generando informe PDF" });
+        const notFound = error?.message === "Asistencia no encontrada";
+        res
+          .status(notFound ? 404 : 500)
+          .json({ error: notFound ? error.message : "Error generando informe PDF" });
       }
+    }
+  }
+);
+
+let mailTransport: import("nodemailer").Transporter | null = null;
+function getMailTransport() {
+  if (mailTransport) return mailTransport;
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    return null;
+  }
+  mailTransport = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: Number(process.env.SMTP_PORT || 587) === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+  return mailTransport;
+}
+
+app.post(
+  "/api/roadside-assistances/:id/send-report",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const channels: string[] = Array.isArray(req.body?.channels) ? req.body.channels : [];
+      const email = String(req.body?.email || "").trim();
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID no válido" });
+      }
+
+      if (channels.length === 0) {
+        return res.status(400).json({ error: "Selecciona al menos un canal de envío" });
+      }
+
+      if (channels.includes("email") && !email) {
+        return res.status(400).json({ error: "Indica un email de destino" });
+      }
+
+      const { buffer, assistance } = await buildAssistanceReportPdfBuffer(id);
+
+      const result: { whatsapp?: string; email?: string } = {};
+
+      if (channels.includes("whatsapp")) {
+        const customerPhone = String(assistance.customerPhone || "").trim();
+        if (!customerPhone) {
+          result.whatsapp = "skipped: sin teléfono";
+        } else if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+          result.whatsapp = "skipped: Twilio no configurado";
+        } else {
+          try {
+            const storagePath = `roadside/${id}/informe_${Date.now()}.pdf`;
+            const { error: uploadError } = await supabase.storage
+              .from(SUPABASE_ROADSIDE_BUCKET)
+              .upload(storagePath, buffer, {
+                contentType: "application/pdf",
+                upsert: false,
+              });
+            if (uploadError) throw new Error(uploadError.message);
+
+            const { data: publicData } = supabase.storage
+              .from(SUPABASE_ROADSIDE_BUCKET)
+              .getPublicUrl(storagePath);
+
+            await twilioClient.messages.create({
+              from: getWhatsAppFromNumber(),
+              to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
+              body: `Hola ${assistance.customerName || "cliente"}, adjuntamos el informe de tu asistencia de SEA Tarragona.`,
+              mediaUrl: [publicData.publicUrl],
+            });
+            result.whatsapp = "sent";
+          } catch (err: any) {
+            console.error("send-report whatsapp error:", err.message);
+            result.whatsapp = `error: ${err.message}`;
+          }
+        }
+      }
+
+      if (channels.includes("email")) {
+        const transport = getMailTransport();
+        if (!transport) {
+          result.email = "skipped: SMTP no configurado";
+        } else {
+          try {
+            await transport.sendMail({
+              from: process.env.SMTP_FROM || process.env.SMTP_USER,
+              to: email,
+              subject: `Informe de asistencia SEA Tarragona #${id}`,
+              text: `Hola ${assistance.customerName || "cliente"}, adjuntamos el informe de tu asistencia.`,
+              attachments: [
+                { filename: `asistencia_${id}.pdf`, content: buffer, contentType: "application/pdf" },
+              ],
+            });
+            result.email = "sent";
+          } catch (err: any) {
+            console.error("send-report email error:", err.message);
+            result.email = `error: ${err.message}`;
+          }
+        }
+      }
+
+      res.json({ ok: true, result });
+    } catch (error: any) {
+      console.error("POST /api/roadside-assistances/:id/send-report error:", error);
+      res.status(500).json({ error: "Error enviando informe" });
     }
   }
 );

@@ -182,7 +182,7 @@ export default function RoadsideTrackingPage() {
 
     void loadTracking();
 
-    const timer = window.setInterval(() => void loadTracking(), 60000);
+    const timer = window.setInterval(() => void loadTracking(), 20000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

@@ -71,6 +71,9 @@ export type RoadsideAssistance = {
   etaMinutos?: number | null;
   etaKm?: string | null;
   etaActualizadoAt?: number | null;
+  operatorLat?: number | null;
+  operatorLng?: number | null;
+  operatorLocationAtMs?: number | null;
   arrivedAtPointMs?: number | null;
   finishedAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;
@@ -106,6 +109,7 @@ export type RoadsideAssistanceFile = {
   kind: string;
   url: string;
   fileName?: string | null;
+  detectedPlate?: string | null;
   createdAtMs: number;
 };
 

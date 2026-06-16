@@ -9,6 +9,8 @@ import {
   FileText,
   Home,
   Images,
+  LocateFixed,
+  Mail,
   MapPin,
   Navigation,
   Phone,
@@ -20,6 +22,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
+import RoadsideMap from "./RoadsideMap";
 
 import type { Tech } from "../modules/workshopTypes";
 import { API_BASE } from "../modules/workshopApi";
@@ -218,6 +221,15 @@ export default function RoadsideAssistanceView({
   const [photos, setPhotos] = useState<RoadsideAssistanceFile[]>([]);
   const [photosLoading, setPhotosLoading] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [mapAssistance, setMapAssistance] = useState<RoadsideAssistance | null>(null);
+  const [reportAssistance, setReportAssistance] = useState<RoadsideAssistance | null>(null);
+  const [reportChannels, setReportChannels] = useState<{ whatsapp: boolean; email: boolean }>({
+    whatsapp: true,
+    email: false,
+  });
+  const [reportEmail, setReportEmail] = useState("");
+  const [sendingReport, setSendingReport] = useState(false);
+  const [reportFeedback, setReportFeedback] = useState("");
 
   useEffect(() => {
     if (!photosAssistance) return;
@@ -228,6 +240,22 @@ export default function RoadsideAssistanceView({
       .catch(() => setPhotos([]))
       .finally(() => setPhotosLoading(false));
   }, [photosAssistance]);
+
+  useEffect(() => {
+    if (!mapAssistance) return;
+
+    const refresh = () => {
+      fetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.assistance) setMapAssistance(data.assistance);
+        })
+        .catch(() => {});
+    };
+
+    const interval = setInterval(refresh, 15000);
+    return () => clearInterval(interval);
+  }, [mapAssistance?.id]);
 
   const activeAssistances = useMemo(
     () => assistances.filter((item) => !isClosed(item.status)),
@@ -415,6 +443,55 @@ export default function RoadsideAssistanceView({
       );
     } finally {
       setSendingWhatsappId(null);
+    }
+  }
+
+  function openReportModal(assistance: RoadsideAssistance) {
+    setReportAssistance(assistance);
+    setReportChannels({ whatsapp: !!assistance.customerPhone, email: false });
+    setReportEmail("");
+    setReportFeedback("");
+  }
+
+  async function handleSendReport() {
+    if (!reportAssistance) return;
+    const channels = Object.entries(reportChannels)
+      .filter(([, enabled]) => enabled)
+      .map(([key]) => key);
+
+    if (channels.length === 0) {
+      setReportFeedback("Selecciona al menos un canal de envío.");
+      return;
+    }
+    if (reportChannels.email && !reportEmail.trim()) {
+      setReportFeedback("Indica un email de destino.");
+      return;
+    }
+
+    setSendingReport(true);
+    setReportFeedback("");
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/roadside-assistances/${reportAssistance.id}/send-report`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channels, email: reportEmail.trim() }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Error enviando informe");
+
+      const parts: string[] = [];
+      if (data.result?.whatsapp) parts.push(`WhatsApp: ${data.result.whatsapp}`);
+      if (data.result?.email) parts.push(`Email: ${data.result.email}`);
+      setReportFeedback(parts.join(" · ") || "Informe enviado");
+    } catch (sendError) {
+      setReportFeedback(
+        sendError instanceof Error ? sendError.message : "Error enviando informe"
+      );
+    } finally {
+      setSendingReport(false);
     }
   }
 
@@ -919,6 +996,15 @@ export default function RoadsideAssistanceView({
 
                       <button
                         type="button"
+                        onClick={() => openReportModal(assistance)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-800 hover:bg-indigo-100"
+                      >
+                        <Send className="h-4 w-4" />
+                        Enviar informe
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => handleSendTrackingWhatsapp(assistance)}
                         disabled={
                           sendingWhatsappId === assistance.id ||
@@ -974,6 +1060,20 @@ export default function RoadsideAssistanceView({
                         <Images className="h-4 w-4" />
                         Fotos
                       </button>
+
+                      {(assistance.status === "en_camino" ||
+                        assistance.status === "en_punto") &&
+                        assistance.latitude != null &&
+                        assistance.longitude != null && (
+                          <button
+                            type="button"
+                            onClick={() => setMapAssistance(assistance)}
+                            className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100"
+                          >
+                            <LocateFixed className="h-4 w-4" />
+                            Ubicación en vivo
+                          </button>
+                        )}
 
                       <button
                         type="button"
@@ -1425,6 +1525,12 @@ export default function RoadsideAssistanceView({
             </div>
 
             <div className="overflow-y-auto p-5">
+              {photosAssistance.plateMismatch && (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                  ⚠️ La matrícula leída por IA en la foto no coincide con la matrícula
+                  registrada ({photosAssistance.plate || "sin matrícula"}). Revísalo.
+                </div>
+              )}
               {photosLoading ? (
                 <div className="py-12 text-center text-sm font-bold text-slate-400">
                   Cargando fotos...
@@ -1463,12 +1569,143 @@ export default function RoadsideAssistanceView({
                                 alt={label}
                                 className="h-32 w-full object-cover"
                               />
+                              {file.detectedPlate && (
+                                <div className="bg-slate-900 px-2 py-1 text-center text-xs font-black text-white">
+                                  IA: {file.detectedPlate}
+                                </div>
+                              )}
                             </button>
                           ))}
                         </div>
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal enviar informe */}
+      {reportAssistance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <div className="text-sm font-black uppercase text-slate-400">
+                  Enviar informe
+                </div>
+                <div className="font-black text-slate-800">
+                  #{reportAssistance.id} · {reportAssistance.plate || "Sin matrícula"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportAssistance(null)}
+                className="rounded-full p-2 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={reportChannels.whatsapp}
+                  onChange={(e) =>
+                    setReportChannels((prev) => ({ ...prev, whatsapp: e.target.checked }))
+                  }
+                />
+                <Send className="h-4 w-4 text-emerald-700" />
+                <span className="text-sm font-bold text-slate-700">
+                  WhatsApp ({reportAssistance.customerPhone || "sin teléfono"})
+                </span>
+              </label>
+
+              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={reportChannels.email}
+                  onChange={(e) =>
+                    setReportChannels((prev) => ({ ...prev, email: e.target.checked }))
+                  }
+                />
+                <Mail className="h-4 w-4 text-indigo-700" />
+                <span className="text-sm font-bold text-slate-700">Email</span>
+              </label>
+
+              {reportChannels.email && (
+                <input
+                  type="email"
+                  placeholder="cliente@email.com"
+                  value={reportEmail}
+                  onChange={(e) => setReportEmail(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              )}
+
+              {reportFeedback && (
+                <div className="text-sm font-bold text-slate-600">{reportFeedback}</div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSendReport}
+                disabled={sendingReport}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-black text-white hover:bg-indigo-800 disabled:opacity-50"
+              >
+                <Send className="h-4 w-4" />
+                {sendingReport ? "Enviando..." : "Enviar informe"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal ubicación en vivo */}
+      {mapAssistance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <div className="text-sm font-black uppercase text-slate-400">
+                  Ubicación en vivo
+                </div>
+                <div className="font-black text-slate-800">
+                  #{mapAssistance.id} · {mapAssistance.plate || "Sin matrícula"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMapAssistance(null)}
+                className="rounded-full p-2 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="p-5">
+              {mapAssistance.latitude != null && mapAssistance.longitude != null ? (
+                <>
+                  <RoadsideMap
+                    assistanceLat={mapAssistance.latitude}
+                    assistanceLng={mapAssistance.longitude}
+                    vehicleLat={mapAssistance.operatorLat ?? null}
+                    vehicleLng={mapAssistance.operatorLng ?? null}
+                  />
+                  <div className="mt-3 text-xs font-bold text-slate-500">
+                    {mapAssistance.operatorLocationAtMs
+                      ? `Última actualización: ${new Date(
+                          mapAssistance.operatorLocationAtMs
+                        ).toLocaleTimeString()}`
+                      : "El operario aún no ha compartido su ubicación"}
+                  </div>
+                </>
+              ) : (
+                <div className="py-12 text-center text-sm font-bold text-slate-400">
+                  Sin coordenadas de la asistencia
                 </div>
               )}
             </div>

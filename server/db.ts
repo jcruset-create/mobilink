@@ -219,6 +219,21 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS notes TEXT;
 
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "operatorLat" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "operatorLng" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "operatorLocationAtMs" BIGINT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "plateMismatch" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE roadside_assistance_files
+    ADD COLUMN IF NOT EXISTS "detectedPlate" TEXT;
+
     CREATE INDEX IF NOT EXISTS roadside_assistances_status_idx
       ON roadside_assistances(status);
 
