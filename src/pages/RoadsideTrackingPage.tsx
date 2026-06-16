@@ -298,6 +298,24 @@ export default function RoadsideTrackingPage() {
                     {data?.etaWarning ? " · (usando último ETA guardado)" : ""}
                   </div>
                 )}
+                {data?.vehiclePosition?.moving != null && (
+                  <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-black text-white">
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        data.vehiclePosition.moving
+                          ? "bg-emerald-400"
+                          : "bg-amber-300"
+                      }`}
+                    />
+                    {data.vehiclePosition.moving
+                      ? `En marcha${
+                          data.vehiclePosition.speedKmh != null
+                            ? ` · ${Math.round(data.vehiclePosition.speedKmh)} km/h`
+                            : ""
+                        }`
+                      : "Parado"}
+                  </div>
+                )}
               </div>
             </div>
           </section>

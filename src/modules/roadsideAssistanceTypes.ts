@@ -123,7 +123,12 @@ export type RoadsideTrackingResponse = {
     createdAtMs: number;
   }>;
   files: RoadsideAssistanceFile[];
-  vehiclePosition?: { lat: number; lng: number } | null;
+  vehiclePosition?: {
+    lat: number;
+    lng: number;
+    speedKmh?: number | null;
+    moving?: boolean | null;
+  } | null;
   etaWarning?: string | null;
   expired: boolean;
 };

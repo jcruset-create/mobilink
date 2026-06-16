@@ -929,11 +929,15 @@ function buildWebfleetRequest(action: string, extra: Record<string, string> = {}
   };
 }
 
+const STOPPED_SPEED_THRESHOLD_KMH = 3;
+
 async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
   lat: number;
   lng: number;
   vehicleId: string;
   timestamp?: string;
+  speedKmh: number | null;
+  moving: boolean | null;
 }> {
   const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno: vehicleId });
   const response = await fetch(url, { headers });
@@ -956,7 +960,18 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
     throw new Error(`Posición inválida para vehículo ${vehicleId}`);
   }
 
-  return { lat, lng, vehicleId, timestamp: vehicle.pos_time ?? undefined };
+  const rawSpeed = Number(vehicle.speed);
+  const speedKmh = Number.isFinite(rawSpeed) ? rawSpeed : null;
+  const moving = speedKmh != null ? speedKmh >= STOPPED_SPEED_THRESHOLD_KMH : null;
+
+  return {
+    lat,
+    lng,
+    vehicleId,
+    timestamp: vehicle.pos_time ?? undefined,
+    speedKmh,
+    moving,
+  };
 }
 
 function getJobOperationLabel(job: any) {
@@ -2187,7 +2202,12 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
     // Recalcular ETA en tiempo real si la furgoneta está en camino
     let etaWarning: string | null = null;
-    let vehiclePosition: { lat: number; lng: number } | null = null;
+    let vehiclePosition: {
+      lat: number;
+      lng: number;
+      speedKmh: number | null;
+      moving: boolean | null;
+    } | null = null;
 
     const canRecalculate =
       assistance.status === "en_camino" &&
@@ -2257,6 +2277,8 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         ? {
             lat: Math.round(vehiclePosition.lat * 1000) / 1000,
             lng: Math.round(vehiclePosition.lng * 1000) / 1000,
+            speedKmh: vehiclePosition.speedKmh,
+            moving: vehiclePosition.moving,
           }
         : null,
       etaWarning,
