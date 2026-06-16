@@ -846,6 +846,32 @@ async function sendRoadsideStatusWhatsApp(
   const body = messages[status];
   if (!body) return { status: "skipped", reason: "no_message_for_status" };
 
+  // WhatsApp Business exige plantilla aprobada para mensajes iniciados por
+  // la empresa fuera de la ventana de 24h de conversación con el cliente.
+  // El texto libre se acepta en Twilio pero Meta lo bloquea en silencio,
+  // así que para "en_camino" reenviamos la plantilla ya aprobada de
+  // seguimiento (incluye el enlace, donde el cliente ya ve el ETA en vivo).
+  const roadsideContentSid = String(process.env.TWILIO_ROADSIDE_CONTENT_SID || "").trim();
+  if (status === "en_camino" && roadsideContentSid && extra?.trackingUrl) {
+    try {
+      await twilioClient.messages.create({
+        from: getWhatsAppFromNumber(),
+        to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
+        contentSid: roadsideContentSid,
+        contentVariables: JSON.stringify({
+          "1": name,
+          "2": plate,
+          "3": extra.trackingUrl,
+          "4": tech,
+        }),
+      });
+      return { status: "sent" };
+    } catch (err: any) {
+      console.error("sendRoadsideStatusWhatsApp (template) error:", err.message);
+      return { status: "error", reason: err.message };
+    }
+  }
+
   try {
     await twilioClient.messages.create({
       from: getWhatsAppFromNumber(),
