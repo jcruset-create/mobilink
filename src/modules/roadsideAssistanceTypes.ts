@@ -87,6 +87,8 @@ export type RoadsideAssistanceDraft = {
   customerPhone: string;
   address: string;
   googleMapsUrl: string;
+  latitude: string;
+  longitude: string;
   plate: string;
   vehicleDescription: string;
   webfleetVehicleId: string;

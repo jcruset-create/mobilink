@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
+import { geocodeAddress } from "../modules/roadsideAssistanceApi";
 
 import type { Tech } from "../modules/workshopTypes";
 import { API_BASE } from "../modules/workshopApi";
@@ -43,6 +44,8 @@ const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   customerPhone: "",
   address: "",
   googleMapsUrl: "",
+  latitude: "",
+  longitude: "",
   plate: "",
   vehicleDescription: "",
   webfleetVehicleId: "",
@@ -230,6 +233,10 @@ export default function RoadsideAssistanceView({
   const [reportEmail, setReportEmail] = useState("");
   const [sendingReport, setSendingReport] = useState(false);
   const [reportFeedback, setReportFeedback] = useState("");
+  const [geocodingCreate, setGeocodingCreate] = useState(false);
+  const [geocodeCreateError, setGeocodeCreateError] = useState("");
+  const [geocodingEdit, setGeocodingEdit] = useState(false);
+  const [geocodeEditError, setGeocodeEditError] = useState("");
 
   useEffect(() => {
     if (!photosAssistance) return;
@@ -446,6 +453,54 @@ export default function RoadsideAssistanceView({
     }
   }
 
+  async function handleGeocodeCreate() {
+    const query = draft.googleMapsUrl.trim() || draft.address.trim();
+    if (!query) {
+      setGeocodeCreateError("Indica una dirección o un enlace de Google Maps primero.");
+      return;
+    }
+    setGeocodingCreate(true);
+    setGeocodeCreateError("");
+    try {
+      const result = await geocodeAddress(query);
+      setDraft((prev) => ({
+        ...prev,
+        latitude: String(result.lat),
+        longitude: String(result.lng),
+      }));
+    } catch (geoError) {
+      setGeocodeCreateError(
+        geoError instanceof Error ? geoError.message : "Error geocodificando"
+      );
+    } finally {
+      setGeocodingCreate(false);
+    }
+  }
+
+  async function handleGeocodeEdit() {
+    const query = editDraft.googleMapsUrl.trim() || editDraft.address.trim();
+    if (!query) {
+      setGeocodeEditError("Indica una dirección o un enlace de Google Maps primero.");
+      return;
+    }
+    setGeocodingEdit(true);
+    setGeocodeEditError("");
+    try {
+      const result = await geocodeAddress(query);
+      setEditDraft((prev) => ({
+        ...prev,
+        latitude: String(result.lat),
+        longitude: String(result.lng),
+      }));
+    } catch (geoError) {
+      setGeocodeEditError(
+        geoError instanceof Error ? geoError.message : "Error geocodificando"
+      );
+    } finally {
+      setGeocodingEdit(false);
+    }
+  }
+
   function openReportModal(assistance: RoadsideAssistance) {
     setReportAssistance(assistance);
     setReportChannels({ whatsapp: !!assistance.customerPhone, email: false });
@@ -645,6 +700,47 @@ export default function RoadsideAssistanceView({
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
                 />
               </label>
+
+              <button
+                type="button"
+                onClick={handleGeocodeCreate}
+                disabled={geocodingCreate}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+              >
+                <LocateFixed className="h-4 w-4" />
+                {geocodingCreate ? "Geocodificando..." : "Geocodificar dirección"}
+              </button>
+              {geocodeCreateError && (
+                <div className="text-xs font-bold text-red-600">{geocodeCreateError}</div>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Latitud
+                  </span>
+                  <input
+                    value={draft.latitude}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, latitude: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Longitud
+                  </span>
+                  <input
+                    value={draft.longitude}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, longitude: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+              </div>
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
                 <label className="block">
@@ -1272,6 +1368,21 @@ export default function RoadsideAssistanceView({
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
                   />
                 </label>
+
+                <div className="md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={handleGeocodeEdit}
+                    disabled={geocodingEdit}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+                  >
+                    <LocateFixed className="h-4 w-4" />
+                    {geocodingEdit ? "Geocodificando..." : "Geocodificar dirección"}
+                  </button>
+                  {geocodeEditError && (
+                    <div className="mt-1 text-xs font-bold text-red-600">{geocodeEditError}</div>
+                  )}
+                </div>
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">

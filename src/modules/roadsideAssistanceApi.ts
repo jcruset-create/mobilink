@@ -10,6 +10,22 @@ import type {
   RoadsideVehicleDraft,
 } from "./roadsideAssistanceTypes";
 
+export async function geocodeAddress(address: string) {
+  const response = await fetchWithTimeout(`${API_BASE}/api/geocode`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ address }),
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(data?.error || "No se pudo geocodificar la dirección.");
+  }
+
+  return data as { lat: number; lng: number; formattedAddress: string };
+}
+
 export async function loadRoadsideAssistancesFromBackend(
   includeClosed = true
 ) {
@@ -167,7 +183,11 @@ export async function createRoadsideAssistanceInBackend(
     headers: getAdminHeaders({
       "Content-Type": "application/json",
     }),
-    body: JSON.stringify(draft),
+    body: JSON.stringify({
+      ...draft,
+      latitude: draft.latitude.trim() ? Number(draft.latitude) : null,
+      longitude: draft.longitude.trim() ? Number(draft.longitude) : null,
+    }),
   });
 
   if (!response.ok) {

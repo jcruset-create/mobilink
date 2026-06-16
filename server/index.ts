@@ -852,6 +852,61 @@ async function calcularETA(
   return { minutos, kilometros };
 }
 
+function extractLatLngFromGoogleMapsUrl(url: string): { lat: number; lng: number } | null {
+  const patterns = [
+    /@(-?\d+\.\d+),(-?\d+\.\d+)/,
+    /[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/,
+    /[?&]query=(-?\d+\.\d+),(-?\d+\.\d+)/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) {
+      return { lat: Number(match[1]), lng: Number(match[2]) };
+    }
+  }
+  return null;
+}
+
+app.post("/api/geocode", async (req, res) => {
+  try {
+    const address = String(req.body?.address || "").trim();
+    if (!address) {
+      return res.status(400).json({ error: "Indica una dirección" });
+    }
+
+    if (/^https?:\/\//i.test(address)) {
+      const fromUrl = extractLatLngFromGoogleMapsUrl(address);
+      if (fromUrl) {
+        return res.json({ ...fromUrl, formattedAddress: address });
+      }
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ error: "GOOGLE_MAPS_API_KEY no configurada" });
+    }
+
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Error Google Geocoding API: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (data.status !== "OK" || !data.results?.[0]) {
+      return res.status(404).json({ error: `No se encontraron coordenadas para "${address}"` });
+    }
+
+    const result = data.results[0];
+    const { lat, lng } = result.geometry.location;
+
+    res.json({ lat, lng, formattedAddress: result.formatted_address as string });
+  } catch (error: any) {
+    console.error("POST /api/geocode error:", error);
+    res.status(500).json({ error: error?.message || "Error geocodificando dirección" });
+  }
+});
+
 function buildWebfleetRequest(action: string, extra: Record<string, string> = {}): { url: string; headers: Record<string, string> } {
   const account = process.env.WEBFLEET_ACCOUNT;
   const username = process.env.WEBFLEET_USERNAME;
