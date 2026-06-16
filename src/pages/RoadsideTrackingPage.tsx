@@ -43,6 +43,15 @@ function formatTime(value?: number | null) {
   });
 }
 
+function formatTimeWithSeconds(value?: number | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function getCurrentStep(status: RoadsideAssistanceStatus) {
   const index = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
   return index === -1 ? 0 : index;
@@ -267,7 +276,7 @@ export default function RoadsideTrackingPage() {
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">
-              Actualizado: {formatTime(assistance.updatedAtMs)}
+              Actualizado: {formatTimeWithSeconds(assistance.updatedAtMs)}
             </div>
           </div>
         </section>
@@ -293,8 +302,7 @@ export default function RoadsideTrackingPage() {
                 )}
                 {assistance.etaActualizadoAt != null && (
                   <div className="mt-1 text-xs text-blue-200">
-                    Actualizado hace{" "}
-                    {Math.round((Date.now() - assistance.etaActualizadoAt) / 1000)}s
+                    Actualizado: {formatTimeWithSeconds(assistance.etaActualizadoAt)}
                     {data?.etaWarning ? " · (usando último ETA guardado)" : ""}
                   </div>
                 )}
@@ -342,8 +350,7 @@ export default function RoadsideTrackingPage() {
             </Suspense>
             {assistance.etaActualizadoAt != null && (
               <div className="px-4 py-2 text-xs font-semibold text-slate-400">
-                Última actualización: hace{" "}
-                {Math.round((Date.now() - assistance.etaActualizadoAt) / 1000)}s
+                Última actualización: {formatTimeWithSeconds(assistance.etaActualizadoAt)}
                 {data?.etaWarning ? " · usando último ETA guardado" : ""}
               </div>
             )}
