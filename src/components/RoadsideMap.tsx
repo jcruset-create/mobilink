@@ -17,14 +17,9 @@ const vehicleIcon = L.divIcon({
       display:flex;
       align-items:center;
       justify-content:center;
-      width:34px;
-      height:34px;
-      border-radius:50%;
-      background:#2563eb;
-      border:2px solid white;
-      box-shadow:0 2px 6px rgba(0,0,0,0.4);
-      font-size:18px;
+      font-size:30px;
       line-height:1;
+      filter:drop-shadow(0 2px 3px rgba(0,0,0,0.5));
     ">🚐</div>
   `,
   className: "",
