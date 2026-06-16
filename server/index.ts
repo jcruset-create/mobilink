@@ -496,6 +496,9 @@ function normalizeTechRow(t: any) {
     competencies: safeJsonParse(t.competencies, {}),
     priorities: safeJsonParse(t.priorities, {}),
     avatar: t.avatar ?? null,
+    roadsideCapable: t.roadsideCapable === true || t.roadsideCapable === "true",
+    currentRoadsideAssistanceId:
+      t.currentRoadsideAssistanceId != null ? Number(t.currentRoadsideAssistanceId) : null,
   };
 }
 
@@ -611,6 +614,50 @@ function normalizeRoadsideVehicleRow(row: any) {
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
+}
+
+const ROADSIDE_ACTIVE_STATUSES = new Set(["asignada", "en_camino", "en_punto"]);
+const ROADSIDE_CLOSED_STATUSES = new Set(["finalizada", "llegada_taller", "cancelada"]);
+
+async function occupyTechForRoadside(techName: string, assistanceId: number) {
+  await db.query(
+    `
+      UPDATE techs
+      SET status = 'ocupado', "currentRoadsideAssistanceId" = $2
+      WHERE name = $1
+    `,
+    [techName, assistanceId]
+  );
+}
+
+async function freeTechFromRoadside(techName: string, assistanceId: number) {
+  await db.query(
+    `
+      UPDATE techs
+      SET status = 'disponible', "currentRoadsideAssistanceId" = NULL
+      WHERE name = $1 AND "currentRoadsideAssistanceId" = $2
+    `,
+    [techName, assistanceId]
+  );
+}
+
+async function syncTechRoadsideOccupation(
+  assistanceId: number,
+  status: string,
+  assignedTechName: string | null,
+  previousTechName?: string | null
+) {
+  if (previousTechName && previousTechName !== assignedTechName) {
+    await freeTechFromRoadside(previousTechName, assistanceId);
+  }
+
+  if (!assignedTechName) return;
+
+  if (ROADSIDE_ACTIVE_STATUSES.has(status)) {
+    await occupyTechForRoadside(assignedTechName, assistanceId);
+  } else if (ROADSIDE_CLOSED_STATUSES.has(status)) {
+    await freeTechFromRoadside(assignedTechName, assistanceId);
+  }
 }
 
 function getRoadsideStatusTimestampField(status: string) {
@@ -1423,7 +1470,8 @@ Si no hay técnico válido, responsable debe ser null.
 app.get("/api/techs", async (_req, res) => {
   try {
     const result = await db.query(`
-      SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar
+      SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
+             "roadsideCapable", "currentRoadsideAssistanceId"
       FROM techs
       ORDER BY id ASC
     `);
@@ -1448,6 +1496,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       avatar,
       statusChangedAtMs,
       statusTotals,
+      roadsideCapable,
     } = req.body ?? {};
 
     const normalizedStatus = status ?? "disponible";
@@ -1463,6 +1512,15 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
     const normalizedBlocked =
       protectedStatuses.has(normalizedStatus) || Boolean(blocked);
 
+    const existingResult = await db.query(
+      `SELECT "roadsideCapable" FROM techs WHERE name = $1`,
+      [name]
+    );
+    const normalizedRoadsideCapable =
+      roadsideCapable === undefined
+        ? existingResult.rows[0]?.roadsideCapable === true
+        : Boolean(roadsideCapable);
+
     await db.query(
       `
         INSERT INTO techs (
@@ -1474,9 +1532,10 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           priorities,
           avatar,
           "statusChangedAtMs",
-          "statusTotals"
+          "statusTotals",
+          "roadsideCapable"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (name)
         DO UPDATE SET
           status = EXCLUDED.status,
@@ -1486,7 +1545,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           priorities = EXCLUDED.priorities,
           avatar = EXCLUDED.avatar,
           "statusChangedAtMs" = EXCLUDED."statusChangedAtMs",
-          "statusTotals" = EXCLUDED."statusTotals"
+          "statusTotals" = EXCLUDED."statusTotals",
+          "roadsideCapable" = EXCLUDED."roadsideCapable"
       `,
       [
         name,
@@ -1498,6 +1558,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         avatar ?? null,
         statusChangedAtMs ?? Date.now(),
         JSON.stringify(statusTotals ?? {}),
+        normalizedRoadsideCapable,
       ]
     );
 
@@ -1512,7 +1573,9 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           priorities,
           avatar,
           "statusChangedAtMs",
-          "statusTotals"
+          "statusTotals",
+          "roadsideCapable",
+          "currentRoadsideAssistanceId"
         FROM techs
         WHERE name = $1
       `,
@@ -2555,6 +2618,8 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
       }
     }
 
+    await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
+
     return res.json({
       ...updated,
       whatsappWarning: whatsappWarning ?? null,
@@ -2851,6 +2916,7 @@ app.post(
       );
 
       const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+      await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
       void sendRoadsideStatusWhatsApp(updated, status);
     } catch (error) {
@@ -3036,6 +3102,12 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
       );
     }
 
+    await syncTechRoadsideOccupation(
+      assistance.id,
+      assistance.status,
+      assistance.assignedTechName
+    );
+
     res.json(assistance);
   } catch (error) {
     console.error("POST /api/roadside-assistances error:", error);
@@ -3058,7 +3130,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
 
     const existingResult = await db.query(
       `
-        SELECT status
+        SELECT status, "assignedTechName"
         FROM roadside_assistances
         WHERE id = $1
         LIMIT 1
@@ -3073,6 +3145,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
     const previousStatus = normalizeRoadsideAssistanceStatus(
       existingResult.rows[0].status
     );
+    const previousTechName: string | null = existingResult.rows[0].assignedTechName ?? null;
 
     const result = await db.query(
       `
@@ -3155,6 +3228,13 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         `${updated.plate || "Vehículo"} · ${updated.address || updated.customerName}`
       );
     }
+
+    await syncTechRoadsideOccupation(
+      updated.id,
+      updated.status,
+      updated.assignedTechName,
+      previousTechName
+    );
 
     res.json(updated);
   } catch (error) {
@@ -3319,6 +3399,7 @@ app.post(
       );
 
       const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+      await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
       void sendRoadsideStatusWhatsApp(updated, status);
     } catch (error) {

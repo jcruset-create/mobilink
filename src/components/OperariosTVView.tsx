@@ -40,6 +40,23 @@ type TechForOperarios = {
   status: string;
   currentJobId?: number | null;
   avatar?: string | null;
+  currentRoadsideAssistanceId?: number | null;
+};
+
+type RoadsideAssistanceForOperarios = {
+  id: number;
+  plate?: string | null;
+  customerName?: string | null;
+  status: string;
+  assignedTechName?: string | null;
+  etaMinutos?: number | null;
+  etaKm?: string | null;
+};
+
+const ROADSIDE_STATUS_LABELS: Record<string, string> = {
+  asignada: "Asignada",
+  en_camino: "En camino",
+  en_punto: "En el punto",
 };
 
 type OperationLabelJob = Pick<
@@ -50,6 +67,7 @@ type OperationLabelJob = Pick<
 type Props = {
   jobs: JobForOperarios[];
   techs: TechForOperarios[];
+  roadsideAssistances?: RoadsideAssistanceForOperarios[];
   finishJob: (jobId: number) => void;
   moveJobToStandBy: (jobId: number) => void;
   getOperationLabel: (job: OperationLabelJob) => string;
@@ -473,6 +491,7 @@ function saveAssignedMaintenanceTasksToLocalStorage(
 export default function OperariosTVView({
   jobs,
   techs,
+  roadsideAssistances = [],
   finishJob,
   moveJobToStandBy,
   getOperationLabel,
@@ -1464,6 +1483,14 @@ export default function OperariosTVView({
                   ? jobs.find((job) => job.id === tech.currentJobId)
                   : null;
 
+              const activeRoadsideAssistance =
+                tech.currentRoadsideAssistanceId != null
+                  ? roadsideAssistances.find(
+                      (assistance) =>
+                        assistance.id === tech.currentRoadsideAssistanceId
+                    )
+                  : null;
+
               const validationProposal = jobs.find(
                 (job) =>
                   job.status === "validacion" &&
@@ -1489,7 +1516,9 @@ export default function OperariosTVView({
                 <div
                   key={tech.name}
                   className={`rounded-2xl border p-3 ${
-                    pendingOutsideMaintenanceTask
+                    activeRoadsideAssistance
+                      ? "border-blue-300 bg-blue-200 text-blue-950"
+                      : pendingOutsideMaintenanceTask
                       ? "border-red-300 bg-red-200 text-red-950"
                       : pendingWorkshopMaintenanceTask
                       ? "border-emerald-300 bg-emerald-200 text-emerald-950"
@@ -1508,7 +1537,21 @@ export default function OperariosTVView({
                         </div>
 
                         <div className="truncate text-xs font-semibold opacity-80">
-                          {currentJob
+                          {activeRoadsideAssistance
+                            ? `🚐 Asistencia carretera · ${
+                                activeRoadsideAssistance.plate ||
+                                activeRoadsideAssistance.customerName ||
+                                `#${activeRoadsideAssistance.id}`
+                              } · ${
+                                ROADSIDE_STATUS_LABELS[
+                                  activeRoadsideAssistance.status
+                                ] ?? activeRoadsideAssistance.status
+                              }${
+                                activeRoadsideAssistance.etaMinutos != null
+                                  ? ` · ETA ${activeRoadsideAssistance.etaMinutos} min`
+                                  : ""
+                              }`
+                            : currentJob
                             ? `${currentJob.plate} · ${getOperationLabel(
                                 currentJob
                               )}`
@@ -1527,7 +1570,9 @@ export default function OperariosTVView({
 
                     <div className="flex items-center gap-1 shrink-0">
                       <span className="rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
-                        {pendingOutsideMaintenanceTask
+                        {activeRoadsideAssistance
+                          ? "CARRETERA"
+                          : pendingOutsideMaintenanceTask
                           ? "FUERA TALLER"
                           : pendingWorkshopMaintenanceTask
                           ? "MANT. TALLER"

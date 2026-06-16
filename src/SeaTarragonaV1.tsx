@@ -5024,6 +5024,19 @@ function updateTechCompetency(
   });
 }
 
+function updateTechRoadsideCapable(name: string, value: boolean) {
+  setTechs((prev) => {
+    const updated = prev.map((t) =>
+      t.name === name ? { ...t, roadsideCapable: value } : t
+    );
+
+    const changed = updated.find((t) => t.name === name);
+    if (changed) saveTechToBackend(changed);
+
+    return updated;
+  });
+}
+
 function updateTechPriority(
   name: string,
   area: AreaKey,
@@ -5093,6 +5106,7 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
     <OperariosTVView
       jobs={jobsForScreens}
       techs={visibleTechs}
+      roadsideAssistances={roadsideAssistances}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
@@ -7735,6 +7749,7 @@ const textColor = "";
                   <thead>
                     <tr className="text-left text-slate-500">
                       <th className="py-2 pr-2">Técnico</th>
+                      <th className="py-2 pr-2">Apto carretera</th>
                       <th className="py-2 pr-2">Cam R</th>
                       <th className="py-2 pr-2">Cam A</th>
                       <th className="py-2 pr-2">Mov R</th>
@@ -7768,6 +7783,15 @@ const textColor = "";
                         className="border-t border-slate-100"
                       >
                         <td className="py-2 pr-2 font-medium">{tech.name}</td>
+                        <td className="py-2 pr-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(tech.roadsideCapable)}
+                            onChange={(e) =>
+                              updateTechRoadsideCapable(tech.name, e.target.checked)
+                            }
+                          />
+                        </td>
                         {(
                           [
                             "camion",

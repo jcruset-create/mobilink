@@ -264,6 +264,22 @@ export default function RoadsideAssistanceView({
     return () => clearInterval(interval);
   }, [mapAssistance?.id]);
 
+  const roadsideCapableTechs = useMemo(
+    () => techs.filter((tech) => tech.roadsideCapable),
+    [techs]
+  );
+
+  const editAssignableTechs = useMemo(() => {
+    if (
+      editDraft.assignedTechName &&
+      !roadsideCapableTechs.some((tech) => tech.name === editDraft.assignedTechName)
+    ) {
+      const current = techs.find((tech) => tech.name === editDraft.assignedTechName);
+      return current ? [current, ...roadsideCapableTechs] : roadsideCapableTechs;
+    }
+    return roadsideCapableTechs;
+  }, [roadsideCapableTechs, techs, editDraft.assignedTechName]);
+
   const activeAssistances = useMemo(
     () => assistances.filter((item) => !isClosed(item.status)),
     [assistances]
@@ -792,7 +808,7 @@ export default function RoadsideAssistanceView({
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
                   >
                     <option value="">Sin asignar</option>
-                    {techs.map((tech) => (
+                    {roadsideCapableTechs.map((tech) => (
                       <option key={tech.name} value={tech.name}>
                         {tech.name}
                       </option>
@@ -1463,7 +1479,7 @@ export default function RoadsideAssistanceView({
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
                   >
                     <option value="">Sin asignar</option>
-                    {techs.map((tech) => (
+                    {editAssignableTechs.map((tech) => (
                       <option key={tech.name} value={tech.name}>
                         {tech.name}
                       </option>

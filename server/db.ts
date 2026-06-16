@@ -187,6 +187,16 @@ export async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "roadsideCapable" BOOLEAN NOT NULL DEFAULT false;
+  `);
+
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "currentRoadsideAssistanceId" INTEGER;
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id BIGINT PRIMARY KEY,
       data JSONB NOT NULL,

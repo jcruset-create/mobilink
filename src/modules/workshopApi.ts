@@ -132,6 +132,7 @@ export async function saveTechToBackend(tech: Tech) {
           avatar: tech.avatar ?? null,
           statusChangedAtMs: tech.statusChangedAtMs ?? nowMs(),
           statusTotals: tech.statusTotals ?? {},
+          roadsideCapable: Boolean(tech.roadsideCapable),
         }),
       }
     );
