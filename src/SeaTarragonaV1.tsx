@@ -961,6 +961,8 @@ return {
           statusChangedAtMs:
             found.statusChangedAtMs ?? baseTech.statusChangedAtMs,
           statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
+          roadsideCapable: found.roadsideCapable ?? baseTech.roadsideCapable ?? false,
+          currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
         };
       });
 
@@ -1581,6 +1583,8 @@ blocked: isUnavailableTechStatus(
       statusChangedAtMs:
         found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
       statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
+      roadsideCapable: found.roadsideCapable ?? baseTech.roadsideCapable ?? false,
+      currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
     }
   : baseTech;
       });
@@ -4596,6 +4600,8 @@ async function resetAllSystem() {
       statusChangedAtMs:
         found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
       statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
+      roadsideCapable: found.roadsideCapable ?? baseTech.roadsideCapable ?? false,
+      currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
     }
   : baseTech;
       });
