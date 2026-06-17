@@ -533,6 +533,7 @@ const ROADSIDE_ASSISTANCE_STATUSES = new Set([
   "asignada",
   "en_camino",
   "en_punto",
+  "inicio_reparacion",
   "finalizada",
   "llegada_taller",
   "cancelada",
@@ -584,6 +585,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     etaMinutos: row.etaMinutos != null ? Number(row.etaMinutos) : null,
     etaKm: row.etaKm ?? null,
     arrivedAtPointMs: row.arrivedAtPointMs != null ? Number(row.arrivedAtPointMs) : null,
+    inicioReparacionAtMs: row.inicioReparacionAtMs != null ? Number(row.inicioReparacionAtMs) : null,
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
     arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
     cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
@@ -618,7 +620,7 @@ function normalizeRoadsideVehicleRow(row: any) {
   };
 }
 
-const ROADSIDE_ACTIVE_STATUSES = new Set(["asignada", "en_camino", "en_punto"]);
+const ROADSIDE_ACTIVE_STATUSES = new Set(["asignada", "en_camino", "en_punto", "inicio_reparacion"]);
 const ROADSIDE_CLOSED_STATUSES = new Set(["finalizada", "llegada_taller", "cancelada"]);
 
 async function occupyTechForRoadside(techName: string, assistanceId: number) {
@@ -666,6 +668,7 @@ function getRoadsideStatusTimestampField(status: string) {
   if (status === "asignada") return "assignedAtMs";
   if (status === "en_camino") return "departedAtMs";
   if (status === "en_punto") return "arrivedAtPointMs";
+  if (status === "inicio_reparacion") return "inicioReparacionAtMs";
   if (status === "finalizada") return "finishedAtMs";
   if (status === "llegada_taller") return "arrivedAtWorkshopMs";
   if (status === "cancelada") return "cancelledAtMs";
@@ -2891,6 +2894,7 @@ app.post(
       const allowedStatuses = new Set([
         "en_camino",
         "en_punto",
+        "inicio_reparacion",
         "finalizada",
         "llegada_taller",
       ]);
@@ -3804,51 +3808,28 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         const kindLabels: Record<string, string> = {
           matricula_camion: "Matrícula camión",
           matricula_remolque: "Matrícula remolque",
-          foto_averia: "Avería",
+          foto_averia: "Avería (antes de reparar)",
           foto_reparacion: "Reparación finalizada",
         };
 
-        const colW = 235;
-        const colH = 175;
-        const gap = 15;
-        const marginLeft = 40;
+        const maxW = 480;
+        const maxH = 320;
 
-        for (let i = 0; i < photos.length; i += 2) {
-          const left = photos[i];
-          const right = photos[i + 1];
-          const y = doc.y;
-
-          // left photo
+        for (const photo of photos) {
           try {
-            const resp = await fetch(left.url);
+            const resp = await fetch(photo.url);
             if (resp.ok) {
               const buf = Buffer.from(await resp.arrayBuffer());
-              doc.image(buf, marginLeft, y, { fit: [colW, colH] });
-              doc.fontSize(8).font("Helvetica").text(
-                kindLabels[left.kind] ?? left.kind,
-                marginLeft, y + colH + 2, { width: colW, align: "center" }
-              );
+              doc.fontSize(9).font("Helvetica-Bold")
+                .text(kindLabels[photo.kind] ?? photo.kind);
+              doc.moveDown(0.2);
+              doc.image(buf, { fit: [maxW, maxH], align: "center" });
+              doc.moveDown(0.8);
             }
           } catch { /* skip */ }
 
-          // right photo
-          if (right) {
-            try {
-              const resp = await fetch(right.url);
-              if (resp.ok) {
-                const buf = Buffer.from(await resp.arrayBuffer());
-                const x2 = marginLeft + colW + gap;
-                doc.image(buf, x2, y, { fit: [colW, colH] });
-                doc.fontSize(8).font("Helvetica").text(
-                  kindLabels[right.kind] ?? right.kind,
-                  x2, y + colH + 2, { width: colW, align: "center" }
-                );
-              }
-            } catch { /* skip */ }
-          }
-
-          doc.moveDown(0.5);
-          doc.y = y + colH + 22;
+          // Nueva página si queda poco espacio
+          if (doc.y > 680) doc.addPage();
         }
       }
 
