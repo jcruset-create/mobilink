@@ -406,6 +406,39 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS roadside_backoffice_expediente_idx ON roadside_backoffice("expedienteExterno");
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+      id SERIAL PRIMARY KEY,
+      message_sid TEXT NOT NULL UNIQUE,
+      from_phone TEXT NOT NULL,
+      profile_name TEXT,
+      body TEXT,
+      num_media INTEGER NOT NULL DEFAULT 0,
+      media_urls TEXT,
+      raw_payload TEXT,
+      processed BOOLEAN NOT NULL DEFAULT false,
+      assistance_draft_id INTEGER,
+      created_at BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS whatsapp_messages_sid_idx ON whatsapp_messages(message_sid);
+    CREATE INDEX IF NOT EXISTS whatsapp_messages_created_idx ON whatsapp_messages(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS assistance_drafts (
+      id SERIAL PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'whatsapp',
+      source_message_id INTEGER,
+      extracted_json TEXT,
+      confidence TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS assistance_drafts_status_idx ON assistance_drafts(status);
+    CREATE INDEX IF NOT EXISTS assistance_drafts_created_idx ON assistance_drafts(created_at DESC);
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

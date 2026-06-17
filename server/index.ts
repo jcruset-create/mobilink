@@ -7204,6 +7204,257 @@ app.use(
 );
 
 /* =========================================================
+   WHATSAPP INBOUND
+========================================================= */
+
+async function extractAssistanceFromMessage(body: string, mediaUrls: string[]): Promise<{ data: Record<string, any>; confidence: string }> {
+  const systemPrompt = `Eres un asistente especializado en asistencias en carretera.
+Analiza el mensaje de WhatsApp y extrae los datos de la asistencia en formato JSON.
+Reglas estrictas:
+- NO inventes datos. Si un campo no está presente, devuelve null.
+- Normaliza el teléfono al formato español (+34XXXXXXXXX o 6XXXXXXXX).
+- Normaliza la matrícula al formato español (4 dígitos + 3 letras, o antiguo formato).
+- Si hay un enlace de Google Maps, extráelo en googleMapsUrl.
+- Si el texto tiene muy poca información útil, marca confidence como "low".
+- Si tiene información suficiente para crear una asistencia, marca confidence "high".
+- En caso intermedio, "medium".
+
+Devuelve SOLO el JSON sin texto adicional:
+{
+  "cliente": null,
+  "telefonoWhatsapp": null,
+  "direccion": null,
+  "googleMapsUrl": null,
+  "latitud": null,
+  "longitud": null,
+  "matricula": null,
+  "vehiculo": null,
+  "tipoAsistencia": null,
+  "tipoVehiculo": null,
+  "estadoVehiculo": null,
+  "empresaSolicitante": null,
+  "numeroExpedienteExterno": null,
+  "conductor": null,
+  "telefonoConductor": null,
+  "observaciones": null,
+  "confidence": "medium",
+  "warnings": []
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Mensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}` },
+      ],
+      temperature: 0.1,
+      max_tokens: 800,
+    });
+
+    const raw = response.choices[0]?.message?.content ?? "{}";
+    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    const confidence = parsed.confidence ?? "medium";
+    return { data: parsed, confidence };
+  } catch (e) {
+    console.error("extractAssistanceFromMessage error:", e);
+    return { data: {}, confidence: "low" };
+  }
+}
+
+// Twilio sends form-encoded bodies for webhooks
+app.post(
+  "/api/whatsapp/inbound",
+  express.urlencoded({ extended: false }),
+  async (req, res) => {
+    try {
+      // Validate Twilio signature
+      const authToken = process.env.TWILIO_AUTH_TOKEN ?? "";
+      const twilioSig = req.headers["x-twilio-signature"] as string | undefined;
+      const fullUrl = `${process.env.PUBLIC_APP_URL ?? "https://sea-tarragona.onrender.com"}/api/whatsapp/inbound`;
+
+      if (authToken && twilioSig) {
+        const valid = twilio.validateRequest(authToken, twilioSig, fullUrl, req.body);
+        if (!valid) {
+          console.warn("Invalid Twilio signature on /api/whatsapp/inbound");
+          return res.status(403).send("Forbidden");
+        }
+      }
+
+      const {
+        MessageSid,
+        From,
+        ProfileName,
+        Body,
+        NumMedia,
+        ...rest
+      } = req.body;
+
+      if (!MessageSid || !From) {
+        return res.status(400).send("Missing required fields");
+      }
+
+      // Dedup
+      const existing = await db.query(
+        `SELECT id FROM whatsapp_messages WHERE message_sid = $1`,
+        [MessageSid]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(200).send("<Response></Response>");
+      }
+
+      const numMedia = Number(NumMedia ?? 0);
+      const mediaUrls: string[] = [];
+      for (let i = 0; i < numMedia; i++) {
+        const url = req.body[`MediaUrl${i}`];
+        if (url) mediaUrls.push(url);
+      }
+
+      const now = Date.now();
+
+      // Save message
+      const msgResult = await db.query(
+        `INSERT INTO whatsapp_messages
+          (message_sid, from_phone, profile_name, body, num_media, media_urls, raw_payload, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id`,
+        [
+          MessageSid,
+          From,
+          ProfileName ?? null,
+          Body ?? null,
+          numMedia,
+          mediaUrls.length ? JSON.stringify(mediaUrls) : null,
+          JSON.stringify({ ...rest, From, ProfileName, Body, NumMedia, MessageSid }),
+          now,
+        ]
+      );
+      const msgId = msgResult.rows[0].id;
+
+      // Extract with AI
+      const { data: extracted, confidence } = await extractAssistanceFromMessage(
+        Body ?? "",
+        mediaUrls
+      );
+
+      // Save draft
+      const draftResult = await db.query(
+        `INSERT INTO assistance_drafts
+          (source, source_message_id, extracted_json, confidence, status, created_at, updated_at)
+         VALUES ('whatsapp', $1, $2, $3, 'pending', $4, $4)
+         RETURNING id`,
+        [msgId, JSON.stringify(extracted), confidence, now]
+      );
+      const draftId = draftResult.rows[0].id;
+
+      // Link message → draft
+      await db.query(
+        `UPDATE whatsapp_messages SET processed = true, assistance_draft_id = $1 WHERE id = $2`,
+        [draftId, msgId]
+      );
+
+      console.log(`WhatsApp inbound: ${MessageSid} from ${From}, draft #${draftId}, confidence=${confidence}`);
+
+      // Twilio expects TwiML response
+      return res.status(200).type("text/xml").send("<Response></Response>");
+    } catch (error) {
+      console.error("POST /api/whatsapp/inbound error:", error);
+      return res.status(200).type("text/xml").send("<Response></Response>");
+    }
+  }
+);
+
+app.post(
+  "/api/whatsapp/status",
+  express.urlencoded({ extended: false }),
+  async (req, res) => {
+    try {
+      const { MessageSid, MessageStatus, ErrorCode } = req.body;
+      console.log(`WhatsApp status update: ${MessageSid} → ${MessageStatus}${ErrorCode ? ` (err ${ErrorCode})` : ""}`);
+      return res.status(200).send("OK");
+    } catch (error) {
+      console.error("POST /api/whatsapp/status error:", error);
+      return res.status(200).send("OK");
+    }
+  }
+);
+
+app.get("/api/whatsapp/messages", requireSupervisorRole, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const offset = Number(req.query.offset ?? 0);
+    const result = await db.query(
+      `SELECT m.*, d.extracted_json, d.confidence, d.status AS draft_status, d.id AS draft_id
+       FROM whatsapp_messages m
+       LEFT JOIN assistance_drafts d ON d.id = m.assistance_draft_id
+       ORDER BY m.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    const total = await db.query(`SELECT COUNT(*) FROM whatsapp_messages`);
+    return res.json({ items: result.rows, total: Number(total.rows[0].count) });
+  } catch (error) {
+    console.error("GET /api/whatsapp/messages error:", error);
+    return res.status(500).json({ error: "Error obteniendo mensajes" });
+  }
+});
+
+app.get("/api/assistance-drafts", requireSupervisorRole, async (req, res) => {
+  try {
+    const status = req.query.status as string | undefined;
+    const params: any[] = [];
+    const where = status ? `WHERE d.status = $${params.push(status)}` : "";
+    const result = await db.query(
+      `SELECT d.*, m.from_phone, m.profile_name, m.body AS original_body, m.media_urls
+       FROM assistance_drafts d
+       LEFT JOIN whatsapp_messages m ON m.id = d.source_message_id
+       ${where}
+       ORDER BY d.created_at DESC
+       LIMIT 100`,
+      params
+    );
+    return res.json(result.rows);
+  } catch (error) {
+    console.error("GET /api/assistance-drafts error:", error);
+    return res.status(500).json({ error: "Error obteniendo borradores" });
+  }
+});
+
+app.patch("/api/assistance-drafts/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { extracted_json, status } = req.body;
+    const result = await db.query(
+      `UPDATE assistance_drafts
+       SET extracted_json = COALESCE($2, extracted_json),
+           status = COALESCE($3, status),
+           updated_at = $4
+       WHERE id = $1 RETURNING *`,
+      [id, extracted_json ? JSON.stringify(extracted_json) : null, status ?? null, Date.now()]
+    );
+    return res.json(result.rows[0]);
+  } catch (error) {
+    console.error("PATCH /api/assistance-drafts/:id error:", error);
+    return res.status(500).json({ error: "Error actualizando borrador" });
+  }
+});
+
+app.post("/api/assistance-drafts/:id/ignore", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await db.query(
+      `UPDATE assistance_drafts SET status = 'ignored', updated_at = $2 WHERE id = $1`,
+      [id, Date.now()]
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/assistance-drafts/:id/ignore error:", error);
+    return res.status(500).json({ error: "Error ignorando borrador" });
+  }
+});
+
+/* =========================================================
    START SERVER
 ========================================================= */
 initDb()

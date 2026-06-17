@@ -219,6 +219,7 @@ import {
 } from "./modules/scheduledTechStatusApi";
 import RoadsideAssistanceView from "./components/RoadsideAssistanceView";
 import RoadsideAssistanceAdminView from "./components/RoadsideAssistanceAdminView";
+import WhatsAppInboxView from "./components/WhatsAppInboxView";
 import {
   createRoadsideAssistanceInBackend,
   createRoadsideVehicleInBackend,
@@ -5229,6 +5230,43 @@ if (
   );
 }
 
+if (view === "whatsapp_inbox" && canAccessView(userRole, "whatsapp_inbox")) {
+  return (
+    <WhatsAppInboxView
+      onBack={() => setView("operativo")}
+      onCreateAssistance={(extracted, fromPhone) => {
+        const draft: import("./modules/roadsideAssistanceTypes").RoadsideAssistanceDraft = {
+          customerName: extracted.cliente ?? "",
+          customerPhone: extracted.telefonoWhatsapp ?? fromPhone.replace("whatsapp:", "") ?? "",
+          address: extracted.direccion ?? "",
+          googleMapsUrl: extracted.googleMapsUrl ?? "",
+          latitude: extracted.latitud ?? "",
+          longitude: extracted.longitud ?? "",
+          plate: extracted.matricula ?? "",
+          vehicleDescription: extracted.vehiculo ?? "",
+          webfleetVehicleId: "",
+          assignedTechName: "",
+          assignedVehicleName: "",
+          priority: "normal",
+          notes: [
+            extracted.tipoAsistencia ? `Tipo: ${extracted.tipoAsistencia}` : "",
+            extracted.empresaSolicitante ? `Empresa: ${extracted.empresaSolicitante}` : "",
+            extracted.numeroExpedienteExterno ? `Expediente: ${extracted.numeroExpedienteExterno}` : "",
+            extracted.conductor ? `Conductor: ${extracted.conductor}` : "",
+            extracted.telefonoConductor ? `Tel. conductor: ${extracted.telefonoConductor}` : "",
+            extracted.observaciones ?? "",
+          ].filter(Boolean).join("\n"),
+          sendTrackingWhatsapp: Boolean(extracted.telefonoWhatsapp ?? fromPhone),
+        };
+        void createRoadsideAssistance(draft).then(() => {
+          setView("asistencias");
+          void reloadRoadsideAssistancesFromBackend();
+        });
+      }}
+    />
+  );
+}
+
 if (view === "ranking" && canAccessView(userRole, "ranking")) {
   return (
     <WorkRankingView
@@ -5428,6 +5466,20 @@ return (
       }`}
     >
       Config. asistencia
+    </button>
+  )}
+
+  {canAccessView(userRole, "whatsapp_inbox") && (
+    <button
+      type="button"
+      onClick={() => setView("whatsapp_inbox")}
+      className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+        view === "whatsapp_inbox"
+          ? "border border-emerald-300 bg-emerald-100 text-emerald-950 shadow-sm"
+          : "border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+      }`}
+    >
+      📥 WhatsApp
     </button>
   )}
 
