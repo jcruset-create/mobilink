@@ -3837,13 +3837,18 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
 
       if (signature) {
         doc.addPage();
-        doc.fontSize(13).font("Helvetica-Bold").text("Firma del cliente");
+        doc.fontSize(13).font("Helvetica-Bold").text("Firma del conductor");
         doc.moveDown(0.5);
+        if (a.conductorNombre || a.conductorDni) {
+          doc.fontSize(11).font("Helvetica-Bold").text(a.conductorNombre ?? "", { continued: false });
+          doc.fontSize(10).font("Helvetica").text(`DNI / NIE: ${a.conductorDni ?? "-"}`);
+          doc.moveDown(0.5);
+        }
         try {
           const resp = await fetch(signature.url);
           if (resp.ok) {
             const buffer = Buffer.from(await resp.arrayBuffer());
-            doc.image(buffer, { fit: [400, 200], align: "center" });
+            doc.image(buffer, { fit: [400, 150], align: "left" });
           }
         } catch {
           doc.fontSize(9).font("Helvetica").text(`[Firma no disponible]`);

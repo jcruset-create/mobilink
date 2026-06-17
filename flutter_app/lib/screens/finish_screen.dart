@@ -20,8 +20,8 @@ class _FinishScreenState extends State<FinishScreen> {
   final _picker = ImagePicker();
   final _sigController = SignatureController(
     penStrokeWidth: 3,
-    penColor: Colors.white,
-    exportBackgroundColor: const Color(0xFF0f3460),
+    penColor: Colors.black,
+    exportBackgroundColor: Colors.white,
   );
 
   final _nombreCtrl = TextEditingController();
@@ -245,12 +245,12 @@ class _FinishScreenState extends State<FinishScreen> {
                   const SizedBox(height: 8),
                   Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0f3460),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: _sigController.isEmpty
-                            ? Colors.white24
-                            : Colors.green.withOpacity(0.6),
+                            ? Colors.black26
+                            : Colors.green.withOpacity(0.8),
                         width: 1.5,
                       ),
                     ),
@@ -259,7 +259,7 @@ class _FinishScreenState extends State<FinishScreen> {
                       child: Signature(
                         controller: _sigController,
                         height: 160,
-                        backgroundColor: const Color(0xFF0f3460),
+                        backgroundColor: Colors.white,
                       ),
                     ),
                   ),
