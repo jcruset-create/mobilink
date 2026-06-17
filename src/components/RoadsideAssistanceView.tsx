@@ -1229,12 +1229,22 @@ export default function RoadsideAssistanceView({
                           }
                         </span>
                       </div>
-                      <div className="mt-1 text-xs font-semibold text-slate-500">
-                        {formatTime(
-                          assistance.arrivedAtWorkshopMs ||
-                            assistance.cancelledAtMs ||
-                            assistance.finishedAtMs
-                        )}
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <div className="text-xs font-semibold text-slate-500">
+                          {formatTime(
+                            assistance.arrivedAtWorkshopMs ||
+                              assistance.cancelledAtMs ||
+                              assistance.finishedAtMs
+                          )}
+                        </div>
+                        <a
+                          href={`/api/roadside-assistances/${assistance.id}/report.pdf`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+                        >
+                          Ver informe
+                        </a>
                       </div>
                     </div>
                   ))}
