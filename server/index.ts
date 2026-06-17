@@ -7,6 +7,7 @@ import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
 import PDFDocument from "pdfkit";
+import sharp from "sharp";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
@@ -3660,6 +3661,14 @@ app.delete(
    ROADSIDE PDF REPORT
 ========================================================= */
 
+async function fetchImageForPdf(url: string): Promise<Buffer> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const raw = Buffer.from(await resp.arrayBuffer());
+  // Auto-rotate based on EXIF orientation and convert to JPEG
+  return sharp(raw).rotate().jpeg({ quality: 85 }).toBuffer();
+}
+
 function formatDateEs(ms: number | null | undefined): string {
   if (!ms) return "-";
   return new Date(ms).toLocaleString("es-ES", {
@@ -3818,15 +3827,12 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
 
         for (const photo of photos) {
           try {
-            const resp = await fetch(photo.url);
-            if (resp.ok) {
-              const buf = Buffer.from(await resp.arrayBuffer());
-              doc.fontSize(9).font("Helvetica-Bold")
-                .text(kindLabels[photo.kind] ?? photo.kind);
-              doc.moveDown(0.2);
-              doc.image(buf, { fit: [maxW, maxH], align: "center" });
-              doc.moveDown(0.8);
-            }
+            const buf = await fetchImageForPdf(photo.url);
+            doc.fontSize(9).font("Helvetica-Bold")
+              .text(kindLabels[photo.kind] ?? photo.kind);
+            doc.moveDown(0.2);
+            doc.image(buf, { fit: [maxW, maxH], align: "center" });
+            doc.moveDown(0.8);
           } catch { /* skip */ }
 
           // Nueva página si queda poco espacio
@@ -3844,11 +3850,8 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           doc.moveDown(0.5);
         }
         try {
-          const resp = await fetch(signature.url);
-          if (resp.ok) {
-            const buffer = Buffer.from(await resp.arrayBuffer());
-            doc.image(buffer, { fit: [400, 150], align: "left" });
-          }
+          const buffer = await fetchImageForPdf(signature.url);
+          doc.image(buffer, { fit: [400, 150], align: "left" });
         } catch {
           doc.fontSize(9).font("Helvetica").text(`[Firma no disponible]`);
         }
