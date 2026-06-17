@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   RefreshCw,
@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronUp,
   Send,
+  Reply,
 } from "lucide-react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 
@@ -186,6 +187,31 @@ function MessageCard({
   onIgnore: (id: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [replying, setReplying] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [replyDone, setReplyDone] = useState(false);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
+
+  async function sendReply() {
+    if (!replyText.trim()) return;
+    setSendingReply(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
+        method: "POST",
+        headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
+        body: JSON.stringify({ to: msg.from_phone, body: replyText.trim() }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setReplyText("");
+      setReplying(false);
+      setReplyDone(true);
+    } catch (e: any) {
+      alert(`Error enviando respuesta: ${e.message}`);
+    } finally {
+      setSendingReply(false);
+    }
+  }
   const extracted: ExtractedData = msg.extracted_json
     ? JSON.parse(msg.extracted_json)
     : {};
@@ -293,24 +319,66 @@ function MessageCard({
           )}
 
           {/* Actions */}
-          {!isDone && (
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onCreateAssistance(msg)}
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700"
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                Crear asistencia
-              </button>
-              <button
-                type="button"
-                onClick={() => onIgnore(msg.draft_id ?? 0)}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
-              >
-                <XCircle className="h-4 w-4" />
-                Ignorar
-              </button>
+          <div className="flex flex-wrap gap-2">
+            {!isDone && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onCreateAssistance(msg)}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Crear asistencia
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onIgnore(msg.draft_id ?? 0)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Ignorar
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => { setReplying((v) => !v); setTimeout(() => replyRef.current?.focus(), 50); }}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100"
+            >
+              <Reply className="h-4 w-4" />
+              {replyDone ? "Enviado ✓" : "Responder"}
+            </button>
+          </div>
+
+          {/* Reply box */}
+          {replying && (
+            <div className="mt-3 flex gap-2">
+              <textarea
+                ref={replyRef}
+                rows={2}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendReply(); }}
+                placeholder="Escribe tu respuesta… (Ctrl+Enter para enviar)"
+                className="flex-1 resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-300"
+              />
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={sendReply}
+                  disabled={sendingReply || !replyText.trim()}
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {sendingReply ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReplying(false)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           )}
         </div>

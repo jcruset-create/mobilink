@@ -7427,6 +7427,23 @@ app.post("/api/assistance-drafts/:id/ignore", requireSupervisorRole, async (req,
   }
 });
 
+app.post("/api/whatsapp/send", requireSupervisorRole, async (req, res) => {
+  try {
+    const { to, body } = req.body;
+    if (!to || !body) return res.status(400).json({ error: "Faltan campos to/body" });
+
+    const from = process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || "whatsapp:+34610473079";
+    const toFormatted = to.startsWith("whatsapp:") ? to : `whatsapp:${to}`;
+
+    const message = await twilioClient.messages.create({ from, to: toFormatted, body });
+    console.log(`WhatsApp reply sent to ${toFormatted}: ${message.sid}`);
+    return res.json({ ok: true, sid: message.sid });
+  } catch (error: any) {
+    console.error("POST /api/whatsapp/send error:", error);
+    return res.status(500).json({ error: error.message ?? "Error enviando mensaje" });
+  }
+});
+
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
