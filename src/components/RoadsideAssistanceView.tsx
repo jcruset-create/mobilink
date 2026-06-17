@@ -1240,14 +1240,19 @@ export default function RoadsideAssistanceView({
                         <button
                           className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
                           onClick={async () => {
-                            const token = localStorage.getItem("sea-admin-token") ?? "";
-                            const res = await fetch(`/api/roadside-assistances/${assistance.id}/report.pdf`, {
-                              headers: { "x-admin-token": token },
-                            });
-                            if (!res.ok) return;
-                            const blob = await res.blob();
-                            const url = URL.createObjectURL(blob);
-                            window.open(url, "_blank");
+                            // Open window immediately (before await) to avoid popup blocker
+                            const win = window.open("", "_blank");
+                            try {
+                              const token = localStorage.getItem("sea-admin-token") ?? "";
+                              const res = await fetch(`/api/roadside-assistances/${assistance.id}/report.pdf`, {
+                                headers: { "x-admin-token": token },
+                              });
+                              if (!res.ok) { win?.close(); alert("Error generando el informe"); return; }
+                              const blob = await res.blob();
+                              const url = URL.createObjectURL(blob);
+                              if (win) win.location.href = url;
+                              else window.open(url, "_blank");
+                            } catch { win?.close(); alert("Error de conexión al generar el informe"); }
                           }}
                         >
                           Ver informe
