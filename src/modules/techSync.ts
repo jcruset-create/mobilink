@@ -33,6 +33,10 @@ export function syncTechsWithActiveJobs(baseTechs: Tech[], jobs: Job[]): Tech[] 
     );
 
     if (!activeJob) {
+      // Keep status if tech is on a roadside assistance
+      if (tech.currentRoadsideAssistanceId != null) {
+        return { ...tech, currentJobId: null, blocked: false };
+      }
       return {
         ...tech,
         status:
