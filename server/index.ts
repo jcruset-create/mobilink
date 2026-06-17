@@ -1174,7 +1174,7 @@ app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const expectedToken = process.env.ADMIN_TOKEN;
-  const token = String(req.headers["x-admin-token"] ?? "");
+  const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
 
   if (!expectedToken) {
     return res.status(500).json({
@@ -1193,7 +1193,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 function getRoleFromRequest(req: express.Request): UserRole | null {
-  const token = String(req.headers["x-admin-token"] ?? "");
+  const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
 
   if (process.env.ADMIN_PASSWORD && token === process.env.ADMIN_PASSWORD) {
     return "admin";
