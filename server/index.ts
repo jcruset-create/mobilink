@@ -594,6 +594,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     operatorLng: normalizeNullableNumber(row.operatorLng),
     operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
+    conductorNombre: row.conductorNombre ?? null,
+    conductorDni: row.conductorDni ?? null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -2969,6 +2971,44 @@ app.post(
     } catch (error) {
       console.error("POST /api/roadside-operator/assistances/:id/status error:", error);
       res.status(500).json({ error: "Error cambiando estado operario" });
+    }
+  }
+);
+
+app.post(
+  "/api/roadside-operator/assistances/:id/conductor",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+      const nombre = String(req.body?.conductorNombre || "").trim();
+      const dni = String(req.body?.conductorDni || "").trim();
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID no válido" });
+      }
+      if (!nombre || !dni) {
+        return res.status(400).json({ error: "Nombre y DNI obligatorios" });
+      }
+
+      const check = await db.query(
+        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        [id, operator.techName]
+      );
+      if (check.rows.length === 0) {
+        return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
+      }
+
+      const result = await db.query(
+        `UPDATE roadside_assistances SET "conductorNombre" = $2, "conductorDni" = $3 WHERE id = $1 RETURNING *`,
+        [id, nombre, dni]
+      );
+
+      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    } catch (error) {
+      console.error("POST /api/roadside-operator/assistances/:id/conductor error:", error);
+      res.status(500).json({ error: "Error guardando datos del conductor" });
     }
   }
 );

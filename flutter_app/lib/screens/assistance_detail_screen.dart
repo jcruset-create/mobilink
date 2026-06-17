@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
+import 'arrival_photos_screen.dart';
+import 'finish_screen.dart';
 
 class AssistanceDetailScreen extends StatefulWidget {
   final ApiService api;
@@ -16,11 +20,51 @@ class AssistanceDetailScreen extends StatefulWidget {
 class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   late Map<String, dynamic> _a;
   bool _loading = false;
+  Timer? _locationTimer;
 
   @override
   void initState() {
     super.initState();
     _a = widget.assistance;
+    if (_status == 'en_camino') _startLocationTracking();
+  }
+
+  @override
+  void dispose() {
+    _locationTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startLocationTracking() {
+    _locationTimer?.cancel();
+    _sendLocation(); // envío inmediato
+    _locationTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_status == 'en_camino') {
+        _sendLocation();
+      } else {
+        _locationTimer?.cancel();
+      }
+    });
+  }
+
+  Future<void> _sendLocation() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        await Geolocator.requestPermission();
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+      await widget.api.sendLocation(_a['id'] as int, pos.latitude, pos.longitude);
+    } catch (_) {
+      // silencioso — no interrumpir al técnico por un fallo de GPS
+    }
   }
 
   Future<void> _changeStatus(String status) async {
@@ -28,6 +72,7 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     try {
       final updated = await widget.api.updateStatus(_a['id'] as int, status);
       setState(() => _a = updated);
+      _locationTimer?.cancel();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -39,13 +84,66 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content:
-              Text(e.toString().replaceFirst('Exception: ', '')),
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
           backgroundColor: Colors.red,
         ),
       );
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _goEnCamino() async {
+    setState(() => _loading = true);
+    try {
+      final updated = await widget.api.enCamino(_a['id'] as int);
+      setState(() => _a = updated);
+      _startLocationTracking();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('En camino — se notificará al cliente por WhatsApp'),
+          backgroundColor: Colors.lightBlue,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _onFinalize() async {
+    final confirmed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => FinishScreen(
+          api: widget.api,
+          assistanceId: _a['id'] as int,
+        ),
+      ),
+    );
+    if (confirmed == true) {
+      await _changeStatus('finalizada');
+    }
+  }
+
+  Future<void> _onHeArrived() async {
+    final confirmed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ArrivalPhotosScreen(
+          api: widget.api,
+          assistanceId: _a['id'] as int,
+        ),
+      ),
+    );
+    if (confirmed == true) {
+      await _changeStatus('en_punto');
     }
   }
 
@@ -82,6 +180,7 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
 
   String get _status => _a['status'] as String? ?? '';
 
+  bool get _canGoEnCamino => _status == 'asignada';
   bool get _canHeArrived => _status == 'en_camino';
   bool get _canFinalize => _status == 'en_punto';
   bool get _hasPhone {
@@ -141,12 +240,21 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                   _section('Cambiar estado'),
                   const SizedBox(height: 12),
                   _ActionButton(
+                    icon: Icons.directions_car,
+                    label: 'Estoy en camino',
+                    color: Colors.lightBlue,
+                    enabled: _canGoEnCamino,
+                    fullWidth: true,
+                    onPressed: _goEnCamino,
+                  ),
+                  const SizedBox(height: 12),
+                  _ActionButton(
                     icon: Icons.location_on,
                     label: 'He llegado al punto',
                     color: Colors.purple,
                     enabled: _canHeArrived,
                     fullWidth: true,
-                    onPressed: () => _changeStatus('en_punto'),
+                    onPressed: _onHeArrived,
                   ),
                   const SizedBox(height: 12),
                   _ActionButton(
@@ -155,8 +263,12 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                     color: Colors.teal,
                     enabled: _canFinalize,
                     fullWidth: true,
-                    onPressed: () => _changeStatus('finalizada'),
+                    onPressed: _onFinalize,
                   ),
+                  if (_status == 'en_camino') ...[
+                    const SizedBox(height: 16),
+                    _GpsTrackingBanner(),
+                  ],
                 ],
               ),
             ),
@@ -171,6 +283,30 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
             fontWeight: FontWeight.w600,
             letterSpacing: 1),
       );
+}
+
+class _GpsTrackingBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.lightBlue.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.lightBlue.withOpacity(0.4)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.my_location, size: 16, color: Colors.lightBlue),
+          SizedBox(width: 8),
+          Text(
+            'Enviando ubicación al cliente cada 30s',
+            style: TextStyle(color: Colors.lightBlue, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _InfoCard extends StatelessWidget {
