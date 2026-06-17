@@ -300,6 +300,29 @@ export async function initDb() {
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
   `);
 
+  await pool.query(`
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "whatsappEnCaminoEnviado" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "whatsappEnCaminoAt" BIGINT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "reportToken" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "whatsappAsignadaSentAtMs" BIGINT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "whatsappFinalizadaSentAtMs" BIGINT;
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS roadside_assistances_report_token_idx
+      ON roadside_assistances("reportToken")
+      WHERE "reportToken" IS NOT NULL;
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

@@ -5,6 +5,7 @@ import SeaTarragonaV1 from "./SeaTarragonaV1";
 import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
 import WorkshopOperatorPage from "./pages/WorkshopOperatorPage";
 import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
+import RoadsideReportPage from "./pages/RoadsideReportPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 import PaymentResult from "./modules/cobros/pages/PaymentResult";
@@ -61,6 +62,8 @@ export default function App() {
       <Route path="/operario/asistencias" element={<RoadsideOperatorPage />} />
       <Route path="/operario/taller" element={<WorkshopOperatorPage />} />
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
+      <Route path="/track/:token" element={<RoadsideTrackingPage />} />
+      <Route path="/informe/:token" element={<RoadsideReportPage />} />
       <Route path="/login" element={<Login />} />
 
       <Route

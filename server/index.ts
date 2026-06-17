@@ -599,6 +599,9 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     conductorNombre: row.conductorNombre ?? null,
     conductorDni: row.conductorDni ?? null,
+    reportToken: row.reportToken ?? null,
+    whatsappAsignadaSentAtMs: row.whatsappAsignadaSentAtMs != null ? Number(row.whatsappAsignadaSentAtMs) : null,
+    whatsappFinalizadaSentAtMs: row.whatsappFinalizadaSentAtMs != null ? Number(row.whatsappFinalizadaSentAtMs) : null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -824,7 +827,7 @@ async function sendFcmNotification(techName: string, title: string, body: string
 async function sendRoadsideStatusWhatsApp(
   assistance: any,
   status: string,
-  extra?: { etaMinutos?: number | null; etaKm?: string | null; trackingUrl?: string }
+  extra?: { etaMinutos?: number | null; etaKm?: string | null; trackingUrl?: string; reportUrl?: string }
 ) {
   const customerPhone = String(assistance.customerPhone || "").trim();
   if (!customerPhone) return { status: "skipped", reason: "no_phone" };
@@ -833,37 +836,40 @@ async function sendRoadsideStatusWhatsApp(
   const name = assistance.customerName || "cliente";
   const tech = assistance.assignedTechName || "nuestro operario";
   const plate = assistance.plate || "tu vehículo";
+  const to = `whatsapp:${normalizeSpanishPhone(customerPhone)}`;
+  const from = getWhatsAppFromNumber();
 
-  let enCaminoMsg = `Hola ${name}, ${tech} ya está en camino hacia tu ubicación para la asistencia de ${plate}.`;
-  if (extra?.etaMinutos != null && extra?.etaKm != null) {
-    enCaminoMsg += ` Tiempo estimado: ${extra.etaMinutos} min · ${extra.etaKm} km.`;
-  }
-  if (extra?.trackingUrl) {
-    enCaminoMsg += ` Siga la asistencia aquí: ${extra.trackingUrl}`;
-  }
-
-  const messages: Record<string, string> = {
-    en_camino: enCaminoMsg,
-    en_punto: `Hola ${name}, ${tech} ha llegado al punto de asistencia para ${plate}.`,
-    finalizada: `Hola ${name}, la asistencia de ${plate} ha finalizado. Gracias por confiar en SEA Tarragona.`,
-    llegada_taller: `Hola ${name}, ${plate} ha llegado al taller de SEA Tarragona.`,
-  };
-
-  const body = messages[status];
-  if (!body) return { status: "skipped", reason: "no_message_for_status" };
-
-  // WhatsApp Business exige plantilla aprobada para mensajes iniciados por
-  // la empresa fuera de la ventana de 24h de conversación con el cliente.
-  // El texto libre se acepta en Twilio pero Meta lo bloquea en silencio,
-  // así que para "en_camino" reenviamos la plantilla ya aprobada de
-  // seguimiento (incluye el enlace, donde el cliente ya ve el ETA en vivo).
-  const roadsideContentSid = String(process.env.TWILIO_ROADSIDE_CONTENT_SID || "").trim();
-  if (status === "en_camino" && roadsideContentSid && extra?.trackingUrl) {
+  // ── asignada ────────────────────────────────────────────────────────────────
+  if (status === "asignada") {
+    const templateSid = String(process.env.TWILIO_TEMPLATE_ASIGNADA || "").trim();
+    if (!templateSid) return { status: "skipped", reason: "no_template_asignada" };
     try {
       await twilioClient.messages.create({
-        from: getWhatsAppFromNumber(),
-        to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
-        contentSid: roadsideContentSid,
+        from,
+        to,
+        contentSid: templateSid,
+        contentVariables: JSON.stringify({ "1": name, "2": plate, "3": tech }),
+      });
+      console.log(`[WhatsApp] asignada enviado → ${customerPhone} asistencia#${assistance.id}`);
+      return { status: "sent" };
+    } catch (err: any) {
+      console.error(`[WhatsApp] asignada error asistencia#${assistance.id}:`, err.message);
+      return { status: "error", reason: err.message };
+    }
+  }
+
+  // ── en_camino ───────────────────────────────────────────────────────────────
+  if (status === "en_camino") {
+    const templateSid = String(
+      process.env.TWILIO_TEMPLATE_EN_CAMINO || process.env.TWILIO_ROADSIDE_CONTENT_SID || ""
+    ).trim();
+    if (!templateSid) return { status: "skipped", reason: "no_template_en_camino" };
+    if (!extra?.trackingUrl) return { status: "skipped", reason: "no_tracking_url" };
+    try {
+      await twilioClient.messages.create({
+        from,
+        to,
+        contentSid: templateSid,
         contentVariables: JSON.stringify({
           "1": name,
           "2": plate,
@@ -871,24 +877,35 @@ async function sendRoadsideStatusWhatsApp(
           "4": tech,
         }),
       });
+      console.log(`[WhatsApp] en_camino enviado → ${customerPhone} asistencia#${assistance.id} url=${extra.trackingUrl}`);
       return { status: "sent" };
     } catch (err: any) {
-      console.error("sendRoadsideStatusWhatsApp (template) error:", err.message);
+      console.error(`[WhatsApp] en_camino error asistencia#${assistance.id}:`, err.message);
       return { status: "error", reason: err.message };
     }
   }
 
-  try {
-    await twilioClient.messages.create({
-      from: getWhatsAppFromNumber(),
-      to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
-      body,
-    });
-    return { status: "sent" };
-  } catch (err: any) {
-    console.error("sendRoadsideStatusWhatsApp error:", err.message);
-    return { status: "error", reason: err.message };
+  // ── finalizada ──────────────────────────────────────────────────────────────
+  if (status === "finalizada") {
+    const templateSid = String(process.env.TWILIO_TEMPLATE_FINALIZADA || "").trim();
+    if (!templateSid) return { status: "skipped", reason: "no_template_finalizada" };
+    if (!extra?.reportUrl) return { status: "skipped", reason: "no_report_url" };
+    try {
+      await twilioClient.messages.create({
+        from,
+        to,
+        contentSid: templateSid,
+        contentVariables: JSON.stringify({ "1": name, "2": plate, "3": extra.reportUrl }),
+      });
+      console.log(`[WhatsApp] finalizada enviado → ${customerPhone} asistencia#${assistance.id} url=${extra.reportUrl}`);
+      return { status: "sent" };
+    } catch (err: any) {
+      console.error(`[WhatsApp] finalizada error asistencia#${assistance.id}:`, err.message);
+      return { status: "error", reason: err.message };
+    }
   }
+
+  return { status: "skipped", reason: "no_message_for_status" };
 }
 
 async function calcularETA(
@@ -2408,6 +2425,86 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
   }
 });
 
+app.get("/api/roadside-report/:token", async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+    if (!token) return res.status(400).json({ error: "Token no valido" });
+
+    const assistanceResult = await db.query(
+      `SELECT * FROM roadside_assistances WHERE "reportToken" = $1 LIMIT 1`,
+      [token]
+    );
+
+    if (assistanceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Informe no encontrado" });
+    }
+
+    const assistance = normalizeRoadsideAssistanceRow(assistanceResult.rows[0]);
+
+    const [eventsResult, filesResult] = await Promise.all([
+      db.query(
+        `SELECT status, "createdAtMs"
+         FROM roadside_assistance_events
+         WHERE "assistanceId" = $1
+         ORDER BY "createdAtMs" ASC`,
+        [assistance.id]
+      ),
+      db.query(
+        `SELECT id, kind, url, "fileName", "createdAtMs"
+         FROM roadside_assistance_files
+         WHERE "assistanceId" = $1
+         ORDER BY "createdAtMs" ASC`,
+        [assistance.id]
+      ),
+    ]);
+
+    res.json({
+      assistance,
+      events: eventsResult.rows.map((e: any) => ({
+        status: e.status,
+        createdAtMs: Number(e.createdAtMs),
+      })),
+      files: filesResult.rows.map((f: any) => ({
+        id: Number(f.id),
+        kind: f.kind,
+        url: f.url,
+        fileName: f.fileName ?? null,
+        createdAtMs: Number(f.createdAtMs),
+      })),
+      pdfUrl: `/api/roadside-report/${token}/pdf`,
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-report/:token error:", error);
+    res.status(500).json({ error: "Error obteniendo informe" });
+  }
+});
+
+app.get("/api/roadside-report/:token/pdf", async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+    if (!token) return res.status(400).json({ error: "Token no valido" });
+
+    const assistanceResult = await db.query(
+      `SELECT id FROM roadside_assistances WHERE "reportToken" = $1 LIMIT 1`,
+      [token]
+    );
+    if (assistanceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Informe no encontrado" });
+    }
+
+    const id = Number(assistanceResult.rows[0].id);
+    const { buffer } = await buildAssistanceReportPdfBuffer(id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="asistencia_${id}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET /api/roadside-report/:token/pdf error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Error generando informe PDF" });
+    }
+  }
+});
+
 app.get(
   "/api/roadside-operator-codes",
   requireSupervisorRole,
@@ -2969,10 +3066,32 @@ app.post(
         ]
       );
 
-      const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+      let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+      // Generar reportToken al finalizar
+      if (status === "finalizada" && !updated.reportToken) {
+        const { randomUUID } = await import("crypto");
+        const reportToken = randomUUID();
+        const rtResult = await db.query(
+          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
+          [id, reportToken]
+        );
+        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
+      }
+
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
-      void sendRoadsideStatusWhatsApp(updated, status);
+
+      if (status === "finalizada" && updated.customerPhone && !updated.whatsappFinalizadaSentAtMs && updated.reportToken) {
+        const reportUrl = `${getPublicAppBaseUrl(req)}/informe/${updated.reportToken}`;
+        const waResult = await sendRoadsideStatusWhatsApp(updated, "finalizada", { reportUrl });
+        if (waResult?.status === "sent") {
+          await db.query(
+            `UPDATE roadside_assistances SET "whatsappFinalizadaSentAtMs" = $2 WHERE id = $1`,
+            [id, now]
+          );
+        }
+      }
     } catch (error) {
       console.error("POST /api/roadside-operator/assistances/:id/status error:", error);
       res.status(500).json({ error: "Error cambiando estado operario" });
@@ -3490,10 +3609,43 @@ app.post(
         ]
       );
 
-      const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+      let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+      // ── Generar reportToken si se finaliza y no existe ya ──────────────────
+      if (status === "finalizada" && !updated.reportToken) {
+        const { randomUUID } = await import("crypto");
+        const reportToken = randomUUID();
+        const rtResult = await db.query(
+          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
+          [id, reportToken]
+        );
+        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
+      }
+
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
-      void sendRoadsideStatusWhatsApp(updated, status);
+
+      // ── WhatsApp con deduplicación ─────────────────────────────────────────
+      if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
+        const waResult = await sendRoadsideStatusWhatsApp(updated, "asignada");
+        if (waResult?.status === "sent") {
+          await db.query(
+            `UPDATE roadside_assistances SET "whatsappAsignadaSentAtMs" = $2 WHERE id = $1`,
+            [id, now]
+          );
+        }
+      }
+
+      if (status === "finalizada" && updated.customerPhone && !updated.whatsappFinalizadaSentAtMs && updated.reportToken) {
+        const reportUrl = `${getPublicAppBaseUrl(req)}/informe/${updated.reportToken}`;
+        const waResult = await sendRoadsideStatusWhatsApp(updated, "finalizada", { reportUrl });
+        if (waResult?.status === "sent") {
+          await db.query(
+            `UPDATE roadside_assistances SET "whatsappFinalizadaSentAtMs" = $2 WHERE id = $1`,
+            [id, now]
+          );
+        }
+      }
     } catch (error) {
       console.error("POST /api/roadside-assistances/:id/status error:", error);
       res.status(500).json({ error: "Error cambiando estado de asistencia" });
