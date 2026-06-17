@@ -148,7 +148,7 @@ export const ROADSIDE_ASSISTANCE_STATUS_LABELS: Record<
   en_camino: "En camino",
   en_punto: "En punto",
   finalizada: "Finalizada",
-  llegada_taller: "En taller",
+  llegada_taller: "Finalizada ✓ en taller",
   cancelada: "Cancelada",
 };
 
