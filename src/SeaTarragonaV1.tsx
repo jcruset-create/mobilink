@@ -1243,6 +1243,7 @@ useAutoSync({
     await reloadLogsFromBackend();
     await reloadTechsFromBackend();
     await reloadMaintenanceAvailabilityFromBackend();
+    await reloadRoadsideAssistancesFromBackend();
   },
   onSynced: () => {
     setLastSyncAt(Date.now());
