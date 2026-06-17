@@ -134,17 +134,30 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   }
 
   Future<void> _onHeArrived() async {
-    final confirmed = await Navigator.of(context).push<bool>(
+    await _changeStatus('en_punto');
+    if (!mounted) return;
+    // Fotos de llegada: matrícula + avería antes de reparar
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ArrivalPhotosScreen(
           api: widget.api,
           assistanceId: _a['id'] as int,
+          onDone: () => _changeStatus('inicio_reparacion'),
         ),
       ),
     );
-    if (confirmed == true) {
-      await _changeStatus('en_punto');
-    }
+  }
+
+  Future<void> _addExtraPhotos() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ArrivalPhotosScreen(
+          api: widget.api,
+          assistanceId: _a['id'] as int,
+          extraMode: true,
+        ),
+      ),
+    );
   }
 
   Future<void> _openMaps() async {
@@ -182,7 +195,10 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
 
   bool get _canGoEnCamino => _status == 'asignada';
   bool get _canHeArrived => _status == 'en_camino';
-  bool get _canFinalize => _status == 'en_punto';
+  bool get _canInicioReparacion => _status == 'en_punto';
+  bool get _canFinalize => _status == 'inicio_reparacion';
+  bool get _canAddPhotos =>
+      ['en_punto', 'inicio_reparacion'].contains(_status);
   bool get _hasPhone {
     final p = _a['customerPhone'] as String? ?? '';
     return p.isNotEmpty;
@@ -255,6 +271,24 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                     enabled: _canHeArrived,
                     fullWidth: true,
                     onPressed: _onHeArrived,
+                  ),
+                  const SizedBox(height: 12),
+                  _ActionButton(
+                    icon: Icons.build,
+                    label: 'Iniciar reparación',
+                    color: Colors.deepOrange,
+                    enabled: _canInicioReparacion,
+                    fullWidth: true,
+                    onPressed: () => _changeStatus('inicio_reparacion'),
+                  ),
+                  const SizedBox(height: 12),
+                  _ActionButton(
+                    icon: Icons.add_a_photo,
+                    label: 'Añadir fotos',
+                    color: Colors.indigo,
+                    enabled: _canAddPhotos,
+                    fullWidth: true,
+                    onPressed: _addExtraPhotos,
                   ),
                   const SizedBox(height: 12),
                   _ActionButton(
@@ -372,6 +406,7 @@ class _InfoCard extends StatelessWidget {
         'asignada': 'Asignada',
         'en_camino': 'En camino',
         'en_punto': 'En punto',
+        'inicio_reparacion': 'Reparando',
         'finalizada': 'Finalizada',
         'llegada_taller': 'En taller',
         'cancelada': 'Cancelada',
@@ -383,6 +418,7 @@ class _InfoCard extends StatelessWidget {
         'asignada': Colors.blue,
         'en_camino': Colors.lightBlue,
         'en_punto': Colors.purple,
+        'inicio_reparacion': Colors.deepOrange,
         'finalizada': Colors.green,
         'llegada_taller': Colors.teal,
         'cancelada': Colors.grey,

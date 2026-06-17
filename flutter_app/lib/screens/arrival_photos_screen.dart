@@ -6,9 +6,18 @@ import '../services/api_service.dart';
 class ArrivalPhotosScreen extends StatefulWidget {
   final ApiService api;
   final int assistanceId;
+  // Si extraMode=true, solo pide fotos libres sin obligatorias
+  final bool extraMode;
+  // Callback opcional al confirmar (p.ej. cambiar estado)
+  final Future<void> Function()? onDone;
 
-  const ArrivalPhotosScreen(
-      {super.key, required this.api, required this.assistanceId});
+  const ArrivalPhotosScreen({
+    super.key,
+    required this.api,
+    required this.assistanceId,
+    this.extraMode = false,
+    this.onDone,
+  });
 
   @override
   State<ArrivalPhotosScreen> createState() => _ArrivalPhotosScreenState();
@@ -17,18 +26,24 @@ class ArrivalPhotosScreen extends StatefulWidget {
 class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
   final _picker = ImagePicker();
 
+  // Fotos obligatorias (solo en modo normal)
   File? _photoCamion;
   File? _photoRemolque;
   File? _photoAveria;
   bool _hasRemolque = false;
 
+  // Fotos extra (disponibles en ambos modos)
+  final List<File> _extraPhotos = [];
+
   bool _uploading = false;
   String? _uploadingLabel;
 
-  bool get _canConfirm =>
-      _photoCamion != null &&
-      _photoAveria != null &&
-      (!_hasRemolque || _photoRemolque != null);
+  bool get _canConfirm {
+    if (widget.extraMode) return true; // en modo extra siempre se puede confirmar
+    return _photoCamion != null &&
+        _photoAveria != null &&
+        (!_hasRemolque || _photoRemolque != null);
+  }
 
   Future<void> _pickPhoto(String label, void Function(File) onPicked) async {
     final source = await _showSourceDialog(label);
@@ -39,10 +54,22 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
       maxWidth: 1920,
     );
     if (xfile == null) return;
-    onPicked(File(xfile.path));
+    setState(() => onPicked(File(xfile.path)));
   }
 
-  Future<ImageSource?> _showSourceDialog(String label) async {
+  Future<void> _pickExtraPhoto() async {
+    final source = await _showSourceDialog('Foto adicional');
+    if (source == null) return;
+    final xfile = await _picker.pickImage(
+      source: source,
+      imageQuality: 80,
+      maxWidth: 1920,
+    );
+    if (xfile == null) return;
+    setState(() => _extraPhotos.add(File(xfile.path)));
+  }
+
+  Future<ImageSource?> _showSourceDialog(String label) {
     return showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: const Color(0xFF16213e),
@@ -86,19 +113,34 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     });
 
     try {
-      setState(() => _uploadingLabel = 'Subiendo matrícula camión...');
-      await widget.api
-          .uploadFile(widget.assistanceId, _photoCamion!, 'matricula_camion');
-
-      if (_hasRemolque && _photoRemolque != null) {
-        setState(() => _uploadingLabel = 'Subiendo matrícula remolque...');
+      if (!widget.extraMode) {
+        setState(() => _uploadingLabel = 'Subiendo matrícula camión...');
         await widget.api.uploadFile(
-            widget.assistanceId, _photoRemolque!, 'matricula_remolque');
+            widget.assistanceId, _photoCamion!, 'matricula_camion');
+
+        if (_hasRemolque && _photoRemolque != null) {
+          setState(() => _uploadingLabel = 'Subiendo matrícula remolque...');
+          await widget.api.uploadFile(
+              widget.assistanceId, _photoRemolque!, 'matricula_remolque');
+        }
+
+        setState(() => _uploadingLabel = 'Subiendo foto avería...');
+        await widget.api
+            .uploadFile(widget.assistanceId, _photoAveria!, 'foto_averia');
       }
 
-      setState(() => _uploadingLabel = 'Subiendo foto avería...');
-      await widget.api
-          .uploadFile(widget.assistanceId, _photoAveria!, 'foto_averia');
+      for (int i = 0; i < _extraPhotos.length; i++) {
+        setState(() =>
+            _uploadingLabel = 'Subiendo foto extra ${i + 1}/${_extraPhotos.length}...');
+        await widget.api.uploadFile(
+            widget.assistanceId, _extraPhotos[i], 'foto_extra');
+      }
+
+      // Callback de estado (p.ej. inicio_reparacion)
+      if (widget.onDone != null) {
+        setState(() => _uploadingLabel = 'Actualizando estado...');
+        await widget.onDone!();
+      }
 
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -118,7 +160,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
-        title: const Text('Fotos de llegada'),
+        title: Text(widget.extraMode ? 'Añadir fotos' : 'Fotos de llegada'),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),
@@ -139,57 +181,110 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Antes de marcar llegada, toma las fotos obligatorias.',
-                    style: TextStyle(color: Colors.white54, fontSize: 13),
+                  Text(
+                    widget.extraMode
+                        ? 'Añade las fotos que necesites durante la reparación.'
+                        : 'Fotografía el vehículo antes de iniciar la reparación.',
+                    style: const TextStyle(color: Colors.white54, fontSize: 13),
                   ),
                   const SizedBox(height: 24),
-                  _PhotoTile(
-                    icon: Icons.local_shipping,
-                    label: 'Matrícula del camión *',
-                    photo: _photoCamion,
-                    onTap: () => _pickPhoto(
-                        'Matrícula del camión',
-                        (f) => setState(() => _photoCamion = f)),
-                  ),
-                  const SizedBox(height: 16),
-                  _RemolqueToggle(
-                    value: _hasRemolque,
-                    onChanged: (v) => setState(() {
-                      _hasRemolque = v;
-                      if (!v) _photoRemolque = null;
-                    }),
-                  ),
-                  if (_hasRemolque) ...[
+
+                  // Fotos obligatorias (solo modo normal)
+                  if (!widget.extraMode) ...[
+                    _PhotoTile(
+                      icon: Icons.local_shipping,
+                      label: 'Matrícula del camión *',
+                      photo: _photoCamion,
+                      onTap: () => _pickPhoto('Matrícula del camión',
+                          (f) => _photoCamion = f),
+                    ),
+                    const SizedBox(height: 16),
+                    _RemolqueToggle(
+                      value: _hasRemolque,
+                      onChanged: (v) => setState(() {
+                        _hasRemolque = v;
+                        if (!v) _photoRemolque = null;
+                      }),
+                    ),
+                    if (_hasRemolque) ...[
+                      const SizedBox(height: 16),
+                      _PhotoTile(
+                        icon: Icons.rv_hookup,
+                        label: 'Matrícula del remolque *',
+                        photo: _photoRemolque,
+                        onTap: () => _pickPhoto('Matrícula del remolque',
+                            (f) => _photoRemolque = f),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     _PhotoTile(
-                      icon: Icons.rv_hookup,
-                      label: 'Matrícula del remolque *',
-                      photo: _photoRemolque,
+                      icon: Icons.warning_amber,
+                      label: 'Foto de la avería *',
+                      photo: _photoAveria,
                       onTap: () => _pickPhoto(
-                          'Matrícula del remolque',
-                          (f) => setState(() => _photoRemolque = f)),
+                          'Foto de la avería', (f) => _photoAveria = f),
                     ),
+                    const SizedBox(height: 24),
+                    _label('Fotos adicionales (opcional)'),
+                    const SizedBox(height: 8),
                   ],
-                  const SizedBox(height: 16),
-                  _PhotoTile(
-                    icon: Icons.warning_amber,
-                    label: 'Foto de la avería *',
-                    photo: _photoAveria,
-                    onTap: () => _pickPhoto(
-                        'Foto de la avería',
-                        (f) => setState(() => _photoAveria = f)),
+
+                  // Fotos extra
+                  ..._extraPhotos.asMap().entries.map((e) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _PhotoTile(
+                          icon: Icons.photo_camera,
+                          label: 'Foto extra ${e.key + 1}',
+                          photo: e.value,
+                          onTap: () => _pickPhoto(
+                              'Foto extra', (f) {
+                                setState(() => _extraPhotos[e.key] = f);
+                              }),
+                        ),
+                      )),
+
+                  // Botón añadir foto extra
+                  GestureDetector(
+                    onTap: _pickExtraPhoto,
+                    child: Container(
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF16213e),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.indigo.withOpacity(0.5), width: 1.5),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_a_photo,
+                              color: Colors.indigo, size: 20),
+                          SizedBox(width: 8),
+                          Text('Añadir otra foto',
+                              style: TextStyle(
+                                  color: Colors.indigo, fontSize: 13)),
+                        ],
+                      ),
+                    ),
                   ),
+
                   const SizedBox(height: 32),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: _canConfirm ? _confirm : null,
-                      icon: const Icon(Icons.check_circle),
-                      label: const Text('Confirmar llegada'),
+                      icon: Icon(widget.extraMode
+                          ? Icons.upload
+                          : Icons.build),
+                      label: Text(widget.extraMode
+                          ? 'Subir fotos'
+                          : 'Confirmar e iniciar reparación'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            _canConfirm ? Colors.purple : Colors.white12,
+                        backgroundColor: _canConfirm
+                            ? (widget.extraMode
+                                ? Colors.indigo
+                                : Colors.deepOrange)
+                            : Colors.white12,
                         foregroundColor:
                             _canConfirm ? Colors.white : Colors.white38,
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -203,6 +298,15 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
             ),
     );
   }
+
+  Widget _label(String text) => Text(
+        text,
+        style: const TextStyle(
+            color: Colors.white54,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8),
+      );
 }
 
 class _PhotoTile extends StatelessWidget {
@@ -211,11 +315,12 @@ class _PhotoTile extends StatelessWidget {
   final File? photo;
   final VoidCallback onTap;
 
-  const _PhotoTile(
-      {required this.icon,
-      required this.label,
-      required this.photo,
-      required this.onTap});
+  const _PhotoTile({
+    required this.icon,
+    required this.label,
+    required this.photo,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {

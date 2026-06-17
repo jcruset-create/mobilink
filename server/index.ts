@@ -3809,6 +3809,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           matricula_camion: "Matrícula camión",
           matricula_remolque: "Matrícula remolque",
           foto_averia: "Avería (antes de reparar)",
+          foto_extra: "Foto adicional",
           foto_reparacion: "Reparación finalizada",
         };
 
