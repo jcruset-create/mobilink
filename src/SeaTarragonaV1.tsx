@@ -401,6 +401,7 @@ useEffect(() => {
   const scheduledJobsDirtyRef = useRef(false);
   const scheduledJobsSaveVersionRef = useRef(0);
   const autoStandbyRunningRef = useRef(false);
+  const pendingRoadsideCapableRef = useRef<Map<string, boolean>>(new Map());
   const [scheduledJobsLoaded, setScheduledJobsLoaded] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
   return localStorage.getItem("sea-authenticated") === "true";
@@ -961,7 +962,9 @@ return {
           statusChangedAtMs:
             found.statusChangedAtMs ?? baseTech.statusChangedAtMs,
           statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
-          roadsideCapable: found.roadsideCapable ?? baseTech.roadsideCapable ?? false,
+          roadsideCapable: pendingRoadsideCapableRef.current.has(baseTech.name)
+            ? pendingRoadsideCapableRef.current.get(baseTech.name)!
+            : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
           currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
         };
       });
@@ -1547,9 +1550,10 @@ async function reloadTechsFromBackend(currentJobs = jobs) {
 
 if (!Array.isArray(data)) return;
 
-    setTechs(() => {
+    setTechs((prev) => {
       const merged = INITIAL_TECHS.map((baseTech) => {
         const found = data.find((tech: any) => tech.name === baseTech.name);
+        const prevTech = prev.find((t) => t.name === baseTech.name);
 
         const hasCompetencies =
           found?.competencies &&
@@ -1583,7 +1587,9 @@ blocked: isUnavailableTechStatus(
       statusChangedAtMs:
         found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
       statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
-      roadsideCapable: found.roadsideCapable ?? baseTech.roadsideCapable ?? false,
+      roadsideCapable: pendingRoadsideCapableRef.current.has(baseTech.name)
+        ? pendingRoadsideCapableRef.current.get(baseTech.name)!
+        : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
       currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
     }
   : baseTech;
@@ -4600,7 +4606,9 @@ async function resetAllSystem() {
       statusChangedAtMs:
         found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
       statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
-      roadsideCapable: found.roadsideCapable ?? baseTech.roadsideCapable ?? false,
+      roadsideCapable: pendingRoadsideCapableRef.current.has(baseTech.name)
+        ? pendingRoadsideCapableRef.current.get(baseTech.name)!
+        : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
       currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
     }
   : baseTech;
@@ -5042,13 +5050,18 @@ function updateTechCompetency(
 }
 
 function updateTechRoadsideCapable(name: string, value: boolean) {
+  pendingRoadsideCapableRef.current.set(name, value);
   setTechs((prev) => {
     const updated = prev.map((t) =>
       t.name === name ? { ...t, roadsideCapable: value } : t
     );
 
     const changed = updated.find((t) => t.name === name);
-    if (changed) saveTechToBackend(changed);
+    if (changed) {
+      saveTechToBackend(changed).finally(() => {
+        pendingRoadsideCapableRef.current.delete(name);
+      });
+    }
 
     return updated;
   });
