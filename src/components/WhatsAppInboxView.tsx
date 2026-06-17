@@ -113,12 +113,10 @@ const DISPLAY_FIELDS: (keyof ExtractedData)[] = [
 
 function PreviewModal({
   draft,
-  fromPhone,
   onConfirm,
   onCancel,
 }: {
   draft: ExtractedData;
-  fromPhone: string;
   onConfirm: (edited: ExtractedData) => void;
   onCancel: () => void;
 }) {
@@ -484,7 +482,6 @@ export default function WhatsAppInboxView({ onBack, onCreateAssistance }: Props)
       {previewMsg && (
         <PreviewModal
           draft={previewMsg.extracted_json ? JSON.parse(previewMsg.extracted_json) : {}}
-          fromPhone={previewMsg.from_phone}
           onConfirm={handleConfirmCreate}
           onCancel={() => setPreviewMsg(null)}
         />
