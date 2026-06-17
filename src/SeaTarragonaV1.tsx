@@ -7431,17 +7431,17 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 )}
 
 {(view === "operativo" || view === "operativo2") && validationJobs.length > 0 && (
-  <section className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 shadow-sm">
+  <section className="rounded-2xl border border-red-700 bg-red-600 px-4 py-3 shadow-sm">
     <div className="mb-2 flex items-center gap-2">
-      <span className="text-xs font-semibold text-violet-700 uppercase tracking-wide">Pendientes de validar</span>
-      <span className="rounded-full bg-violet-200 px-1.5 py-0.5 text-[10px] font-bold text-violet-800">{validationJobs.length}</span>
+      <span className="text-xs font-semibold text-white uppercase tracking-wide">Pendientes de validar</span>
+      <span className="rounded-full bg-red-800 px-1.5 py-0.5 text-[10px] font-bold text-white">{validationJobs.length}</span>
     </div>
     <div className="flex flex-col gap-2">
       {validationJobs.map((job) => {
         const Icon = AREA_META[job.area].icon;
         const assignedNames = job.assignedNames ?? [];
         return (
-          <div key={job.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2">
+          <div key={job.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-red-300 bg-white px-3 py-2">
             {/* icono + matrícula + operación */}
             <div className={`rounded-lg border p-1 ${AREA_META[job.area].color}`}>
               <Icon className="h-3 w-3" />
