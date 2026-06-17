@@ -1237,14 +1237,21 @@ export default function RoadsideAssistanceView({
                               assistance.finishedAtMs
                           )}
                         </div>
-                        <a
-                          href={`/api/roadside-assistances/${assistance.id}/report.pdf`}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
                           className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+                          onClick={async () => {
+                            const token = localStorage.getItem("sea-admin-token") ?? "";
+                            const res = await fetch(`/api/roadside-assistances/${assistance.id}/report.pdf`, {
+                              headers: { "x-admin-token": token },
+                            });
+                            if (!res.ok) return;
+                            const blob = await res.blob();
+                            const url = URL.createObjectURL(blob);
+                            window.open(url, "_blank");
+                          }}
                         >
                           Ver informe
-                        </a>
+                        </button>
                       </div>
                     </div>
                   ))}
