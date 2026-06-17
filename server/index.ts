@@ -3792,7 +3792,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           doc
             .fontSize(9)
             .font("Helvetica")
-            .text(`${formatDateEs(ev.createdAtMs)}  ->  ${label}${by}${note}`);
+            .text(`${formatDateEs(Number(ev.createdAtMs))}  ->  ${label}${by}${note}`);
         }
       }
 
