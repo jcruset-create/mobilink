@@ -3784,19 +3784,54 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         doc.fontSize(13).font("Helvetica-Bold").text("Fotografías");
         doc.moveDown(0.5);
 
-        for (const photo of photos) {
+        const kindLabels: Record<string, string> = {
+          matricula_camion: "Matrícula camión",
+          matricula_remolque: "Matrícula remolque",
+          foto_averia: "Avería",
+          foto_reparacion: "Reparación finalizada",
+        };
+
+        const colW = 235;
+        const colH = 175;
+        const gap = 15;
+        const marginLeft = 40;
+
+        for (let i = 0; i < photos.length; i += 2) {
+          const left = photos[i];
+          const right = photos[i + 1];
+          const y = doc.y;
+
+          // left photo
           try {
-            const resp = await fetch(photo.url);
+            const resp = await fetch(left.url);
             if (resp.ok) {
-              const buffer = Buffer.from(await resp.arrayBuffer());
-              doc.image(buffer, { fit: [500, 350], align: "center" });
-              doc.moveDown(0.5);
-              doc.fontSize(8).font("Helvetica").text(photo.url, { align: "center" });
-              doc.moveDown(1);
+              const buf = Buffer.from(await resp.arrayBuffer());
+              doc.image(buf, marginLeft, y, { fit: [colW, colH] });
+              doc.fontSize(8).font("Helvetica").text(
+                kindLabels[left.kind] ?? left.kind,
+                marginLeft, y + colH + 2, { width: colW, align: "center" }
+              );
             }
-          } catch {
-            doc.fontSize(9).font("Helvetica").text(`[Foto no disponible: ${photo.url}]`);
+          } catch { /* skip */ }
+
+          // right photo
+          if (right) {
+            try {
+              const resp = await fetch(right.url);
+              if (resp.ok) {
+                const buf = Buffer.from(await resp.arrayBuffer());
+                const x2 = marginLeft + colW + gap;
+                doc.image(buf, x2, y, { fit: [colW, colH] });
+                doc.fontSize(8).font("Helvetica").text(
+                  kindLabels[right.kind] ?? right.kind,
+                  x2, y + colH + 2, { width: colW, align: "center" }
+                );
+              }
+            } catch { /* skip */ }
           }
+
+          doc.moveDown(0.5);
+          doc.y = y + colH + 22;
         }
       }
 
