@@ -3661,6 +3661,71 @@ app.delete(
    ROADSIDE PDF REPORT
 ========================================================= */
 
+// Builds a 480×260 map image by compositing a 3×3 grid of OSM tiles + red marker
+async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
+  const zoom = 15;
+  const n = Math.pow(2, zoom);
+
+  const cx = (lng + 180) / 360 * n;
+  const latRad = lat * Math.PI / 180;
+  const cy = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+
+  const tileX = Math.floor(cx);
+  const tileY = Math.floor(cy);
+
+  // Fetch 3×3 tiles in parallel
+  const positions: { dx: number; dy: number; buf: Buffer | null }[] = await Promise.all(
+    [-1, 0, 1].flatMap(dy =>
+      [-1, 0, 1].map(async dx => {
+        try {
+          const r = await fetch(
+            `https://tile.openstreetmap.org/${zoom}/${tileX + dx}/${tileY + dy}.png`,
+            { headers: { "User-Agent": "SEATarragona-Informe/1.0 (internal)" }, signal: AbortSignal.timeout(6000) }
+          );
+          return { dx, dy, buf: r.ok ? Buffer.from(await r.arrayBuffer()) : null };
+        } catch {
+          return { dx, dy, buf: null };
+        }
+      })
+    )
+  );
+
+  // Pixel offset of the exact point within the center tile
+  const px = Math.round((cx - tileX) * 256);
+  const py = Math.round((cy - tileY) * 256);
+
+  // Marker SVG (red pin 20×20)
+  const m = 10;
+  const markerSvg = Buffer.from(
+    `<svg width="${m*2}" height="${m*2}" xmlns="http://www.w3.org/2000/svg">` +
+    `<circle cx="${m}" cy="${m}" r="${m-2}" fill="red" stroke="white" stroke-width="2.5"/>` +
+    `</svg>`
+  );
+
+  const compositeInputs: sharp.OverlayOptions[] = [];
+
+  for (const { dx, dy, buf } of positions) {
+    if (buf) {
+      compositeInputs.push({ input: buf, left: (dx + 1) * 256, top: (dy + 1) * 256 });
+    }
+  }
+
+  // Center of the 3×3 canvas is at tile (1,1) → pixel (256+px, 256+py)
+  compositeInputs.push({
+    input: markerSvg,
+    left: 256 + px - m,
+    top: 256 + py - m,
+  });
+
+  return sharp({
+    create: { width: 768, height: 768, channels: 4, background: { r: 200, g: 200, b: 200, alpha: 1 } },
+  })
+    .composite(compositeInputs)
+    .resize(480, 260)
+    .png()
+    .toBuffer();
+}
+
 async function fetchImageForPdf(url: string): Promise<Buffer> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -3761,11 +3826,11 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         doc.fontSize(10).font("Helvetica-Bold").text("Localización de la avería:");
         doc.moveDown(0.3);
         try {
-          const mapUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${a.latitude},${a.longitude}&zoom=15&size=480x260&markers=${a.latitude},${a.longitude},red-pushpin`;
-          const mapRes = await fetch(mapUrl, { signal: AbortSignal.timeout(8000) });
-          if (mapRes.ok) {
-            const mapBuf = Buffer.from(await mapRes.arrayBuffer());
+          const mapBuf = await buildMapImage(a.latitude, a.longitude);
+          if (mapBuf) {
             doc.image(mapBuf, { fit: [480, 260], align: "left" });
+          } else {
+            doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
           }
         } catch {
           doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
