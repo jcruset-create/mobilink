@@ -298,6 +298,7 @@ export async function initDb() {
     );
 
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT NULL;
   `);
 
   await pool.query(`

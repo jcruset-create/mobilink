@@ -86,6 +86,7 @@ export type Tech = {
   statusTotals?: Partial<Record<TechStatus, number>>;
   roadsideCapable?: boolean;
   currentRoadsideAssistanceId?: number | null;
+  phone?: string | null;
 };
 
 export type SavedTechConfig = {

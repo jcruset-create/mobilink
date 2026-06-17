@@ -500,6 +500,7 @@ function normalizeTechRow(t: any) {
     roadsideCapable: t.roadsideCapable === true || t.roadsideCapable === "true",
     currentRoadsideAssistanceId:
       t.currentRoadsideAssistanceId != null ? Number(t.currentRoadsideAssistanceId) : null,
+    phone: t.phone ?? null,
   };
 }
 
@@ -1520,7 +1521,7 @@ app.get("/api/techs", async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "currentRoadsideAssistanceId"
+             "roadsideCapable", "currentRoadsideAssistanceId", phone
       FROM techs
       ORDER BY id ASC
     `);
@@ -1546,6 +1547,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       statusChangedAtMs,
       statusTotals,
       roadsideCapable,
+      phone,
     } = req.body ?? {};
 
     const normalizedStatus = status ?? "disponible";
@@ -1582,9 +1584,10 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           avatar,
           "statusChangedAtMs",
           "statusTotals",
-          "roadsideCapable"
+          "roadsideCapable",
+          phone
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT (name)
         DO UPDATE SET
           status = EXCLUDED.status,
@@ -1595,7 +1598,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           avatar = EXCLUDED.avatar,
           "statusChangedAtMs" = EXCLUDED."statusChangedAtMs",
           "statusTotals" = EXCLUDED."statusTotals",
-          "roadsideCapable" = EXCLUDED."roadsideCapable"
+          "roadsideCapable" = EXCLUDED."roadsideCapable",
+          phone = EXCLUDED.phone
       `,
       [
         name,
@@ -1608,6 +1612,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         statusChangedAtMs ?? Date.now(),
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
+        phone != null ? String(phone).trim() || null : null,
       ]
     );
 
@@ -1624,7 +1629,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusChangedAtMs",
           "statusTotals",
           "roadsideCapable",
-          "currentRoadsideAssistanceId"
+          "currentRoadsideAssistanceId",
+          phone
         FROM techs
         WHERE name = $1
       `,

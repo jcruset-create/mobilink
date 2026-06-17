@@ -133,6 +133,7 @@ export async function saveTechToBackend(tech: Tech) {
           statusChangedAtMs: tech.statusChangedAtMs ?? nowMs(),
           statusTotals: tech.statusTotals ?? {},
           roadsideCapable: Boolean(tech.roadsideCapable),
+          phone: tech.phone ?? null,
         }),
       }
     );

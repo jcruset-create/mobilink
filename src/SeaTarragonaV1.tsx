@@ -5135,9 +5135,6 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
   return (
     <TecnicosView
       techs={visibleTechs}
-      newTechName={newTechName}
-      setNewTechName={setNewTechName}
-      addTech={addTech}
       removeTech={removeTech}
       updateTechCompetency={updateTechCompetency}
       updateTechPriority={updateTechPriority}
@@ -5147,6 +5144,21 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
         setWorkshopPinModal({ techName });
         setWorkshopPinInput("");
         setWorkshopPinError("");
+      }}
+      onSaveTech={(name, phone, isNew) => {
+        if (isNew) {
+          if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) return;
+          const newTech = { ...createTech(name), workshopId: selectedWorkshopId, phone: phone || null };
+          setTechs((prev) => [...prev, newTech]);
+          appendLog(`Técnico añadido: ${name}.`);
+          saveTechToBackend(newTech).catch((e) => console.error("Error guardando técnico:", e));
+        } else {
+          setTechs((prev) =>
+            prev.map((t) => (t.name === name ? { ...t, phone: phone || null } : t))
+          );
+          const updated = techs.find((t) => t.name === name);
+          if (updated) saveTechToBackend({ ...updated, phone: phone || null }).catch((e) => console.error("Error guardando técnico:", e));
+        }
       }}
       onBack={() => setView("operativo")}
     />
