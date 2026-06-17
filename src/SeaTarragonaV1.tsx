@@ -1550,7 +1550,7 @@ async function reloadTechsFromBackend(currentJobs = jobs) {
 
 if (!Array.isArray(data)) return;
 
-    setTechs((prev) => {
+    setTechs(() => {
       const merged = INITIAL_TECHS.map((baseTech) => {
         const found = data.find((tech: any) => tech.name === baseTech.name);
 
