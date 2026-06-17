@@ -75,7 +75,13 @@ export type RoadsideAssistance = {
   operatorLng?: number | null;
   operatorLocationAtMs?: number | null;
   plateMismatch?: boolean;
+  conductorNombre?: string | null;
+  conductorDni?: string | null;
+  reportToken?: string | null;
+  whatsappAsignadaSentAtMs?: number | null;
+  whatsappFinalizadaSentAtMs?: number | null;
   arrivedAtPointMs?: number | null;
+  inicioReparacionAtMs?: number | null;
   finishedAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;
   cancelledAtMs?: number | null;
