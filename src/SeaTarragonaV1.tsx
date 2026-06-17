@@ -8218,12 +8218,20 @@ console.log("DEBUG tiempos trabajo activo", {
             </div>
           </div>
 
-          <button
-            onClick={() => reactivatePausedJob(job.id)}
-            className="mt-3 rounded-xl bg-orange-600 px-3 py-2 text-sm font-medium text-white hover:bg-orange-700"
-          >
-            Reactivar
-          </button>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => reactivatePausedJob(job.id)}
+              className="rounded-xl bg-orange-600 px-3 py-2 text-sm font-medium text-white hover:bg-orange-700"
+            >
+              Reactivar
+            </button>
+            <button
+              onClick={() => finishJob(job.id)}
+              className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              Finalizar
+            </button>
+          </div>
         </div>
       ))
     )}
