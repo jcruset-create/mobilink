@@ -1553,7 +1553,6 @@ if (!Array.isArray(data)) return;
     setTechs((prev) => {
       const merged = INITIAL_TECHS.map((baseTech) => {
         const found = data.find((tech: any) => tech.name === baseTech.name);
-        const prevTech = prev.find((t) => t.name === baseTech.name);
 
         const hasCompetencies =
           found?.competencies &&
