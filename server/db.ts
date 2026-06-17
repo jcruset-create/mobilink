@@ -324,6 +324,88 @@ export async function initDb() {
       WHERE "reportToken" IS NOT NULL;
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS companies (
+      id SERIAL PRIMARY KEY,
+      "workshopId" TEXT,
+      nombre TEXT NOT NULL,
+      nif TEXT,
+      telefono TEXT,
+      email TEXT,
+      tipo TEXT NOT NULL DEFAULT 'otro',
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS companies_nombre_idx ON companies(nombre);
+    CREATE INDEX IF NOT EXISTS companies_workshop_idx ON companies("workshopId");
+
+    CREATE TABLE IF NOT EXISTS roadside_backoffice (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL UNIQUE REFERENCES roadside_assistances(id) ON DELETE CASCADE,
+
+      -- Bloque 1: Contactos
+      "solicitanteNombre" TEXT,
+      "solicitanteTelefono" TEXT,
+      "solicitanteWhatsapp" TEXT,
+      "solicitanteEmail" TEXT,
+      "conductorTelefono" TEXT,
+      "responsableNombre" TEXT,
+      "responsableTelefono" TEXT,
+      "responsableCargo" TEXT,
+      "autorizadorNombre" TEXT,
+      "autorizadorTelefono" TEXT,
+      "autorizadorCargo" TEXT,
+
+      -- Bloque 2: Empresas
+      "empresaSolicitanteNombre" TEXT,
+      "empresaSolicitanteTelefono" TEXT,
+      "empresaSolicitanteEmail" TEXT,
+      "empresaServicioNombre" TEXT,
+      "empresaServicioCif" TEXT,
+      "empresaServicioTelefono" TEXT,
+      "empresaFacturacionNombre" TEXT,
+      "empresaFacturacionCif" TEXT,
+      "empresaFacturacionEmail" TEXT,
+      "expedienteExterno" TEXT,
+      "referenciaCliente" TEXT,
+      "referenciaAutorizacion" TEXT,
+
+      -- Bloque 3: Operativa
+      "tiposAsistencia" TEXT,
+      "tipoVehiculo" TEXT,
+      "estadoVehiculo" TEXT,
+      "ubicacionIncidencia" TEXT,
+
+      -- Bloque 4: Vehículo
+      marca TEXT,
+      modelo TEXT,
+      color TEXT,
+      vin TEXT,
+      kilometraje INTEGER,
+      "medidaNeumatico" TEXT,
+      "ejeAfectado" TEXT,
+      "posicionRueda" TEXT,
+      "vehiculoCargado" BOOLEAN,
+      mercancia TEXT,
+      adr BOOLEAN,
+
+      -- Bloque 5: Facturación
+      facturable BOOLEAN DEFAULT true,
+      "pendienteAutorizacion" BOOLEAN DEFAULT false,
+      garantia BOOLEAN DEFAULT false,
+      interna BOOLEAN DEFAULT false,
+      "importeAcordado" NUMERIC(10,2),
+      "observacionesFacturacion" TEXT,
+
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS roadside_backoffice_assistance_idx ON roadside_backoffice("assistanceId");
+    CREATE INDEX IF NOT EXISTS roadside_backoffice_expediente_idx ON roadside_backoffice("expedienteExterno");
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

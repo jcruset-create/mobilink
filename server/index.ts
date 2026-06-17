@@ -4303,6 +4303,180 @@ app.post(
 );
 
 /* =========================================================
+   BACK OFFICE
+========================================================= */
+
+app.get(
+  "/api/roadside-assistances/:id/backoffice",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "ID inválido" });
+      const result = await db.query(
+        `SELECT * FROM roadside_backoffice WHERE "assistanceId" = $1`,
+        [id]
+      );
+      return res.json(result.rows[0] ?? null);
+    } catch (error) {
+      console.error("GET backoffice error:", error);
+      return res.status(500).json({ error: "Error obteniendo back office" });
+    }
+  }
+);
+
+app.put(
+  "/api/roadside-assistances/:id/backoffice",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "ID inválido" });
+      const now = Date.now();
+      const b = req.body;
+
+      const existing = await db.query(
+        `SELECT id FROM roadside_backoffice WHERE "assistanceId" = $1`,
+        [id]
+      );
+
+      if (existing.rows.length === 0) {
+        const result = await db.query(
+          `INSERT INTO roadside_backoffice (
+            "assistanceId",
+            "solicitanteNombre","solicitanteTelefono","solicitanteWhatsapp","solicitanteEmail",
+            "conductorTelefono",
+            "responsableNombre","responsableTelefono","responsableCargo",
+            "autorizadorNombre","autorizadorTelefono","autorizadorCargo",
+            "empresaSolicitanteNombre","empresaSolicitanteTelefono","empresaSolicitanteEmail",
+            "empresaServicioNombre","empresaServicioCif","empresaServicioTelefono",
+            "empresaFacturacionNombre","empresaFacturacionCif","empresaFacturacionEmail",
+            "expedienteExterno","referenciaCliente","referenciaAutorizacion",
+            "tiposAsistencia","tipoVehiculo","estadoVehiculo","ubicacionIncidencia",
+            marca,modelo,color,vin,kilometraje,
+            "medidaNeumatico","ejeAfectado","posicionRueda","vehiculoCargado",mercancia,adr,
+            facturable,"pendienteAutorizacion",garantia,interna,"importeAcordado","observacionesFacturacion",
+            "createdAtMs","updatedAtMs"
+          ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46
+          ) RETURNING *`,
+          [
+            id,
+            b.solicitanteNombre ?? null, b.solicitanteTelefono ?? null, b.solicitanteWhatsapp ?? null, b.solicitanteEmail ?? null,
+            b.conductorTelefono ?? null,
+            b.responsableNombre ?? null, b.responsableTelefono ?? null, b.responsableCargo ?? null,
+            b.autorizadorNombre ?? null, b.autorizadorTelefono ?? null, b.autorizadorCargo ?? null,
+            b.empresaSolicitanteNombre ?? null, b.empresaSolicitanteTelefono ?? null, b.empresaSolicitanteEmail ?? null,
+            b.empresaServicioNombre ?? null, b.empresaServicioCif ?? null, b.empresaServicioTelefono ?? null,
+            b.empresaFacturacionNombre ?? null, b.empresaFacturacionCif ?? null, b.empresaFacturacionEmail ?? null,
+            b.expedienteExterno ?? null, b.referenciaCliente ?? null, b.referenciaAutorizacion ?? null,
+            b.tiposAsistencia ? JSON.stringify(b.tiposAsistencia) : null,
+            b.tipoVehiculo ?? null, b.estadoVehiculo ?? null, b.ubicacionIncidencia ?? null,
+            b.marca ?? null, b.modelo ?? null, b.color ?? null, b.vin ?? null,
+            b.kilometraje != null ? Number(b.kilometraje) : null,
+            b.medidaNeumatico ?? null, b.ejeAfectado ?? null, b.posicionRueda ?? null,
+            b.vehiculoCargado ?? null, b.mercancia ?? null, b.adr ?? null,
+            b.facturable ?? true, b.pendienteAutorizacion ?? false, b.garantia ?? false, b.interna ?? false,
+            b.importeAcordado != null ? Number(b.importeAcordado) : null,
+            b.observacionesFacturacion ?? null,
+            now, now,
+          ]
+        );
+        return res.json(result.rows[0]);
+      } else {
+        const result = await db.query(
+          `UPDATE roadside_backoffice SET
+            "solicitanteNombre"=$2,"solicitanteTelefono"=$3,"solicitanteWhatsapp"=$4,"solicitanteEmail"=$5,
+            "conductorTelefono"=$6,
+            "responsableNombre"=$7,"responsableTelefono"=$8,"responsableCargo"=$9,
+            "autorizadorNombre"=$10,"autorizadorTelefono"=$11,"autorizadorCargo"=$12,
+            "empresaSolicitanteNombre"=$13,"empresaSolicitanteTelefono"=$14,"empresaSolicitanteEmail"=$15,
+            "empresaServicioNombre"=$16,"empresaServicioCif"=$17,"empresaServicioTelefono"=$18,
+            "empresaFacturacionNombre"=$19,"empresaFacturacionCif"=$20,"empresaFacturacionEmail"=$21,
+            "expedienteExterno"=$22,"referenciaCliente"=$23,"referenciaAutorizacion"=$24,
+            "tiposAsistencia"=$25,"tipoVehiculo"=$26,"estadoVehiculo"=$27,"ubicacionIncidencia"=$28,
+            marca=$29,modelo=$30,color=$31,vin=$32,kilometraje=$33,
+            "medidaNeumatico"=$34,"ejeAfectado"=$35,"posicionRueda"=$36,"vehiculoCargado"=$37,mercancia=$38,adr=$39,
+            facturable=$40,"pendienteAutorizacion"=$41,garantia=$42,interna=$43,"importeAcordado"=$44,"observacionesFacturacion"=$45,
+            "updatedAtMs"=$46
+          WHERE "assistanceId"=$1 RETURNING *`,
+          [
+            id,
+            b.solicitanteNombre ?? null, b.solicitanteTelefono ?? null, b.solicitanteWhatsapp ?? null, b.solicitanteEmail ?? null,
+            b.conductorTelefono ?? null,
+            b.responsableNombre ?? null, b.responsableTelefono ?? null, b.responsableCargo ?? null,
+            b.autorizadorNombre ?? null, b.autorizadorTelefono ?? null, b.autorizadorCargo ?? null,
+            b.empresaSolicitanteNombre ?? null, b.empresaSolicitanteTelefono ?? null, b.empresaSolicitanteEmail ?? null,
+            b.empresaServicioNombre ?? null, b.empresaServicioCif ?? null, b.empresaServicioTelefono ?? null,
+            b.empresaFacturacionNombre ?? null, b.empresaFacturacionCif ?? null, b.empresaFacturacionEmail ?? null,
+            b.expedienteExterno ?? null, b.referenciaCliente ?? null, b.referenciaAutorizacion ?? null,
+            b.tiposAsistencia ? JSON.stringify(b.tiposAsistencia) : null,
+            b.tipoVehiculo ?? null, b.estadoVehiculo ?? null, b.ubicacionIncidencia ?? null,
+            b.marca ?? null, b.modelo ?? null, b.color ?? null, b.vin ?? null,
+            b.kilometraje != null ? Number(b.kilometraje) : null,
+            b.medidaNeumatico ?? null, b.ejeAfectado ?? null, b.posicionRueda ?? null,
+            b.vehiculoCargado ?? null, b.mercancia ?? null, b.adr ?? null,
+            b.facturable ?? true, b.pendienteAutorizacion ?? false, b.garantia ?? false, b.interna ?? false,
+            b.importeAcordado != null ? Number(b.importeAcordado) : null,
+            b.observacionesFacturacion ?? null,
+            now,
+          ]
+        );
+        return res.json(result.rows[0]);
+      }
+    } catch (error) {
+      console.error("PUT backoffice error:", error);
+      return res.status(500).json({ error: "Error guardando back office" });
+    }
+  }
+);
+
+/* ── Companies ── */
+
+app.get("/api/companies", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const workshopId = req.query.workshopId as string | undefined;
+    const params: any[] = [];
+    const conditions: string[] = [];
+    if (q) {
+      params.push(`%${q}%`);
+      conditions.push(`(nombre ILIKE $${params.length} OR nif ILIKE $${params.length})`);
+    }
+    if (workshopId) {
+      params.push(workshopId);
+      conditions.push(`"workshopId" = $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const result = await db.query(
+      `SELECT * FROM companies ${where} ORDER BY nombre LIMIT 50`,
+      params
+    );
+    return res.json(result.rows);
+  } catch (error) {
+    console.error("GET companies error:", error);
+    return res.status(500).json({ error: "Error obteniendo empresas" });
+  }
+});
+
+app.post("/api/companies", requireSupervisorRole, async (req, res) => {
+  try {
+    const { workshopId, nombre, nif, telefono, email, tipo } = req.body;
+    if (!nombre) return res.status(400).json({ error: "Nombre requerido" });
+    const now = Date.now();
+    const result = await db.query(
+      `INSERT INTO companies ("workshopId",nombre,nif,telefono,email,tipo,"createdAtMs","updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [workshopId ?? null, nombre, nif ?? null, telefono ?? null, email ?? null, tipo ?? "otro", now, now]
+    );
+    return res.json(result.rows[0]);
+  } catch (error) {
+    console.error("POST companies error:", error);
+    return res.status(500).json({ error: "Error creando empresa" });
+  }
+});
+
+/* =========================================================
    MAINTENANCE TASKS
 ========================================================= */
 

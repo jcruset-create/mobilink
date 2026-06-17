@@ -20,7 +20,9 @@ import {
   Send,
   X,
   XCircle,
+  Briefcase,
 } from "lucide-react";
+import RoadsideBackofficeModal from "./RoadsideBackofficeModal";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
 import { geocodeAddress } from "../modules/roadsideAssistanceApi";
@@ -270,6 +272,8 @@ export default function RoadsideAssistanceView({
   const [geocodeCreateError, setGeocodeCreateError] = useState("");
   const [geocodingEdit, setGeocodingEdit] = useState(false);
   const [geocodeEditError, setGeocodeEditError] = useState("");
+
+  const [backofficeAssistance, setBackofficeAssistance] = useState<RoadsideAssistance | null>(null);
 
   // ── Pestañas panel derecho ──────────────────────────────────────────────────
   type PanelTab = "activas" | "cerradas" | "historial";
@@ -1258,6 +1262,15 @@ export default function RoadsideAssistanceView({
                         Fotos
                       </button>
 
+                      <button
+                        type="button"
+                        onClick={() => setBackofficeAssistance(assistance)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-800 hover:bg-indigo-100"
+                      >
+                        <Briefcase className="h-4 w-4" />
+                        Back Office
+                      </button>
+
                       {(assistance.status === "en_camino" ||
                         assistance.status === "en_punto") &&
                         assistance.latitude != null &&
@@ -2029,6 +2042,14 @@ export default function RoadsideAssistanceView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal Back Office */}
+      {backofficeAssistance && (
+        <RoadsideBackofficeModal
+          assistance={backofficeAssistance}
+          onClose={() => setBackofficeAssistance(null)}
+        />
       )}
 
       {/* Lightbox */}
