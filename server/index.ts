@@ -7,8 +7,6 @@ import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
 import PDFDocument from "pdfkit";
-import { Jimp } from "jimp";
-import ExifReader from "exifr";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
@@ -3665,21 +3663,7 @@ app.delete(
 async function fetchImageForPdf(url: string): Promise<Buffer> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const raw = Buffer.from(await resp.arrayBuffer());
-
-  // Read EXIF orientation (1=normal, 3=180°, 6=90°CW, 8=90°CCW)
-  let degrees = 0;
-  try {
-    const exif = await ExifReader.parse(raw, { pick: ["Orientation"] });
-    const orientation = exif?.Orientation as number | undefined;
-    if (orientation === 3) degrees = 180;
-    else if (orientation === 6) degrees = 90;
-    else if (orientation === 8) degrees = 270;
-  } catch { /* no EXIF — leave as-is */ }
-
-  const img = await Jimp.read(raw);
-  if (degrees) img.rotate(degrees);
-  return img.getBuffer("image/jpeg", { quality: 85 });
+  return Buffer.from(await resp.arrayBuffer());
 }
 
 function formatDateEs(ms: number | null | undefined): string {
