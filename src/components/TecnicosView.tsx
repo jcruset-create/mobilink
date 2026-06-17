@@ -4,32 +4,32 @@ import type {
   AreaKey,
   AssignmentRole,
   CompetencyKey,
+  RoleCapability,
+  RolePriority,
   Tech,
 } from "../modules/workshopTypes";
 import { getTechAvatarUrl } from "../modules/techAvatar";
+import {
+  defaultCompetencies,
+  defaultPriorities,
+} from "../modules/techConfig";
 
 type Props = {
   techs: Tech[];
   removeTech: (name: string) => void;
-  updateTechCompetency: (
-    name: string,
-    key: CompetencyKey,
-    role: AssignmentRole,
-    value: boolean
-  ) => void;
-  updateTechPriority: (
-    name: string,
-    area: AreaKey,
-    role: AssignmentRole,
-    value: number
-  ) => void;
-  updateTechRoadsideCapable: (name: string, value: boolean) => void;
   handleTechImageUpload: (
     event: ChangeEvent<HTMLInputElement>,
     techName: string
   ) => void;
   onSetWorkshopPin: (techName: string) => void;
-  onSaveTech: (name: string, phone: string, isNew: boolean) => void;
+  onSaveTech: (data: {
+    name: string;
+    phone: string;
+    isNew: boolean;
+    competencies: Record<CompetencyKey, RoleCapability>;
+    priorities: Record<AreaKey, RolePriority>;
+    roadsideCapable: boolean;
+  }) => void;
   onBack: () => void;
 };
 
@@ -52,15 +52,26 @@ const PRIORITY_AREAS: { key: AreaKey; label: string }[] = [
 ];
 
 type ModalState =
-  | { mode: "new"; name: string; phone: string }
-  | { mode: "edit"; tech: Tech; phone: string };
+  | {
+      mode: "new";
+      name: string;
+      phone: string;
+      roadsideCapable: boolean;
+      competencies: Record<CompetencyKey, RoleCapability>;
+      priorities: Record<AreaKey, RolePriority>;
+    }
+  | {
+      mode: "edit";
+      tech: Tech;
+      phone: string;
+      roadsideCapable: boolean;
+      competencies: Record<CompetencyKey, RoleCapability>;
+      priorities: Record<AreaKey, RolePriority>;
+    };
 
 export default function TecnicosView({
   techs,
   removeTech,
-  updateTechCompetency,
-  updateTechPriority,
-  updateTechRoadsideCapable,
   handleTechImageUpload,
   onSetWorkshopPin,
   onSaveTech,
@@ -69,11 +80,26 @@ export default function TecnicosView({
   const [modal, setModal] = useState<ModalState | null>(null);
 
   function openNew() {
-    setModal({ mode: "new", name: "", phone: "" });
+    const placeholder = "__new__";
+    setModal({
+      mode: "new",
+      name: "",
+      phone: "",
+      roadsideCapable: false,
+      competencies: defaultCompetencies(placeholder),
+      priorities: defaultPriorities(placeholder),
+    });
   }
 
   function openEdit(tech: Tech) {
-    setModal({ mode: "edit", tech, phone: tech.phone ?? "" });
+    setModal({
+      mode: "edit",
+      tech,
+      phone: tech.phone ?? "",
+      roadsideCapable: Boolean(tech.roadsideCapable),
+      competencies: { ...tech.competencies } as Record<CompetencyKey, RoleCapability>,
+      priorities: { ...tech.priorities } as Record<AreaKey, RolePriority>,
+    });
   }
 
   function closeModal() {
@@ -85,11 +111,53 @@ export default function TecnicosView({
     if (modal.mode === "new") {
       const name = modal.name.trim();
       if (!name) return;
-      onSaveTech(name, modal.phone.trim(), true);
+      onSaveTech({
+        name,
+        phone: modal.phone.trim(),
+        isNew: true,
+        competencies: modal.competencies,
+        priorities: modal.priorities,
+        roadsideCapable: modal.roadsideCapable,
+      });
     } else {
-      onSaveTech(modal.tech.name, modal.phone.trim(), false);
+      onSaveTech({
+        name: modal.tech.name,
+        phone: modal.phone.trim(),
+        isNew: false,
+        competencies: modal.competencies,
+        priorities: modal.priorities,
+        roadsideCapable: modal.roadsideCapable,
+      });
     }
     closeModal();
+  }
+
+  function setCompetency(key: CompetencyKey, role: AssignmentRole, value: boolean) {
+    setModal((prev) =>
+      prev
+        ? {
+            ...prev,
+            competencies: {
+              ...prev.competencies,
+              [key]: { ...(prev.competencies[key] ?? { responsable: false, apoyo: false }), [role]: value },
+            },
+          }
+        : prev
+    );
+  }
+
+  function setPriority(key: AreaKey, role: AssignmentRole, value: number) {
+    setModal((prev) =>
+      prev
+        ? {
+            ...prev,
+            priorities: {
+              ...prev.priorities,
+              [key]: { ...(prev.priorities[key] ?? { responsable: 99, apoyo: 99 }), [role]: value },
+            },
+          }
+        : prev
+    );
   }
 
   const editingTech = modal?.mode === "edit" ? modal.tech : null;
@@ -132,8 +200,7 @@ export default function TecnicosView({
                 key={tech.name}
                 className="rounded-2xl border border-slate-200 p-4"
               >
-                {/* Cabecera */}
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <img
                       src={getTechAvatarUrl(tech)}
@@ -154,11 +221,15 @@ export default function TecnicosView({
                           {tech.phone}
                         </a>
                       )}
+                      {Boolean(tech.roadsideCapable) && (
+                        <span className="mt-0.5 inline-block rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-bold text-emerald-800">
+                          Apto carretera
+                        </span>
+                      )}
                     </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* Editar */}
                     <button
                       type="button"
                       onClick={() => openEdit(tech)}
@@ -168,7 +239,6 @@ export default function TecnicosView({
                       Editar
                     </button>
 
-                    {/* Cambiar foto */}
                     <label className="cursor-pointer rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 hover:bg-blue-100">
                       Cambiar foto
                       <input
@@ -186,17 +256,6 @@ export default function TecnicosView({
                     >
                       🔑 PIN portal móvil
                     </button>
-
-                    <label className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(tech.roadsideCapable)}
-                        onChange={(e) =>
-                          updateTechRoadsideCapable(tech.name, e.target.checked)
-                        }
-                      />
-                      Apto carretera
-                    </label>
 
                     {tech.name !== "Ramón" && (
                       <button
@@ -217,76 +276,6 @@ export default function TecnicosView({
                     )}
                   </div>
                 </div>
-
-                {/* Tabla competencias */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-left text-slate-500">
-                        <th className="py-1 pr-3">Competencia</th>
-                        {COMPETENCY_KEYS.map(({ key, label }) => (
-                          <th key={key} className="px-2 py-1 text-center">
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(["responsable", "apoyo"] as AssignmentRole[]).map((role) => (
-                        <tr key={role} className="border-t border-slate-100">
-                          <td className="py-2 pr-3 font-bold capitalize">{role}</td>
-                          {COMPETENCY_KEYS.map(({ key }) => (
-                            <td key={key} className="px-2 py-2 text-center">
-                              <input
-                                type="checkbox"
-                                checked={tech.competencies[key]?.[role] ?? false}
-                                onChange={(e) =>
-                                  updateTechCompetency(tech.name, key, role, e.target.checked)
-                                }
-                              />
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Tabla prioridades */}
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-left text-slate-500">
-                        <th className="py-1 pr-3">Prioridad</th>
-                        {PRIORITY_AREAS.map(({ key, label }) => (
-                          <th key={key} className="px-2 py-1 text-center">
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(["responsable", "apoyo"] as AssignmentRole[]).map((role) => (
-                        <tr key={role} className="border-t border-slate-100">
-                          <td className="py-2 pr-3 font-bold capitalize">{role}</td>
-                          {PRIORITY_AREAS.map(({ key }) => (
-                            <td key={key} className="px-2 py-2 text-center">
-                              <input
-                                type="number"
-                                min={1}
-                                value={tech.priorities[key]?.[role] ?? 99}
-                                onChange={(e) =>
-                                  updateTechPriority(tech.name, key, role, Number(e.target.value))
-                                }
-                                className="w-16 rounded border border-slate-200 px-2 py-1 text-center"
-                              />
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
               </div>
             ))}
           </div>
@@ -296,7 +285,7 @@ export default function TecnicosView({
       {/* ── Modal ficha técnico ── */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <h2 className="text-lg font-black">
@@ -312,7 +301,7 @@ export default function TecnicosView({
             </div>
 
             {/* Body */}
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
               {/* Foto (edit only) */}
               {modal.mode === "edit" && (
                 <div className="flex items-center gap-4">
@@ -349,7 +338,6 @@ export default function TecnicosView({
                         prev?.mode === "new" ? { ...prev, name: e.target.value } : prev
                       )
                     }
-                    onKeyDown={(e) => e.key === "Enter" && handleSave()}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
                   />
                 ) : (
@@ -380,19 +368,19 @@ export default function TecnicosView({
                 </div>
               </label>
 
-              {/* Apto carretera (edit only) */}
-              {modal.mode === "edit" && (
-                <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(modal.tech.roadsideCapable)}
-                    onChange={(e) =>
-                      updateTechRoadsideCapable(modal.tech.name, e.target.checked)
-                    }
-                  />
-                  <span className="text-sm font-bold text-emerald-800">Apto carretera</span>
-                </label>
-              )}
+              {/* Apto carretera */}
+              <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={modal.roadsideCapable}
+                  onChange={(e) =>
+                    setModal((prev) =>
+                      prev ? { ...prev, roadsideCapable: e.target.checked } : prev
+                    )
+                  }
+                />
+                <span className="text-sm font-bold text-emerald-800">Apto carretera</span>
+              </label>
 
               {/* PIN (edit only) */}
               {modal.mode === "edit" && (
@@ -404,6 +392,78 @@ export default function TecnicosView({
                   🔑 Cambiar PIN portal móvil
                 </button>
               )}
+
+              {/* Competencias */}
+              <div>
+                <div className="mb-2 text-xs font-bold text-slate-600">Competencias</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-slate-500">
+                        <th className="py-1 pr-3">Rol</th>
+                        {COMPETENCY_KEYS.map(({ key, label }) => (
+                          <th key={key} className="px-2 py-1 text-center">
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["responsable", "apoyo"] as AssignmentRole[]).map((role) => (
+                        <tr key={role} className="border-t border-slate-100">
+                          <td className="py-2 pr-3 font-bold capitalize">{role}</td>
+                          {COMPETENCY_KEYS.map(({ key }) => (
+                            <td key={key} className="px-2 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={modal.competencies[key]?.[role] ?? false}
+                                onChange={(e) => setCompetency(key, role, e.target.checked)}
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Prioridades */}
+              <div>
+                <div className="mb-2 text-xs font-bold text-slate-600">Prioridades</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-slate-500">
+                        <th className="py-1 pr-3">Rol</th>
+                        {PRIORITY_AREAS.map(({ key, label }) => (
+                          <th key={key} className="px-2 py-1 text-center">
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["responsable", "apoyo"] as AssignmentRole[]).map((role) => (
+                        <tr key={role} className="border-t border-slate-100">
+                          <td className="py-2 pr-3 font-bold capitalize">{role}</td>
+                          {PRIORITY_AREAS.map(({ key }) => (
+                            <td key={key} className="px-2 py-2 text-center">
+                              <input
+                                type="number"
+                                min={1}
+                                value={modal.priorities[key]?.[role] ?? 99}
+                                onChange={(e) => setPriority(key, role, Number(e.target.value))}
+                                className="w-16 rounded border border-slate-200 px-2 py-1 text-center"
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
 
             {/* Footer */}

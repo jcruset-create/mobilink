@@ -26,8 +26,6 @@ import type {
   AISuggestion,
   AllocationResult,
   AreaKey,
-  AssignmentRole,
-  CompetencyKey,
   Job,
   JobStatus,
   LinkedTemplate,
@@ -592,7 +590,6 @@ const [workshopPinError, setWorkshopPinError] = useState("");
 const [log, setLog] = useState<LogItem[]>([]);
 const [externalAIAnswer, setExternalAIAnswer] = useState("");
 const [externalAILoading, setExternalAILoading] = useState(false);
-const [newTechName, setNewTechName] = useState("");
 const [tick, setTick] = useState(0);
 const [view, setView] = useState<AppView>(() => {
   const storedRole = localStorage.getItem("sea-role");
@@ -4766,20 +4763,6 @@ function reassignJob(jobId: number, techName: string) {
   recalcWaitingQueue(reassignedTechs, updatedJobs);
 }
   
-  function addTech() {
-    const name = newTechName.trim();
-    if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) {
-      return;
-    }
-    const newTech = { ...createTech(name), workshopId: selectedWorkshopId };
-    setTechs((prev) => [...prev, newTech]);
-    setNewTechName("");
-    appendLog(`Técnico añadido: ${name}.`);
-    saveTechToBackend(newTech).catch((error) => {
-      console.error("Error guardando nuevo técnico:", error);
-      appendLog(`Error guardando el técnico ${name} en el servidor.`);
-    });
-  }
 function addSupportToJob(jobId: number, forcedSupportName?: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "activo") return;
@@ -5023,77 +5006,6 @@ function removeSupportFromActiveJob(jobId: number) {
     });
   }
 
-function updateTechCompetency(
-  name: string,
-  key: CompetencyKey,
-  role: AssignmentRole,
-  value: boolean
-) {
-  setTechs((prev) => {
-    const updated = prev.map((t) =>
-      t.name === name
-        ? {
-            ...t,
-            competencies: {
-              ...t.competencies,
-              [key]: { ...t.competencies[key], [role]: value },
-            },
-          }
-        : t
-    );
-
-    const changed = updated.find((t) => t.name === name);
-    if (changed) saveTechToBackend(changed);
-
-    return updated;
-  });
-}
-
-function updateTechRoadsideCapable(name: string, value: boolean) {
-  pendingRoadsideCapableRef.current.set(name, value);
-  setTechs((prev) => {
-    const updated = prev.map((t) =>
-      t.name === name ? { ...t, roadsideCapable: value } : t
-    );
-
-    const changed = updated.find((t) => t.name === name);
-    if (changed) {
-      saveTechToBackend(changed).finally(() => {
-        pendingRoadsideCapableRef.current.delete(name);
-      });
-    }
-
-    return updated;
-  });
-}
-
-function updateTechPriority(
-  name: string,
-  area: AreaKey,
-  role: AssignmentRole,
-  value: number
-) {
-  const nextValue = Number.isFinite(value) && value > 0 ? value : 99;
-
-  setTechs((prev) => {
-    const updated = prev.map((t) =>
-      t.name === name
-        ? {
-            ...t,
-            priorities: {
-              ...t.priorities,
-              [area]: { ...t.priorities[area], [role]: nextValue },
-            },
-          }
-        : t
-    );
-
-    const changed = updated.find((t) => t.name === name);
-    if (changed) saveTechToBackend(changed);
-
-    return updated;
-  });
-}
 
 
 if (userRole === "tv75") {
@@ -5136,28 +5048,40 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
     <TecnicosView
       techs={visibleTechs}
       removeTech={removeTech}
-      updateTechCompetency={updateTechCompetency}
-      updateTechPriority={updateTechPriority}
-      updateTechRoadsideCapable={updateTechRoadsideCapable}
       handleTechImageUpload={handleTechImageUpload}
       onSetWorkshopPin={(techName) => {
         setWorkshopPinModal({ techName });
         setWorkshopPinInput("");
         setWorkshopPinError("");
       }}
-      onSaveTech={(name, phone, isNew) => {
+      onSaveTech={({ name, phone, isNew, competencies, priorities, roadsideCapable }) => {
         if (isNew) {
           if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) return;
-          const newTech = { ...createTech(name), workshopId: selectedWorkshopId, phone: phone || null };
+          const newTech = {
+            ...createTech(name),
+            workshopId: selectedWorkshopId,
+            phone: phone || null,
+            competencies,
+            priorities,
+            roadsideCapable,
+          };
           setTechs((prev) => [...prev, newTech]);
           appendLog(`Técnico añadido: ${name}.`);
           saveTechToBackend(newTech).catch((e) => console.error("Error guardando técnico:", e));
         } else {
           setTechs((prev) =>
-            prev.map((t) => (t.name === name ? { ...t, phone: phone || null } : t))
+            prev.map((t) =>
+              t.name === name
+                ? { ...t, phone: phone || null, competencies, priorities, roadsideCapable }
+                : t
+            )
           );
-          const updated = techs.find((t) => t.name === name);
-          if (updated) saveTechToBackend({ ...updated, phone: phone || null }).catch((e) => console.error("Error guardando técnico:", e));
+          const base = techs.find((t) => t.name === name);
+          if (base) {
+            saveTechToBackend({ ...base, phone: phone || null, competencies, priorities, roadsideCapable }).catch(
+              (e) => console.error("Error guardando técnico:", e)
+            );
+          }
         }
       }}
       onBack={() => setView("operativo")}
