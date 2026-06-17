@@ -7178,32 +7178,6 @@ app.put(
 );
 
 /* =========================================================
-   STATIC / SPA CATCH-ALL (must be after all API routes)
-========================================================= */
-
-app.use(express.static(path.join(__dirname, "../dist")));
-
-app.get(/.*/, (_req, res) => {
-  res.sendFile(path.join(__dirname, "../dist/index.html"));
-});
-
-app.use((_req, res) => {
-  res.status(404).json({ error: "Ruta no encontrada" });
-});
-
-app.use(
-  (
-    error: any,
-    _req: express.Request,
-    res: express.Response,
-    _next: express.NextFunction
-  ) => {
-    console.error("Unhandled server error:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-);
-
-/* =========================================================
    WHATSAPP INBOUND
 ========================================================= */
 
@@ -7452,6 +7426,32 @@ app.post("/api/assistance-drafts/:id/ignore", requireSupervisorRole, async (req,
     return res.status(500).json({ error: "Error ignorando borrador" });
   }
 });
+
+/* =========================================================
+   STATIC / SPA CATCH-ALL (must be after all API routes)
+========================================================= */
+
+app.use(express.static(path.join(__dirname, "../dist")));
+
+app.get(/.*/, (_req, res) => {
+  res.sendFile(path.join(__dirname, "../dist/index.html"));
+});
+
+app.use((_req, res) => {
+  res.status(404).json({ error: "Ruta no encontrada" });
+});
+
+app.use(
+  (
+    error: any,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction
+  ) => {
+    console.error("Unhandled server error:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+);
 
 /* =========================================================
    START SERVER
