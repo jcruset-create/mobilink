@@ -3736,6 +3736,23 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       row("Prioridad:", a.priority === "urgente" ? "URGENTE" : "Normal");
       if (a.notes) row("Notas:", a.notes);
 
+      // Mapa estático de la ubicación
+      if (a.latitude != null && a.longitude != null) {
+        doc.moveDown(0.5);
+        doc.fontSize(10).font("Helvetica-Bold").text("Localización de la avería:");
+        doc.moveDown(0.3);
+        try {
+          const mapUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${a.latitude},${a.longitude}&zoom=15&size=480x260&markers=${a.latitude},${a.longitude},red-pushpin`;
+          const mapRes = await fetch(mapUrl, { signal: AbortSignal.timeout(8000) });
+          if (mapRes.ok) {
+            const mapBuf = Buffer.from(await mapRes.arrayBuffer());
+            doc.image(mapBuf, { fit: [480, 260], align: "left" });
+          }
+        } catch {
+          doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
+        }
+      }
+
       doc.moveDown(1);
       doc.fontSize(13).font("Helvetica-Bold").text("Asignación");
       doc.moveDown(0.3);
