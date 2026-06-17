@@ -7,6 +7,7 @@ import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
 import PDFDocument from "pdfkit";
+import sharp from "sharp";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
@@ -3663,7 +3664,15 @@ app.delete(
 async function fetchImageForPdf(url: string): Promise<Buffer> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return Buffer.from(await resp.arrayBuffer());
+  const raw = Buffer.from(await resp.arrayBuffer());
+  // Convert to PNG: fixes scan-line artifacts from Android JPEG color profiles/subsampling.
+  // sharp auto-rotates EXIF orientation and strips metadata.
+  // Falls back to raw buffer if sharp fails.
+  try {
+    return await sharp(raw).rotate().png().toBuffer();
+  } catch {
+    return raw;
+  }
 }
 
 function formatDateEs(ms: number | null | undefined): string {
