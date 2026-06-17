@@ -3802,6 +3802,9 @@ app.post(
         [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
 
+      let plateAction: "none" | "assigned" | "match" | "mismatch" = "none";
+      let currentPlateAfter: string | null = null;
+
       if (kind === "matricula_camion" && detectedPlate) {
         const assistanceResult = await db.query(
           `SELECT plate FROM roadside_assistances WHERE id = $1 LIMIT 1`,
@@ -3814,15 +3817,27 @@ app.post(
             `UPDATE roadside_assistances SET plate = $2 WHERE id = $1`,
             [id, detectedPlate]
           );
-        } else if (currentPlate !== detectedPlate) {
+          plateAction = "assigned";
+          currentPlateAfter = detectedPlate;
+        } else if (currentPlate === detectedPlate) {
+          plateAction = "match";
+          currentPlateAfter = currentPlate;
+        } else {
           await db.query(
             `UPDATE roadside_assistances SET "plateMismatch" = true WHERE id = $1`,
             [id]
           );
+          plateAction = "mismatch";
+          currentPlateAfter = currentPlate;
         }
       }
 
-      res.json(result.rows[0]);
+      res.json({
+        file: result.rows[0],
+        plateAction,
+        detectedPlate: detectedPlate ?? null,
+        currentPlate: currentPlateAfter,
+      });
     } catch (error: any) {
       console.error("POST /api/roadside-assistances/:id/files error:", error);
       res.status(500).json({ error: "Error subiendo archivo" });

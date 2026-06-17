@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 
 class ArrivalPhotosScreen extends StatefulWidget {
@@ -45,28 +47,36 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
         (!_hasRemolque || _photoRemolque != null);
   }
 
+  Future<File> _normalizeImage(XFile xfile) async {
+    final tmpDir = await getTemporaryDirectory();
+    final outPath = '${tmpDir.path}/norm_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final result = await FlutterImageCompress.compressAndGetFile(
+      xfile.path,
+      outPath,
+      quality: 85,
+      minWidth: 1920,
+      minHeight: 1080,
+      keepExif: false, // elimina EXIF — la foto queda ya rotada correctamente
+    );
+    return result == null ? File(xfile.path) : File(result.path);
+  }
+
   Future<void> _pickPhoto(String label, void Function(File) onPicked) async {
     final source = await _showSourceDialog(label);
     if (source == null) return;
-    final xfile = await _picker.pickImage(
-      source: source,
-      imageQuality: 80,
-      maxWidth: 1920,
-    );
+    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
     if (xfile == null) return;
-    setState(() => onPicked(File(xfile.path)));
+    final file = await _normalizeImage(xfile);
+    setState(() => onPicked(file));
   }
 
   Future<void> _pickExtraPhoto() async {
     final source = await _showSourceDialog('Foto adicional');
     if (source == null) return;
-    final xfile = await _picker.pickImage(
-      source: source,
-      imageQuality: 80,
-      maxWidth: 1920,
-    );
+    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
     if (xfile == null) return;
-    setState(() => _extraPhotos.add(File(xfile.path)));
+    final file = await _normalizeImage(xfile);
+    setState(() => _extraPhotos.add(file));
   }
 
   Future<ImageSource?> _showSourceDialog(String label) {
@@ -106,6 +116,46 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     );
   }
 
+  Future<void> _handlePlateResult(Map<String, dynamic> result) async {
+    final action = result['plateAction'] as String? ?? 'none';
+    final detected = result['detectedPlate'] as String?;
+    final current = result['currentPlate'] as String?;
+
+    if (action == 'none' || !mounted) return;
+
+    String title;
+    String message;
+    Color color;
+
+    if (action == 'assigned') {
+      title = 'Matrícula detectada';
+      message = 'La IA ha leído la matrícula ${detected ?? ''} y la ha asignado a esta asistencia.';
+      color = Colors.green;
+    } else if (action == 'match') {
+      title = '✓ Matrícula correcta';
+      message = 'La matrícula detectada (${detected ?? ''}) coincide con la registrada.';
+      color = Colors.green;
+    } else {
+      title = '⚠️ Matrícula no coincide';
+      message = 'La IA detectó ${detected ?? '(no legible)'} pero la asistencia tiene ${current ?? '(sin matrícula)'}. Avisa a oficina si hay error.';
+      color = Colors.orange;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _confirm() async {
     setState(() {
       _uploading = true;
@@ -115,8 +165,9 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     try {
       if (!widget.extraMode) {
         setState(() => _uploadingLabel = 'Subiendo matrícula camión...');
-        await widget.api.uploadFile(
+        final plateResult = await widget.api.uploadFile(
             widget.assistanceId, _photoCamion!, 'matricula_camion');
+        await _handlePlateResult(plateResult);
 
         if (_hasRemolque && _photoRemolque != null) {
           setState(() => _uploadingLabel = 'Subiendo matrícula remolque...');
