@@ -192,7 +192,13 @@ type Props = {
   ) => Promise<void>;
 };
 
-function ClosedAssistanceCard({ assistance }: { assistance: RoadsideAssistance }) {
+function ClosedAssistanceCard({
+  assistance,
+  onOpenBackoffice,
+}: {
+  assistance: RoadsideAssistance;
+  onOpenBackoffice: (a: RoadsideAssistance) => void;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 px-3 py-2">
       <div className="flex items-center justify-between gap-3">
@@ -210,16 +216,25 @@ function ClosedAssistanceCard({ assistance }: { assistance: RoadsideAssistance }
         <div className="text-xs font-semibold text-slate-500">
           {formatTime(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
         </div>
-        <button
-          type="button"
-          className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
-          onClick={() => {
-            const token = localStorage.getItem("sea-admin-token") ?? "";
-            window.open(`/api/roadside-assistances/${assistance.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
-          }}
-        >
-          Ver informe
-        </button>
+        <div className="flex gap-1">
+          <button
+            type="button"
+            className="shrink-0 rounded bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+            onClick={() => onOpenBackoffice(assistance)}
+          >
+            Back Office
+          </button>
+          <button
+            type="button"
+            className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+            onClick={() => {
+              const token = localStorage.getItem("sea-admin-token") ?? "";
+              window.open(`/api/roadside-assistances/${assistance.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+            }}
+          >
+            Ver informe
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1313,7 +1328,11 @@ export default function RoadsideAssistanceView({
                 ) : (
                   <div className="grid gap-2 md:grid-cols-2">
                     {closedAssistances.map((assistance) => (
-                      <ClosedAssistanceCard key={`closed-${assistance.id}`} assistance={assistance} />
+                      <ClosedAssistanceCard
+                        key={`closed-${assistance.id}`}
+                        assistance={assistance}
+                        onOpenBackoffice={setBackofficeAssistance}
+                      />
                     ))}
                   </div>
                 )}
@@ -1416,16 +1435,25 @@ export default function RoadsideAssistanceView({
                               </span>
                             </td>
                             <td className="px-3 py-2">
-                              <button
-                                type="button"
-                                className="rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
-                                onClick={() => {
-                                  const token = localStorage.getItem("sea-admin-token") ?? "";
-                                  window.open(`/api/roadside-assistances/${item.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
-                                }}
-                              >
-                                PDF
-                              </button>
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  className="rounded bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                                  onClick={() => setBackofficeAssistance(item as any)}
+                                >
+                                  Back Office
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+                                  onClick={() => {
+                                    const token = localStorage.getItem("sea-admin-token") ?? "";
+                                    window.open(`/api/roadside-assistances/${item.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+                                  }}
+                                >
+                                  PDF
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
