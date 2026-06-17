@@ -2309,6 +2309,62 @@ app.get("/api/roadside-assistances", async (req, res) => {
   }
 });
 
+app.get("/api/roadside-assistances/historial", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim().toLowerCase();
+    const status = String(req.query.status || "").trim();
+    const techName = String(req.query.techName || "").trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = 50;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (q) {
+      conditions.push(
+        `(LOWER("plate") LIKE $${idx} OR LOWER("customerName") LIKE $${idx} OR LOWER("customerPhone") LIKE $${idx} OR LOWER("address") LIKE $${idx})`
+      );
+      params.push(`%${q}%`);
+      idx++;
+    }
+    if (status) {
+      conditions.push(`status = $${idx}`);
+      params.push(status);
+      idx++;
+    }
+    if (techName) {
+      conditions.push(`"assignedTechName" = $${idx}`);
+      params.push(techName);
+      idx++;
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const [dataResult, countResult] = await Promise.all([
+      db.query(
+        `SELECT * FROM roadside_assistances ${where} ORDER BY "createdAtMs" DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+        [...params, limit, offset]
+      ),
+      db.query(
+        `SELECT COUNT(*) FROM roadside_assistances ${where}`,
+        params
+      ),
+    ]);
+
+    res.json({
+      items: dataResult.rows.map(normalizeRoadsideAssistanceRow),
+      total: Number(countResult.rows[0].count),
+      page,
+      limit,
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/historial error:", error);
+    res.status(500).json({ error: "Error obteniendo historial" });
+  }
+});
+
 app.get("/api/roadside-tracking/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();

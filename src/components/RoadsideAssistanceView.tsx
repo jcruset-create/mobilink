@@ -190,6 +190,39 @@ type Props = {
   ) => Promise<void>;
 };
 
+function ClosedAssistanceCard({ assistance }: { assistance: RoadsideAssistance }) {
+  return (
+    <div className="rounded-lg border border-slate-200 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="truncate text-sm font-black">
+          {assistance.plate || assistance.customerName}
+        </div>
+        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${STATUS_BADGES[assistance.status]}`}>
+          {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
+        </span>
+      </div>
+      {assistance.customerName && (
+        <div className="mt-0.5 truncate text-xs text-slate-500">{assistance.customerName}</div>
+      )}
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-slate-500">
+          {formatTime(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
+        </div>
+        <button
+          type="button"
+          className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+          onClick={() => {
+            const token = localStorage.getItem("sea-admin-token") ?? "";
+            window.open(`/api/roadside-assistances/${assistance.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+          }}
+        >
+          Ver informe
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function RoadsideAssistanceView({
   assistances,
   techs,
@@ -238,6 +271,21 @@ export default function RoadsideAssistanceView({
   const [geocodingEdit, setGeocodingEdit] = useState(false);
   const [geocodeEditError, setGeocodeEditError] = useState("");
 
+  // ── Pestañas panel derecho ──────────────────────────────────────────────────
+  type PanelTab = "activas" | "cerradas" | "historial";
+  const [panelTab, setPanelTab] = useState<PanelTab>("activas");
+
+  // ── Historial ───────────────────────────────────────────────────────────────
+  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null };
+  const [historialItems, setHistorialItems] = useState<HistorialItem[]>([]);
+  const [historialTotal, setHistorialTotal] = useState(0);
+  const [historialPage, setHistorialPage] = useState(1);
+  const [historialLoading, setHistorialLoading] = useState(false);
+  const [historialQ, setHistorialQ] = useState("");
+  const [historialStatus, setHistorialStatus] = useState("");
+  const [historialTech, setHistorialTech] = useState("");
+  const [historialQInput, setHistorialQInput] = useState("");
+
   useEffect(() => {
     if (!photosAssistance) return;
     setPhotosLoading(true);
@@ -263,6 +311,32 @@ export default function RoadsideAssistanceView({
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
   }, [mapAssistance?.id]);
+
+  useEffect(() => {
+    if (panelTab !== "historial") return;
+    setHistorialLoading(true);
+    const params = new URLSearchParams();
+    if (historialQ) params.set("q", historialQ);
+    if (historialStatus) params.set("status", historialStatus);
+    if (historialTech) params.set("techName", historialTech);
+    params.set("page", String(historialPage));
+    const token = localStorage.getItem("sea-admin-token") ?? "";
+    fetch(`${API_BASE}/api/roadside-assistances/historial?${params}`, {
+      headers: { "x-admin-token": token },
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        setHistorialItems(Array.isArray(d.items) ? d.items : []);
+        setHistorialTotal(d.total ?? 0);
+      })
+      .catch(() => {})
+      .finally(() => setHistorialLoading(false));
+  }, [panelTab, historialQ, historialStatus, historialTech, historialPage]);
+
+  function searchHistorial() {
+    setHistorialQ(historialQInput);
+    setHistorialPage(1);
+  }
 
   const roadsideCapableTechs = useMemo(
     () => techs.filter((tech) => tech.roadsideCapable),
@@ -922,23 +996,34 @@ export default function RoadsideAssistanceView({
           </div>
 
           <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-black uppercase text-slate-700">
-                Asistencias activas
-              </h2>
-              {loading && (
-                <span className="inline-flex items-center gap-2 text-xs font-bold text-slate-500">
-                  <Clock3 className="h-4 w-4" />
-                  Cargando
-                </span>
+            {/* ── Pestañas ── */}
+            <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+              {(["activas", "cerradas", "historial"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setPanelTab(tab)}
+                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-black uppercase tracking-wide transition-colors ${
+                    panelTab === tab
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-500 hover:bg-slate-50"
+                  }`}
+                >
+                  {tab === "activas" ? `Activas (${activeAssistances.length})` : tab === "cerradas" ? "Últimas cerradas" : "Historial"}
+                </button>
+              ))}
+              {loading && panelTab !== "historial" && (
+                <Clock3 className="h-4 w-4 shrink-0 text-slate-400" />
               )}
             </div>
 
-            {activeAssistances.length === 0 && (
+            {/* ── Tab: Activas ── */}
+            {panelTab === "activas" && activeAssistances.length === 0 && (
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
                 Sin asistencias activas.
               </div>
             )}
+            {panelTab === "activas" && activeAssistances.length > 0 && (
 
             <div className="grid gap-3 lg:grid-cols-2">
               {activeAssistances.map((assistance) => {
@@ -1203,57 +1288,149 @@ export default function RoadsideAssistanceView({
                 );
               })}
             </div>
+            )}
 
-            {closedAssistances.length > 0 && (
-              <section className="rounded-lg border border-slate-200 bg-white p-4">
-                <h2 className="mb-3 text-sm font-black uppercase text-slate-700">
-                  Ultimas cerradas
-                </h2>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {closedAssistances.map((assistance) => (
-                    <div
-                      key={`closed-${assistance.id}`}
-                      className="rounded-lg border border-slate-200 px-3 py-2"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="truncate text-sm font-black">
-                          {assistance.plate || assistance.customerName}
-                        </div>
-                        <span
-                          className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${STATUS_BADGES[assistance.status]}`}
-                        >
-                          {
-                            ROADSIDE_ASSISTANCE_STATUS_LABELS[
-                              assistance.status
-                            ]
-                          }
-                        </span>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between gap-2">
-                        <div className="text-xs font-semibold text-slate-500">
-                          {formatTime(
-                            assistance.arrivedAtWorkshopMs ||
-                              assistance.cancelledAtMs ||
-                              assistance.finishedAtMs
-                          )}
-                        </div>
-                        <button
-                          className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
-                          onClick={() => {
-                            const token = localStorage.getItem("sea-admin-token") ?? "";
-                            window.open(
-                              `/api/roadside-assistances/${assistance.id}/report.pdf?token=${encodeURIComponent(token)}`,
-                              "_blank"
-                            );
-                          }}
-                        >
-                          Ver informe
-                        </button>
-                      </div>
+            {/* ── Tab: Últimas cerradas ── */}
+            {panelTab === "cerradas" && (
+              <div className="space-y-3">
+                {closedAssistances.length === 0 ? (
+                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                    Sin asistencias cerradas recientes.
+                  </div>
+                ) : (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {closedAssistances.map((assistance) => (
+                      <ClosedAssistanceCard key={`closed-${assistance.id}`} assistance={assistance} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Tab: Historial ── */}
+            {panelTab === "historial" && (
+              <div className="space-y-3">
+                {/* Filtros */}
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex min-w-48 flex-1 items-center gap-1 rounded-lg border border-slate-200 px-2">
+                      <input
+                        type="text"
+                        placeholder="Buscar matrícula, cliente, teléfono, dirección…"
+                        value={historialQInput}
+                        onChange={(e) => setHistorialQInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && searchHistorial()}
+                        className="w-full py-1.5 text-sm outline-none"
+                      />
                     </div>
-                  ))}
+                    <select
+                      value={historialStatus}
+                      onChange={(e) => { setHistorialStatus(e.target.value); setHistorialPage(1); setHistorialQ(historialQInput); }}
+                      className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                    >
+                      <option value="">Todos los estados</option>
+                      <option value="pendiente">Pendiente</option>
+                      <option value="asignada">Asignada</option>
+                      <option value="en_camino">En camino</option>
+                      <option value="en_punto">En punto</option>
+                      <option value="finalizada">Finalizada</option>
+                      <option value="llegada_taller">En taller</option>
+                      <option value="cancelada">Cancelada</option>
+                    </select>
+                    <select
+                      value={historialTech}
+                      onChange={(e) => { setHistorialTech(e.target.value); setHistorialPage(1); setHistorialQ(historialQInput); }}
+                      className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                    >
+                      <option value="">Todos los operarios</option>
+                      {techs.map((t) => (
+                        <option key={t.name} value={t.name}>{t.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={searchHistorial}
+                      className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-black text-white hover:bg-slate-700"
+                    >
+                      Buscar
+                    </button>
+                    {(historialQ || historialStatus || historialTech) && (
+                      <button
+                        type="button"
+                        onClick={() => { setHistorialQ(""); setHistorialQInput(""); setHistorialStatus(""); setHistorialTech(""); setHistorialPage(1); }}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                      >
+                        Limpiar
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </section>
+
+                {historialLoading ? (
+                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                    Cargando…
+                  </div>
+                ) : historialItems.length === 0 ? (
+                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                    Sin resultados.
+                  </div>
+                ) : (
+                  <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-100 bg-slate-50 text-xs font-black uppercase text-slate-500">
+                          <th className="px-3 py-2 text-left">Fecha</th>
+                          <th className="px-3 py-2 text-left">Matrícula</th>
+                          <th className="px-3 py-2 text-left">Cliente</th>
+                          <th className="px-3 py-2 text-left">Operario</th>
+                          <th className="px-3 py-2 text-left">Estado</th>
+                          <th className="px-3 py-2 text-left"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {historialItems.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 text-xs text-slate-500">
+                              {new Date(item.createdAtMs).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit" })}
+                              <div className="text-[10px] text-slate-400">{formatTime(item.createdAtMs)}</div>
+                            </td>
+                            <td className="px-3 py-2 font-black">{item.plate || "—"}</td>
+                            <td className="px-3 py-2 text-slate-700 max-w-[140px] truncate">{item.customerName || "—"}</td>
+                            <td className="px-3 py-2 text-slate-600">{item.assignedTechName || "—"}</td>
+                            <td className="px-3 py-2">
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${STATUS_BADGES[item.status]}`}>
+                                {ROADSIDE_ASSISTANCE_STATUS_LABELS[item.status]}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <button
+                                type="button"
+                                className="rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+                                onClick={() => {
+                                  const token = localStorage.getItem("sea-admin-token") ?? "";
+                                  window.open(`/api/roadside-assistances/${item.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+                                }}
+                              >
+                                PDF
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {/* Paginación */}
+                    {historialTotal > 50 && (
+                      <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 text-xs font-semibold text-slate-500">
+                        <span>{historialTotal} resultados · pág. {historialPage} de {Math.ceil(historialTotal / 50)}</span>
+                        <div className="flex gap-1">
+                          <button type="button" disabled={historialPage <= 1} onClick={() => setHistorialPage((p) => p - 1)} className="rounded border border-slate-200 px-2 py-1 disabled:opacity-40">←</button>
+                          <button type="button" disabled={historialPage * 50 >= historialTotal} onClick={() => setHistorialPage((p) => p + 1)} className="rounded border border-slate-200 px-2 py-1 disabled:opacity-40">→</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </section>
         </div>
