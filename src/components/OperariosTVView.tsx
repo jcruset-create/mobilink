@@ -1538,19 +1538,34 @@ export default function OperariosTVView({
 
                         <div className="truncate text-xs font-semibold opacity-80">
                           {activeRoadsideAssistance
-                            ? `🚐 Asistencia carretera · ${
-                                activeRoadsideAssistance.plate ||
-                                activeRoadsideAssistance.customerName ||
-                                `#${activeRoadsideAssistance.id}`
-                              } · ${
-                                ROADSIDE_STATUS_LABELS[
-                                  activeRoadsideAssistance.status
-                                ] ?? activeRoadsideAssistance.status
-                              }${
-                                activeRoadsideAssistance.etaMinutos != null
-                                  ? ` · ETA ${activeRoadsideAssistance.etaMinutos} min`
-                                  : ""
-                              }`
+                            ? <span className="flex items-center gap-1 min-w-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 62" width="22" height="14" style={{flexShrink:0}}>
+                                  <path d="M6 42 L6 20 Q6 12 14 10 L62 10 Q72 10 78 18 L90 34 L94 36 L94 44 Q94 48 90 48 L84 48" fill="#fff" stroke="#1a2744" strokeWidth="3.5" strokeLinejoin="round"/>
+                                  <path d="M84 48 L26 48" fill="none" stroke="#1a2744" strokeWidth="3.5"/>
+                                  <path d="M6 48 L6 42" fill="none" stroke="#1a2744" strokeWidth="3.5"/>
+                                  <rect x="6" y="38" width="88" height="4" rx="1" fill="#e8eaf0"/>
+                                  <g transform="translate(38,20) rotate(38)">
+                                    <rect x="-3" y="-13" width="6" height="26" rx="3" fill="#E8620A"/>
+                                    <ellipse cx="0" cy="-13" rx="6" ry="5" fill="#E8620A"/>
+                                    <ellipse cx="0" cy="13" rx="5" ry="4" fill="#E8620A"/>
+                                  </g>
+                                  <circle cx="26" cy="48" r="10" fill="#1a2744"/>
+                                  <circle cx="26" cy="48" r="5.5" fill="#fff"/>
+                                  <circle cx="26" cy="48" r="2" fill="#1a2744"/>
+                                  <circle cx="76" cy="48" r="10" fill="#1a2744"/>
+                                  <circle cx="76" cy="48" r="5.5" fill="#fff"/>
+                                  <circle cx="76" cy="48" r="2" fill="#1a2744"/>
+                                  <path d="M90 36 L96 38 L96 46 L90 46" fill="#ccc" stroke="#1a2744" strokeWidth="2"/>
+                                  <ellipse cx="92" cy="34" rx="3" ry="2" fill="#fffde0" stroke="#1a2744" strokeWidth="1"/>
+                                </svg>
+                                <span className="truncate">{`Asistencia carretera · ${
+                                  activeRoadsideAssistance.plate ||
+                                  activeRoadsideAssistance.customerName ||
+                                  `#${activeRoadsideAssistance.id}`
+                                } · ${
+                                  ROADSIDE_STATUS_LABELS[activeRoadsideAssistance.status] ?? activeRoadsideAssistance.status
+                                }${activeRoadsideAssistance.etaMinutos != null ? ` · ETA ${activeRoadsideAssistance.etaMinutos} min` : ""}`}</span>
+                              </span>
                             : currentJob
                             ? `${currentJob.plate} · ${getOperationLabel(
                                 currentJob

@@ -5068,7 +5068,10 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
           };
           setTechs((prev) => [...prev, newTech]);
           appendLog(`Técnico añadido: ${name}.`);
-          saveTechToBackend(newTech).catch((e) => console.error("Error guardando técnico:", e));
+          pendingRoadsideCapableRef.current.set(name, roadsideCapable);
+          saveTechToBackend(newTech)
+            .catch((e) => console.error("Error guardando técnico:", e))
+            .finally(() => pendingRoadsideCapableRef.current.delete(name));
         } else {
           setTechs((prev) =>
             prev.map((t) =>
@@ -5079,9 +5082,10 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
           );
           const base = techs.find((t) => t.name === name);
           if (base) {
-            saveTechToBackend({ ...base, phone: phone || null, competencies, priorities, roadsideCapable }).catch(
-              (e) => console.error("Error guardando técnico:", e)
-            );
+            pendingRoadsideCapableRef.current.set(name, roadsideCapable);
+            saveTechToBackend({ ...base, phone: phone || null, competencies, priorities, roadsideCapable })
+              .catch((e) => console.error("Error guardando técnico:", e))
+              .finally(() => pendingRoadsideCapableRef.current.delete(name));
           }
         }
       }}
