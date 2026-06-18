@@ -5,6 +5,7 @@ export type RoadsideAssistanceStatus =
   | "asignada"
   | "en_camino"
   | "en_punto"
+  | "inicio_reparacion"
   | "finalizada"
   | "llegada_taller"
   | "cancelada";
