@@ -57,6 +57,7 @@ const ROADSIDE_STATUS_LABELS: Record<string, string> = {
   asignada: "Asignada",
   en_camino: "En camino",
   en_punto: "En el punto",
+  inicio_reparacion: "Reparando",
 };
 
 type OperationLabelJob = Pick<
