@@ -3042,6 +3042,34 @@ app.get(
   }
 );
 
+app.post(
+  "/api/roadside-operator/assistances/:id/send-eta",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { etaMinutos, distanciaKm } = req.body as { etaMinutos?: number; distanciaKm?: string };
+
+      const result = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+      if (result.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+
+      const a = normalizeRoadsideAssistanceRow(result.rows[0]);
+      const customerPhone = a.customerPhone;
+      if (!customerPhone) return res.status(400).json({ error: "Sin teléfono de cliente" });
+
+      const waResult = await sendRoadsideStatusWhatsApp(a, "en_camino", {
+        etaMinutos: etaMinutos ?? null,
+        etaKm: distanciaKm ?? null,
+      });
+
+      res.json({ ok: true, whatsapp: waResult });
+    } catch (error: any) {
+      console.error("POST /api/roadside-operator/assistances/:id/send-eta error:", error);
+      res.status(500).json({ error: error?.message || "Error enviando ETA" });
+    }
+  }
+);
+
 app.get(
   "/api/roadside-operator/history",
   requireRoadsideOperator,
