@@ -54,9 +54,7 @@ function formatTimeWithSeconds(value?: number | null) {
 }
 
 function getCurrentStep(status: RoadsideAssistanceStatus) {
-  // inicio_reparacion no está en el flow visible pero equivale a en_punto
-  const normalized = status === "inicio_reparacion" ? "en_punto" : status;
-  const index = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(normalized);
+  const index = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
   return index === -1 ? 0 : index;
 }
 
@@ -362,7 +360,7 @@ export default function RoadsideTrackingPage() {
 
         {/* Progress steps */}
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-3 md:grid-cols-5">
+          <div className="grid gap-2 grid-cols-2 md:grid-cols-7">
             {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
               const done = index <= currentStep;
               return (

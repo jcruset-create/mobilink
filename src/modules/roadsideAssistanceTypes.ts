@@ -147,6 +147,7 @@ export const ROADSIDE_ASSISTANCE_STATUS_LABELS: Record<
   asignada: "Asignada",
   en_camino: "En camino",
   en_punto: "En punto",
+  inicio_reparacion: "Reparando",
   finalizada: "Finalizada",
   llegada_taller: "Finalizada ✓ en taller",
   cancelada: "Cancelada",
@@ -157,6 +158,7 @@ export const ROADSIDE_ASSISTANCE_STATUS_FLOW: RoadsideAssistanceStatus[] = [
   "asignada",
   "en_camino",
   "en_punto",
+  "inicio_reparacion",
   "finalizada",
   "llegada_taller",
 ];
