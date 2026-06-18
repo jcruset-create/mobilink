@@ -3961,18 +3961,28 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
     }
   }
 
-  // Center of the 3×3 canvas is at tile (1,1) → pixel (256+px, 256+py)
+  // Absolute pixel of the point on the 3×3 canvas (768×768)
+  const pointX = 256 + px; // center tile starts at x=256
+  const pointY = 256 + py;
+
+  // Marker centered on the point
   compositeInputs.push({
     input: markerSvg,
-    left: 256 + px - m,
-    top: 256 + py - m,
+    left: pointX - m,
+    top: pointY - m,
   });
+
+  // Crop 480×260 centered on the point, clamped to canvas bounds
+  const outW = 480;
+  const outH = 260;
+  const cropLeft = Math.max(0, Math.min(768 - outW, pointX - Math.round(outW / 2)));
+  const cropTop  = Math.max(0, Math.min(768 - outH, pointY - Math.round(outH / 2)));
 
   return sharp({
     create: { width: 768, height: 768, channels: 4, background: { r: 200, g: 200, b: 200, alpha: 1 } },
   })
     .composite(compositeInputs)
-    .resize(480, 260)
+    .extract({ left: cropLeft, top: cropTop, width: outW, height: outH })
     .png()
     .toBuffer();
 }
@@ -3994,6 +4004,7 @@ async function fetchImageForPdf(url: string): Promise<Buffer> {
 function formatDateEs(ms: number | null | undefined): string {
   if (!ms) return "-";
   return new Date(ms).toLocaleString("es-ES", {
+    timeZone: "Europe/Madrid",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
