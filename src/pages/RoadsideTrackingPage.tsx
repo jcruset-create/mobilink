@@ -260,8 +260,13 @@ export default function RoadsideTrackingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
-      <main className="mx-auto max-w-4xl space-y-4">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      {/* Cabecera con logo */}
+      <header className="bg-[#16213e] px-6 py-3 flex items-center justify-center">
+        <img src="/logo_horizontal.png" alt="SEA Assist" style={{height: 56}} />
+      </header>
+
+      <main className="mx-auto max-w-4xl space-y-4 p-4">
 
         {/* Header */}
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
