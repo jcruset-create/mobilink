@@ -3042,6 +3042,28 @@ app.get(
   }
 );
 
+app.get(
+  "/api/roadside-operator/history",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const result = await db.query(
+        `SELECT * FROM roadside_assistances
+         WHERE "assignedTechName" = $1
+           AND status IN ('finalizada', 'llegada_taller', 'cancelada')
+         ORDER BY "createdAtMs" DESC
+         LIMIT 100`,
+        [operator.techName]
+      );
+      res.json(result.rows.map(normalizeRoadsideAssistanceRow));
+    } catch (error) {
+      console.error("GET /api/roadside-operator/history error:", error);
+      res.status(500).json({ error: "Error obteniendo historial" });
+    }
+  }
+);
+
 app.post(
   "/api/roadside-operator/assistances/:id/status",
   requireRoadsideOperator,
