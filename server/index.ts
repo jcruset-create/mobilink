@@ -3042,6 +3042,48 @@ app.get(
   }
 );
 
+app.patch(
+  "/api/roadside-operator/assistances/:id/plate",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const plate = String(req.body?.plate || "").trim().toUpperCase();
+      if (!plate) return res.status(400).json({ error: "Matrícula requerida" });
+      const result = await db.query(
+        `UPDATE roadside_assistances SET plate = $2 WHERE id = $1 RETURNING *`,
+        [id, plate]
+      );
+      if (result.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    } catch (error) {
+      console.error("PATCH /api/roadside-operator/assistances/:id/plate error:", error);
+      res.status(500).json({ error: "Error actualizando matrícula" });
+    }
+  }
+);
+
+app.post(
+  "/api/roadside-operator/assistances/:id/report-plate-mismatch",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const { detected, current } = req.body as { detected?: string; current?: string };
+      await db.query(
+        `INSERT INTO roadside_assistance_events ("assistanceId", status, "createdBy", note, "createdAtMs")
+         VALUES ($1, 'incidencia_matricula', $2, $3, $4)`,
+        [id, operator.techName, `Matrícula no coincide: IA detectó "${detected ?? '?'}", asistencia tiene "${current ?? '?'}"`, Date.now()]
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("POST /api/roadside-operator/assistances/:id/report-plate-mismatch error:", error);
+      res.status(500).json({ error: "Error reportando incidencia" });
+    }
+  }
+);
+
 app.post(
   "/api/roadside-operator/assistances/:id/send-eta",
   requireRoadsideOperator,
