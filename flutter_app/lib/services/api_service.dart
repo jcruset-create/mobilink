@@ -41,6 +41,62 @@ class ApiService {
     return list.cast<Map<String, dynamic>>();
   }
 
+  Future<List<Map<String, dynamic>>> getHistory() async {
+    final res = await http.get(
+      Uri.parse('$kBackendUrl/api/roadside-operator/history'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Error cargando historial');
+    }
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  Future<Map<String, dynamic>> getEta({
+    required double originLat,
+    required double originLng,
+    required double destLat,
+    required double destLng,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-eta'),
+      headers: _headers,
+      body: jsonEncode({
+        'origen': {'lat': originLat, 'lng': originLng},
+        'destino': {'lat': destLat, 'lng': destLng},
+      }),
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200) throw Exception(data['error'] ?? 'Error calculando ETA');
+    return data;
+  }
+
+  Future<void> updatePlate(int id, String plate) async {
+    final res = await http.patch(
+      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/plate'),
+      headers: _headers,
+      body: jsonEncode({'plate': plate}),
+    );
+    if (res.statusCode != 200) throw Exception('Error actualizando matrícula');
+  }
+
+  Future<void> reportPlateMismatch(int id, {String? detected, String? current}) async {
+    await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/report-plate-mismatch'),
+      headers: _headers,
+      body: jsonEncode({'detected': detected, 'current': current}),
+    );
+  }
+
+  Future<void> sendEtaWhatsApp(int id, {int? etaMinutos, String? distanciaKm}) async {
+    await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/send-eta'),
+      headers: _headers,
+      body: jsonEncode({'etaMinutos': etaMinutos, 'distanciaKm': distanciaKm}),
+    );
+  }
+
   Future<Map<String, dynamic>> updateStatus(int id, String status) async {
     final res = await http.post(
       Uri.parse(
@@ -91,6 +147,18 @@ class ApiService {
       throw Exception(data['error'] ?? 'Error guardando conductor');
     }
     return data;
+  }
+
+  Future<Map<String, dynamic>?> getWhatsAppCapture(int id) async {
+    final res = await http.get(
+      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/whatsapp-capture'),
+      headers: _headers,
+    );
+    if (res.statusCode == 404 || res.body == 'null') return null;
+    if (res.statusCode != 200) return null;
+    final data = jsonDecode(res.body);
+    if (data == null) return null;
+    return data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> uploadFile(

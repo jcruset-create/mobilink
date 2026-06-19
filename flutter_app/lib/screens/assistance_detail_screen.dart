@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import 'arrival_photos_screen.dart';
 import 'finish_screen.dart';
+import 'navigation_screen.dart';
 
 class AssistanceDetailScreen extends StatefulWidget {
   final ApiService api;
@@ -21,18 +22,33 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   late Map<String, dynamic> _a;
   bool _loading = false;
   Timer? _locationTimer;
+  Map<String, dynamic>? _whatsappCapture;
+  bool _loadingCapture = false;
 
   @override
   void initState() {
     super.initState();
     _a = widget.assistance;
     if (_status == 'en_camino') _startLocationTracking();
+    _loadWhatsAppCapture();
   }
 
   @override
   void dispose() {
     _locationTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadWhatsAppCapture() async {
+    setState(() => _loadingCapture = true);
+    try {
+      final capture = await widget.api.getWhatsAppCapture(_a['id'] as int);
+      if (mounted) setState(() => _whatsappCapture = capture);
+    } catch (_) {
+      // silencioso — no bloquear la pantalla si WhatsApp capture falla
+    } finally {
+      if (mounted) setState(() => _loadingCapture = false);
+    }
   }
 
   void _startLocationTracking() {
@@ -163,18 +179,25 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   Future<void> _openMaps() async {
     final lat = _a['latitude'];
     final lng = _a['longitude'];
-    final mapsUrl = _a['googleMapsUrl'] as String?;
+    final address = (_a['address'] as String? ?? '').trim();
 
     Uri uri;
     if (lat != null && lng != null) {
       uri = Uri.parse(
           'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
-    } else if (mapsUrl != null && mapsUrl.isNotEmpty) {
-      uri = Uri.parse(mapsUrl);
-    } else {
-      final address = Uri.encodeComponent(_a['address'] ?? '');
+    } else if (address.isNotEmpty) {
+      final encoded = Uri.encodeComponent(address);
       uri = Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=$address');
+          'https://www.google.com/maps/dir/?api=1&destination=$encoded&travelmode=driving');
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay ubicación disponible para navegar.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
     }
 
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
@@ -206,7 +229,7 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
 
   bool get _hasLocation {
     return (_a['latitude'] != null && _a['longitude'] != null) ||
-        (_a['googleMapsUrl'] as String? ?? '').isNotEmpty;
+        (_a['address'] as String? ?? '').trim().isNotEmpty;
   }
 
   @override
@@ -214,7 +237,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
-        title: Text(_a['customerName'] ?? 'Asistencia'),
+        toolbarHeight: 110,
+        title: Image.asset('assets/logo_horizontal.png', height: 90),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),
@@ -226,6 +250,13 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _InfoCard(assistance: _a),
+                  if (_loadingCapture) ...[
+                    const SizedBox(height: 16),
+                    const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  ] else if (_whatsappCapture != null) ...[
+                    const SizedBox(height: 24),
+                    _WhatsAppCaptureCard(capture: _whatsappCapture!),
+                  ],
                   const SizedBox(height: 24),
                   _section('Acciones rápidas'),
                   const SizedBox(height: 12),
@@ -235,12 +266,29 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                         child: _ActionButton(
                           icon: Icons.navigation,
                           label: 'Navegar',
+                          color: Colors.deepPurple,
+                          enabled: _hasLocation,
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => NavigationScreen(
+                                api: widget.api,
+                                assistance: _a,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _ActionButton(
+                          icon: Icons.map,
+                          label: 'Google Maps',
                           color: Colors.blue,
                           enabled: _hasLocation,
                           onPressed: _openMaps,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: _ActionButton(
                           icon: Icons.phone,
@@ -460,4 +508,105 @@ class _ActionButton extends StatelessWidget {
 
     return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
   }
+}
+
+class _WhatsAppCaptureCard extends StatelessWidget {
+  final Map<String, dynamic> capture;
+
+  const _WhatsAppCaptureCard({required this.capture});
+
+  @override
+  Widget build(BuildContext context) {
+    final resumen = capture['resumen'] as String?;
+    final nombre = capture['contactoNombre'] as String?;
+    final telefono = capture['contactoTelefono'] as String?;
+    final imageUrls = (capture['imageUrls'] as List<dynamic>?)
+            ?.cast<String>() ??
+        [];
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.green.withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.chat, size: 16, color: Colors.green),
+              SizedBox(width: 8),
+              Text(
+                'Captura WhatsApp',
+                style: TextStyle(
+                  color: Colors.green,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+          ),
+          if (nombre != null && nombre.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _row(Icons.person, nombre),
+          ],
+          if (telefono != null && telefono.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            _row(Icons.phone, telefono),
+          ],
+          if (resumen != null && resumen.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              resumen,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ],
+          if (imageUrls.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Fotos del cliente',
+              style: TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 0.5),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 100,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: imageUrls.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, i) => ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    imageUrls[i],
+                    height: 100,
+                    width: 100,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      height: 100,
+                      width: 100,
+                      color: Colors.white12,
+                      child: const Icon(Icons.broken_image, color: Colors.white38),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _row(IconData icon, String text) => Row(
+        children: [
+          Icon(icon, size: 14, color: Colors.white54),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          ),
+        ],
+      );
 }

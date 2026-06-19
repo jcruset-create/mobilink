@@ -3137,6 +3137,58 @@ app.get(
   }
 );
 
+app.get(
+  "/api/roadside-operator/assistances/:id/whatsapp-capture",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+
+      // Verify the assistance is assigned to this operator
+      const check = await db.query(
+        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        [id, operator.techName]
+      );
+      if (check.rows.length === 0) {
+        return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
+      }
+
+      // Get the most recent closed session with AI suggestions
+      const sessionResult = await db.query(
+        `SELECT * FROM whatsapp_capture_sessions WHERE job_id = $1 ORDER BY started_at DESC LIMIT 1`,
+        [id]
+      );
+      if (!sessionResult.rows.length) return res.json(null);
+
+      const session = sessionResult.rows[0];
+      session.started_at = session.started_at ? Number(session.started_at) : null;
+      session.ended_at = session.ended_at ? Number(session.ended_at) : null;
+      if (session.ai_suggestions) {
+        try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
+      }
+
+      // Get image messages from this session
+      const msgResult = await db.query(
+        `SELECT media_url, msg_type FROM whatsapp_capture_messages WHERE session_id = $1 AND msg_type = 'image' AND media_url IS NOT NULL ORDER BY received_at ASC`,
+        [session.id]
+      );
+      const imageUrls = msgResult.rows.map((m: any) => m.media_url as string);
+
+      return res.json({
+        resumen: session.ai_suggestions?.resumen ?? null,
+        contactoNombre: session.ai_suggestions?.contactoNombre ?? null,
+        contactoTelefono: session.ai_suggestions?.contactoTelefono ?? null,
+        imageUrls,
+        status: session.status,
+      });
+    } catch (error) {
+      console.error("GET /api/roadside-operator/assistances/:id/whatsapp-capture error:", error);
+      res.status(500).json({ error: "Error obteniendo captura WhatsApp" });
+    }
+  }
+);
+
 app.post(
   "/api/roadside-operator/assistances/:id/status",
   requireRoadsideOperator,
