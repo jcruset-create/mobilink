@@ -150,6 +150,7 @@ import {
   loadTechsFromBackend,
   saveJobToBackend,
   saveTechToBackend,
+  patchTechRoadsideCapable,
 } from "./modules/workshopApi";
 import {
   buildOperationReport,
@@ -5055,6 +5056,18 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
         setWorkshopPinInput("");
         setWorkshopPinError("");
       }}
+      onToggleRoadsideCapable={(name, value) => {
+        setTechs((prev) =>
+          prev.map((t) => t.name === name ? { ...t, roadsideCapable: value } : t)
+        );
+        patchTechRoadsideCapable(name, value)
+          .catch((e) => {
+            console.error("Error guardando apto para carretera:", e);
+            setTechs((prev) =>
+              prev.map((t) => t.name === name ? { ...t, roadsideCapable: !value } : t)
+            );
+          });
+      }}
       onSaveTech={({ name, phone, isNew, competencies, priorities, roadsideCapable }) => {
         if (isNew) {
           if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) return;
@@ -5068,11 +5081,9 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
           };
           setTechs((prev) => [...prev, newTech]);
           appendLog(`Técnico añadido: ${name}.`);
-          pendingRoadsideCapableRef.current.set(name, roadsideCapable);
           saveTechToBackend(newTech)
             .then(() => reloadTechsFromBackend())
-            .catch((e) => console.error("Error guardando técnico:", e))
-            .finally(() => pendingRoadsideCapableRef.current.delete(name));
+            .catch((e) => console.error("Error guardando técnico:", e));
         } else {
           setTechs((prev) =>
             prev.map((t) =>
@@ -5083,11 +5094,9 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
           );
           const base = techs.find((t) => t.name === name);
           if (base) {
-            pendingRoadsideCapableRef.current.set(name, roadsideCapable);
             saveTechToBackend({ ...base, phone: phone || null, competencies, priorities, roadsideCapable })
               .then(() => reloadTechsFromBackend())
-              .catch((e) => console.error("Error guardando técnico:", e))
-              .finally(() => pendingRoadsideCapableRef.current.delete(name));
+              .catch((e) => console.error("Error guardando técnico:", e));
           }
         }
       }}

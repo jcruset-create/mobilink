@@ -160,6 +160,22 @@ export async function saveTechToBackend(tech: Tech) {
   }
 }
 
+export async function patchTechRoadsideCapable(name: string, value: boolean) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/techs/${encodeURIComponent(name)}/roadside-capable`,
+    {
+      method: "PATCH",
+      headers: getAdminHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ roadsideCapable: value }),
+    }
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `Error actualizando apto para carretera: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function deleteTechFromBackend(name: string) {
   const response = await fetchWithTimeout(
     `${API_BASE}/api/techs/${encodeURIComponent(name)}`,

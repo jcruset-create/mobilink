@@ -30,6 +30,7 @@ type Props = {
     priorities: Record<AreaKey, RolePriority>;
     roadsideCapable: boolean;
   }) => void;
+  onToggleRoadsideCapable: (name: string, value: boolean) => void;
   onBack: () => void;
 };
 
@@ -75,6 +76,7 @@ export default function TecnicosView({
   handleTechImageUpload,
   onSetWorkshopPin,
   onSaveTech,
+  onToggleRoadsideCapable,
   onBack,
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -221,11 +223,18 @@ export default function TecnicosView({
                           {tech.phone}
                         </a>
                       )}
-                      {Boolean(tech.roadsideCapable) && (
-                        <span className="mt-0.5 inline-block rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-bold text-emerald-800">
-                          Apto carretera
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        title={tech.roadsideCapable ? "Quitar: apto para carretera" : "Marcar como apto para carretera"}
+                        onClick={() => onToggleRoadsideCapable(tech.name, !tech.roadsideCapable)}
+                        className={`mt-0.5 inline-block rounded px-1.5 py-0.5 text-xs font-bold transition-colors ${
+                          tech.roadsideCapable
+                            ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                            : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                        }`}
+                      >
+                        🚗 {tech.roadsideCapable ? "Apto carretera" : "No apto carretera"}
+                      </button>
                     </div>
                   </div>
 

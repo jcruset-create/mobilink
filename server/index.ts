@@ -1649,6 +1649,29 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
   }
 });
 
+app.patch("/api/techs/:name/roadside-capable", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const { roadsideCapable } = req.body ?? {};
+
+    if (roadsideCapable === undefined) {
+      return res.status(400).json({ error: "roadsideCapable requerido" });
+    }
+
+    const value = Boolean(roadsideCapable);
+
+    await db.query(
+      `UPDATE techs SET "roadsideCapable" = $2 WHERE name = $1`,
+      [name, value]
+    );
+
+    return res.json({ ok: true, name, roadsideCapable: value });
+  } catch (error) {
+    console.error("PATCH /api/techs/:name/roadside-capable error:", error);
+    res.status(500).json({ error: "Error actualizando apto para carretera" });
+  }
+});
+
 app.delete("/api/techs/:name", requireAdminRole, async (req, res) => {
   try {
     const name = String(req.params.name);
