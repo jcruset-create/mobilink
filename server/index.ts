@@ -7722,6 +7722,8 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
     );
     if (!sessionResult.rows.length) return res.json(null);
     const session = sessionResult.rows[0];
+    session.started_at = session.started_at ? Number(session.started_at) : null;
+    session.ended_at = session.ended_at ? Number(session.ended_at) : null;
     if (session.ai_suggestions) {
       try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
     }
@@ -7729,7 +7731,13 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
       `SELECT * FROM whatsapp_capture_messages WHERE session_id = $1 ORDER BY received_at ASC`,
       [session.id]
     );
-    return res.json({ ...session, messages: msgResult.rows });
+    const messages = msgResult.rows.map((m: any) => ({
+      ...m,
+      received_at: m.received_at ? Number(m.received_at) : null,
+      latitude: m.latitude != null ? Number(m.latitude) : null,
+      longitude: m.longitude != null ? Number(m.longitude) : null,
+    }));
+    return res.json({ ...session, messages });
   } catch (error) {
     console.error("GET /api/whatsapp-capture/by-job error:", error);
     return res.status(500).json({ error: "Error obteniendo sesión" });
@@ -7766,7 +7774,10 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
        RETURNING *`,
       [job_id, now, created_by ?? null]
     );
-    return res.json(result.rows[0]);
+    const row = result.rows[0];
+    row.started_at = row.started_at ? Number(row.started_at) : null;
+    row.ended_at = row.ended_at ? Number(row.ended_at) : null;
+    return res.json(row);
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions error:", error);
     return res.status(500).json({ error: "Error iniciando sesión" });
