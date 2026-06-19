@@ -161,6 +161,47 @@ class ApiService {
     return data as Map<String, dynamic>;
   }
 
+  Future<List<Map<String, dynamic>>> getCobros() async {
+    final res = await http.get(
+      Uri.parse('$kBackendUrl/api/roadside-operator/cobros'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('Error cargando cobros');
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  Future<Map<String, dynamic>?> getCobroForAssistance(int assistanceId) async {
+    final res = await http.get(
+      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$assistanceId/cobro'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200 || res.body == 'null') return null;
+    final data = jsonDecode(res.body);
+    if (data == null) return null;
+    return data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> marcarCobrado(
+    int id, {
+    required String metodoPago,
+    required double importeCobrado,
+    String? observaciones,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/cobros/$id/marcar-cobrado'),
+      headers: _headers,
+      body: jsonEncode({
+        'metodoPago': metodoPago,
+        'importeCobrado': importeCobrado,
+        'observaciones': observaciones,
+      }),
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200) throw Exception(data['error'] ?? 'Error marcando cobro');
+    return data;
+  }
+
   Future<Map<String, dynamic>> uploadFile(
       int id, File file, String kind) async {
     final req = http.MultipartRequest(

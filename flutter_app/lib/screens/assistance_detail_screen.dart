@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import 'arrival_photos_screen.dart';
+import 'cobros_screen.dart';
 import 'finish_screen.dart';
 import 'navigation_screen.dart';
 
@@ -24,6 +25,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   Timer? _locationTimer;
   Map<String, dynamic>? _whatsappCapture;
   bool _loadingCapture = false;
+  Map<String, dynamic>? _cobro;
+  bool _loadingCobro = false;
 
   @override
   void initState() {
@@ -31,12 +34,44 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     _a = widget.assistance;
     if (_status == 'en_camino') _startLocationTracking();
     _loadWhatsAppCapture();
+    _loadCobro();
   }
 
   @override
   void dispose() {
     _locationTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadCobro() async {
+    setState(() => _loadingCobro = true);
+    try {
+      final cobro = await widget.api.getCobroForAssistance(_a['id'] as int);
+      if (mounted) setState(() => _cobro = cobro);
+    } catch (_) {
+      // silencioso
+    } finally {
+      if (mounted) setState(() => _loadingCobro = false);
+    }
+  }
+
+  void _abrirCobro(Map<String, dynamic> cobro) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF16213e),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _CobroDetailSheet(
+        cobro: cobro,
+        api: widget.api,
+        onCobrado: () {
+          Navigator.pop(context);
+          _loadCobro();
+        },
+      ),
+    );
   }
 
   Future<void> _loadWhatsAppCapture() async {
@@ -250,6 +285,14 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _InfoCard(assistance: _a),
+                  // Cobro asociado a esta asistencia
+                  if (!_loadingCobro && _cobro != null) ...[
+                    const SizedBox(height: 16),
+                    _CobroMiniCard(
+                      cobro: _cobro!,
+                      onTap: () => _abrirCobro(_cobro!),
+                    ),
+                  ],
                   if (_loadingCapture) ...[
                     const SizedBox(height: 16),
                     const Center(child: CircularProgressIndicator(strokeWidth: 2)),
@@ -509,6 +552,73 @@ class _ActionButton extends StatelessWidget {
     return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
   }
 }
+
+// ── Cobro mini-card dentro del detalle de asistencia ─────────────────────────
+
+class _CobroMiniCard extends StatelessWidget {
+  final Map<String, dynamic> cobro;
+  final VoidCallback onTap;
+
+  const _CobroMiniCard({required this.cobro, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final estado = cobro['estado'] as String? ?? 'pendiente';
+    final yaCobrado = estado == 'cobrado';
+    final color = yaCobrado ? Colors.green : Colors.orange;
+    final importe = (cobro['importe_total'] as num).toDouble();
+    final concepto = cobro['concepto'] as String? ?? '';
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF16213e),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.5)),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              yaCobrado ? Icons.check_circle : Icons.receipt_long,
+              color: color,
+              size: 28,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    concepto.isNotEmpty ? concepto : 'Cobro pendiente',
+                    style: TextStyle(
+                        color: color, fontWeight: FontWeight.w700, fontSize: 14),
+                  ),
+                  Text(
+                    '${importe.toStringAsFixed(2)} € · ${yaCobrado ? "Cobrado" : "Pendiente"}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              yaCobrado ? 'Ver' : 'Cobrar',
+              style: TextStyle(
+                  color: color, fontWeight: FontWeight.w700, fontSize: 13),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right, color: color, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Reutilizar el bottom sheet de cobros (importado de cobros_screen.dart)
+// El alias _CobroDetailSheet apunta a la clase pública del mismo fichero
+typedef _CobroDetailSheet = CobroDetailSheet;
 
 class _WhatsAppCaptureCard extends StatelessWidget {
   final Map<String, dynamic> capture;

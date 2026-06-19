@@ -493,6 +493,27 @@ function safeJsonParse<T>(value: unknown, fallback: T): T {
   }
 }
 
+function normalizeCobro(c: any) {
+  return {
+    id: c.id,
+    asistencia_id: c.asistencia_id ?? null,
+    operario_name: c.operario_name ?? "",
+    cliente_nombre: c.cliente_nombre ?? "",
+    telefono: c.telefono ?? "",
+    concepto: c.concepto ?? "",
+    importe_total: parseFloat(c.importe_total) || 0,
+    importe_cobrado: c.importe_cobrado != null ? parseFloat(c.importe_cobrado) : null,
+    estado: c.estado ?? "pendiente",
+    metodo_pago: c.metodo_pago ?? null,
+    fecha_cobro: c.fecha_cobro != null ? Number(c.fecha_cobro) : null,
+    observaciones: c.observaciones ?? "",
+    created_at_ms: c.created_at_ms != null ? Number(c.created_at_ms) : null,
+    updated_at_ms: c.updated_at_ms != null ? Number(c.updated_at_ms) : null,
+    plate: c.plate ?? null,
+    address: c.address ?? null,
+  };
+}
+
 function normalizeTechRow(t: any) {
   return {
     name: t.name,
@@ -3216,6 +3237,166 @@ app.get(
     }
   }
 );
+
+/* ── COBROS (operario) ──────────────────────────────────────────────────── */
+
+// GET cobros asignados al operario (por operario_name o por asistencia asignada)
+app.get(
+  "/api/roadside-operator/cobros",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const result = await db.query(
+        `SELECT c.*, ra.plate, ra.address
+         FROM cobros c
+         LEFT JOIN roadside_assistances ra ON ra.id = c.asistencia_id
+         WHERE c.operario_name = $1
+            OR (c.asistencia_id IS NOT NULL AND ra."assignedTechName" = $1)
+         ORDER BY c.created_at_ms DESC
+         LIMIT 100`,
+        [operator.techName]
+      );
+      return res.json(result.rows.map(normalizeCobro));
+    } catch (error) {
+      console.error("GET /api/roadside-operator/cobros error:", error);
+      return res.status(500).json({ error: "Error obteniendo cobros" });
+    }
+  }
+);
+
+// GET cobro asociado a una asistencia concreta
+app.get(
+  "/api/roadside-operator/assistances/:id/cobro",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+
+      const check = await db.query(
+        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        [id, operator.techName]
+      );
+      if (check.rows.length === 0) return res.json(null);
+
+      const result = await db.query(
+        `SELECT c.*, ra.plate, ra.address
+         FROM cobros c
+         LEFT JOIN roadside_assistances ra ON ra.id = c.asistencia_id
+         WHERE c.asistencia_id = $1
+           AND c.estado != 'anulado'
+         ORDER BY c.created_at_ms DESC
+         LIMIT 1`,
+        [id]
+      );
+      if (result.rows.length === 0) return res.json(null);
+      return res.json(normalizeCobro(result.rows[0]));
+    } catch (error) {
+      console.error("GET /api/roadside-operator/assistances/:id/cobro error:", error);
+      return res.status(500).json({ error: "Error obteniendo cobro" });
+    }
+  }
+);
+
+// POST marcar cobro como cobrado
+app.post(
+  "/api/roadside-operator/cobros/:id/marcar-cobrado",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+      const { metodoPago, importeCobrado, observaciones } = req.body ?? {};
+
+      const METODOS_VALIDOS = ["efectivo", "tarjeta", "transferencia", "bizum", "pendiente_facturar"];
+      if (!metodoPago || !METODOS_VALIDOS.includes(metodoPago)) {
+        return res.status(400).json({ error: "Método de pago no válido" });
+      }
+      const importe = parseFloat(importeCobrado);
+      if (!importe || importe <= 0) {
+        return res.status(400).json({ error: "Importe debe ser mayor que 0" });
+      }
+
+      // Verificar que el cobro pertenece al operario
+      const check = await db.query(
+        `SELECT c.id, c.estado
+         FROM cobros c
+         LEFT JOIN roadside_assistances ra ON ra.id = c.asistencia_id
+         WHERE c.id = $1
+           AND (c.operario_name = $2 OR ra."assignedTechName" = $2)
+         LIMIT 1`,
+        [id, operator.techName]
+      );
+      if (check.rows.length === 0) {
+        return res.status(404).json({ error: "Cobro no encontrado" });
+      }
+      if (check.rows[0].estado === "cobrado") {
+        return res.status(409).json({ error: "Este cobro ya está marcado como cobrado" });
+      }
+
+      const now = Date.now();
+      const updated = await db.query(
+        `UPDATE cobros
+         SET estado = 'cobrado',
+             metodo_pago = $2,
+             importe_cobrado = $3,
+             observaciones = CASE WHEN $4::text IS NOT NULL THEN $4::text ELSE observaciones END,
+             fecha_cobro = $5,
+             updated_at_ms = $6
+         WHERE id = $1
+         RETURNING *`,
+        [id, metodoPago, importe, observaciones ?? null, now, now]
+      );
+      return res.json(normalizeCobro(updated.rows[0]));
+    } catch (error) {
+      console.error("POST /api/roadside-operator/cobros/:id/marcar-cobrado error:", error);
+      return res.status(500).json({ error: "Error marcando cobro" });
+    }
+  }
+);
+
+/* ── COBROS (admin) ─────────────────────────────────────────────────────── */
+
+// POST crear cobro desde el panel admin (para asignar al operario de una asistencia)
+app.post("/api/cobros", requireAdminRole, async (req, res) => {
+  try {
+    const { asistencia_id, operario_name, cliente_nombre, telefono, concepto, importe_total, observaciones } = req.body ?? {};
+    if (!concepto) return res.status(400).json({ error: "Concepto obligatorio" });
+    const importe = parseFloat(importe_total);
+    if (!importe || importe <= 0) return res.status(400).json({ error: "Importe debe ser mayor que 0" });
+
+    const now = Date.now();
+    const result = await db.query(
+      `INSERT INTO cobros
+         (asistencia_id, operario_name, cliente_nombre, telefono, concepto, importe_total, estado, observaciones, created_at_ms, updated_at_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', $7, $8, $8)
+       RETURNING *`,
+      [asistencia_id ?? null, operario_name ?? "", cliente_nombre ?? "", telefono ?? "", concepto, importe, observaciones ?? "", now]
+    );
+    return res.json(normalizeCobro(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/cobros error:", error);
+    return res.status(500).json({ error: "Error creando cobro" });
+  }
+});
+
+// GET listar todos los cobros (admin)
+app.get("/api/cobros", requireAdminRole, async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT c.*, ra.plate, ra.address
+       FROM cobros c
+       LEFT JOIN roadside_assistances ra ON ra.id = c.asistencia_id
+       ORDER BY c.created_at_ms DESC
+       LIMIT 200`
+    );
+    return res.json(result.rows.map(normalizeCobro));
+  } catch (error) {
+    console.error("GET /api/cobros error:", error);
+    return res.status(500).json({ error: "Error obteniendo cobros" });
+  }
+});
 
 app.post(
   "/api/roadside-operator/assistances/:id/status",

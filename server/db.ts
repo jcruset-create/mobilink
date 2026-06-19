@@ -479,6 +479,28 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS wcm_received_idx ON whatsapp_capture_messages(received_at DESC);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cobros (
+      id SERIAL PRIMARY KEY,
+      asistencia_id INTEGER REFERENCES roadside_assistances(id) ON DELETE SET NULL,
+      operario_name TEXT NOT NULL DEFAULT '',
+      cliente_nombre TEXT NOT NULL DEFAULT '',
+      telefono TEXT NOT NULL DEFAULT '',
+      concepto TEXT NOT NULL DEFAULT '',
+      importe_total DECIMAL(10,2) NOT NULL DEFAULT 0,
+      importe_cobrado DECIMAL(10,2),
+      estado TEXT NOT NULL DEFAULT 'pendiente',
+      metodo_pago TEXT,
+      fecha_cobro BIGINT,
+      observaciones TEXT NOT NULL DEFAULT '',
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cobros_operario_idx ON cobros(operario_name);
+    CREATE INDEX IF NOT EXISTS cobros_asistencia_idx ON cobros(asistencia_id);
+    CREATE INDEX IF NOT EXISTS cobros_estado_idx ON cobros(estado);
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 
