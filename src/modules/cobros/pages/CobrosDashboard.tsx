@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 type PaymentStatus = {
   id: number;
@@ -11,6 +12,7 @@ type PaymentStatus = {
 };
 
 export default function CobrosDashboard() {
+  const navigate = useNavigate();
   const [jobId, setJobId] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -112,7 +114,15 @@ Importe: ${Number(amountEuros).toFixed(2)} €`;
   return (
     <div className="min-h-screen bg-slate-950 text-white p-6">
       <div className="max-w-3xl mx-auto">
-        <h1 className="text-3xl font-black mb-2">Cobros</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-3xl font-black">Cobros</h1>
+          <button
+            onClick={() => navigate("/")}
+            className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
+          >
+            ← Volver a Operativo
+          </button>
+        </div>
 
         <p className="text-slate-400 mb-6">
           Crear enlaces de paga y señal con Stripe.

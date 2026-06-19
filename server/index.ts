@@ -293,9 +293,14 @@ app.get("/api/payments/status/:reference", async (req, res) => {
       });
     }
 
+    const row = result.rows[0];
+    // BIGINT columns arrive as strings from pg — convert to number
+    if (row.paid_at_ms != null) row.paid_at_ms = Number(row.paid_at_ms);
+    if (row.created_at_ms != null) row.created_at_ms = Number(row.created_at_ms);
+
     res.json({
       success: true,
-      payment: result.rows[0],
+      payment: row,
     });
   } catch (error: any) {
     console.error("ERROR CONSULTANDO PAYMENT:", error);
