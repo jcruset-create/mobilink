@@ -126,6 +126,8 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const [error, setError] = useState<string | null>(null);
   const [applyingField, setApplyingField] = useState<string | null>(null);
   const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set());
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
 
   const fetchSession = useCallback(async () => {
     try {
@@ -354,31 +356,74 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
             )}
 
             <div className="space-y-1.5">
-              {AI_FIELD_LABELS.filter((f) => suggestions[f.key] != null && suggestions[f.key] !== "").map((f) => (
-                <div
-                  key={f.key}
-                  className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs text-slate-400 font-semibold">{f.label}</div>
-                    <div className="text-sm font-bold text-slate-800 truncate">
-                      {String(suggestions[f.key])}
-                    </div>
+              {AI_FIELD_LABELS.filter((f) => suggestions[f.key] != null && suggestions[f.key] !== "").map((f) => {
+                const isEditing = editingField === f.applyKey;
+                const currentValue = isEditing ? (editValues[f.applyKey!] ?? "") : String(suggestions[f.key]);
+                return (
+                  <div
+                    key={f.key}
+                    className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2"
+                  >
+                    <div className="text-xs text-slate-400 font-semibold mb-1">{f.label}</div>
+                    {isEditing ? (
+                      <input
+                        className="w-full rounded border border-blue-300 px-2 py-1 text-sm font-bold text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 mb-2"
+                        value={currentValue}
+                        onChange={(e) => setEditValues((prev) => ({ ...prev, [f.applyKey!]: e.target.value }))}
+                        autoFocus
+                      />
+                    ) : (
+                      <div className="text-sm font-bold text-slate-800 break-words mb-1">{currentValue}</div>
+                    )}
+                    {f.applyKey && !appliedFields.has(f.applyKey) && (
+                      <div className="flex gap-1.5 flex-wrap">
+                        {isEditing ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                applyField(f.applyKey!, editValues[f.applyKey!] ?? suggestions[f.key]);
+                                setEditingField(null);
+                              }}
+                              disabled={applyingField === f.applyKey}
+                              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              {applyingField === f.applyKey ? "…" : "Aplicar"}
+                            </button>
+                            <button
+                              onClick={() => setEditingField(null)}
+                              className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => applyField(f.applyKey!, suggestions[f.key])}
+                              disabled={applyingField === f.applyKey}
+                              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              {applyingField === f.applyKey ? "…" : "Aplicar"}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditValues((prev) => ({ ...prev, [f.applyKey!]: String(suggestions[f.key]) }));
+                                setEditingField(f.applyKey!);
+                              }}
+                              className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                            >
+                              Editar
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {f.applyKey && appliedFields.has(f.applyKey) && (
+                      <span className="text-xs font-bold text-emerald-600">✓ Aplicado</span>
+                    )}
                   </div>
-                  {f.applyKey && !appliedFields.has(f.applyKey) && (
-                    <button
-                      onClick={() => applyField(f.applyKey!, suggestions[f.key])}
-                      disabled={applyingField === f.applyKey}
-                      className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {applyingField === f.applyKey ? "…" : "Aplicar"}
-                    </button>
-                  )}
-                  {f.applyKey && appliedFields.has(f.applyKey) && (
-                    <span className="shrink-0 text-xs font-bold text-emerald-600">✓ Aplicado</span>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
