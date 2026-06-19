@@ -99,7 +99,7 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "customerName", label: "Nombre cliente", applyKey: "customerName" },
   { key: "conductorNombre", label: "Conductor", applyKey: "conductorNombre" },
   { key: "empresa", label: "Empresa" },
-  { key: "contactoNombre", label: "Contacto nombre" },
+  { key: "contactoNombre", label: "Contacto / Conductor", applyKey: "conductorNombre" },
   { key: "contactoTelefono", label: "Contacto teléfono", applyKey: "customerPhone" },
   { key: "plate", label: "Matrícula", applyKey: "plate" },
   { key: "vehicleBrand", label: "Marca vehículo" },
@@ -356,9 +356,16 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
             )}
 
             <div className="space-y-1.5">
-              {AI_FIELD_LABELS.filter((f) => suggestions[f.key] != null && suggestions[f.key] !== "").map((f) => {
+              {AI_FIELD_LABELS.filter((f) => {
+                // "address" row also shows when only lat/lng available (no text address)
+                if (f.applyKey === "location") return (suggestions.address != null && suggestions.address !== "") || suggestions.latitude != null;
+                return suggestions[f.key] != null && suggestions[f.key] !== "";
+              }).map((f) => {
                 const isEditing = editingField === f.applyKey;
-                const currentValue = isEditing ? (editValues[f.applyKey!] ?? "") : String(suggestions[f.key]);
+                const displayValue = f.applyKey === "location"
+                  ? (suggestions.address || `${suggestions.latitude}, ${suggestions.longitude}`)
+                  : suggestions[f.key];
+                const currentValue = isEditing ? (editValues[f.applyKey!] ?? "") : String(displayValue);
                 return (
                   <div
                     key={f.key}
@@ -381,7 +388,10 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
                           <>
                             <button
                               onClick={() => {
-                                applyField(f.applyKey!, editValues[f.applyKey!] ?? suggestions[f.key]);
+                                const val = f.applyKey === "location"
+                                  ? { address: editValues["location"] ?? suggestions.address, latitude: suggestions.latitude, longitude: suggestions.longitude }
+                                  : (editValues[f.applyKey!] ?? suggestions[f.key]);
+                                applyField(f.applyKey!, val);
                                 setEditingField(null);
                               }}
                               disabled={applyingField === f.applyKey}
