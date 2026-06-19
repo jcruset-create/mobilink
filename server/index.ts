@@ -7646,19 +7646,26 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
   const messages = result.rows;
   if (!messages.length) return {};
 
-  // Build context for AI
+  // Build context for AI — text lines + image URLs for vision
   const lines: string[] = [];
+  const imageUrls: string[] = [];
   for (const m of messages) {
     if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO] ${m.text_content}`);
     else if (m.message_type === "location") lines.push(`[UBICACION] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
     else if (m.message_type === "contact") lines.push(`[CONTACTO] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
-    else if (m.message_type === "image") lines.push(`[IMAGEN] url=${m.media_stored_url || m.media_url || "?"}`);
-    else if (m.message_type === "audio") lines.push(`[AUDIO] url=${m.media_stored_url || m.media_url || "?"}`);
-    else if (m.message_type === "document") lines.push(`[DOCUMENTO] url=${m.media_stored_url || m.media_url || "?"}`);
+    else if (m.message_type === "image") {
+      const url = m.media_stored_url || m.media_url;
+      if (url) imageUrls.push(url);
+      lines.push(`[IMAGEN enviada]`);
+    }
+    else if (m.message_type === "audio") lines.push(`[AUDIO]`);
+    else if (m.message_type === "document") lines.push(`[DOCUMENTO]`);
   }
 
   const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
-Analiza los mensajes de WhatsApp de una incidencia y extrae la información relevante.
+Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
+Si hay imágenes, analízalas: pueden mostrar la matrícula del vehículo, el vehículo, o la avería.
+Extrae la matrícula con especial atención — busca en todas las imágenes.
 Responde SOLO con JSON válido, sin markdown.
 Campos a extraer (null si no disponible):
 {
@@ -7667,7 +7674,7 @@ Campos a extraer (null si no disponible):
   "empresa": string,
   "contactoNombre": string,
   "contactoTelefono": string,
-  "plate": string (matrícula, formato normalizado),
+  "plate": string (matrícula del vehículo averiado, formato normalizado sin espacios ni guiones),
   "vehicleBrand": string,
   "vehicleModel": string,
   "vehicleDescription": string,
@@ -7682,15 +7689,28 @@ Campos a extraer (null si no disponible):
   "confidence": "high"|"medium"|"low"
 }`;
 
+  // Build vision-capable user message content
+  type ContentPart =
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string; detail: "auto" } };
+
+  const userContent: ContentPart[] = [
+    { type: "text", text: `Mensajes de la sesión:\n${lines.join("\n")}` },
+    ...imageUrls.map((url) => ({
+      type: "image_url" as const,
+      image_url: { url, detail: "auto" as const },
+    })),
+  ];
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `Mensajes de la sesión:\n${lines.join("\n")}` },
+        { role: "user", content: userContent },
       ],
       temperature: 0.1,
-      max_tokens: 600,
+      max_tokens: 700,
     });
     const raw = response.choices[0]?.message?.content ?? "{}";
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
