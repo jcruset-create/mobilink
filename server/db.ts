@@ -439,6 +439,46 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS assistance_drafts_created_idx ON assistance_drafts(created_at DESC);
   `);
 
+  // ── WhatsApp Capture Sessions ─────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_capture_sessions (
+      id SERIAL PRIMARY KEY,
+      job_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      started_at BIGINT NOT NULL,
+      ended_at BIGINT,
+      created_by TEXT,
+      ai_suggestions TEXT,
+      CONSTRAINT whatsapp_capture_sessions_status_check CHECK (status IN ('ACTIVE','CLOSED'))
+    );
+    CREATE INDEX IF NOT EXISTS wcs_job_idx ON whatsapp_capture_sessions(job_id);
+    CREATE INDEX IF NOT EXISTS wcs_status_idx ON whatsapp_capture_sessions(status);
+
+    CREATE TABLE IF NOT EXISTS whatsapp_capture_messages (
+      id SERIAL PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES whatsapp_capture_sessions(id) ON DELETE CASCADE,
+      job_id INTEGER NOT NULL,
+      message_sid TEXT UNIQUE,
+      from_phone TEXT,
+      message_type TEXT NOT NULL DEFAULT 'text',
+      text_content TEXT,
+      media_url TEXT,
+      media_stored_url TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      address TEXT,
+      contact_name TEXT,
+      contact_phone TEXT,
+      raw_payload TEXT,
+      received_at BIGINT NOT NULL,
+      processed BOOLEAN NOT NULL DEFAULT false,
+      CONSTRAINT wcm_type_check CHECK (message_type IN ('text','location','contact','image','video','audio','document'))
+    );
+    CREATE INDEX IF NOT EXISTS wcm_session_idx ON whatsapp_capture_messages(session_id);
+    CREATE INDEX IF NOT EXISTS wcm_job_idx ON whatsapp_capture_messages(job_id);
+    CREATE INDEX IF NOT EXISTS wcm_received_idx ON whatsapp_capture_messages(received_at DESC);
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

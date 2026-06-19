@@ -7408,6 +7408,70 @@ app.post(
       );
       const msgId = msgResult.rows[0].id;
 
+      // ── Route to active capture session if one exists ─────────────────
+      const activeSession = await db.query(
+        `SELECT id, job_id FROM whatsapp_capture_sessions WHERE status = 'ACTIVE' LIMIT 1`
+      );
+      if (activeSession.rows.length > 0) {
+        const { id: sessionId, job_id: jobId } = activeSession.rows[0];
+        const msgType = detectMessageType(req.body);
+        const mediaUrl0: string | null = req.body["MediaUrl0"] ?? null;
+
+        // Try to store media in Supabase if it's an image/audio/video/document
+        let storedUrl: string | null = null;
+        if (mediaUrl0 && ["image","audio","video","document"].includes(msgType)) {
+          try {
+            const mediaResp = await fetch(mediaUrl0, {
+              headers: {
+                Authorization: "Basic " + Buffer.from(
+                  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+                ).toString("base64"),
+              },
+            });
+            if (mediaResp.ok) {
+              const contentType = mediaResp.headers.get("content-type") ?? "application/octet-stream";
+              const ext = contentType.split("/")[1]?.split(";")[0] ?? "bin";
+              const buffer = Buffer.from(await mediaResp.arrayBuffer());
+              const storagePath = `roadside/${jobId}/whatsapp_${Date.now()}.${ext}`;
+              const { error: upErr } = await supabase.storage
+                .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
+                .upload(storagePath, buffer, { contentType, upsert: false });
+              if (!upErr) {
+                const { data: pub } = supabase.storage
+                  .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
+                  .getPublicUrl(storagePath);
+                storedUrl = pub.publicUrl ?? null;
+              }
+            }
+          } catch (mediaErr) {
+            console.warn("Could not store WhatsApp media:", mediaErr);
+          }
+        }
+
+        await db.query(
+          `INSERT INTO whatsapp_capture_messages
+            (session_id, job_id, message_sid, from_phone, message_type,
+             text_content, media_url, media_stored_url,
+             latitude, longitude, address, contact_name, contact_phone,
+             raw_payload, received_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [
+            sessionId, jobId, MessageSid, From, msgType,
+            Body ?? null,
+            mediaUrl0,
+            storedUrl,
+            req.body.Latitude ? parseFloat(req.body.Latitude) : null,
+            req.body.Longitude ? parseFloat(req.body.Longitude) : null,
+            req.body.Label ?? null,
+            null, null, // contact_name/phone parsed below
+            JSON.stringify(req.body),
+            Date.now(),
+          ]
+        );
+        console.log(`WhatsApp capture: message ${MessageSid} routed to session #${sessionId} (job ${jobId})`);
+        return res.status(200).type("text/xml").send("<Response></Response>");
+      }
+
       // Extract with AI
       const { data: extracted, confidence } = await extractAssistanceFromMessage(
         Body ?? "",
@@ -7544,6 +7608,251 @@ app.post("/api/whatsapp/send", requireSupervisorRole, async (req, res) => {
   } catch (error: any) {
     console.error("POST /api/whatsapp/send error:", error);
     return res.status(500).json({ error: error.message ?? "Error enviando mensaje" });
+  }
+});
+
+/* =========================================================
+   WHATSAPP CAPTURE SESSIONS
+========================================================= */
+
+// Helper: AI analysis of capture session messages
+async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<string, any>> {
+  const result = await db.query(
+    `SELECT message_type, text_content, latitude, longitude, address,
+            contact_name, contact_phone, media_stored_url, media_url
+     FROM whatsapp_capture_messages
+     WHERE session_id = $1
+     ORDER BY received_at ASC`,
+    [sessionId]
+  );
+  const messages = result.rows;
+  if (!messages.length) return {};
+
+  // Build context for AI
+  const lines: string[] = [];
+  for (const m of messages) {
+    if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO] ${m.text_content}`);
+    else if (m.message_type === "location") lines.push(`[UBICACION] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
+    else if (m.message_type === "contact") lines.push(`[CONTACTO] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
+    else if (m.message_type === "image") lines.push(`[IMAGEN] url=${m.media_stored_url || m.media_url || "?"}`);
+    else if (m.message_type === "audio") lines.push(`[AUDIO] url=${m.media_stored_url || m.media_url || "?"}`);
+    else if (m.message_type === "document") lines.push(`[DOCUMENTO] url=${m.media_stored_url || m.media_url || "?"}`);
+  }
+
+  const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
+Analiza los mensajes de WhatsApp de una incidencia y extrae la información relevante.
+Responde SOLO con JSON válido, sin markdown.
+Campos a extraer (null si no disponible):
+{
+  "customerName": string,
+  "empresa": string,
+  "contactoNombre": string,
+  "contactoTelefono": string,
+  "plate": string (matrícula, formato normalizado),
+  "vehicleBrand": string,
+  "vehicleModel": string,
+  "vehicleDescription": string,
+  "latitude": number,
+  "longitude": number,
+  "address": string,
+  "municipio": string,
+  "provincia": string,
+  "tipoAveria": string,
+  "descripcionAveria": string,
+  "resumen": string (resumen breve de 1-2 frases),
+  "confidence": "high"|"medium"|"low"
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Mensajes de la sesión:\n${lines.join("\n")}` },
+      ],
+      temperature: 0.1,
+      max_tokens: 600,
+    });
+    const raw = response.choices[0]?.message?.content ?? "{}";
+    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("analyzeCaptureSesionWithAI error:", e);
+    return {};
+  }
+}
+
+// Helper: detect message type from Twilio payload
+function detectMessageType(body: Record<string, any>): string {
+  const numMedia = Number(body.NumMedia ?? 0);
+  if (body.Latitude) return "location";
+  if (body.Body?.startsWith("BEGIN:VCARD")) return "contact";
+  if (numMedia > 0) {
+    const contentType: string = body["MediaContentType0"] ?? "";
+    if (contentType.startsWith("image/")) return "image";
+    if (contentType.startsWith("video/")) return "video";
+    if (contentType.startsWith("audio/")) return "audio";
+    return "document";
+  }
+  return "text";
+}
+
+// GET active session (global)
+app.get("/api/whatsapp-capture/active", requireAdminRole, async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT s.*, ra.plate, ra."customerName"
+       FROM whatsapp_capture_sessions s
+       LEFT JOIN roadside_assistances ra ON ra.id = s.job_id
+       WHERE s.status = 'ACTIVE'
+       ORDER BY s.started_at DESC
+       LIMIT 1`
+    );
+    return res.json(result.rows[0] ?? null);
+  } catch (error) {
+    console.error("GET /api/whatsapp-capture/active error:", error);
+    return res.status(500).json({ error: "Error obteniendo sesión activa" });
+  }
+});
+
+// GET session + messages for a job
+app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res) => {
+  try {
+    const jobId = Number(req.params.jobId);
+    const sessionResult = await db.query(
+      `SELECT * FROM whatsapp_capture_sessions WHERE job_id = $1 ORDER BY started_at DESC LIMIT 1`,
+      [jobId]
+    );
+    if (!sessionResult.rows.length) return res.json(null);
+    const session = sessionResult.rows[0];
+    if (session.ai_suggestions) {
+      try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
+    }
+    const msgResult = await db.query(
+      `SELECT * FROM whatsapp_capture_messages WHERE session_id = $1 ORDER BY received_at ASC`,
+      [session.id]
+    );
+    return res.json({ ...session, messages: msgResult.rows });
+  } catch (error) {
+    console.error("GET /api/whatsapp-capture/by-job error:", error);
+    return res.status(500).json({ error: "Error obteniendo sesión" });
+  }
+});
+
+// POST start capture session
+app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) => {
+  try {
+    const { job_id, created_by } = req.body;
+    if (!job_id) return res.status(400).json({ error: "job_id requerido" });
+
+    // Check no active session exists
+    const existing = await db.query(
+      `SELECT s.id, s.job_id, ra.plate, ra."customerName"
+       FROM whatsapp_capture_sessions s
+       LEFT JOIN roadside_assistances ra ON ra.id = s.job_id
+       WHERE s.status = 'ACTIVE'
+       LIMIT 1`
+    );
+    if (existing.rows.length > 0) {
+      const active = existing.rows[0];
+      const label = active.plate || active.customerName || `#${active.job_id}`;
+      return res.status(409).json({
+        error: `Ya existe una captura WhatsApp activa en la asistencia ${label}`,
+        activeSession: active,
+      });
+    }
+
+    const now = Date.now();
+    const result = await db.query(
+      `INSERT INTO whatsapp_capture_sessions (job_id, status, started_at, created_by)
+       VALUES ($1, 'ACTIVE', $2, $3)
+       RETURNING *`,
+      [job_id, now, created_by ?? null]
+    );
+    return res.json(result.rows[0]);
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions error:", error);
+    return res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+// POST close session + trigger AI
+app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const session = await db.query(
+      `SELECT * FROM whatsapp_capture_sessions WHERE id = $1`,
+      [id]
+    );
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
+    if (session.rows[0].status === "CLOSED") return res.status(400).json({ error: "Sesión ya cerrada" });
+
+    const now = Date.now();
+    await db.query(
+      `UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`,
+      [id, now]
+    );
+
+    // Run AI analysis asynchronously — don't block the response
+    analyzeCaptureSesionWithAI(id).then(async (suggestions) => {
+      if (Object.keys(suggestions).length > 0) {
+        await db.query(
+          `UPDATE whatsapp_capture_sessions SET ai_suggestions = $2 WHERE id = $1`,
+          [id, JSON.stringify(suggestions)]
+        );
+        console.log(`WhatsApp capture session #${id} AI analysis complete`);
+      }
+    }).catch((e) => console.error("AI analysis error:", e));
+
+    const updated = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
+    return res.json(updated.rows[0]);
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions/:id/close error:", error);
+    return res.status(500).json({ error: "Error cerrando sesión" });
+  }
+});
+
+// POST apply AI suggestion to assistance
+app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const session = await db.query(
+      `SELECT * FROM whatsapp_capture_sessions WHERE id = $1`,
+      [id]
+    );
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
+
+    const { field, value } = req.body;
+    if (!field || value === undefined) return res.status(400).json({ error: "field y value requeridos" });
+
+    const jobId = session.rows[0].job_id;
+
+    // Allowed fields that can be applied to roadside_assistances
+    const ALLOWED_FIELDS: Record<string, string> = {
+      customerName: '"customerName"',
+      plate: "plate",
+      address: "address",
+      latitude: "latitude",
+      longitude: "longitude",
+      vehicleDescription: '"vehicleDescription"',
+      notes: "notes",
+    };
+
+    if (!ALLOWED_FIELDS[field]) return res.status(400).json({ error: "Campo no permitido" });
+
+    await db.query(
+      `UPDATE roadside_assistances SET ${ALLOWED_FIELDS[field]} = $2, "updatedAtMs" = $3 WHERE id = $1`,
+      [jobId, value, Date.now()]
+    );
+
+    const updated = await db.query(
+      `SELECT * FROM roadside_assistances WHERE id = $1`,
+      [jobId]
+    );
+    return res.json({ ok: true, assistance: updated.rows[0] });
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions/:id/apply error:", error);
+    return res.status(500).json({ error: "Error aplicando sugerencia" });
   }
 });
 

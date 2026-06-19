@@ -23,6 +23,7 @@ import {
   Briefcase,
 } from "lucide-react";
 import RoadsideBackofficeModal from "./RoadsideBackofficeModal";
+import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
 import { geocodeAddress } from "../modules/roadsideAssistanceApi";
@@ -290,6 +291,7 @@ export default function RoadsideAssistanceView({
   const [geocodeEditError, setGeocodeEditError] = useState("");
 
   const [backofficeAssistance, setBackofficeAssistance] = useState<RoadsideAssistance | null>(null);
+  const [whatsappCaptureId, setWhatsappCaptureId] = useState<number | null>(null);
 
   // ── Pestañas panel derecho ──────────────────────────────────────────────────
   type PanelTab = "activas" | "cerradas" | "historial";
@@ -1287,6 +1289,14 @@ export default function RoadsideAssistanceView({
                         Back Office
                       </button>
 
+                      <button
+                        type="button"
+                        onClick={() => setWhatsappCaptureId(whatsappCaptureId === assistance.id ? null : assistance.id)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-800 hover:bg-emerald-100"
+                      >
+                        📲 Captura WhatsApp
+                      </button>
+
                       {(assistance.status === "en_camino" ||
                         assistance.status === "en_punto") &&
                         assistance.latitude != null &&
@@ -1313,6 +1323,15 @@ export default function RoadsideAssistanceView({
                         Cancelar
                       </button>
                     </div>
+
+                    {/* WhatsApp Capture Section (inline) */}
+                    {whatsappCaptureId === assistance.id && (
+                      <WhatsAppCaptureSection
+                        jobId={assistance.id}
+                        jobPlate={assistance.plate}
+                        onAssistanceUpdated={onRefresh}
+                      />
+                    )}
                   </article>
                 );
               })}
