@@ -7416,6 +7416,29 @@ app.post(
         const msgType = detectMessageType(req.body);
         const mediaUrl0: string | null = req.body["MediaUrl0"] ?? null;
 
+        // Parse vCard contact attachment
+        let vcardContactName: string | null = null;
+        let vcardContactPhone: string | null = null;
+        if (msgType === "contact" && mediaUrl0) {
+          try {
+            const vcardResp = await fetch(mediaUrl0, {
+              headers: {
+                Authorization: "Basic " + Buffer.from(
+                  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+                ).toString("base64"),
+              },
+            });
+            if (vcardResp.ok) {
+              const vcardText = await vcardResp.text();
+              const parsed = parseVCard(vcardText);
+              vcardContactName = parsed.name;
+              vcardContactPhone = parsed.phone;
+            }
+          } catch (vcErr) {
+            console.warn("Could not parse vCard:", vcErr);
+          }
+        }
+
         // Try to store media in Supabase if it's an image/audio/video/document
         let storedUrl: string | null = null;
         if (mediaUrl0 && ["image","audio","video","document"].includes(msgType)) {
@@ -7517,7 +7540,8 @@ app.post(
             lat,
             lng,
             resolvedAddress,
-            null, null,
+            vcardContactName,
+            vcardContactPhone,
             JSON.stringify(req.body),
             Date.now(),
           ]
@@ -7772,9 +7796,18 @@ function detectMessageType(body: Record<string, any>): string {
     if (contentType.startsWith("image/")) return "image";
     if (contentType.startsWith("video/")) return "video";
     if (contentType.startsWith("audio/")) return "audio";
+    if (contentType.includes("vcard") || contentType.includes("x-vcard")) return "contact";
     return "document";
   }
   return "text";
+}
+
+function parseVCard(vcardText: string): { name: string | null; phone: string | null } {
+  const fnMatch = vcardText.match(/^FN[^:]*:(.+)$/m);
+  const name = fnMatch ? fnMatch[1].trim() : null;
+  const telMatch = vcardText.match(/^TEL[^:]*:([+\d\s\-()]+)$/m);
+  const phone = telMatch ? telMatch[1].replace(/\s+/g, "").trim() : null;
+  return { name, phone };
 }
 
 // GET active session (global)
