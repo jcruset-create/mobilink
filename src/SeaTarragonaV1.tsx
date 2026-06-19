@@ -5070,6 +5070,7 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
           appendLog(`Técnico añadido: ${name}.`);
           pendingRoadsideCapableRef.current.set(name, roadsideCapable);
           saveTechToBackend(newTech)
+            .then(() => reloadTechsFromBackend())
             .catch((e) => console.error("Error guardando técnico:", e))
             .finally(() => pendingRoadsideCapableRef.current.delete(name));
         } else {
@@ -5084,6 +5085,7 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
           if (base) {
             pendingRoadsideCapableRef.current.set(name, roadsideCapable);
             saveTechToBackend({ ...base, phone: phone || null, competencies, priorities, roadsideCapable })
+              .then(() => reloadTechsFromBackend())
               .catch((e) => console.error("Error guardando técnico:", e))
               .finally(() => pendingRoadsideCapableRef.current.delete(name));
           }

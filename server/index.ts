@@ -501,6 +501,8 @@ function normalizeTechRow(t: any) {
     currentRoadsideAssistanceId:
       t.currentRoadsideAssistanceId != null ? Number(t.currentRoadsideAssistanceId) : null,
     phone: t.phone ?? null,
+    statusChangedAtMs: t.statusChangedAtMs != null ? Number(t.statusChangedAtMs) : null,
+    statusTotals: safeJsonParse(t.statusTotals, {}),
   };
 }
 
@@ -1521,7 +1523,8 @@ app.get("/api/techs", async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "currentRoadsideAssistanceId", phone
+             "roadsideCapable", "currentRoadsideAssistanceId", phone,
+             "statusChangedAtMs", "statusTotals"
       FROM techs
       ORDER BY id ASC
     `);
