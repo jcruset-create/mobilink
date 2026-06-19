@@ -8,7 +8,7 @@ import type {
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 function getAdminHeaders(): Record<string, string> {
-  const token = localStorage.getItem("adminToken") ?? sessionStorage.getItem("adminToken") ?? "";
+  const token = localStorage.getItem("sea-admin-token") ?? "";
   return {
     "Content-Type": "application/json",
     "x-admin-token": token,
