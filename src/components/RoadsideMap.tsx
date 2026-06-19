@@ -12,11 +12,11 @@ L.Icon.Default.mergeOptions({
 });
 
 const vehicleIcon = L.divIcon({
-  html: `<img src="/van-icon.png" style="width:60px;height:auto;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4));" />`,
+  html: `<img src="/van-icon.png" style="width:60px;height:90px;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));" />`,
   className: "",
-  iconSize: [60, 40],
-  iconAnchor: [30, 40],
-  popupAnchor: [0, -40],
+  iconSize: [60, 90],
+  iconAnchor: [30, 90],
+  popupAnchor: [0, -90],
 });
 
 type Props = {
