@@ -7700,8 +7700,13 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
 
   const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
 Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
-Si hay imágenes, analízalas: pueden mostrar la matrícula del vehículo, el vehículo, o la avería.
-Extrae la matrícula con especial atención — busca en todas las imágenes.
+
+INSTRUCCIONES CRÍTICAS para imágenes:
+1. Busca matrículas de vehículos en todas las imágenes (en la placa física, documentos, capturas de pantalla).
+2. Busca coordenadas GPS en cualquier formato: decimal (41.123, 1.456), DMS (41°19'20.4"N 1°15'57.8"E), o en capturas de mapas.
+   - Si encuentras coordenadas DMS, conviértelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
+3. Busca direcciones, nombres de calles, municipios visibles en imágenes de mapas o capturas de pantalla.
+
 Responde SOLO con JSON válido, sin markdown.
 Campos a extraer (null si no disponible):
 {
@@ -7710,12 +7715,12 @@ Campos a extraer (null si no disponible):
   "empresa": string,
   "contactoNombre": string,
   "contactoTelefono": string,
-  "plate": string (matrícula del vehículo averiado, formato normalizado sin espacios ni guiones),
+  "plate": string (matrícula del vehículo averiado, sin espacios ni guiones),
   "vehicleBrand": string,
   "vehicleModel": string,
   "vehicleDescription": string,
-  "latitude": number,
-  "longitude": number,
+  "latitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
+  "longitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
   "address": string,
   "municipio": string,
   "provincia": string,
