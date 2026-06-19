@@ -3367,12 +3367,6 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
       });
     }
 
-    if (!address && !googleMapsUrl && latitude == null && longitude == null) {
-      return res.status(400).json({
-        error: "Indica direccion, enlace de Google Maps o coordenadas",
-      });
-    }
-
     const result = await db.query(
       `
         INSERT INTO roadside_assistances (
@@ -3381,6 +3375,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           priority,
           "customerName",
           "customerPhone",
+          "conductorNombre",
           address,
           "googleMapsUrl",
           latitude,
@@ -3404,7 +3399,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24
+          $17, $18, $19, $20, $21, $22, $23, $24, $25
         )
         RETURNING *
       `,
@@ -3414,6 +3409,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         normalizeRoadsideAssistancePriority(body.priority),
         customerName,
         customerPhone,
+        body.conductorNombre ? String(body.conductorNombre).trim() : null,
         address,
         googleMapsUrl || null,
         latitude,
@@ -7645,6 +7641,7 @@ Responde SOLO con JSON válido, sin markdown.
 Campos a extraer (null si no disponible):
 {
   "customerName": string,
+  "conductorNombre": string,
   "empresa": string,
   "contactoNombre": string,
   "contactoTelefono": string,
@@ -7830,6 +7827,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
     // Allowed fields that can be applied to roadside_assistances
     const ALLOWED_FIELDS: Record<string, string> = {
       customerName: '"customerName"',
+      conductorNombre: '"conductorNombre"',
       plate: "plate",
       address: "address",
       latitude: "latitude",

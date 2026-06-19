@@ -92,6 +92,7 @@ export type RoadsideAssistance = {
 export type RoadsideAssistanceDraft = {
   customerName: string;
   customerPhone: string;
+  conductorNombre: string;
   address: string;
   googleMapsUrl: string;
   latitude: string;

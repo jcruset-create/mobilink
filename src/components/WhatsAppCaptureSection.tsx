@@ -97,6 +97,7 @@ function MessageRow({ msg }: { msg: WhatsAppCaptureMessage }) {
 
 const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyKey?: string }[] = [
   { key: "customerName", label: "Nombre cliente", applyKey: "customerName" },
+  { key: "conductorNombre", label: "Conductor", applyKey: "conductorNombre" },
   { key: "empresa", label: "Empresa" },
   { key: "contactoNombre", label: "Contacto nombre" },
   { key: "contactoTelefono", label: "Contacto teléfono" },

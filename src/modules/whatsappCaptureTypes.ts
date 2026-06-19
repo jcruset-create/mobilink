@@ -42,6 +42,7 @@ export type WhatsAppAiSuggestions = {
   // Cliente
   customerName?: string | null;
   empresa?: string | null;
+  conductorNombre?: string | null;
   // Contacto
   contactoNombre?: string | null;
   contactoTelefono?: string | null;

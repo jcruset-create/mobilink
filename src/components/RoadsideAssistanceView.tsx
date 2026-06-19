@@ -45,6 +45,7 @@ import {
 const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   customerName: "",
   customerPhone: "",
+  conductorNombre: "",
   address: "",
   googleMapsUrl: "",
   latitude: "",
@@ -403,16 +404,9 @@ export default function RoadsideAssistanceView({
 
     const hasCustomer =
       draft.customerName.trim() || draft.customerPhone.trim();
-    const hasLocation =
-      draft.address.trim() || draft.googleMapsUrl.trim();
 
     if (!hasCustomer) {
-      setLocalError("Indica cliente o telefono.");
-      return;
-    }
-
-    if (!hasLocation) {
-      setLocalError("Indica direccion o enlace de Google Maps.");
+      setLocalError("Indica el nombre del cliente o teléfono.");
       return;
     }
 
@@ -765,6 +759,24 @@ export default function RoadsideAssistanceView({
                 </label>
               </div>
 
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Conductor{" "}
+                  <span className="font-normal text-slate-400">(opcional · la IA puede rellenarlo)</span>
+                </span>
+                <input
+                  value={draft.conductorNombre}
+                  onChange={(event) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      conductorNombre: event.target.value,
+                    }))
+                  }
+                  placeholder="Nombre del conductor"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </label>
+
               <label className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
                 <input
                   type="checkbox"
@@ -783,7 +795,8 @@ export default function RoadsideAssistanceView({
 
               <label className="block">
                 <span className="mb-1 block text-xs font-bold text-slate-600">
-                  Direccion
+                  Direccion{" "}
+                  <span className="font-normal text-slate-400">(opcional · se puede recibir por WhatsApp)</span>
                 </span>
                 <input
                   value={draft.address}
