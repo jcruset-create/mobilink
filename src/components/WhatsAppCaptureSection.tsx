@@ -105,7 +105,7 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "vehicleBrand", label: "Marca vehículo" },
   { key: "vehicleModel", label: "Modelo vehículo" },
   { key: "vehicleDescription", label: "Descripción vehículo", applyKey: "vehicleDescription" },
-  { key: "address", label: "Dirección", applyKey: "address" },
+  { key: "address", label: "Dirección (+ GPS)", applyKey: "location" },
   { key: "municipio", label: "Municipio" },
   { key: "provincia", label: "Provincia" },
   { key: "tipoAveria", label: "Tipo avería" },
@@ -399,7 +399,12 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
                         ) : (
                           <>
                             <button
-                              onClick={() => applyField(f.applyKey!, suggestions[f.key])}
+                              onClick={() => {
+                                const val = f.applyKey === "location"
+                                  ? { address: suggestions.address, latitude: suggestions.latitude, longitude: suggestions.longitude }
+                                  : suggestions[f.key];
+                                applyField(f.applyKey!, val);
+                              }}
                               disabled={applyingField === f.applyKey}
                               className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
                             >

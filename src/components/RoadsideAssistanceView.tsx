@@ -500,18 +500,8 @@ export default function RoadsideAssistanceView({
 
     const hasCustomer =
       editDraft.customerName.trim() || editDraft.customerPhone.trim();
-    const hasLocation =
-      editDraft.address.trim() ||
-      editDraft.googleMapsUrl.trim() ||
-      (editDraft.latitude.trim() && editDraft.longitude.trim());
-
     if (!hasCustomer) {
       setEditError("Indica cliente o telefono.");
-      return;
-    }
-
-    if (!hasLocation) {
-      setEditError("Indica direccion, enlace de Google Maps o coordenadas.");
       return;
     }
 

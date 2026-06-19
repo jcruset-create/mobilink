@@ -7447,6 +7447,25 @@ app.post(
           }
         }
 
+        // Reverse geocode GPS location using Nominatim
+        const lat = req.body.Latitude ? parseFloat(req.body.Latitude) : null;
+        const lng = req.body.Longitude ? parseFloat(req.body.Longitude) : null;
+        let resolvedAddress: string | null = req.body.Label ?? null;
+        if (msgType === "location" && lat != null && lng != null && !resolvedAddress) {
+          try {
+            const geoResp = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+              { headers: { "User-Agent": "sea-tarragona-app/1.0" } }
+            );
+            if (geoResp.ok) {
+              const geoData: any = await geoResp.json();
+              resolvedAddress = geoData.display_name ?? null;
+            }
+          } catch (geoErr) {
+            console.warn("Reverse geocoding failed:", geoErr);
+          }
+        }
+
         await db.query(
           `INSERT INTO whatsapp_capture_messages
             (session_id, job_id, message_sid, from_phone, message_type,
@@ -7459,10 +7478,10 @@ app.post(
             Body ?? null,
             mediaUrl0,
             storedUrl,
-            req.body.Latitude ? parseFloat(req.body.Latitude) : null,
-            req.body.Longitude ? parseFloat(req.body.Longitude) : null,
-            req.body.Label ?? null,
-            null, null, // contact_name/phone parsed below
+            lat,
+            lng,
+            resolvedAddress,
+            null, null,
             JSON.stringify(req.body),
             Date.now(),
           ]
@@ -7804,6 +7823,38 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       [id, now]
     );
 
+    // Save WhatsApp media as roadside_assistance_files and build notes from text messages
+    const jobId = session.rows[0].job_id;
+    const msgs = await db.query(
+      `SELECT * FROM whatsapp_capture_messages WHERE session_id = $1 ORDER BY received_at ASC`,
+      [id]
+    );
+    const noteLines: string[] = [];
+    for (const msg of msgs.rows) {
+      if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
+        const url = msg.media_stored_url || msg.media_url;
+        await db.query(
+          `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT DO NOTHING`,
+          [jobId, `whatsapp_${msg.message_type}`, url, `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`, now]
+        ).catch(() => {});
+      }
+      if (msg.message_type === "text" && msg.text_content) {
+        noteLines.push(`[WhatsApp ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}] ${msg.text_content}`);
+      }
+      if (msg.message_type === "location" && msg.address) {
+        noteLines.push(`[Ubicación GPS] ${msg.address}`);
+      }
+    }
+    // Append WhatsApp notes to assistance notes field
+    if (noteLines.length > 0) {
+      const existing = await db.query(`SELECT notes FROM roadside_assistances WHERE id = $1`, [jobId]);
+      const prevNotes = existing.rows[0]?.notes ?? "";
+      const newNotes = [prevNotes, ...noteLines].filter(Boolean).join("\n");
+      await db.query(`UPDATE roadside_assistances SET notes = $2, "updatedAtMs" = $3 WHERE id = $1`, [jobId, newNotes, now]);
+    }
+
     // Run AI analysis asynchronously — don't block the response
     analyzeCaptureSesionWithAI(id).then(async (suggestions) => {
       if (Object.keys(suggestions).length > 0) {
@@ -7850,6 +7901,17 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       vehicleDescription: '"vehicleDescription"',
       notes: "notes",
     };
+
+    // Special compound action: apply location (address + lat + lng)
+    if (field === "location") {
+      const { address: addr, latitude: locLat, longitude: locLng } = value as any;
+      await db.query(
+        `UPDATE roadside_assistances SET address = $2, latitude = $3, longitude = $4, "updatedAtMs" = $5 WHERE id = $1`,
+        [jobId, addr ?? "", locLat ?? null, locLng ?? null, Date.now()]
+      );
+      const updated = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [jobId]);
+      return res.json({ ok: true, assistance: updated.rows[0] });
+    }
 
     if (!ALLOWED_FIELDS[field]) return res.status(400).json({ error: "Campo no permitido" });
 
