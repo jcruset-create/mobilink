@@ -7447,10 +7447,46 @@ app.post(
           }
         }
 
-        // Reverse geocode GPS location using Nominatim
-        const lat = req.body.Latitude ? parseFloat(req.body.Latitude) : null;
-        const lng = req.body.Longitude ? parseFloat(req.body.Longitude) : null;
+        // Detect Google Maps URL in text messages and extract coordinates
+        let effectiveMsgType = msgType;
+        let lat = req.body.Latitude ? parseFloat(req.body.Latitude) : null;
+        let lng = req.body.Longitude ? parseFloat(req.body.Longitude) : null;
         let resolvedAddress: string | null = req.body.Label ?? null;
+
+        if (msgType === "text" && Body) {
+          const mapsUrlMatch = Body.match(/https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.com|www\.google\.com\/maps)[^\s]*/i);
+          if (mapsUrlMatch) {
+            try {
+              // Follow redirects to get the final URL with coordinates
+              const mapsResp = await fetch(mapsUrlMatch[0], { redirect: "follow", signal: AbortSignal.timeout(5000) });
+              const finalUrl = mapsResp.url;
+              // Extract lat/lng from URL patterns like @41.123,1.456 or ?q=41.123,1.456 or ll=41.123,1.456
+              const coordMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                                 finalUrl.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                                 finalUrl.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/);
+              if (coordMatch) {
+                lat = parseFloat(coordMatch[1]);
+                lng = parseFloat(coordMatch[2]);
+                effectiveMsgType = "location";
+                // Reverse geocode
+                try {
+                  const geoResp = await fetch(
+                    `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+                    { headers: { "User-Agent": "sea-tarragona-app/1.0" } }
+                  );
+                  if (geoResp.ok) {
+                    const geoData: any = await geoResp.json();
+                    resolvedAddress = geoData.display_name ?? null;
+                  }
+                } catch {}
+              }
+            } catch (mapsErr) {
+              console.warn("Google Maps URL resolution failed:", mapsErr);
+            }
+          }
+        }
+
+        // Reverse geocode native GPS location using Nominatim
         if (msgType === "location" && lat != null && lng != null && !resolvedAddress) {
           try {
             const geoResp = await fetch(
@@ -7474,8 +7510,8 @@ app.post(
              raw_payload, received_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
           [
-            sessionId, jobId, MessageSid, From, msgType,
-            Body ?? null,
+            sessionId, jobId, MessageSid, From, effectiveMsgType,
+            effectiveMsgType === "location" ? null : (Body ?? null),
             mediaUrl0,
             storedUrl,
             lat,
