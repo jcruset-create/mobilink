@@ -148,6 +148,7 @@ function buildEditDraft(
   return {
     customerName: assistance.customerName || "",
     customerPhone: assistance.customerPhone || "",
+    conductorNombre: assistance.conductorNombre || "",
     address: assistance.address || "",
     googleMapsUrl: assistance.googleMapsUrl || "",
     plate: assistance.plate || "",

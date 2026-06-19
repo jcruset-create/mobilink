@@ -5242,6 +5242,7 @@ if (view === "whatsapp_inbox" && canAccessView(userRole, "whatsapp_inbox")) {
         const draft: import("./modules/roadsideAssistanceTypes").RoadsideAssistanceDraft = {
           customerName: extracted.cliente ?? "",
           customerPhone: extracted.telefonoWhatsapp ?? fromPhone.replace("whatsapp:", "") ?? "",
+          conductorNombre: "",
           address: extracted.direccion ?? "",
           googleMapsUrl: extracted.googleMapsUrl ?? "",
           latitude: extracted.latitud ?? "",
