@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import {
+import type {
   WhatsAppCaptureSessionWithMessages,
   WhatsAppAiSuggestions,
   WhatsAppCaptureMessage,
