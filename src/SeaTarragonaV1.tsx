@@ -342,6 +342,10 @@ export default function SeaTarragonaV1() {
   const [rules, setRules] = useState<string[]>([]);
   const [newRule, setNewRule] = useState("");
   const [techs, setTechs] = useState<Tech[]>(INITIAL_TECHS);
+  // React state (not ref) override for roadsideCapable while a PATCH is in-flight.
+  // Auto-sync can overwrite techs state; this ensures the UI always shows the
+  // user's intended value until the PATCH + reload cycle completes.
+  const [pendingRoadsideCapable, setPendingRoadsideCapable] = useState<Record<string, boolean>>({});
 const [scheduledTechStatuses, setScheduledTechStatuses] = useState<
   ScheduledTechStatus[]
 >(() => loadScheduledTechStatuses());
@@ -440,8 +444,12 @@ const effectiveTechs = useMemo(
     applyScheduledStatusesToTechs({
       techs,
       scheduledStatuses: scheduledTechStatuses,
-    }),
-  [techs, scheduledTechStatuses]
+    }).map((t) =>
+      Object.prototype.hasOwnProperty.call(pendingRoadsideCapable, t.name)
+        ? { ...t, roadsideCapable: pendingRoadsideCapable[t.name] }
+        : t
+    ),
+  [techs, scheduledTechStatuses, pendingRoadsideCapable]
 );
 
 useEffect(() => {
@@ -5057,15 +5065,18 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
         setWorkshopPinError("");
       }}
       onToggleRoadsideCapable={(name, value) => {
-        setTechs((prev) =>
-          prev.map((t) => t.name === name ? { ...t, roadsideCapable: value } : t)
-        );
+        // 1. Mark as pending — this overrides auto-sync until PATCH + reload finish
+        setPendingRoadsideCapable((prev) => ({ ...prev, [name]: value }));
         patchTechRoadsideCapable(name, value)
-          .catch((e) => {
-            console.error("Error guardando apto para carretera:", e);
-            setTechs((prev) =>
-              prev.map((t) => t.name === name ? { ...t, roadsideCapable: !value } : t)
-            );
+          .then(() => reloadTechsFromBackend()) // reload so techs state gets fresh DB value
+          .catch((e) => console.error("Error guardando apto para carretera:", e))
+          .finally(() => {
+            // 2. Clear pending — now effectiveTechs uses the DB value from reload
+            setPendingRoadsideCapable((prev) => {
+              const next = { ...prev };
+              delete next[name];
+              return next;
+            });
           });
       }}
       onSaveTech={({ name, phone, isNew, competencies, priorities, roadsideCapable }) => {
