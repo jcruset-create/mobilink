@@ -7838,6 +7838,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
     // Allowed fields that can be applied to roadside_assistances
     const ALLOWED_FIELDS: Record<string, string> = {
       customerName: '"customerName"',
+      customerPhone: '"customerPhone"',
       conductorNombre: '"conductorNombre"',
       plate: "plate",
       address: "address",

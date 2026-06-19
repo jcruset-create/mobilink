@@ -100,7 +100,7 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "conductorNombre", label: "Conductor", applyKey: "conductorNombre" },
   { key: "empresa", label: "Empresa" },
   { key: "contactoNombre", label: "Contacto nombre" },
-  { key: "contactoTelefono", label: "Contacto teléfono" },
+  { key: "contactoTelefono", label: "Contacto teléfono", applyKey: "customerPhone" },
   { key: "plate", label: "Matrícula", applyKey: "plate" },
   { key: "vehicleBrand", label: "Marca vehículo" },
   { key: "vehicleModel", label: "Modelo vehículo" },
