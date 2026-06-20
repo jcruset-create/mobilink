@@ -1070,8 +1070,11 @@ export default function UsuariosAlmacen() {
 
         <input
           value={codigoOperario}
-          onChange={(e) => setCodigoOperario(e.target.value)}
-          placeholder="Código operario, ejemplo: REUS01"
+          onChange={(e) => setCodigoOperario(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          placeholder="Código operario, 4 dígitos"
+          maxLength={4}
+          inputMode="numeric"
+          pattern="[0-9]{4}"
           className="w-full rounded-lg border px-3 py-2 text-sm"
           disabled={!permisos.esAdmin || creandoUsuario}
         />
@@ -1190,9 +1193,15 @@ export default function UsuariosAlmacen() {
                 <td className="p-3">
                   <input
                     defaultValue={usuario.codigo_operario || ""}
+                    onChange={(e) => {
+                      e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
+                    }}
                     onBlur={(e) =>
                       actualizarCodigoOperario(usuario, e.target.value)
                     }
+                    maxLength={4}
+                    inputMode="numeric"
+                    pattern="[0-9]{4}"
                     className="w-32 rounded-lg border px-2 py-1 text-sm"
                     disabled={!permisos.esAdmin}
                   />

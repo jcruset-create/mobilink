@@ -57,12 +57,18 @@ class _LoginScreenState extends State<LoginScreen> {
       final res = await _db
           .from('perfiles_usuario')
           .select('id, nombre, rol, ubicacion, activo, codigo_operario')
-          .ilike('nombre', nombre)
           .eq('codigo_operario', pin)
           .eq('activo', true)
           .maybeSingle();
 
       if (res == null) {
+        setState(() => _error = 'Usuario o contraseña incorrectos.');
+        _limpiarPin();
+        return;
+      }
+
+      final nombreDb = (res['nombre'] as String? ?? '').toLowerCase().trim();
+      if (nombreDb != nombre.toLowerCase().trim()) {
         setState(() => _error = 'Usuario o contraseña incorrectos.');
         _limpiarPin();
         return;
