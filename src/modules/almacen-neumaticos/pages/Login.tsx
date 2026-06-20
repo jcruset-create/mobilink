@@ -2,7 +2,7 @@ import { useState } from "react";
 import { supabase } from "../services/supabase";
 
 export default function Login() {
-  const [email, setEmail] = useState("");
+  const [nombre, setNombre] = useState("");
   const [password, setPassword] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [cargando, setCargando] = useState(false);
@@ -10,22 +10,35 @@ export default function Login() {
   async function iniciarSesion() {
     setMensaje("");
 
-    if (!email.trim() || !password.trim()) {
-      setMensaje("Email y contraseña son obligatorios.");
+    if (!nombre.trim() || !password.trim()) {
+      setMensaje("Nombre de usuario y contraseña son obligatorios.");
       return;
     }
 
     setCargando(true);
 
+    const { data: perfilData, error: perfilError } = await supabase
+      .from("perfiles_usuario")
+      .select("email")
+      .ilike("nombre", nombre.trim())
+      .eq("activo", true)
+      .maybeSingle();
+
+    if (perfilError || !perfilData?.email) {
+      setCargando(false);
+      setMensaje("Usuario no encontrado.");
+      return;
+    }
+
     const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
+      email: perfilData.email,
       password,
     });
 
     setCargando(false);
 
     if (error) {
-      setMensaje(`Error iniciando sesión: ${error.message}`);
+      setMensaje("Usuario o contraseña incorrectos.");
       return;
     }
 
@@ -44,11 +57,12 @@ export default function Login() {
         </div>
 
         <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          type="email"
-          placeholder="Email"
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          type="text"
+          placeholder="Nombre de usuario"
           className="w-full rounded-lg border px-3 py-2 text-sm"
+          onKeyDown={(e) => { if (e.key === "Enter") iniciarSesion(); }}
         />
 
         <input
