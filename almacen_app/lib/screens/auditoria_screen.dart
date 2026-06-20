@@ -424,7 +424,7 @@ class _AuditoriaScreenState extends State<AuditoriaScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                          'Operario: ${item['codigo_personal'] ?? '—'}',
+                                          'Operario: ${item['nombre_operario'] ?? item['codigo_personal'] ?? '—'}',
                                           style: const TextStyle(
                                               color: Colors.white54,
                                               fontSize: 13)),

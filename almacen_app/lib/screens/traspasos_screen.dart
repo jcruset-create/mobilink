@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'traspaso_detalle_screen.dart';
 import 'auditoria_screen.dart';
 import 'login_screen.dart';
+import 'nuevo_traspaso_screen.dart';
 
 final _db = Supabase.instance.client;
 
@@ -115,6 +116,18 @@ class _TraspasoListScreenState extends State<TraspasoListScreen> {
             ),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          await Navigator.push(context,
+              MaterialPageRoute(
+                builder: (_) => NuevoTraspasoScreen(operario: widget.operario)));
+          _load();
+        },
+        backgroundColor: Colors.blue,
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text('Nuevo traspaso',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
       body: Column(
         children: [

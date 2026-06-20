@@ -12,6 +12,7 @@ type AuditoriaTraspaso = {
   traspaso_id: string;
   accion: string;
   codigo_personal: string;
+  nombre_operario: string | null;
   estado_anterior: string | null;
   estado_nuevo: string | null;
   created_at: string;
@@ -300,7 +301,7 @@ export default function AuditoriaTraspasos() {
               <th className="p-3">Fecha</th>
               <th className="p-3">Traspaso</th>
               <th className="p-3">Acción</th>
-              <th className="p-3">Código personal</th>
+              <th className="p-3">Operario</th>
               <th className="p-3">Estado anterior</th>
               <th className="p-3">Estado nuevo</th>
               <th className="p-3">ID traspaso</th>
@@ -317,7 +318,7 @@ export default function AuditoriaTraspasos() {
                   {registro.traspaso_codigo || "Sin código"}
                 </td>
                 <td className="p-3">{accionTexto(registro.accion)}</td>
-                <td className="p-3">{registro.codigo_personal || "-"}</td>
+                <td className="p-3">{registro.nombre_operario || registro.codigo_personal || "-"}</td>
                 <td className="p-3">{registro.estado_anterior || "-"}</td>
                 <td className="p-3">{registro.estado_nuevo || "-"}</td>
                 <td className="p-3 text-xs">{registro.traspaso_id}</td>

@@ -13,6 +13,7 @@ type AuditoriaAccion = {
   user_id: string | null;
   perfil_usuario_id: string | null;
   codigo_operario: string | null;
+  nombre_operario: string | null;
   email: string | null;
   rol: string | null;
   modulo: string;
@@ -80,7 +81,8 @@ export default function AuditoriaAlmacen() {
         tabla_afectada,
         registro_id,
         descripcion,
-        datos
+        datos,
+        perfiles_usuario ( nombre )
       `)
       .order("created_at", { ascending: false })
       .limit(200);
@@ -122,7 +124,11 @@ export default function AuditoriaAlmacen() {
       return;
     }
 
-    setAcciones((data || []) as AuditoriaAccion[]);
+    const accioesConNombre = (data || []).map((a: any) => ({
+      ...a,
+      nombre_operario: a.perfiles_usuario?.nombre ?? null,
+    }));
+    setAcciones(accioesConNombre as AuditoriaAccion[]);
   }
 
   function limpiarFiltros() {
@@ -348,9 +354,9 @@ export default function AuditoriaAlmacen() {
                   {formatearFecha(accion.created_at)}
                 </td>
                 <td className="p-3">
-                  <div>{accion.email || "-"}</div>
+                  <div className="font-medium">{accion.nombre_operario || accion.email || "-"}</div>
                   <div className="text-xs text-gray-500">
-                    {accion.codigo_operario || "-"}
+                    {accion.codigo_operario || ""}
                   </div>
                 </td>
                 <td className="p-3">{accion.rol || "-"}</td>
