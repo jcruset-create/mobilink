@@ -18,6 +18,10 @@ const pool = new Pool({
 
 export async function initDb() {
   await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+  `).catch(() => {});
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS rules (
       id SERIAL PRIMARY KEY,
       text TEXT NOT NULL

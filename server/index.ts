@@ -118,7 +118,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", async (req, res) => {
   try {
-    const { jobId, customerName, customerPhone, amountEuros } = req.body;
+    const { jobId, customerName, customerPhone, amountEuros, description } = req.body;
 
     const reference = String(jobId || "").trim();
     const amountCents = Math.round(Number(amountEuros || 0) * 100);
@@ -137,13 +137,16 @@ app.post("/api/payments/create-deposit", async (req, res) => {
       });
     }
 
+    const desc = String(description || "").trim();
+
     const session = await stripe.checkout.sessions.create({
             line_items: [
         {
           price_data: {
             currency: "eur",
             product_data: {
-              name: `Paga y señal ${reference}`,
+              name: desc ? `${desc} (ref. ${reference})` : `Paga y señal ${reference}`,
+              ...(desc ? { description: desc } : {}),
             },
             unit_amount: amountCents,
           },
@@ -175,9 +178,10 @@ app.post("/api/payments/create-deposit", async (req, res) => {
           status,
           stripe_session_id,
           payment_url,
-          created_at_ms
+          created_at_ms,
+          description
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
       `,
       [
         reference,
@@ -187,6 +191,7 @@ app.post("/api/payments/create-deposit", async (req, res) => {
         session.id,
         session.url,
         Date.now(),
+        desc,
       ]
     );
 
@@ -325,10 +330,11 @@ app.get("/api/payments/recent", async (_req, res) => {
           status,
           payment_url,
           paid_at_ms,
-          created_at_ms
+          created_at_ms,
+          description
         FROM payments
         ORDER BY created_at_ms DESC
-        LIMIT 25
+        LIMIT 50
       `
     );
 
