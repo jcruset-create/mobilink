@@ -3362,6 +3362,97 @@ app.post(
   }
 );
 
+/* ── PAGOS STRIPE (operario) ────────────────────────────────────────────── */
+
+// POST crear enlace de pago Stripe desde la APK
+app.post(
+  "/api/roadside-operator/payments/create",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const { jobId, customerName, customerPhone, amountEuros, description } = req.body ?? {};
+      const reference = String(jobId || "").trim();
+      const amountCents = Math.round(Number(amountEuros || 0) * 100);
+      const desc = String(description || "").trim();
+
+      if (!reference) return res.status(400).json({ success: false, message: "Referencia obligatoria" });
+      if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mínimo 1 €" });
+
+      const session = await stripe.checkout.sessions.create({
+        line_items: [{
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: desc ? `${desc} (ref. ${reference})` : `Paga y señal ${reference}`,
+              ...(desc ? { description: desc } : {}),
+            },
+            unit_amount: amountCents,
+          },
+          quantity: 1,
+        }],
+        mode: "payment",
+        success_url: `${process.env.PUBLIC_APP_URL}/payment-success`,
+        cancel_url: `${process.env.PUBLIC_APP_URL}/payment-cancelled`,
+        metadata: { reference, jobId: reference, customerName: String(customerName || ""), customerPhone: String(customerPhone || "") },
+      });
+
+      await db.query(
+        `INSERT INTO payments (reference, customer_name, customer_phone, amount_cents, status, stripe_session_id, payment_url, created_at_ms, description)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)`,
+        [reference, String(customerName || ""), String(customerPhone || ""), amountCents, session.id, session.url, Date.now(), desc]
+      );
+
+      return res.json({ success: true, url: session.url, sessionId: session.id, reference });
+    } catch (error: any) {
+      console.error("POST /api/roadside-operator/payments/create error:", error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
+// GET historial de pagos Stripe (últimos 50)
+app.get(
+  "/api/roadside-operator/payments/history",
+  requireRoadsideOperator,
+  async (_req, res) => {
+    try {
+      const result = await db.query(
+        `SELECT id, reference, customer_name, customer_phone, amount_cents, status, payment_url, paid_at_ms, created_at_ms, description
+         FROM payments ORDER BY created_at_ms DESC LIMIT 50`
+      );
+      return res.json(result.rows.map((r: any) => ({
+        ...r,
+        amount_cents: Number(r.amount_cents),
+        paid_at_ms: r.paid_at_ms != null ? Number(r.paid_at_ms) : null,
+        created_at_ms: Number(r.created_at_ms),
+      })));
+    } catch (error) {
+      console.error("GET /api/roadside-operator/payments/history error:", error);
+      return res.status(500).json({ error: "Error obteniendo historial" });
+    }
+  }
+);
+
+// DELETE cancelar pago pendiente desde APK
+app.delete(
+  "/api/roadside-operator/payments/:id",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, message: "ID inválido" });
+      const existing = await db.query(`SELECT id, status FROM payments WHERE id = $1`, [id]);
+      if (existing.rows.length === 0) return res.status(404).json({ success: false, message: "Cobro no encontrado" });
+      if (existing.rows[0].status === "paid") return res.status(400).json({ success: false, message: "No se puede cancelar un cobro pagado" });
+      await db.query(`DELETE FROM payments WHERE id = $1`, [id]);
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error("DELETE /api/roadside-operator/payments/:id error:", error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
 /* ── COBROS (admin) ─────────────────────────────────────────────────────── */
 
 // POST crear cobro desde el panel admin (para asignar al operario de una asistencia)

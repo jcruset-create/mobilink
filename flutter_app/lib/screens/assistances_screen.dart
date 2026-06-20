@@ -5,6 +5,7 @@ import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
+import 'payments_screen.dart';
 
 const _statusLabels = {
   'pendiente': 'Pendiente',
@@ -47,7 +48,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _load();
   }
 
@@ -116,6 +117,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                     Tab(icon: Icon(Icons.assignment, size: 26), text: 'Activas'),
                     Tab(icon: Icon(Icons.history, size: 26), text: 'Historial'),
                     Tab(icon: Icon(Icons.receipt_long, size: 26), text: 'Cobros'),
+                    Tab(icon: Icon(Icons.add_card, size: 26), text: 'Pagos'),
                   ],
                 ),
                 // Acciones
@@ -138,6 +140,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
           ),
           HistoryScreen(api: widget.api),
           CobrosScreen(api: widget.api),
+          PaymentsScreen(api: widget.api),
         ],
       ),
     );

@@ -202,6 +202,50 @@ class ApiService {
     return data;
   }
 
+  Future<Map<String, dynamic>> createPaymentLink({
+    required String jobId,
+    required String customerName,
+    required String customerPhone,
+    required double amountEuros,
+    String description = '',
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/payments/create'),
+      headers: _headers,
+      body: jsonEncode({
+        'jobId': jobId,
+        'customerName': customerName,
+        'customerPhone': customerPhone,
+        'amountEuros': amountEuros,
+        'description': description,
+      }),
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200 || data['success'] != true) {
+      throw Exception(data['message'] ?? 'Error creando enlace de pago');
+    }
+    return data;
+  }
+
+  Future<List<Map<String, dynamic>>> getPaymentHistory() async {
+    final res = await http.get(
+      Uri.parse('$kBackendUrl/api/roadside-operator/payments/history'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('Error cargando historial de pagos');
+    final list = jsonDecode(res.body) as List<dynamic>;
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  Future<void> cancelPayment(int id) async {
+    final res = await http.delete(
+      Uri.parse('$kBackendUrl/api/roadside-operator/payments/$id'),
+      headers: _headers,
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200) throw Exception(data['message'] ?? 'Error cancelando cobro');
+  }
+
   Future<Map<String, dynamic>> uploadFile(
       int id, File file, String kind) async {
     final req = http.MultipartRequest(
