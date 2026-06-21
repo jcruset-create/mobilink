@@ -119,7 +119,7 @@ export default function Reuniones() {
         <div className="space-y-3">
           {filtrados.map((r) => {
             const dias = Math.ceil((new Date(r.fecha).getTime() - Date.now()) / 86400000);
-            const esFutura = dias > 0;
+
             return (
               <div key={r.id} className="rounded-xl border bg-white p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
