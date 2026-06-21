@@ -1,1 +1,1 @@
-export { supabase } from "../../modules/almacen-neumaticos/services/supabase";
+export { supabase } from "../../almacen-neumaticos/services/supabase";
