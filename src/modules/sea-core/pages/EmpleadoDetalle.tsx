@@ -8,8 +8,6 @@ type Empleado = {
   dni_nie: string | null; telefono: string | null; email: string | null;
   cargo: string | null; departamento: string | null; rol: string;
   codigo_operario: string | null; activo: boolean; fecha_alta: string | null;
-  talla_camiseta: string | null; talla_pantalon: string | null;
-  talla_calzado: string | null; talla_guantes: string | null;
   company_id: string | null; work_center_id: string | null;
   sea_companies: { nombre: string } | null;
   sea_work_centers: { nombre: string } | null;
@@ -59,12 +57,17 @@ export default function EmpleadoDetalle() {
   const [guardando, setGuardando] = useState(false);
   const [mensaje, setMensaje] = useState("");
 
+  // Vestuario
+  const [vestuarioId, setVestuarioId] = useState<string | null>(null);
+  const [formVest, setFormVest] = useState({ calzado: "", pantalon: "", camisa: "", camiseta: "", chaqueta: "", sudadera: "", chaleco: "", observaciones: "" });
+  const [guardandoVest, setGuardandoVest] = useState(false);
+
   useEffect(() => { if (id) cargar(id); }, [id]);
 
   async function cargar(empId: string) {
     setCargando(true);
     const [{ data: emp }, { data: comp }, { data: cert }, { data: aut }, { data: form },
-      { data: catC }, { data: catCe }, { data: catA }] = await Promise.all([
+      { data: catC }, { data: catCe }, { data: catA }, { data: vest }] = await Promise.all([
       supabase.from("sea_employees")
         .select("*, sea_companies(nombre), sea_work_centers(nombre)")
         .eq("id", empId).single(),
@@ -81,6 +84,7 @@ export default function EmpleadoDetalle() {
       supabase.from("sea_competencies").select("id, nombre, categoria").order("nombre"),
       supabase.from("sea_certifications").select("id, nombre, entidad_emisora").order("nombre"),
       supabase.from("sea_authorizations").select("id, nombre").order("nombre"),
+      supabase.from("sea_employee_clothing").select("*").eq("employee_id", empId).maybeSingle(),
     ]);
     setEmpleado(emp as any);
     setCompetencias(comp ?? []);
@@ -90,6 +94,18 @@ export default function EmpleadoDetalle() {
     setCatCompetencias(catC ?? []);
     setCatCertificaciones(catCe ?? []);
     setCatAutorizaciones(catA ?? []);
+    if (vest) {
+      setVestuarioId(vest.id);
+      setFormVest({
+        calzado: vest.calzado ?? "", pantalon: vest.pantalon ?? "",
+        camisa: vest.camisa ?? "", camiseta: vest.camiseta ?? "",
+        chaqueta: vest.chaqueta ?? "", sudadera: vest.sudadera ?? "",
+        chaleco: vest.chaleco ?? "", observaciones: vest.observaciones ?? "",
+      });
+    } else {
+      setVestuarioId(null);
+      setFormVest({ calzado: "", pantalon: "", camisa: "", camiseta: "", chaqueta: "", sudadera: "", chaleco: "", observaciones: "" });
+    }
     setCargando(false);
   }
 
@@ -183,6 +199,29 @@ export default function EmpleadoDetalle() {
     if (!confirm("¿Eliminar este registro de formación?")) return;
     await supabase.from("sea_training_records").delete().eq("id", formId);
     cargar(id!);
+  }
+
+  async function guardarVestuario() {
+    setGuardandoVest(true);
+    const payload = {
+      employee_id:   id,
+      calzado:       formVest.calzado || null,
+      pantalon:      formVest.pantalon || null,
+      camisa:        formVest.camisa || null,
+      camiseta:      formVest.camiseta || null,
+      chaqueta:      formVest.chaqueta || null,
+      sudadera:      formVest.sudadera || null,
+      chaleco:       formVest.chaleco || null,
+      observaciones: formVest.observaciones || null,
+    };
+    if (vestuarioId) {
+      await supabase.from("sea_employee_clothing").update(payload).eq("id", vestuarioId);
+    } else {
+      const { data } = await supabase.from("sea_employee_clothing").insert(payload).select("id").single();
+      if (data) setVestuarioId(data.id);
+    }
+    setGuardandoVest(false);
+    setMensaje("Tallas guardadas."); setTimeout(() => setMensaje(""), 3000);
   }
 
   function diasParaCaducidad(fecha: string | null) {
@@ -419,20 +458,51 @@ export default function EmpleadoDetalle() {
 
       {/* Tab: Vestuario */}
       {tabActiva === 5 && (
-        <div className="rounded-xl border bg-white p-5 space-y-3 max-w-sm">
-          <h2 className="font-semibold text-gray-700">Tallas de vestuario</h2>
-          {[
-            { label: "Camiseta", value: empleado.talla_camiseta },
-            { label: "Pantalón", value: empleado.talla_pantalon },
-            { label: "Calzado", value: empleado.talla_calzado },
-            { label: "Guantes", value: empleado.talla_guantes },
-          ].map(({ label, value }) => (
-            <div key={label} className="flex justify-between text-sm border-b pb-2 last:border-0 last:pb-0">
-              <span className="text-gray-500">{label}</span>
-              <span className="font-medium">{value ?? "—"}</span>
-            </div>
-          ))}
-          <p className="text-xs text-gray-400">Para editar las tallas, usa el botón Editar en la lista de empleados.</p>
+        <div className="rounded-xl border bg-white p-5 space-y-4 max-w-lg">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-700">Tallas de vestuario</h2>
+            {vestuarioId && <span className="text-xs text-gray-400">Última actualización guardada</span>}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { key: "camiseta",  label: "Camiseta",  placeholder: "S, M, L, XL..." },
+              { key: "camisa",    label: "Camisa",    placeholder: "S, M, L, XL..." },
+              { key: "pantalon",  label: "Pantalón",  placeholder: "38, 40, 42..." },
+              { key: "calzado",   label: "Calzado",   placeholder: "40, 41, 42..." },
+              { key: "chaqueta",  label: "Chaqueta",  placeholder: "S, M, L, XL..." },
+              { key: "sudadera",  label: "Sudadera",  placeholder: "S, M, L, XL..." },
+              { key: "chaleco",   label: "Chaleco",   placeholder: "S, M, L, XL..." },
+            ].map(({ key, label, placeholder }) => (
+              <div key={key}>
+                <label className="text-xs font-medium text-gray-500">{label}</label>
+                <input
+                  value={(formVest as any)[key]}
+                  onChange={(e) => setFormVest({ ...formVest, [key]: e.target.value })}
+                  placeholder={placeholder}
+                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                />
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-500">Observaciones</label>
+            <textarea
+              value={formVest.observaciones}
+              onChange={(e) => setFormVest({ ...formVest, observaciones: e.target.value })}
+              placeholder="Alergias a materiales, preferencias especiales..."
+              rows={2}
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm resize-none"
+            />
+          </div>
+
+          <button
+            onClick={guardarVestuario}
+            disabled={guardandoVest}
+            className="rounded-xl bg-gray-800 px-5 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+            {guardandoVest ? "Guardando..." : "Guardar tallas"}
+          </button>
         </div>
       )}
 
