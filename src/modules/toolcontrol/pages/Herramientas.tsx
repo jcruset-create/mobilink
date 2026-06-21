@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import ToolControlMenu from "../components/ToolControlMenu";
 import { supabase } from "../services/supabase";
 
