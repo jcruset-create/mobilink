@@ -15,6 +15,7 @@ type Empleado = {
   rol: string;
   codigo_operario: string | null;
   activo: boolean;
+  roadside_capable: boolean;
   fecha_alta: string | null;
   sea_companies: { nombre: string } | null;
   sea_work_centers: { nombre: string } | null;
@@ -33,7 +34,7 @@ const ROL_BADGE: Record<string, string> = {
 const EMPTY = {
   nombre: "", apellidos: "", dni_nie: "", telefono: "", email: "",
   cargo: "", departamento: "", rol: "operario", codigo_operario: "",
-  fecha_alta: "", activo: true, company_id: "", work_center_id: "",
+  fecha_alta: "", activo: true, roadside_capable: false, company_id: "", work_center_id: "",
 };
 
 export default function Empleados() {
@@ -95,6 +96,7 @@ export default function Empleados() {
       codigo_operario: e.codigo_operario ?? "",
       fecha_alta: (e.fecha_alta ?? "").substring(0, 10),
       activo: e.activo,
+      roadside_capable: e.roadside_capable ?? false,
       company_id: (e as any).company_id ?? "",
       work_center_id: (e as any).work_center_id ?? "",
     });
@@ -115,10 +117,11 @@ export default function Empleados() {
       cargo:           form.cargo || null,
       departamento:    form.departamento || null,
       rol:             form.rol,
-      codigo_operario: form.codigo_operario || null,
-      fecha_alta:      form.fecha_alta || null,
-      activo:          form.activo,
-      company_id:      form.company_id || null,
+      codigo_operario:  form.codigo_operario || null,
+      fecha_alta:       form.fecha_alta || null,
+      activo:           form.activo,
+      roadside_capable: form.roadside_capable,
+      company_id:       form.company_id || null,
       work_center_id:  form.work_center_id || null,
     };
     const { error: err } = editId
@@ -318,6 +321,13 @@ export default function Empleados() {
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={form.activo} onChange={(e) => setForm({ ...form, activo: e.target.checked })} />
                 Empleado activo
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={form.roadside_capable} onChange={(e) => setForm({ ...form, roadside_capable: e.target.checked })} />
+                <span>Puede gestionar asistencias en carretera</span>
+                {form.roadside_capable && !form.codigo_operario && (
+                  <span className="text-xs text-orange-600">(requiere código operario)</span>
+                )}
               </label>
             </div>
 

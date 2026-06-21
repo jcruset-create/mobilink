@@ -34,6 +34,7 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import type { Tech } from "../modules/workshopTypes";
 import { API_BASE } from "../modules/workshopApi";
+import { supabase } from "../modules/almacen-neumaticos/services/supabase";
 
 const SESSION_KEY = "sea-roadside-operator-session";
 
@@ -394,14 +395,49 @@ export default function RoadsideOperatorPage() {
 
     async function loadTechs() {
       try {
-        const data = await loadRoadsideOperatorTechs();
+        // Intentar cargar desde SEA Core primero
+        const { data: seaEmps } = await supabase
+          .from("sea_employees")
+          .select("nombre, apellidos, codigo_operario")
+          .eq("activo", true)
+          .eq("roadside_capable", true)
+          .not("codigo_operario", "is", null)
+          .order("nombre");
+
         if (!cancelled) {
-          setTechs(data);
-          setTechName((current) => current || data[0]?.name || "");
+          if (seaEmps && seaEmps.length > 0) {
+            // Convertir empleados SEA Core al formato Tech mínimo que necesita el selector
+            const seaTechs = seaEmps.map((e) => ({
+              name: [e.nombre, e.apellidos].filter(Boolean).join(" "),
+              status: "available" as const,
+              currentJobId: null,
+              blocked: false,
+              competencies: {} as Tech["competencies"],
+              priorities: {} as Tech["priorities"],
+            }));
+            setTechs(seaTechs);
+            setTechName((current) => current || seaTechs[0]?.name || "");
+          } else {
+            // Fallback al backend si no hay empleados SEA Core configurados
+            const data = await loadRoadsideOperatorTechs();
+            if (!cancelled) {
+              setTechs(data);
+              setTechName((current) => current || data[0]?.name || "");
+            }
+          }
         }
       } catch (loadError) {
-        if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "No se pudieron cargar operarios.");
+        // Si falla Supabase, intentar el backend como fallback
+        try {
+          const data = await loadRoadsideOperatorTechs();
+          if (!cancelled) {
+            setTechs(data);
+            setTechName((current) => current || data[0]?.name || "");
+          }
+        } catch {
+          if (!cancelled) {
+            setError(loadError instanceof Error ? loadError.message : "No se pudieron cargar operarios.");
+          }
         }
       }
     }
