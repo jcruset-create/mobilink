@@ -61,6 +61,7 @@ import EmpleadoDetalle from "./modules/sea-core/pages/EmpleadoDetalle";
 import Empresas from "./modules/sea-core/pages/Empresas";
 import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
 import CoreCompetencias from "./modules/sea-core/pages/Competencias";
+import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
 
 type RolAlmacen = "admin" | "responsable" | "operario";
 
@@ -281,6 +282,7 @@ export default function App() {
       <Route path="/sea-core/empresas" element={<Protegida><Empresas /></Protegida>} />
       <Route path="/sea-core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
       <Route path="/sea-core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
+      <Route path="/sea-core/autorizaciones" element={<Protegida><CoreAutorizaciones /></Protegida>} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>

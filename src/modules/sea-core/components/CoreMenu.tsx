@@ -6,6 +6,7 @@ const links = [
   { to: "/sea-core/empresas", label: "Empresas" },
   { to: "/sea-core/centros", label: "Centros de trabajo" },
   { to: "/sea-core/competencias", label: "Competencias" },
+  { to: "/sea-core/autorizaciones", label: "Autorizaciones" },
 ];
 
 export default function CoreMenu() {
