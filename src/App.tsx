@@ -50,6 +50,7 @@ import UsuariosAlmacen from "./modules/almacen-neumaticos/pages/UsuariosAlmacen"
 import AuditoriaAlmacen from "./modules/almacen-neumaticos/pages/AuditoriaAlmacen";
 import SistemaAlmacen from "./modules/almacen-neumaticos/pages/SistemaAlmacen";
 import NotFound from "./pages/NotFound";
+import SeaHub from "./pages/SeaHub";
 import MobileAlmacen from "./modules/almacen-neumaticos/pages/MobileAlmacen";
 import MobileAuditoria from "./modules/almacen-neumaticos/pages/MobileAuditoria";
 import MobileTraspasoDetalle from "./modules/almacen-neumaticos/pages/MobileTraspasoDetalle";
@@ -85,6 +86,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
+      <Route path="/sea" element={<SeaHub />} />
       <Route path="/operario/asistencias" element={<RoadsideOperatorPage />} />
       <Route path="/operario/taller" element={<WorkshopOperatorPage />} />
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
