@@ -8,6 +8,16 @@ import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
 import RoadsideReportPage from "./pages/RoadsideReportPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
+
+import ToolControlDashboard from "./modules/toolcontrol/pages/ToolControlDashboard";
+import Herramientas from "./modules/toolcontrol/pages/Herramientas";
+import Maquinas from "./modules/toolcontrol/pages/Maquinas";
+import Movimientos from "./modules/toolcontrol/pages/Movimientos";
+import Mantenimiento from "./modules/toolcontrol/pages/Mantenimiento";
+import InventarioTC from "./modules/toolcontrol/pages/Inventario";
+import IncidenciasTC from "./modules/toolcontrol/pages/Incidencias";
+import Ubicaciones from "./modules/toolcontrol/pages/Ubicaciones";
+import CategoriasTC from "./modules/toolcontrol/pages/Categorias";
 import PaymentResult from "./modules/cobros/pages/PaymentResult";
 
 import Login from "./modules/almacen-neumaticos/pages/Login";
@@ -209,6 +219,17 @@ export default function App() {
           </ProtegidaPorRol>
         }
       />
+
+      {/* SEA ToolControl */}
+      <Route path="/toolcontrol" element={<Protegida><ToolControlDashboard /></Protegida>} />
+      <Route path="/toolcontrol/herramientas" element={<Protegida><Herramientas /></Protegida>} />
+      <Route path="/toolcontrol/maquinas" element={<Protegida><Maquinas /></Protegida>} />
+      <Route path="/toolcontrol/movimientos" element={<Protegida><Movimientos /></Protegida>} />
+      <Route path="/toolcontrol/mantenimiento" element={<Protegida><Mantenimiento /></Protegida>} />
+      <Route path="/toolcontrol/inventario" element={<Protegida><InventarioTC /></Protegida>} />
+      <Route path="/toolcontrol/incidencias" element={<Protegida><IncidenciasTC /></Protegida>} />
+      <Route path="/toolcontrol/ubicaciones" element={<Protegida><Ubicaciones /></Protegida>} />
+      <Route path="/toolcontrol/categorias" element={<Protegida><CategoriasTC /></Protegida>} />
 
       <Route path="/cobros" element={<CobrosDashboard />} />
       <Route path="/payment-success" element={<PaymentResult type="success" />} />

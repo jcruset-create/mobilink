@@ -124,7 +124,7 @@ class _TraspasoListScreenState extends State<TraspasoListScreen> {
                 builder: (_) => NuevoTraspasoScreen(operario: widget.operario)));
           _load();
         },
-        backgroundColor: Colors.blue,
+        backgroundColor: Colors.green[700],
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text('Nuevo traspaso',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
