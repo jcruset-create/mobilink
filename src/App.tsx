@@ -52,6 +52,8 @@ import SistemaAlmacen from "./modules/almacen-neumaticos/pages/SistemaAlmacen";
 import NotFound from "./pages/NotFound";
 import SeaHub from "./pages/SeaHub";
 import QrScan from "./pages/QrScan";
+import PortalLogin from "./pages/PortalLogin";
+import PortalFicha from "./pages/PortalFicha";
 import MobileAlmacen from "./modules/almacen-neumaticos/pages/MobileAlmacen";
 import MobileAuditoria from "./modules/almacen-neumaticos/pages/MobileAuditoria";
 import MobileTraspasoDetalle from "./modules/almacen-neumaticos/pages/MobileTraspasoDetalle";
@@ -90,6 +92,8 @@ export default function App() {
       <Route path="/" element={<SeaTarragonaV1 />} />
       <Route path="/sea" element={<SeaHub />} />
       <Route path="/qr/:tipo/:id" element={<QrScan />} />
+      <Route path="/portal" element={<PortalLogin />} />
+      <Route path="/portal/mi-ficha" element={<PortalFicha />} />
       <Route path="/operario/asistencias" element={<RoadsideOperatorPage />} />
       <Route path="/operario/taller" element={<WorkshopOperatorPage />} />
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />

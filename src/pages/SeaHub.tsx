@@ -444,6 +444,7 @@ export default function SeaHub() {
               { label: "TV Operarios", ruta: "/operario/asistencias", icon: "📺" },
               { label: "Cobros", ruta: "/cobros", icon: "💳" },
               { label: "Auditoría almacén", ruta: "/almacen/auditoria", icon: "📋" },
+              { label: "Portal empleado", ruta: "/portal", icon: "👤" },
             ].map((a) => (
               <Link key={a.ruta} to={a.ruta}
                 className="flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
