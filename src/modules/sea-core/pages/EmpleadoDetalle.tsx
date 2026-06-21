@@ -201,6 +201,107 @@ export default function EmpleadoDetalle() {
     cargar(id!);
   }
 
+  function exportarPDF() {
+    const nombre = [empleado!.nombre, empleado!.apellidos].filter(Boolean).join(" ");
+    const hoy = new Date().toLocaleDateString("es-ES");
+
+    const fila = (label: string, value: string | null | undefined) =>
+      value ? `<tr><td style="color:#6b7280;padding:4px 8px 4px 0;width:40%">${label}</td><td style="padding:4px 0;font-weight:500">${value}</td></tr>` : "";
+
+    const seccion = (titulo: string, contenido: string) =>
+      `<div style="margin-bottom:20px;page-break-inside:avoid">
+        <h2 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin-bottom:8px">${titulo}</h2>
+        ${contenido}
+      </div>`;
+
+    const tabla = (filas: string) =>
+      `<table style="width:100%;font-size:12px;border-collapse:collapse">${filas}</table>`;
+
+    const lista = (items: string[]) =>
+      items.length === 0
+        ? `<p style="font-size:12px;color:#9ca3af;font-style:italic">Sin registros.</p>`
+        : `<ul style="margin:0;padding-left:16px;font-size:12px">${items.map((i) => `<li style="margin-bottom:4px">${i}</li>`).join("")}</ul>`;
+
+    const diasCad = (fecha: string | null) => {
+      if (!fecha) return "";
+      const d = Math.ceil((new Date(fecha).getTime() - Date.now()) / 86400000);
+      if (d < 0) return ` <span style="color:#dc2626">[CADUCADO]</span>`;
+      if (d <= 30) return ` <span style="color:#d97706">[Caduca en ${d}d]</span>`;
+      return ` <span style="color:#16a34a">[Válido ${d}d]</span>`;
+    };
+
+    const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+      <title>Ficha – ${nombre}</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; color: #111827; margin: 0; padding: 24px; font-size: 13px; }
+        @media print { body { padding: 0; } @page { margin: 15mm; } }
+      </style>
+    </head><body>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #111827">
+        <div>
+          <h1 style="margin:0;font-size:20px">${nombre}</h1>
+          <p style="margin:4px 0 0;color:#6b7280;font-size:12px">
+            ${[empleado!.cargo, empleado!.departamento, (empleado!.sea_companies as any)?.nombre].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+        <div style="text-align:right;font-size:11px;color:#9ca3af">
+          <div>SEA Platform</div>
+          <div>${hoy}</div>
+          <div style="margin-top:4px;font-weight:700;color:${empleado!.activo ? "#16a34a" : "#dc2626"}">${empleado!.activo ? "ACTIVO" : "INACTIVO"}</div>
+        </div>
+      </div>
+
+      ${seccion("Datos personales", tabla([
+        fila("DNI / NIE", empleado!.dni_nie),
+        fila("Email", empleado!.email),
+        fila("Teléfono", empleado!.telefono),
+        fila("Empresa", (empleado!.sea_companies as any)?.nombre),
+        fila("Centro de trabajo", (empleado!.sea_work_centers as any)?.nombre),
+        fila("Rol", empleado!.rol),
+        fila("Código operario", empleado!.codigo_operario),
+        fila("Fecha de alta", empleado!.fecha_alta ? new Date(empleado!.fecha_alta).toLocaleDateString("es-ES") : null),
+      ].join("")))}
+
+      ${competencias.length > 0 ? seccion("Competencias", lista(
+        competencias.map((c) => `<strong>${c.sea_competencies?.nombre}</strong> (${c.nivel})${c.notas ? ` — ${c.notas}` : ""}`)
+      )) : ""}
+
+      ${certificaciones.length > 0 ? seccion("Certificaciones", lista(
+        certificaciones.map((c) => `<strong>${c.nombre}</strong>${c.entidad_emisora ? ` · ${c.entidad_emisora}` : ""}${c.fecha_caducidad ? diasCad(c.fecha_caducidad) : ""}`)
+      )) : ""}
+
+      ${autorizaciones.length > 0 ? seccion("Autorizaciones", lista(
+        autorizaciones.map((a) => `<strong>${a.sea_authorizations?.nombre}</strong>${a.numero_autorizacion ? ` Nº ${a.numero_autorizacion}` : ""}${a.fecha_caducidad ? diasCad(a.fecha_caducidad) : ""}`)
+      )) : ""}
+
+      ${formaciones.length > 0 ? seccion("Formación", lista(
+        formaciones.map((f) => `<strong>${f.nombre_curso}</strong>${f.entidad_formadora ? ` · ${f.entidad_formadora}` : ""}${f.horas ? ` · ${f.horas}h` : ""} · ${f.resultado}${f.fecha_caducidad ? diasCad(f.fecha_caducidad) : ""}`)
+      )) : ""}
+
+      ${(formVest.camiseta || formVest.pantalon || formVest.calzado || formVest.camisa || formVest.chaqueta || formVest.sudadera || formVest.chaleco) ? seccion("Tallas de vestuario", tabla([
+        fila("Camiseta", formVest.camiseta),
+        fila("Camisa", formVest.camisa),
+        fila("Pantalón", formVest.pantalon),
+        fila("Calzado", formVest.calzado),
+        fila("Chaqueta", formVest.chaqueta),
+        fila("Sudadera", formVest.sudadera),
+        fila("Chaleco", formVest.chaleco),
+        fila("Observaciones", formVest.observaciones),
+      ].join(""))) : ""}
+
+      <p style="margin-top:32px;font-size:10px;color:#9ca3af;text-align:center">
+        Documento generado el ${hoy} · SEA Platform · Confidencial
+      </p>
+    </body></html>`;
+
+    const ventana = window.open("", "_blank");
+    if (!ventana) return;
+    ventana.document.write(html);
+    ventana.document.close();
+    ventana.onload = () => { ventana.print(); };
+  }
+
   async function guardarVestuario() {
     setGuardandoVest(true);
     const payload = {
@@ -266,7 +367,13 @@ export default function EmpleadoDetalle() {
             {(empleado.sea_companies as any)?.nombre ? ` · ${(empleado.sea_companies as any).nombre}` : ""}
           </div>
         </div>
-        <Link to="/sea-core/empleados" className="text-sm text-gray-500 hover:text-gray-700">← Volver</Link>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={exportarPDF}
+            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-1">
+            ⬇ Exportar PDF
+          </button>
+          <Link to="/sea-core/empleados" className="text-sm text-gray-500 hover:text-gray-700">← Volver</Link>
+        </div>
       </div>
 
       {/* Tabs */}
