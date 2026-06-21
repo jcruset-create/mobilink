@@ -54,6 +54,13 @@ import MobileAlmacen from "./modules/almacen-neumaticos/pages/MobileAlmacen";
 import MobileAuditoria from "./modules/almacen-neumaticos/pages/MobileAuditoria";
 import MobileTraspasoDetalle from "./modules/almacen-neumaticos/pages/MobileTraspasoDetalle";
 
+import CoreDashboard from "./modules/sea-core/pages/CoreDashboard";
+import Empleados from "./modules/sea-core/pages/Empleados";
+import EmpleadoDetalle from "./modules/sea-core/pages/EmpleadoDetalle";
+import Empresas from "./modules/sea-core/pages/Empresas";
+import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
+import CoreCompetencias from "./modules/sea-core/pages/Competencias";
+
 type RolAlmacen = "admin" | "responsable" | "operario";
 
 function Protegida({ children }: { children: ReactNode }) {
@@ -265,6 +272,14 @@ export default function App() {
         path="/almacen-neumaticos/mobile/traspaso/:id"
         element={<MobileTraspasoDetalle />}
       />
+      {/* SEA Core routes */}
+      <Route path="/sea-core" element={<Protegida><CoreDashboard /></Protegida>} />
+      <Route path="/sea-core/empleados" element={<Protegida><Empleados /></Protegida>} />
+      <Route path="/sea-core/empleados/:id" element={<Protegida><EmpleadoDetalle /></Protegida>} />
+      <Route path="/sea-core/empresas" element={<Protegida><Empresas /></Protegida>} />
+      <Route path="/sea-core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
+      <Route path="/sea-core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
+
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
