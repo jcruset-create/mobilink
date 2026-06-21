@@ -9,6 +9,15 @@ import RoadsideReportPage from "./pages/RoadsideReportPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
+import SafetyDashboard from "./modules/safety/pages/SafetyDashboard";
+import Epis from "./modules/safety/pages/Epis";
+import Entregas from "./modules/safety/pages/Entregas";
+import StockEpis from "./modules/safety/pages/Stock";
+import Documentos from "./modules/safety/pages/Documentos";
+import Reuniones from "./modules/safety/pages/Reuniones";
+import Formacion from "./modules/safety/pages/Formacion";
+import Inspecciones from "./modules/safety/pages/Inspecciones";
+
 import ToolControlDashboard from "./modules/toolcontrol/pages/ToolControlDashboard";
 import Herramientas from "./modules/toolcontrol/pages/Herramientas";
 import Maquinas from "./modules/toolcontrol/pages/Maquinas";
@@ -219,6 +228,16 @@ export default function App() {
           </ProtegidaPorRol>
         }
       />
+
+      {/* SEA Safety Manager */}
+      <Route path="/safety" element={<Protegida><SafetyDashboard /></Protegida>} />
+      <Route path="/safety/epis" element={<Protegida><Epis /></Protegida>} />
+      <Route path="/safety/entregas" element={<Protegida><Entregas /></Protegida>} />
+      <Route path="/safety/stock" element={<Protegida><StockEpis /></Protegida>} />
+      <Route path="/safety/documentos" element={<Protegida><Documentos /></Protegida>} />
+      <Route path="/safety/reuniones" element={<Protegida><Reuniones /></Protegida>} />
+      <Route path="/safety/formacion" element={<Protegida><Formacion /></Protegida>} />
+      <Route path="/safety/inspecciones" element={<Protegida><Inspecciones /></Protegida>} />
 
       {/* SEA ToolControl */}
       <Route path="/toolcontrol" element={<Protegida><ToolControlDashboard /></Protegida>} />

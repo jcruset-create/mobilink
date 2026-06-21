@@ -1,0 +1,38 @@
+import { NavLink } from "react-router-dom";
+
+const links = [
+  { to: "/safety", label: "Dashboard", exact: true },
+  { to: "/safety/epis", label: "EPIs" },
+  { to: "/safety/entregas", label: "Entregas" },
+  { to: "/safety/stock", label: "Stock" },
+  { to: "/safety/documentos", label: "Documentos" },
+  { to: "/safety/reuniones", label: "Reuniones" },
+  { to: "/safety/formacion", label: "Formación" },
+  { to: "/safety/inspecciones", label: "Inspecciones" },
+];
+
+export default function SafetyMenu() {
+  return (
+    <nav className="flex flex-wrap gap-2 border-b pb-3 mb-4">
+      <span className="flex items-center gap-1 font-bold text-yellow-700 mr-2">
+        🦺 SEA Safety Manager
+      </span>
+      {links.map((l) => (
+        <NavLink
+          key={l.to}
+          to={l.to}
+          end={l.exact}
+          className={({ isActive }) =>
+            `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              isActive
+                ? "bg-yellow-500 text-white"
+                : "bg-gray-100 text-gray-700 hover:bg-yellow-50 hover:text-yellow-700"
+            }`
+          }
+        >
+          {l.label}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
