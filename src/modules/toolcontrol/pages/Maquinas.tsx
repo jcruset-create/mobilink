@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import QRCode from "react-qr-code";
 import ToolControlMenu from "../components/ToolControlMenu";
 import { supabase } from "../services/supabase";
 
@@ -31,6 +32,8 @@ export default function Maquinas() {
   const [ubicaciones, setUbicaciones] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
   const [modal, setModal] = useState(false);
+  const [qrItem, setQrItem] = useState<{ id: string; codigo: string; nombre: string } | null>(null);
+  const qrRef = useRef<HTMLDivElement>(null);
   const [form, setForm] = useState<any>({ ...EMPTY });
   const [editId, setEditId] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
@@ -117,7 +120,13 @@ export default function Maquinas() {
                   <td className="p-3 text-gray-500">{(m.tc_categories as any)?.nombre ?? "—"}</td>
                   <td className="p-3 text-gray-500">{(m.tc_locations as any)?.nombre ?? "—"}</td>
                   <td className="p-3"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[m.estado] ?? "bg-gray-100 text-gray-600"}`}>{m.estado.replace(/_/g, " ")}</span></td>
-                  <td className="p-3"><button onClick={() => abrir(m)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">Editar</button></td>
+                  <td className="p-3">
+                    <div className="flex gap-2">
+                      <button onClick={() => setQrItem({ id: m.id, codigo: m.codigo, nombre: m.nombre })}
+                        className="rounded-lg bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100">QR</button>
+                      <button onClick={() => abrir(m)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">Editar</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {filtradas.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-gray-400">Sin máquinas.</td></tr>}
@@ -169,6 +178,59 @@ export default function Maquinas() {
               <button onClick={() => setModal(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={guardar} disabled={guardando} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
                 {guardando ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal QR */}
+      {qrItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-xs rounded-2xl bg-white p-6 shadow-xl space-y-4">
+            <div className="text-center">
+              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Máquina · {qrItem.codigo}</div>
+              <div className="font-bold text-gray-800">{qrItem.nombre}</div>
+            </div>
+
+            <div ref={qrRef} className="flex justify-center p-4 bg-white border rounded-xl">
+              <QRCode
+                value={`${window.location.origin}/qr/maquina/${qrItem.id}`}
+                size={180}
+                level="M"
+              />
+            </div>
+
+            <p className="text-xs text-center text-gray-400 break-all">
+              {window.location.origin}/qr/maquina/{qrItem.id}
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setQrItem(null)}
+                className="flex-1 rounded-xl border px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+              <button
+                onClick={() => {
+                  const w = window.open("", "_blank");
+                  if (!w) return;
+                  const url = `${window.location.origin}/qr/maquina/${qrItem.id}`;
+                  w.document.write(`<!DOCTYPE html><html><head><title>QR ${qrItem.codigo}</title>
+                    <style>body{font-family:Arial,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+                    svg{width:200px;height:200px}h2{margin:12px 0 4px;font-size:16px}p{margin:0;font-size:11px;color:#6b7280}
+                    @media print{@page{margin:10mm}}</style></head><body>
+                    ${qrRef.current?.innerHTML ?? ""}
+                    <h2>${qrItem.codigo} · ${qrItem.nombre}</h2>
+                    <p>${url}</p>
+                    <script>window.onload=()=>window.print()</script>
+                    </body></html>`);
+                  w.document.close();
+                }}
+                className="flex-1 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                Imprimir etiqueta
               </button>
             </div>
           </div>
