@@ -103,6 +103,7 @@ export default function App() {
       <Route path="/track/:token" element={<RoadsideTrackingPage />} />
       <Route path="/informe/:token" element={<RoadsideReportPage />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/almacen-neumaticos/login" element={<Login />} />
 
       <Route
         path="/almacen-neumaticos"
