@@ -79,10 +79,12 @@ const STATUS_BADGES: Record<RoadsideAssistanceStatus, string> = {
   cancelada: "border-red-200 bg-red-50 text-red-800",
 };
 
-function formatTime(value?: number | null) {
+function formatTime(value?: number | string | null) {
   if (!value) return "-";
+  const d = new Date(value as number);
+  if (isNaN(d.getTime())) return "-";
 
-  return new Date(value).toLocaleTimeString("es-ES", {
+  return d.toLocaleTimeString("es-ES", {
     hour: "2-digit",
     minute: "2-digit",
   });

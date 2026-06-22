@@ -587,6 +587,14 @@ function normalizeRoadsideAssistancePriority(value: unknown) {
   return ROADSIDE_ASSISTANCE_PRIORITIES.has(priority) ? priority : "normal";
 }
 
+function haversineDistanceM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function normalizeNullableNumber(value: unknown) {
   if (value === null || value === undefined || value === "") return null;
 
@@ -3015,7 +3023,27 @@ app.post(
         [id, lat, lng, Date.now()]
       );
 
-      res.json({ ok: true });
+      // Geofencing automático: si el operario está a <300m del taller, pasar a llegada_taller
+      const WORKSHOP_LAT = 41.121134;
+      const WORKSHOP_LNG = 1.242743;
+      const GEOFENCE_RADIUS_M = 300;
+
+      const distM = haversineDistanceM(lat, lng, WORKSHOP_LAT, WORKSHOP_LNG);
+
+      if (distM <= GEOFENCE_RADIUS_M) {
+        await db.query(
+          `
+            UPDATE roadside_assistances
+            SET status = 'llegada_taller', "arrivedAtWorkshopMs" = $2
+            WHERE id = $1
+              AND status IN ('inicio_reparacion', 'finalizada')
+              AND "arrivedAtWorkshopMs" IS NULL
+          `,
+          [id, Date.now()]
+        );
+      }
+
+      res.json({ ok: true, distToWorkshopM: Math.round(distM) });
     } catch (error) {
       console.error("POST /api/roadside-operator/assistances/:id/location error:", error);
       res.status(500).json({ error: "Error guardando ubicacion" });
