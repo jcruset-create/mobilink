@@ -455,7 +455,9 @@ class _InfoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _row(Icons.person, a['customerName'] ?? ''),
+          _row(Icons.business, a['customerName'] ?? ''),
+          if ((a['conductorNombre'] as String? ?? '').isNotEmpty)
+            _row(Icons.person, a['conductorNombre'] ?? ''),
           _row(Icons.phone, a['customerPhone'] ?? ''),
           _row(Icons.location_on, a['address'] ?? ''),
           _row(Icons.directions_car, a['plate'] ?? ''),
@@ -630,9 +632,9 @@ class _WhatsAppCaptureCard extends StatelessWidget {
     final resumen = capture['resumen'] as String?;
     final nombre = capture['contactoNombre'] as String?;
     final telefono = capture['contactoTelefono'] as String?;
-    final imageUrls = (capture['imageUrls'] as List<dynamic>?)
-            ?.cast<String>() ??
-        [];
+    final imageUrls = (capture['imageUrls'] as List<dynamic>?)?.cast<String>() ?? [];
+    final videoUrls = (capture['videoUrls'] as List<dynamic>?)?.cast<String>() ?? [];
+    final totalMedia = imageUrls.length + videoUrls.length;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -644,12 +646,12 @@ class _WhatsAppCaptureCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.chat, size: 16, color: Colors.green),
-              SizedBox(width: 8),
-              Text(
-                'Captura WhatsApp',
+              const Icon(Icons.whatsapp, size: 16, color: Colors.green),
+              const SizedBox(width: 8),
+              const Text(
+                'Archivos del cliente (WhatsApp)',
                 style: TextStyle(
                   color: Colors.green,
                   fontSize: 12,
@@ -657,6 +659,19 @@ class _WhatsAppCaptureCard extends StatelessWidget {
                   letterSpacing: 1,
                 ),
               ),
+              const Spacer(),
+              if (totalMedia > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '$totalMedia archivo${totalMedia != 1 ? "s" : ""}',
+                    style: const TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.w700),
+                  ),
+                ),
             ],
           ),
           if (nombre != null && nombre.isNotEmpty) ...[
@@ -674,40 +689,108 @@ class _WhatsAppCaptureCard extends StatelessWidget {
               style: const TextStyle(color: Colors.white70, fontSize: 13),
             ),
           ],
+          // Fotos
           if (imageUrls.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text(
-              'Fotos del cliente',
-              style: TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 0.5),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                const Icon(Icons.photo_library, size: 13, color: Colors.white38),
+                const SizedBox(width: 6),
+                Text(
+                  'Fotos (${imageUrls.length})',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 0.5),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             SizedBox(
-              height: 100,
+              height: 110,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: imageUrls.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, i) => ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    imageUrls[i],
-                    height: 100,
-                    width: 100,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      height: 100,
-                      width: 100,
-                      color: Colors.white12,
-                      child: const Icon(Icons.broken_image, color: Colors.white38),
+                itemBuilder: (context, i) => GestureDetector(
+                  onTap: () => _openUrl(context, imageUrls[i]),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.network(
+                      imageUrls[i],
+                      height: 110,
+                      width: 110,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        height: 110,
+                        width: 110,
+                        color: Colors.white12,
+                        child: const Icon(Icons.broken_image, color: Colors.white38),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ],
+          // Vídeos
+          if (videoUrls.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                const Icon(Icons.videocam, size: 13, color: Colors.white38),
+                const SizedBox(width: 6),
+                Text(
+                  'Vídeos (${videoUrls.length})',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11, letterSpacing: 0.5),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Column(
+              children: videoUrls.map((url) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: GestureDetector(
+                  onTap: () => _openUrl(context, url),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.play_circle_fill, color: Colors.white70, size: 28),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Reproducir vídeo',
+                            style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Icon(Icons.open_in_new, color: Colors.white38, size: 16),
+                      ],
+                    ),
+                  ),
+                ),
+              )).toList(),
+            ),
+          ],
+          if (totalMedia == 0 && resumen == null) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'Sin archivos multimedia en esta captura.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  void _openUrl(BuildContext context, String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Widget _row(IconData icon, String text) => Row(

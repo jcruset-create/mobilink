@@ -3307,18 +3307,27 @@ app.get(
         try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
       }
 
-      // Get image messages from this session
+      // Get image and video messages from this session
       const msgResult = await db.query(
-        `SELECT media_url, msg_type FROM whatsapp_capture_messages WHERE session_id = $1 AND msg_type = 'image' AND media_url IS NOT NULL ORDER BY received_at ASC`,
+        `SELECT media_stored_url, media_url, message_type FROM whatsapp_capture_messages
+         WHERE session_id = $1 AND message_type IN ('image','video') AND (media_stored_url IS NOT NULL OR media_url IS NOT NULL)
+         ORDER BY received_at ASC`,
         [session.id]
       );
-      const imageUrls = msgResult.rows.map((m: any) => m.media_url as string);
+      const imageUrls: string[] = [];
+      const videoUrls: string[] = [];
+      for (const m of msgResult.rows) {
+        const url = (m.media_stored_url || m.media_url) as string;
+        if (m.message_type === "video") videoUrls.push(url);
+        else imageUrls.push(url);
+      }
 
       return res.json({
         resumen: session.ai_suggestions?.resumen ?? null,
         contactoNombre: session.ai_suggestions?.contactoNombre ?? null,
         contactoTelefono: session.ai_suggestions?.contactoTelefono ?? null,
         imageUrls,
+        videoUrls,
         status: session.status,
       });
     } catch (error) {
