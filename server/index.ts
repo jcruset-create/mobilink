@@ -4755,7 +4755,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
 
       if (a.observacionesReparacion) {
         doc.moveDown(1);
-        doc.fontSize(13).font("Helvetica-Bold").text("Observaciones de la reparación");
+        doc.fontSize(13).font("Helvetica-Bold").text("Trabajos realizados");
         doc.moveDown(0.3);
         doc.fontSize(11).font("Helvetica").text(a.observacionesReparacion, {
           lineGap: 4,

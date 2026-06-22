@@ -38,7 +38,8 @@ class _FinishScreenState extends State<FinishScreen> {
       _photoReparacion != null &&
       !_sigController.isEmpty &&
       _nombreCtrl.text.trim().isNotEmpty &&
-      _dniCtrl.text.trim().isNotEmpty;
+      _dniCtrl.text.trim().isNotEmpty &&
+      _obsCtrl.text.trim().isNotEmpty;
 
   @override
   void dispose() {
@@ -240,14 +241,15 @@ class _FinishScreenState extends State<FinishScreen> {
                           onChanged: (_) => setState(() {}),
                         ),
                         const SizedBox(height: 20),
-                        _label('Observaciones de la reparación'),
+                        _label('Trabajos realizados *'),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _obsCtrl,
                           maxLines: 4,
+                          onChanged: (_) => setState(() {}),
                           style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
-                            hintText: 'Describe brevemente lo que se ha reparado...',
+                            hintText: 'Describe los trabajos realizados...',
                             hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
                             filled: true,
                             fillColor: const Color(0xFF16213e),
