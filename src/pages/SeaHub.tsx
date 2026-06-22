@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { supabase } from "../modules/almacen-neumaticos/services/supabase";
 import { APP_VERSION } from "../version";
 
@@ -280,32 +280,17 @@ async function cargarAlertas(): Promise<Alerta[]> {
 }
 
 export default function SeaHub() {
-  const navigate = useNavigate();
-  const [usuario, setUsuario] = useState<{ nombre: string; rol: string } | null>(null);
+  const [usuario] = useState<{ nombre: string; rol: string } | null>(null);
   const [cargando, setCargando] = useState(true);
   const [alertas, setAlertas] = useState<Alerta[]>([]);
   const [cargandoAlertas, setCargandoAlertas] = useState(true);
   const [mostrarTodasAlertas, setMostrarTodasAlertas] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session) {
-        const { data } = await supabase
-          .from("perfiles_usuario")
-          .select("nombre, rol")
-          .eq("user_id", session.user.id)
-          .single();
-        setUsuario(data ?? { nombre: session.user.email ?? "Usuario", rol: "" });
-      }
-      setCargando(false);
-      cargarAlertas().then((a) => { setAlertas(a); setCargandoAlertas(false); });
-    });
-  }, [navigate]);
+    setCargando(false);
+    cargarAlertas().then((a) => { setAlertas(a); setCargandoAlertas(false); });
+  }, []);
 
-  async function cerrarSesion() {
-    await supabase.auth.signOut();
-    navigate("/almacen/login");
-  }
 
   if (cargando) {
     return (
@@ -337,10 +322,6 @@ export default function SeaHub() {
                 {usuario.rol && <div className="text-xs text-gray-400">{usuario.rol}</div>}
               </div>
             )}
-            <button onClick={cerrarSesion}
-              className="rounded-lg border px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-50 transition-colors">
-              Cerrar sesión
-            </button>
           </div>
         </div>
       </header>
