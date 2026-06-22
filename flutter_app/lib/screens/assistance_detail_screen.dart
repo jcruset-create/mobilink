@@ -648,7 +648,7 @@ class _WhatsAppCaptureCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.whatsapp, size: 16, color: Colors.green),
+              const Icon(Icons.chat, size: 16, color: Colors.green),
               const SizedBox(width: 8),
               const Text(
                 'Archivos del cliente (WhatsApp)',
