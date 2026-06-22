@@ -2211,7 +2211,7 @@ async function getWorkshopConfig() {
   };
 }
 
-app.get("/api/workshop-config", requireAdmin, async (_req, res) => {
+app.get("/api/workshop-config", requireAdminRole, async (_req, res) => {
   try {
     res.json(await getWorkshopConfig());
   } catch (error) {
@@ -2220,7 +2220,7 @@ app.get("/api/workshop-config", requireAdmin, async (_req, res) => {
   }
 });
 
-app.post("/api/workshop-config", requireAdmin, async (req, res) => {
+app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
   try {
     const { taller_lat, taller_lng, taller_direccion, taller_radio_m } = req.body ?? {};
     const entries: [string, string][] = [
