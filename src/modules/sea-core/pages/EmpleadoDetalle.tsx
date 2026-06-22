@@ -40,7 +40,6 @@ export default function EmpleadoDetalle() {
 
   // Catálogos para añadir
   const [catCompetencias, setCatCompetencias] = useState<any[]>([]);
-  const [catCertificaciones, setCatCertificaciones] = useState<any[]>([]);
   const [catAutorizaciones, setCatAutorizaciones] = useState<any[]>([]);
 
   // Modals
@@ -67,7 +66,7 @@ export default function EmpleadoDetalle() {
   async function cargar(empId: string) {
     setCargando(true);
     const [{ data: emp }, { data: comp }, { data: cert }, { data: aut }, { data: form },
-      { data: catC }, { data: catCe }, { data: catA }, { data: vest }] = await Promise.all([
+      { data: catC }, { data: catA }, { data: vest }] = await Promise.all([
       supabase.from("sea_employees")
         .select("*, sea_companies(nombre), sea_work_centers(nombre)")
         .eq("id", empId).single(),
@@ -82,7 +81,6 @@ export default function EmpleadoDetalle() {
       supabase.from("sea_training_records")
         .select("*").eq("employee_id", empId).order("fecha_inicio", { ascending: false }),
       supabase.from("sea_competencies").select("id, nombre, categoria").order("nombre"),
-      supabase.from("sea_certifications").select("id, nombre, entidad_emisora").order("nombre"),
       supabase.from("sea_authorizations").select("id, nombre").order("nombre"),
       supabase.from("sea_employee_clothing").select("*").eq("employee_id", empId).maybeSingle(),
     ]);
@@ -92,7 +90,6 @@ export default function EmpleadoDetalle() {
     setAutorizaciones(aut ?? []);
     setFormaciones(form ?? []);
     setCatCompetencias(catC ?? []);
-    setCatCertificaciones(catCe ?? []);
     setCatAutorizaciones(catA ?? []);
     if (vest) {
       setVestuarioId(vest.id);

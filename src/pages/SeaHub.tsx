@@ -75,6 +75,20 @@ const MODULOS: Modulo[] = [
     ],
   },
   {
+    id: "presencia",
+    titulo: "SEA Presencia",
+    descripcion: "Control de fichajes y presencia diaria del personal.",
+    icon: "🕐",
+    color: "bg-violet-50",
+    colorBorder: "border-violet-300",
+    colorIcon: "bg-violet-600 text-white",
+    ruta: "/presencia",
+    links: [
+      { label: "Dashboard hoy",   ruta: "/presencia" },
+      { label: "Todos los fichajes", ruta: "/presencia/fichajes" },
+    ],
+  },
+  {
     id: "almacen",
     titulo: "Almacén Neumáticos",
     descripcion: "Stock operativo, entradas, salidas, traspasos e inventarios.",
@@ -109,7 +123,6 @@ async function cargarAlertas(): Promise<Alerta[]> {
     { data: certsExp },
     { data: autsExp },
     { data: formExp },
-    { data: episBajoStock },
     { data: herrsVencidas },
     { data: incidenciasCrit },
     { data: inspeccionesCrit },
@@ -134,12 +147,6 @@ async function cargarAlertas(): Promise<Alerta[]> {
       .lte("fecha_caducidad", en30str)
       .gte("fecha_caducidad", hoystr)
       .limit(10),
-
-    // EPIs con stock bajo o a cero
-    supabase.from("sm_epis")
-      .select("id, nombre, stock_actual, stock_minimo")
-      .lte("stock_actual", supabase.rpc as any)
-      .limit(1), // placeholder — lo hacemos con filter abajo
 
     // Herramientas con revisión vencida
     supabase.from("tc_tools")

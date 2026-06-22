@@ -30,6 +30,8 @@ const EMPTY = { titulo: "", tipo: "procedimiento", descripcion: "", version: "1.
 
 export default function Documentos() {
   const [items, setItems] = useState<Documento[]>([]);
+  const [firmasMap, setFirmasMap] = useState<Record<string, number>>({});
+  const [totalEmpleados, setTotalEmpleados] = useState(0);
   const [cargando, setCargando] = useState(true);
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroTexto, setFiltroTexto] = useState("");
@@ -45,10 +47,21 @@ export default function Documentos() {
 
   async function cargar() {
     setCargando(true);
-    const { data } = await supabase.from("sm_safety_documents")
-      .select("id, titulo, tipo, descripcion, version, lectura_obligatoria, publicado, fecha_publicacion, fecha_caducidad, archivo_url, activo")
-      .eq("activo", true).order("fecha_publicacion", { ascending: false });
+    const [{ data }, { data: acks }, { count: empCount }] = await Promise.all([
+      supabase.from("sm_safety_documents")
+        .select("id, titulo, tipo, descripcion, version, lectura_obligatoria, publicado, fecha_publicacion, fecha_caducidad, archivo_url, activo")
+        .eq("activo", true).order("fecha_publicacion", { ascending: false }),
+      supabase.from("sm_document_acknowledgements").select("document_id").eq("firmado", true),
+      supabase.from("sea_employees").select("*", { count: "exact", head: true }).eq("activo", true),
+    ]);
     setItems(data ?? []);
+
+    const map: Record<string, number> = {};
+    for (const a of acks ?? []) {
+      map[a.document_id] = (map[a.document_id] ?? 0) + 1;
+    }
+    setFirmasMap(map);
+    setTotalEmpleados(empCount ?? 0);
     setCargando(false);
   }
 
@@ -157,6 +170,7 @@ export default function Documentos() {
                 <th className="p-3">Versión</th>
                 <th className="p-3">Publicado</th>
                 <th className="p-3">Caducidad</th>
+                <th className="p-3">Firmas</th>
                 <th className="p-3">Acciones</th>
               </tr>
             </thead>
@@ -195,6 +209,20 @@ export default function Documentos() {
                       )}
                     </td>
                     <td className="p-3">
+                      {d.lectura_obligatoria && d.publicado ? (
+                        <div className="flex items-center gap-1.5">
+                          <div className="h-1.5 w-16 rounded-full bg-gray-200 overflow-hidden">
+                            <div className="h-full bg-green-500 rounded-full" style={{ width: `${totalEmpleados > 0 ? Math.round(((firmasMap[d.id] ?? 0) / totalEmpleados) * 100) : 0}%` }} />
+                          </div>
+                          <span className="text-xs text-gray-500 whitespace-nowrap">
+                            {firmasMap[d.id] ?? 0}/{totalEmpleados}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="p-3">
                       <div className="flex gap-1">
                         <button onClick={() => publicar(d.id, !d.publicado)}
                           className={`rounded-lg px-2 py-1 text-xs ${d.publicado ? "bg-gray-100 hover:bg-gray-200" : "bg-green-50 text-green-700 hover:bg-green-100"}`}>
@@ -208,7 +236,7 @@ export default function Documentos() {
                 );
               })}
               {filtrados.length === 0 && (
-                <tr><td colSpan={6} className="p-8 text-center text-gray-400">Sin documentos.</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-gray-400">Sin documentos.</td></tr>
               )}
             </tbody>
           </table>

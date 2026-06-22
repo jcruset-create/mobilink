@@ -58,6 +58,9 @@ import MobileAlmacen from "./modules/almacen-neumaticos/pages/MobileAlmacen";
 import MobileAuditoria from "./modules/almacen-neumaticos/pages/MobileAuditoria";
 import MobileTraspasoDetalle from "./modules/almacen-neumaticos/pages/MobileTraspasoDetalle";
 
+import PresenciaDashboard from "./modules/presencia/pages/PresenciaDashboard";
+import Fichajes from "./modules/presencia/pages/Fichajes";
+
 import CoreDashboard from "./modules/sea-core/pages/CoreDashboard";
 import Empleados from "./modules/sea-core/pages/Empleados";
 import EmpleadoDetalle from "./modules/sea-core/pages/EmpleadoDetalle";
@@ -281,6 +284,10 @@ export default function App() {
         path="/almacen-neumaticos/mobile/traspaso/:id"
         element={<MobileTraspasoDetalle />}
       />
+      {/* SEA Presencia */}
+      <Route path="/presencia" element={<Protegida><PresenciaDashboard /></Protegida>} />
+      <Route path="/presencia/fichajes" element={<Protegida><Fichajes /></Protegida>} />
+
       {/* SEA Core routes */}
       <Route path="/sea-core" element={<Protegida><CoreDashboard /></Protegida>} />
       <Route path="/sea-core/empleados" element={<Protegida><Empleados /></Protegida>} />

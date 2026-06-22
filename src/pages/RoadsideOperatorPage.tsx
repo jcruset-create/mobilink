@@ -412,10 +412,10 @@ export default function RoadsideOperatorPage() {
               status: "available" as const,
               currentJobId: null,
               blocked: false,
-              competencies: {} as Tech["competencies"],
-              priorities: {} as Tech["priorities"],
+              competencies: {} as unknown as Tech["competencies"],
+              priorities: {} as unknown as Tech["priorities"],
             }));
-            setTechs(seaTechs);
+            setTechs(seaTechs as unknown as Tech[]);
             setTechName((current) => current || seaTechs[0]?.name || "");
           } else {
             // Fallback al backend si no hay empleados SEA Core configurados

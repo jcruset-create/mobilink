@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../modules/almacen-neumaticos/services/supabase";
 import { getPortalSession, clearPortalSession } from "./PortalLogin";
 
-const TABS = ["Mi perfil", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Mis EPIs", "Vestuario"];
+const TABS = ["Mi perfil", "Fichar", "Documentos", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Mis EPIs", "Vestuario"];
 
 const NIVEL_BADGE: Record<string, string> = {
   basico: "bg-gray-100 text-gray-700", medio: "bg-blue-100 text-blue-700",
@@ -13,7 +13,7 @@ const NIVEL_BADGE: Record<string, string> = {
 function BadgeCaducidad({ fecha }: { fecha: string | null }) {
   if (!fecha) return null;
   const dias = Math.ceil((new Date(fecha).getTime() - Date.now()) / 86400000);
-  if (dias < 0)  return <span className="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-xs font-medium">Caducado</span>;
+  if (dias < 0)   return <span className="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-xs font-medium">Caducado</span>;
   if (dias <= 30) return <span className="rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs font-medium">Caduca en {dias}d</span>;
   return <span className="rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-xs font-medium">Válido</span>;
 }
@@ -32,11 +32,59 @@ export default function PortalFicha() {
   const [formacion, setFormacion]       = useState<any[]>([]);
   const [epis, setEpis]                 = useState<any[]>([]);
   const [vestuario, setVestuario]       = useState<any>(null);
+  const [documentos, setDocumentos]     = useState<any[]>([]);
+  const [acks, setAcks]                 = useState<Record<string, any>>({});
+
+  // Estado fichaje
+  const hoy = new Date().toISOString().slice(0, 10);
+  const [fichaje, setFichaje]           = useState<any>(null);
+  const [fichandoIn, setFichandoIn]     = useState(false);
+  const [fichandoOut, setFichandoOut]   = useState(false);
+  const [histFichajes, setHistFichajes] = useState<any[]>([]);
+
+  // Estado firma
+  const [docFirmar, setDocFirmar]       = useState<any>(null);
+  const [codigoFirma, setCodigoFirma]   = useState("");
+  const [firmando, setFirmando]         = useState(false);
+  const [errorFirma, setErrorFirma]     = useState("");
+  const [docExpandido, setDocExpandido] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sesion) { navigate("/portal"); return; }
     cargar(sesion.id);
+    cargarFichaje(sesion.id);
   }, []);
+
+  async function cargarFichaje(empId: string) {
+    const [{ data: hoyRec }, { data: hist }] = await Promise.all([
+      supabase.from("pres_records").select("*").eq("employee_id", empId).eq("fecha", hoy).maybeSingle(),
+      supabase.from("pres_records").select("*").eq("employee_id", empId)
+        .order("fecha", { ascending: false }).limit(14),
+    ]);
+    setFichaje(hoyRec);
+    setHistFichajes(hist ?? []);
+  }
+
+  async function ficharEntrada() {
+    if (!sesion) return;
+    setFichandoIn(true);
+    const ahora = new Date().toISOString();
+    const { data } = await supabase.from("pres_records")
+      .insert({ employee_id: sesion.id, fecha: hoy, hora_entrada: ahora, tipo: "normal" })
+      .select().single();
+    setFichaje(data);
+    await cargarFichaje(sesion.id);
+    setFichandoIn(false);
+  }
+
+  async function ficharSalida() {
+    if (!sesion || !fichaje) return;
+    setFichandoOut(true);
+    const ahora = new Date().toISOString();
+    await supabase.from("pres_records").update({ hora_salida: ahora }).eq("id", fichaje.id);
+    await cargarFichaje(sesion.id);
+    setFichandoOut(false);
+  }
 
   async function cargar(empId: string) {
     setCargando(true);
@@ -48,6 +96,8 @@ export default function PortalFicha() {
       { data: form },
       { data: epiAsig },
       { data: vest },
+      { data: docs },
+      { data: acksData },
     ] = await Promise.all([
       supabase.from("sea_employees")
         .select("*, sea_companies(nombre), sea_work_centers(nombre)")
@@ -67,7 +117,14 @@ export default function PortalFicha() {
         .eq("employee_id", empId).eq("estado", "activa").order("fecha_entrega", { ascending: false }),
       supabase.from("sea_employee_clothing")
         .select("*").eq("employee_id", empId).maybeSingle(),
+      supabase.from("sm_safety_documents")
+        .select("id, titulo, tipo, descripcion, contenido, archivo_url, version, lectura_obligatoria, created_at")
+        .eq("publicado", true)
+        .order("created_at", { ascending: false }),
+      supabase.from("sm_document_acknowledgements")
+        .select("*").eq("employee_id", empId),
     ]);
+
     setEmpleado(emp);
     setCompetencias(comp ?? []);
     setCerts(cert ?? []);
@@ -75,22 +132,64 @@ export default function PortalFicha() {
     setFormacion(form ?? []);
     setEpis(epiAsig ?? []);
     setVestuario(vest);
+    setDocumentos(docs ?? []);
+
+    // Indexar acks por document_id
+    const ackMap: Record<string, any> = {};
+    for (const a of acksData ?? []) ackMap[a.document_id] = a;
+    setAcks(ackMap);
+
     setCargando(false);
   }
 
-  function cerrarSesion() {
-    clearPortalSession();
-    navigate("/portal");
+  async function marcarLeido(docId: string) {
+    if (!sesion) return;
+    const existe = acks[docId];
+    if (existe?.leido) return;
+    const payload = { document_id: docId, employee_id: sesion.id, leido: true, fecha_lectura: new Date().toISOString() };
+    if (existe) {
+      await supabase.from("sm_document_acknowledgements").update({ leido: true, fecha_lectura: new Date().toISOString() }).eq("id", existe.id);
+    } else {
+      await supabase.from("sm_document_acknowledgements").insert(payload);
+    }
+    setAcks((prev) => ({ ...prev, [docId]: { ...(prev[docId] ?? {}), ...payload } }));
   }
 
-  if (!sesion) return null;
+  async function firmarDocumento() {
+    if (!sesion || !docFirmar) return;
+    setErrorFirma("");
+    if (codigoFirma !== sesion.codigo) { setErrorFirma("Código incorrecto."); return; }
+    setFirmando(true);
+    const ahora = new Date().toISOString();
+    const existe = acks[docFirmar.id];
+    const payload = {
+      document_id: docFirmar.id, employee_id: sesion.id,
+      leido: true, firmado: true,
+      fecha_lectura: existe?.fecha_lectura ?? ahora,
+      fecha_firma: ahora,
+      dispositivo: navigator.userAgent.slice(0, 200),
+    };
+    if (existe) {
+      await supabase.from("sm_document_acknowledgements").update({ firmado: true, fecha_firma: ahora }).eq("id", existe.id);
+    } else {
+      await supabase.from("sm_document_acknowledgements").insert(payload);
+    }
+    setAcks((prev) => ({ ...prev, [docFirmar.id]: { ...(prev[docFirmar.id] ?? {}), ...payload } }));
+    setFirmando(false);
+    setDocFirmar(null);
+    setCodigoFirma("");
+  }
 
+  function cerrarSesion() { clearPortalSession(); navigate("/portal"); }
+
+  if (!sesion) return null;
   if (cargando) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="text-gray-400 text-sm">Cargando tu ficha...</div>
     </div>
   );
 
+  const docsPendientes = documentos.filter((d) => d.lectura_obligatoria && !acks[d.id]?.firmado);
   const alertasCaducidad = [
     ...certs.filter((c) => c.fecha_caducidad && Math.ceil((new Date(c.fecha_caducidad).getTime() - Date.now()) / 86400000) <= 30),
     ...auts.filter((a) => a.fecha_caducidad && Math.ceil((new Date(a.fecha_caducidad).getTime() - Date.now()) / 86400000) <= 30),
@@ -120,25 +219,46 @@ export default function PortalFicha() {
 
       <div className="max-w-2xl mx-auto px-4 pt-5 space-y-4">
 
-        {/* Alertas de caducidad */}
-        {alertasCaducidad.length > 0 && (
-          <div className="rounded-xl bg-orange-50 border border-orange-200 p-4 space-y-1">
-            <div className="font-semibold text-orange-800 text-sm flex items-center gap-1">
-              ⚠️ Tienes {alertasCaducidad.length} documento{alertasCaducidad.length > 1 ? "s" : ""} próximos a caducar
-            </div>
-            <p className="text-xs text-orange-700">Consulta con tu responsable para renovarlos.</p>
+        {/* Alertas */}
+        {(docsPendientes.length > 0 || alertasCaducidad.length > 0) && (
+          <div className="space-y-2">
+            {docsPendientes.length > 0 && (
+              <div className="rounded-xl bg-red-50 border border-red-200 p-4 flex gap-3 items-start cursor-pointer"
+                onClick={() => setTabActiva(2)}>
+                <span className="text-red-500 text-lg shrink-0">📋</span>
+                <div>
+                  <div className="font-semibold text-red-800 text-sm">
+                    {docsPendientes.length} documento{docsPendientes.length > 1 ? "s" : ""} pendiente{docsPendientes.length > 1 ? "s" : ""} de firma
+                  </div>
+                  <p className="text-xs text-red-600 mt-0.5">Toca aquí para ver y firmar</p>
+                </div>
+              </div>
+            )}
+            {alertasCaducidad.length > 0 && (
+              <div className="rounded-xl bg-orange-50 border border-orange-200 p-4 flex gap-3 items-start">
+                <span className="text-orange-500 text-lg shrink-0">⚠️</span>
+                <div className="font-semibold text-orange-800 text-sm">
+                  {alertasCaducidad.length} documento{alertasCaducidad.length > 1 ? "s" : ""} próximo{alertasCaducidad.length > 1 ? "s" : ""} a caducar. Consulta con tu responsable.
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Tabs */}
         <div className="overflow-x-auto">
-          <div className="flex gap-1 min-w-max border-b pb-0">
+          <div className="flex gap-1 min-w-max border-b">
             {TABS.map((tab, i) => (
               <button key={tab} onClick={() => setTabActiva(i)}
-                className={`px-3 py-2 text-xs font-semibold whitespace-nowrap border-b-2 transition-colors ${
+                className={`px-3 py-2 text-xs font-semibold whitespace-nowrap border-b-2 transition-colors relative ${
                   tabActiva === i ? "border-gray-800 text-gray-800" : "border-transparent text-gray-500 hover:text-gray-700"
                 }`}>
                 {tab}
+                {i === 2 && docsPendientes.length > 0 && (
+                  <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center font-bold">
+                    {docsPendientes.length}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -148,13 +268,13 @@ export default function PortalFicha() {
         {tabActiva === 0 && empleado && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {[
-              { label: "Empresa",          value: empleado.sea_companies?.nombre },
-              { label: "Centro de trabajo",value: empleado.sea_work_centers?.nombre },
-              { label: "Departamento",     value: empleado.departamento },
-              { label: "Cargo",            value: empleado.cargo },
-              { label: "Email",            value: empleado.email },
-              { label: "Teléfono",         value: empleado.telefono },
-              { label: "Fecha de alta",    value: empleado.fecha_alta ? new Date(empleado.fecha_alta).toLocaleDateString("es-ES") : null },
+              { label: "Empresa",           value: empleado.sea_companies?.nombre },
+              { label: "Centro de trabajo", value: empleado.sea_work_centers?.nombre },
+              { label: "Departamento",      value: empleado.departamento },
+              { label: "Cargo",             value: empleado.cargo },
+              { label: "Email",             value: empleado.email },
+              { label: "Teléfono",          value: empleado.telefono },
+              { label: "Fecha de alta",     value: empleado.fecha_alta ? new Date(empleado.fecha_alta).toLocaleDateString("es-ES") : null },
             ].filter((f) => f.value).map(({ label, value }) => (
               <div key={label} className="flex justify-between px-4 py-3 text-sm">
                 <span className="text-gray-500">{label}</span>
@@ -164,8 +284,159 @@ export default function PortalFicha() {
           </div>
         )}
 
-        {/* Tab 1: Competencias */}
+        {/* Tab 1: Fichar */}
         {tabActiva === 1 && (
+          <div className="space-y-4">
+            {/* Estado hoy */}
+            <div className={`rounded-2xl border p-6 text-center space-y-4 ${
+              !fichaje ? "bg-white" :
+              fichaje.hora_entrada && !fichaje.hora_salida ? "bg-green-50 border-green-200" :
+              "bg-gray-50 border-gray-200"
+            }`}>
+              {!fichaje ? (
+                <>
+                  <div className="text-4xl">⏱️</div>
+                  <p className="text-gray-600 text-sm">No has fichado entrada hoy.</p>
+                  <button onClick={ficharEntrada} disabled={fichandoIn}
+                    className="mx-auto flex items-center gap-2 rounded-2xl bg-gray-800 px-8 py-4 text-white font-bold text-base hover:bg-gray-900 disabled:opacity-50 shadow-lg">
+                    {fichandoIn ? "Registrando..." : "🟢 Fichar entrada"}
+                  </button>
+                </>
+              ) : fichaje.hora_entrada && !fichaje.hora_salida ? (
+                <>
+                  <div className="text-4xl">🟢</div>
+                  <p className="text-green-700 font-semibold">En planta</p>
+                  <p className="text-sm text-green-600">
+                    Entrada registrada a las{" "}
+                    <strong>{new Date(fichaje.hora_entrada).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</strong>
+                  </p>
+                  <button onClick={ficharSalida} disabled={fichandoOut}
+                    className="mx-auto flex items-center gap-2 rounded-2xl bg-gray-800 px-8 py-4 text-white font-bold text-base hover:bg-gray-900 disabled:opacity-50 shadow-lg">
+                    {fichandoOut ? "Registrando..." : "🔴 Fichar salida"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="text-4xl">✅</div>
+                  <p className="text-gray-700 font-semibold">Jornada completada</p>
+                  <div className="text-sm text-gray-500 space-y-1">
+                    <p>Entrada: <strong>{new Date(fichaje.hora_entrada).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</strong></p>
+                    <p>Salida: <strong>{new Date(fichaje.hora_salida).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</strong></p>
+                    <p>Duración: <strong>{(() => {
+                      const mins = Math.round((new Date(fichaje.hora_salida).getTime() - new Date(fichaje.hora_entrada).getTime()) / 60000);
+                      return `${Math.floor(mins / 60)}h ${(mins % 60).toString().padStart(2, "0")}m`;
+                    })()}</strong></p>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Historial */}
+            {histFichajes.length > 0 && (
+              <div className="rounded-xl border bg-white overflow-hidden">
+                <div className="px-4 py-3 border-b bg-gray-50">
+                  <h3 className="font-semibold text-sm text-gray-700">Últimos registros</h3>
+                </div>
+                <div className="divide-y">
+                  {histFichajes.map((r) => {
+                    const entrada = r.hora_entrada ? new Date(r.hora_entrada).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "—";
+                    const salida  = r.hora_salida  ? new Date(r.hora_salida).toLocaleTimeString("es-ES",  { hour: "2-digit", minute: "2-digit" }) : "—";
+                    return (
+                      <div key={r.id} className="flex items-center justify-between px-4 py-3 text-sm">
+                        <span className="text-gray-500">
+                          {new Date(r.fecha + "T12:00:00").toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}
+                        </span>
+                        <span className="font-mono text-gray-700">{entrada} → {salida}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Documentos */}
+        {tabActiva === 2 && (
+          <div className="space-y-3">
+            {documentos.length === 0
+              ? <div className="rounded-xl border bg-white p-8 text-center text-sm text-gray-400">Sin documentos publicados.</div>
+              : documentos.map((doc) => {
+                const ack = acks[doc.id];
+                const firmado = ack?.firmado ?? false;
+                const leido   = ack?.leido ?? false;
+                const expandido = docExpandido === doc.id;
+
+                return (
+                  <div key={doc.id} className={`rounded-xl border bg-white overflow-hidden ${doc.lectura_obligatoria && !firmado ? "border-red-300" : ""}`}>
+                    {/* Cabecera */}
+                    <div className="flex items-start justify-between p-4 gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-sm">{doc.titulo}</span>
+                          <span className="text-xs text-gray-400">v{doc.version}</span>
+                          {doc.lectura_obligatoria && (
+                            <span className="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-xs font-medium">Firma obligatoria</span>
+                          )}
+                        </div>
+                        {doc.descripcion && <p className="text-xs text-gray-500 mt-1">{doc.descripcion}</p>}
+                        <div className="flex gap-3 mt-2 text-xs">
+                          {firmado
+                            ? <span className="text-green-700 font-medium">✓ Firmado el {new Date(ack.fecha_firma).toLocaleDateString("es-ES")}</span>
+                            : leido
+                            ? <span className="text-blue-600">Leído · pendiente de firma</span>
+                            : <span className="text-gray-400">No leído</span>
+                          }
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setDocExpandido(expandido ? null : doc.id);
+                          if (!leido) marcarLeido(doc.id);
+                        }}
+                        className="rounded-lg border px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 shrink-0">
+                        {expandido ? "Cerrar" : "Leer"}
+                      </button>
+                    </div>
+
+                    {/* Contenido expandido */}
+                    {expandido && (
+                      <div className="border-t px-4 py-4 space-y-4">
+                        {doc.contenido && (
+                          <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-gray-50 rounded-lg p-3">
+                            {doc.contenido}
+                          </div>
+                        )}
+                        {doc.archivo_url && (
+                          <a href={doc.archivo_url} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 text-sm text-blue-600 hover:underline">
+                            📎 Ver archivo adjunto
+                          </a>
+                        )}
+                        {/* Botón firmar */}
+                        {!firmado && (
+                          <button
+                            onClick={() => { setDocFirmar(doc); setCodigoFirma(""); setErrorFirma(""); }}
+                            className="w-full rounded-xl bg-gray-800 py-3 text-sm font-bold text-white hover:bg-gray-900">
+                            ✍️ Firmar este documento
+                          </button>
+                        )}
+                        {firmado && (
+                          <div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 flex items-center gap-2 text-green-800 text-sm">
+                            <span className="text-lg">✅</span>
+                            Firmado el {new Date(ack.fecha_firma).toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        )}
+
+        {/* Tab 3: Competencias */}
+        {tabActiva === 3 && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {competencias.length === 0
               ? <p className="p-6 text-center text-sm text-gray-400">Sin competencias registradas.</p>
@@ -175,16 +446,14 @@ export default function PortalFicha() {
                     <div className="font-medium text-sm">{c.sea_competencies?.nombre}</div>
                     <div className="text-xs text-gray-400 capitalize">{c.sea_competencies?.categoria}</div>
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${NIVEL_BADGE[c.nivel] ?? "bg-gray-100"}`}>
-                    {c.nivel}
-                  </span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${NIVEL_BADGE[c.nivel] ?? "bg-gray-100"}`}>{c.nivel}</span>
                 </div>
               ))}
           </div>
         )}
 
-        {/* Tab 2: Certificaciones */}
-        {tabActiva === 2 && (
+        {/* Tab 4: Certificaciones */}
+        {tabActiva === 4 && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {certs.length === 0
               ? <p className="p-6 text-center text-sm text-gray-400">Sin certificaciones.</p>
@@ -201,8 +470,8 @@ export default function PortalFicha() {
           </div>
         )}
 
-        {/* Tab 3: Autorizaciones */}
-        {tabActiva === 3 && (
+        {/* Tab 5: Autorizaciones */}
+        {tabActiva === 5 && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {auts.length === 0
               ? <p className="p-6 text-center text-sm text-gray-400">Sin autorizaciones.</p>
@@ -219,8 +488,8 @@ export default function PortalFicha() {
           </div>
         )}
 
-        {/* Tab 4: Formación */}
-        {tabActiva === 4 && (
+        {/* Tab 6: Formación */}
+        {tabActiva === 6 && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {formacion.length === 0
               ? <p className="p-6 text-center text-sm text-gray-400">Sin registros de formación.</p>
@@ -229,17 +498,13 @@ export default function PortalFicha() {
                   <div>
                     <div className="font-medium text-sm">{f.nombre_curso}</div>
                     <div className="text-xs text-gray-400">
-                      {[f.entidad_formadora, f.horas ? `${f.horas}h` : null,
-                        f.fecha_inicio ? new Date(f.fecha_inicio).toLocaleDateString("es-ES") : null
-                      ].filter(Boolean).join(" · ")}
+                      {[f.entidad_formadora, f.horas ? `${f.horas}h` : null, f.fecha_inicio ? new Date(f.fecha_inicio).toLocaleDateString("es-ES") : null].filter(Boolean).join(" · ")}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      f.resultado === "superado" ? "bg-green-100 text-green-700"
-                      : f.resultado === "no_superado" ? "bg-red-100 text-red-700"
-                      : "bg-gray-100 text-gray-600"
-                    }`}>{f.resultado?.replace("_", " ")}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${f.resultado === "superado" ? "bg-green-100 text-green-700" : f.resultado === "no_superado" ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"}`}>
+                      {f.resultado?.replace("_", " ")}
+                    </span>
                     <BadgeCaducidad fecha={f.fecha_caducidad} />
                   </div>
                 </div>
@@ -247,8 +512,8 @@ export default function PortalFicha() {
           </div>
         )}
 
-        {/* Tab 5: Mis EPIs */}
-        {tabActiva === 5 && (
+        {/* Tab 7: Mis EPIs */}
+        {tabActiva === 7 && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {epis.length === 0
               ? <p className="p-6 text-center text-sm text-gray-400">No tienes EPIs asignados actualmente.</p>
@@ -259,25 +524,24 @@ export default function PortalFicha() {
                     {e.cantidad && `${e.cantidad} ud. · `}
                     Entregado: {e.fecha_entrega ? new Date(e.fecha_entrega).toLocaleDateString("es-ES") : "—"}
                   </div>
-                  {e.sm_epis?.descripcion && <div className="text-xs text-gray-400">{e.sm_epis.descripcion}</div>}
                 </div>
               ))}
           </div>
         )}
 
-        {/* Tab 6: Vestuario */}
-        {tabActiva === 6 && (
+        {/* Tab 8: Vestuario */}
+        {tabActiva === 8 && (
           <div className="rounded-xl border bg-white divide-y overflow-hidden">
             {!vestuario
               ? <p className="p-6 text-center text-sm text-gray-400">No hay tallas registradas. Consulta con RRHH.</p>
               : [
-                  { label: "Camiseta",  value: vestuario.camiseta },
-                  { label: "Camisa",    value: vestuario.camisa },
-                  { label: "Pantalón",  value: vestuario.pantalon },
-                  { label: "Calzado",   value: vestuario.calzado },
-                  { label: "Chaqueta",  value: vestuario.chaqueta },
-                  { label: "Sudadera",  value: vestuario.sudadera },
-                  { label: "Chaleco",   value: vestuario.chaleco },
+                  { label: "Camiseta", value: vestuario.camiseta },
+                  { label: "Camisa",   value: vestuario.camisa },
+                  { label: "Pantalón", value: vestuario.pantalon },
+                  { label: "Calzado",  value: vestuario.calzado },
+                  { label: "Chaqueta", value: vestuario.chaqueta },
+                  { label: "Sudadera", value: vestuario.sudadera },
+                  { label: "Chaleco",  value: vestuario.chaleco },
                 ].filter((f) => f.value).map(({ label, value }) => (
                   <div key={label} className="flex justify-between px-4 py-3 text-sm">
                     <span className="text-gray-500">{label}</span>
@@ -290,6 +554,47 @@ export default function PortalFicha() {
           </div>
         )}
       </div>
+
+      {/* Modal firma */}
+      {docFirmar && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl space-y-4">
+            <div>
+              <h2 className="font-bold text-gray-900">Firmar documento</h2>
+              <p className="text-sm text-gray-500 mt-1">{docFirmar.titulo}</p>
+            </div>
+            <p className="text-sm text-gray-600">
+              Al firmar confirmas que has leído y entendido el contenido de este documento.
+              Introduce tu código personal para confirmar.
+            </p>
+            <div>
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Tu código (4 dígitos)</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={codigoFirma}
+                onChange={(e) => setCodigoFirma(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                onKeyDown={(e) => { if (e.key === "Enter") void firmarDocumento(); }}
+                placeholder="••••"
+                className="mt-1 w-full rounded-xl border px-3 py-3 text-center text-2xl font-bold tracking-[1rem] outline-none focus:ring-2 focus:ring-gray-300"
+                autoFocus
+              />
+            </div>
+            {errorFirma && <p className="text-sm text-red-600">{errorFirma}</p>}
+            <div className="flex gap-2">
+              <button onClick={() => { setDocFirmar(null); setCodigoFirma(""); setErrorFirma(""); }}
+                className="flex-1 rounded-xl border py-3 text-sm font-semibold text-gray-600 hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button onClick={firmarDocumento} disabled={firmando || codigoFirma.length !== 4}
+                className="flex-1 rounded-xl bg-gray-800 py-3 text-sm font-bold text-white hover:bg-gray-900 disabled:opacity-40">
+                {firmando ? "Firmando..." : "✍️ Confirmar firma"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
