@@ -289,15 +289,15 @@ export default function SeaHub() {
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!session) { navigate("/almacen/login"); return; }
-      const { data } = await supabase
-        .from("perfiles_usuario")
-        .select("nombre, rol")
-        .eq("user_id", session.user.id)
-        .single();
-      setUsuario(data ?? { nombre: session.user.email ?? "Usuario", rol: "" });
+      if (session) {
+        const { data } = await supabase
+          .from("perfiles_usuario")
+          .select("nombre, rol")
+          .eq("user_id", session.user.id)
+          .single();
+        setUsuario(data ?? { nombre: session.user.email ?? "Usuario", rol: "" });
+      }
       setCargando(false);
-      // Cargar alertas tras autenticación
       cargarAlertas().then((a) => { setAlertas(a); setCargandoAlertas(false); });
     });
   }, [navigate]);
