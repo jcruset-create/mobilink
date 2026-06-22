@@ -222,6 +222,9 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set());
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [savedMsgIds, setSavedMsgIds] = useState<Set<number>>(new Set());
+  const [savingAll, setSavingAll] = useState(false);
+  const [saveAllMsg, setSaveAllMsg] = useState("");
 
   const fetchSession = useCallback(async () => {
     try {
@@ -330,9 +333,6 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const isClosed = session?.status === "CLOSED";
   const suggestions: WhatsAppAiSuggestions | null = session?.ai_suggestions ?? null;
   const messages = session?.messages ?? [];
-  const [savedMsgIds, setSavedMsgIds] = useState<Set<number>>(new Set());
-  const [savingAll, setSavingAll] = useState(false);
-  const [saveAllMsg, setSaveAllMsg] = useState("");
 
   const mediaMessages = messages.filter(
     (m) => MEDIA_TYPES.has(m.message_type) && (m.media_stored_url || m.media_url)
