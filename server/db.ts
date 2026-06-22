@@ -505,6 +505,13 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS cobros_estado_idx ON cobros(estado);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS workshop_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    );
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

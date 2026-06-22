@@ -318,6 +318,34 @@ export async function enCaminoRoadsideAssistanceInBackend(
   return (await response.json()) as RoadsideAssistance;
 }
 
+export type WorkshopConfig = {
+  taller_lat: string;
+  taller_lng: string;
+  taller_direccion: string;
+  taller_radio_m: string;
+};
+
+export async function loadWorkshopConfigFromBackend(): Promise<WorkshopConfig> {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/workshop-config`,
+    { headers: getAdminHeaders({}) }
+  );
+  if (!response.ok) throw new Error("No se pudo cargar la configuración del taller.");
+  return (await response.json()) as WorkshopConfig;
+}
+
+export async function saveWorkshopConfigToBackend(config: WorkshopConfig): Promise<void> {
+  const response = await fetchWithTimeout(`${API_BASE}/api/workshop-config`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || "No se pudo guardar la configuración.");
+  }
+}
+
 export async function loadRoadsideTrackingFromBackend(token: string) {
   const response = await fetchWithTimeout(
     `${API_BASE}/api/roadside-tracking/${encodeURIComponent(token)}`,

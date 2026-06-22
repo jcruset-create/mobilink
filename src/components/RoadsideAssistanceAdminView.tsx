@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Edit3,
   KeyRound,
+  MapPin,
   Plus,
   RefreshCw,
   Save,
@@ -16,6 +17,11 @@ import type {
   RoadsideVehicle,
   RoadsideVehicleDraft,
 } from "../modules/roadsideAssistanceTypes";
+import {
+  loadWorkshopConfigFromBackend,
+  saveWorkshopConfigToBackend,
+  type WorkshopConfig,
+} from "../modules/roadsideAssistanceApi";
 
 const INITIAL_VEHICLE_DRAFT: RoadsideVehicleDraft = {
   name: "",
@@ -95,6 +101,12 @@ export default function RoadsideAssistanceAdminView({
   const [newOperatorCode, setNewOperatorCode] = useState("");
   const [addingOperator, setAddingOperator] = useState(false);
 
+  const [workshopConfig, setWorkshopConfig] = useState<WorkshopConfig>({
+    taller_lat: "", taller_lng: "", taller_direccion: "", taller_radio_m: "300",
+  });
+  const [workshopConfigSaving, setWorkshopConfigSaving] = useState(false);
+  const [workshopConfigMsg, setWorkshopConfigMsg] = useState("");
+
   const operatorCodesByTech = useMemo(() => {
     return new Map(operatorCodes.map((item) => [item.techName, item]));
   }, [operatorCodes]);
@@ -113,13 +125,27 @@ export default function RoadsideAssistanceAdminView({
 
   useEffect(() => {
     const nextDrafts: Record<string, string> = {};
-
-    operatorCodes.forEach((item) => {
-      nextDrafts[item.techName] = item.code || "";
-    });
-
+    operatorCodes.forEach((item) => { nextDrafts[item.techName] = item.code || ""; });
     setOperatorCodeDrafts(nextDrafts);
   }, [operatorCodes]);
+
+  useEffect(() => {
+    loadWorkshopConfigFromBackend().then(setWorkshopConfig).catch(() => {});
+  }, []);
+
+  async function handleSaveWorkshopConfig() {
+    setWorkshopConfigSaving(true);
+    setWorkshopConfigMsg("");
+    try {
+      await saveWorkshopConfigToBackend(workshopConfig);
+      setWorkshopConfigMsg("Configuración guardada correctamente.");
+      setTimeout(() => setWorkshopConfigMsg(""), 4000);
+    } catch (err) {
+      setWorkshopConfigMsg(err instanceof Error ? err.message : "Error guardando.");
+    } finally {
+      setWorkshopConfigSaving(false);
+    }
+  }
 
   function startVehicleEdit(vehicle: RoadsideVehicle) {
     setEditingVehicle(vehicle);
@@ -703,6 +729,93 @@ export default function RoadsideAssistanceAdminView({
             </div>
           </section>
         </div>
+
+        {/* Taller base / Geofencing */}
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <MapPin className="h-5 w-5 text-slate-500" />
+            <h2 className="text-sm font-black uppercase text-slate-700">
+              Taller base — geofencing automático
+            </h2>
+          </div>
+          <p className="mb-4 text-xs text-slate-500">
+            Cuando el operario llega a menos del radio configurado, la asistencia pasa automáticamente a <strong>Llegada al taller</strong>.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Dirección</label>
+              <input
+                value={workshopConfig.taller_direccion}
+                onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_direccion: e.target.value }))}
+                placeholder="C/ Exemple, 1 — Tarragona"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Latitud GPS</label>
+              <input
+                value={workshopConfig.taller_lat}
+                onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_lat: e.target.value }))}
+                placeholder="41.121134"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Longitud GPS</label>
+              <input
+                value={workshopConfig.taller_lng}
+                onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_lng: e.target.value }))}
+                placeholder="1.242743"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Radio detección (metros)</label>
+              <input
+                type="number"
+                min={50}
+                max={2000}
+                value={workshopConfig.taller_radio_m}
+                onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_radio_m: e.target.value }))}
+                placeholder="300"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleSaveWorkshopConfig}
+              disabled={workshopConfigSaving}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              <Save className="h-4 w-4" />
+              {workshopConfigSaving ? "Guardando..." : "Guardar configuración"}
+            </button>
+            {workshopConfigMsg && (
+              <span className={`text-sm font-semibold ${workshopConfigMsg.startsWith("Error") || workshopConfigMsg.startsWith("No se") ? "text-red-600" : "text-emerald-600"}`}>
+                {workshopConfigMsg}
+              </span>
+            )}
+          </div>
+
+          {workshopConfig.taller_lat && workshopConfig.taller_lng && (
+            <p className="mt-3 text-xs text-slate-400">
+              Posición actual: {workshopConfig.taller_lat}, {workshopConfig.taller_lng} — radio {workshopConfig.taller_radio_m}m
+              {" · "}
+              <a
+                href={`https://maps.google.com/?q=${workshopConfig.taller_lat},${workshopConfig.taller_lng}`}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-slate-600"
+              >
+                Ver en Maps
+              </a>
+            </p>
+          )}
+        </section>
       </div>
     </div>
   );

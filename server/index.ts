@@ -2191,6 +2191,59 @@ app.delete("/api/jobs/:id", async (req, res) => {
 });
 
 /* =========================================================
+   WORKSHOP CONFIG
+========================================================= */
+
+const WORKSHOP_CONFIG_KEYS = ["taller_lat", "taller_lng", "taller_direccion", "taller_radio_m"] as const;
+
+async function getWorkshopConfig() {
+  const result = await db.query(
+    `SELECT key, value FROM workshop_config WHERE key = ANY($1)`,
+    [WORKSHOP_CONFIG_KEYS]
+  );
+  const map: Record<string, string> = {};
+  for (const row of result.rows) map[row.key] = row.value;
+  return {
+    taller_lat: map["taller_lat"] ?? "",
+    taller_lng: map["taller_lng"] ?? "",
+    taller_direccion: map["taller_direccion"] ?? "",
+    taller_radio_m: map["taller_radio_m"] ?? "300",
+  };
+}
+
+app.get("/api/workshop-config", requireAdmin, async (_req, res) => {
+  try {
+    res.json(await getWorkshopConfig());
+  } catch (error) {
+    console.error("GET /api/workshop-config error:", error);
+    res.status(500).json({ error: "Error cargando configuración" });
+  }
+});
+
+app.post("/api/workshop-config", requireAdmin, async (req, res) => {
+  try {
+    const { taller_lat, taller_lng, taller_direccion, taller_radio_m } = req.body ?? {};
+    const entries: [string, string][] = [
+      ["taller_lat", String(taller_lat ?? "")],
+      ["taller_lng", String(taller_lng ?? "")],
+      ["taller_direccion", String(taller_direccion ?? "")],
+      ["taller_radio_m", String(taller_radio_m ?? "300")],
+    ];
+    for (const [key, value] of entries) {
+      await db.query(
+        `INSERT INTO workshop_config(key, value) VALUES($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [key, value]
+      );
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/workshop-config error:", error);
+    res.status(500).json({ error: "Error guardando configuración" });
+  }
+});
+
+/* =========================================================
    ROADSIDE ASSISTANCES
 ========================================================= */
 
@@ -3023,14 +3076,17 @@ app.post(
         [id, lat, lng, Date.now()]
       );
 
-      // Geofencing automático: si el operario está a <300m del taller, pasar a llegada_taller
-      const WORKSHOP_LAT = 41.121134;
-      const WORKSHOP_LNG = 1.242743;
-      const GEOFENCE_RADIUS_M = 300;
+      // Geofencing automático: si el operario está dentro del radio del taller, pasar a llegada_taller
+      const cfg = await getWorkshopConfig();
+      const tallerLat = parseFloat(cfg.taller_lat);
+      const tallerLng = parseFloat(cfg.taller_lng);
+      const radioM = parseFloat(cfg.taller_radio_m) || 300;
 
-      const distM = haversineDistanceM(lat, lng, WORKSHOP_LAT, WORKSHOP_LNG);
+      const distM = (isFinite(tallerLat) && isFinite(tallerLng))
+        ? haversineDistanceM(lat, lng, tallerLat, tallerLng)
+        : Infinity;
 
-      if (distM <= GEOFENCE_RADIUS_M) {
+      if (distM <= radioM) {
         await db.query(
           `
             UPDATE roadside_assistances
