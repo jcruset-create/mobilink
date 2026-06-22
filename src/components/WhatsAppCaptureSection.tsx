@@ -7,6 +7,8 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
+const MEDIA_TYPES = new Set(["image", "video", "audio", "document"]);
+
 function getAdminHeaders(): Record<string, string> {
   const token = localStorage.getItem("sea-admin-token") ?? "";
   return {
@@ -39,16 +41,100 @@ const TYPE_ICONS: Record<string, string> = {
   document: "📄",
 };
 
-function MessageRow({ msg }: { msg: WhatsAppCaptureMessage }) {
+function MessageRow({
+  msg,
+  jobId,
+  onSaved,
+}: {
+  msg: WhatsAppCaptureMessage;
+  jobId: number;
+  onSaved?: (msgId: number) => void;
+}) {
+  const mediaUrl = msg.media_stored_url || msg.media_url;
+  const hasMedia = !!mediaUrl && MEDIA_TYPES.has(msg.message_type);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  async function handleDownload() {
+    if (!mediaUrl) return;
+    try {
+      const res = await fetch(mediaUrl);
+      const blob = await res.blob();
+      const ext = blob.type.split("/")[1]?.split(";")[0] ?? "bin";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `whatsapp_${msg.message_type}_${msg.id}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      window.open(mediaUrl, "_blank");
+    }
+  }
+
+  async function handleSaveToFiles() {
+    if (!mediaUrl || saving || saved) return;
+    setSaving(true);
+    setSaveError("");
+    try {
+      const token = localStorage.getItem("sea-admin-token") ?? "";
+      const res = await fetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": token },
+        body: JSON.stringify({
+          url: mediaUrl,
+          kind: "whatsapp",
+          filename: `whatsapp_${msg.message_type}_${msg.id}`,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setSaveError(d?.error ?? "Error guardando");
+        return;
+      }
+      setSaved(true);
+      onSaved?.(msg.id);
+    } catch {
+      setSaveError("Error de conexión");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="flex gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
       <span className="text-base leading-none mt-0.5">{TYPE_ICONS[msg.message_type] ?? "📩"}</span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-bold text-slate-500">{fmtTime(msg.received_at)}</span>
           <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600">
             {TYPE_LABELS[msg.message_type] ?? msg.message_type}
           </span>
+          {hasMedia && (
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                type="button"
+                onClick={handleDownload}
+                title="Descargar"
+                className="rounded px-2 py-0.5 text-xs font-semibold bg-slate-200 hover:bg-slate-300 text-slate-700 transition-colors"
+              >
+                ⬇ Descargar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveToFiles}
+                disabled={saving || saved}
+                title="Guardar en fotos de la asistencia"
+                className={`rounded px-2 py-0.5 text-xs font-semibold transition-colors ${
+                  saved
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                }`}
+              >
+                {saved ? "✓ Guardado" : saving ? "…" : "💾 Guardar en fotos"}
+              </button>
+            </div>
+          )}
         </div>
         {msg.text_content && (
           <p className="mt-1 text-slate-800 whitespace-pre-wrap break-words">{msg.text_content}</p>
@@ -68,21 +154,28 @@ function MessageRow({ msg }: { msg: WhatsAppCaptureMessage }) {
             {msg.contact_name} {msg.contact_phone ? `· ${msg.contact_phone}` : ""}
           </p>
         )}
-        {(msg.media_stored_url || msg.media_url) && msg.message_type === "image" && (
-          <a href={msg.media_stored_url || msg.media_url!} target="_blank" rel="noreferrer">
+        {mediaUrl && msg.message_type === "image" && (
+          <a href={mediaUrl} target="_blank" rel="noreferrer">
             <img
-              src={msg.media_stored_url || msg.media_url!}
+              src={mediaUrl}
               alt="adjunto"
               className="mt-2 max-h-40 rounded-lg object-cover border border-slate-200"
             />
           </a>
         )}
-        {(msg.media_stored_url || msg.media_url) && msg.message_type === "audio" && (
-          <audio controls className="mt-2 w-full" src={msg.media_stored_url || msg.media_url!} />
+        {mediaUrl && msg.message_type === "video" && (
+          <video
+            controls
+            className="mt-2 max-h-48 w-full rounded-lg border border-slate-200"
+            src={mediaUrl}
+          />
         )}
-        {(msg.media_stored_url || msg.media_url) && !["image", "audio"].includes(msg.message_type) && (msg.media_stored_url || msg.media_url) && (
+        {mediaUrl && msg.message_type === "audio" && (
+          <audio controls className="mt-2 w-full" src={mediaUrl} />
+        )}
+        {mediaUrl && !["image", "video", "audio"].includes(msg.message_type) && (
           <a
-            href={msg.media_stored_url || msg.media_url!}
+            href={mediaUrl}
             target="_blank"
             rel="noreferrer"
             className="mt-1 inline-flex items-center gap-1 text-blue-600 underline text-xs"
@@ -90,6 +183,7 @@ function MessageRow({ msg }: { msg: WhatsAppCaptureMessage }) {
             Ver adjunto ↗
           </a>
         )}
+        {saveError && <p className="mt-1 text-xs text-red-500">{saveError}</p>}
       </div>
     </div>
   );
@@ -236,6 +330,38 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const isClosed = session?.status === "CLOSED";
   const suggestions: WhatsAppAiSuggestions | null = session?.ai_suggestions ?? null;
   const messages = session?.messages ?? [];
+  const [savedMsgIds, setSavedMsgIds] = useState<Set<number>>(new Set());
+  const [savingAll, setSavingAll] = useState(false);
+  const [saveAllMsg, setSaveAllMsg] = useState("");
+
+  const mediaMessages = messages.filter(
+    (m) => MEDIA_TYPES.has(m.message_type) && (m.media_stored_url || m.media_url)
+  );
+  const pendingMedia = mediaMessages.filter((m) => !savedMsgIds.has(m.id));
+
+  async function handleSaveAll() {
+    if (!pendingMedia.length || savingAll) return;
+    setSavingAll(true);
+    setSaveAllMsg("");
+    const token = localStorage.getItem("sea-admin-token") ?? "";
+    let ok = 0;
+    let fail = 0;
+    for (const m of pendingMedia) {
+      const mediaUrl = m.media_stored_url || m.media_url;
+      if (!mediaUrl) continue;
+      try {
+        const res = await fetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-token": token },
+          body: JSON.stringify({ url: mediaUrl, kind: "whatsapp", filename: `whatsapp_${m.message_type}_${m.id}` }),
+        });
+        if (res.ok) { ok++; setSavedMsgIds((p) => new Set([...p, m.id])); }
+        else fail++;
+      } catch { fail++; }
+    }
+    setSaveAllMsg(fail ? `${ok} guardados, ${fail} fallidos` : `${ok} archivo${ok !== 1 ? "s" : ""} guardado${ok !== 1 ? "s" : ""} correctamente`);
+    setSavingAll(false);
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -316,12 +442,36 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
         {/* Messages list */}
         {messages.length > 0 && (
           <div>
-            <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">
-              Mensajes recibidos
+            <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-black uppercase tracking-wide text-slate-400">
+                Mensajes recibidos
+              </span>
+              {pendingMedia.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {saveAllMsg && (
+                    <span className={`text-xs font-semibold ${saveAllMsg.includes("fallidos") ? "text-red-500" : "text-emerald-600"}`}>
+                      {saveAllMsg}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveAll}
+                    disabled={savingAll}
+                    className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {savingAll ? "Guardando…" : `💾 Guardar todos los archivos (${pendingMedia.length})`}
+                  </button>
+                </div>
+              )}
             </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
               {messages.map((m) => (
-                <MessageRow key={m.id} msg={m} />
+                <MessageRow
+                  key={m.id}
+                  msg={m}
+                  jobId={jobId}
+                  onSaved={(id) => setSavedMsgIds((p) => new Set([...p, id]))}
+                />
               ))}
             </div>
           </div>

@@ -4384,6 +4384,60 @@ app.post(
   }
 );
 
+// Guardar archivo multimedia de WhatsApp desde URL a Supabase
+app.post(
+  "/api/roadside-assistances/:id/files-from-url",
+  requireAdminRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const mediaUrl: string = String(req.body?.url ?? "").trim();
+      const kind: string = String(req.body?.kind ?? "whatsapp").trim();
+      const filename: string = String(req.body?.filename ?? "archivo").trim();
+
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+      if (!mediaUrl) return res.status(400).json({ error: "URL requerida" });
+
+      // Descargar el archivo desde la URL
+      const fetchRes = await fetch(mediaUrl);
+      if (!fetchRes.ok) throw new Error(`No se pudo descargar el archivo: ${fetchRes.status}`);
+
+      const contentType = fetchRes.headers.get("content-type") ?? "application/octet-stream";
+      const buffer = Buffer.from(await fetchRes.arrayBuffer());
+
+      const extMap: Record<string, string> = {
+        "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+        "image/gif": "gif", "video/mp4": "mp4", "video/quicktime": "mov",
+        "video/webm": "webm", "audio/ogg": "ogg", "audio/mpeg": "mp3",
+        "audio/mp4": "m4a", "application/pdf": "pdf",
+      };
+      const ext = extMap[contentType.split(";")[0].trim()] ?? "bin";
+      const storagePath = `roadside/${id}/${kind}_${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(storagePath, buffer, { contentType, upsert: false });
+
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: publicData } = supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .getPublicUrl(storagePath);
+
+      const result = await db.query(
+        `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [id, kind, publicData.publicUrl, filename, Date.now()]
+      );
+
+      res.json({ file: result.rows[0] });
+    } catch (error: any) {
+      console.error("POST /api/roadside-assistances/:id/files-from-url error:", error);
+      res.status(500).json({ error: error?.message ?? "Error guardando archivo" });
+    }
+  }
+);
+
 app.get("/api/roadside-assistances/:id/files", async (req, res) => {
   try {
     const id = Number(req.params.id);
