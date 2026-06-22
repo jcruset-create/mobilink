@@ -642,6 +642,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     conductorNombre: row.conductorNombre ?? null,
     conductorDni: row.conductorDni ?? null,
+    observacionesReparacion: row.observacionesReparacion ?? null,
     reportToken: row.reportToken ?? null,
     whatsappAsignadaSentAtMs: row.whatsappAsignadaSentAtMs != null ? Number(row.whatsappAsignadaSentAtMs) : null,
     whatsappFinalizadaSentAtMs: row.whatsappFinalizadaSentAtMs != null ? Number(row.whatsappFinalizadaSentAtMs) : null,
@@ -3716,6 +3717,9 @@ app.post(
       const id = Number(req.params.id);
       const nombre = String(req.body?.conductorNombre || "").trim();
       const dni = String(req.body?.conductorDni || "").trim();
+      const observaciones = req.body?.observacionesReparacion != null
+        ? String(req.body.observacionesReparacion).trim()
+        : null;
 
       if (!Number.isFinite(id)) {
         return res.status(400).json({ error: "ID no válido" });
@@ -3733,8 +3737,10 @@ app.post(
       }
 
       const result = await db.query(
-        `UPDATE roadside_assistances SET "conductorNombre" = $2, "conductorDni" = $3 WHERE id = $1 RETURNING *`,
-        [id, nombre, dni]
+        `UPDATE roadside_assistances
+         SET "conductorNombre" = $2, "conductorDni" = $3, "observacionesReparacion" = COALESCE($4, "observacionesReparacion")
+         WHERE id = $1 RETURNING *`,
+        [id, nombre, dni, observaciones]
       );
 
       res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
@@ -4745,6 +4751,15 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           // Nueva página si queda poco espacio
           if (doc.y > 680) doc.addPage();
         }
+      }
+
+      if (a.observacionesReparacion) {
+        doc.moveDown(1);
+        doc.fontSize(13).font("Helvetica-Bold").text("Observaciones de la reparación");
+        doc.moveDown(0.3);
+        doc.fontSize(11).font("Helvetica").text(a.observacionesReparacion, {
+          lineGap: 4,
+        });
       }
 
       if (signature) {

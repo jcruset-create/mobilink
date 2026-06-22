@@ -135,12 +135,18 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> saveConductor(
-      int id, String nombre, String dni) async {
+      int id, String nombre, String dni, {String? observaciones}) async {
+    final body = <String, dynamic>{
+      'conductorNombre': nombre,
+      'conductorDni': dni,
+      if (observaciones != null && observaciones.isNotEmpty)
+        'observacionesReparacion': observaciones,
+    };
     final res = await http.post(
       Uri.parse(
           '$kBackendUrl/api/roadside-operator/assistances/$id/conductor'),
       headers: _headers,
-      body: jsonEncode({'conductorNombre': nombre, 'conductorDni': dni}),
+      body: jsonEncode(body),
     );
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200) {
@@ -222,7 +228,7 @@ class ApiService {
     );
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200 || data['success'] != true) {
-      throw Exception(data['message'] ?? 'Error creando enlace de pago');
+      throw Exception(data['message'] ?? data['error'] ?? 'Error ${res.statusCode} creando enlace');
     }
     return data;
   }

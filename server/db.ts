@@ -506,6 +506,11 @@ export async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "observacionesReparacion" TEXT
+  `).catch(() => {});
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS workshop_config (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT ''
