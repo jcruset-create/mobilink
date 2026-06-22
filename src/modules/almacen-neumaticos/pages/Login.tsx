@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
 
 export default function Login() {
@@ -6,6 +7,23 @@ export default function Login() {
   const [enviado, setEnviado] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
+  const navigate = useNavigate();
+
+  // Detectar si Supabase redirigió aquí con error en el hash
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.includes("error_code=otp_expired") || hash.includes("error=access_denied")) {
+      setError("El enlace ha caducado. Solicita uno nuevo.");
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
+
+  // Si ya hay sesión activa, redirigir directo
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user) navigate("/almacen-neumaticos", { replace: true });
+    });
+  }, [navigate]);
 
   async function enviarMagicLink() {
     setCargando(true);
