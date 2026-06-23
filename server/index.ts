@@ -4611,6 +4611,108 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
     .toBuffer();
 }
 
+// Builds a map showing the assistance point (red pin) and the van departure
+// point (blue van) on the SAME image, with a line connecting them. Auto-zoom to fit both.
+async function buildRouteMapImage(
+  point: { lat: number; lng: number },
+  departure: { lat: number; lng: number }
+): Promise<Buffer | null> {
+  const outW = 480;
+  const outH = 300;
+  const pad = 70; // margen para que los pines no queden pegados al borde
+
+  const lngToWorldX = (lng: number, z: number) => (lng + 180) / 360 * 256 * Math.pow(2, z);
+  const latToWorldY = (lat: number, z: number) => {
+    const r = lat * Math.PI / 180;
+    return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 256 * Math.pow(2, z);
+  };
+
+  // Elegir el zoom máximo (<=16) que contenga ambos puntos dentro del recuadro
+  let zoom = 16;
+  for (let z = 16; z >= 3; z--) {
+    const dx = Math.abs(lngToWorldX(point.lng, z) - lngToWorldX(departure.lng, z));
+    const dy = Math.abs(latToWorldY(point.lat, z) - latToWorldY(departure.lat, z));
+    if (dx <= outW - pad && dy <= outH - pad) { zoom = z; break; }
+    zoom = z;
+  }
+
+  const p1x = lngToWorldX(point.lng, zoom);
+  const p1y = latToWorldY(point.lat, zoom);
+  const p2x = lngToWorldX(departure.lng, zoom);
+  const p2y = latToWorldY(departure.lat, zoom);
+
+  const centerX = (p1x + p2x) / 2;
+  const centerY = (p1y + p2y) / 2;
+
+  // Origen del lienzo de salida (esquina sup-izq) en píxeles de mundo
+  const originX = centerX - outW / 2;
+  const originY = centerY - outH / 2;
+
+  // Tiles que cubren el recuadro de salida
+  const tileMinX = Math.floor(originX / 256);
+  const tileMaxX = Math.floor((originX + outW) / 256);
+  const tileMinY = Math.floor(originY / 256);
+  const tileMaxY = Math.floor((originY + outH) / 256);
+
+  const tiles: { tx: number; ty: number; buf: Buffer | null }[] = await Promise.all(
+    (() => {
+      const jobs: Promise<{ tx: number; ty: number; buf: Buffer | null }>[] = [];
+      for (let tx = tileMinX; tx <= tileMaxX; tx++) {
+        for (let ty = tileMinY; ty <= tileMaxY; ty++) {
+          jobs.push((async () => {
+            try {
+              const r = await fetch(
+                `https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`,
+                { headers: { "User-Agent": "SEATarragona-Informe/1.0 (internal)" }, signal: AbortSignal.timeout(6000) }
+              );
+              return { tx, ty, buf: r.ok ? Buffer.from(await r.arrayBuffer()) : null };
+            } catch {
+              return { tx, ty, buf: null };
+            }
+          })());
+        }
+      }
+      return jobs;
+    })()
+  );
+
+  const compositeInputs: sharp.OverlayOptions[] = [];
+  for (const { tx, ty, buf } of tiles) {
+    if (buf) {
+      compositeInputs.push({ input: buf, left: Math.round(tx * 256 - originX), top: Math.round(ty * 256 - originY) });
+    }
+  }
+
+  const ax = Math.round(p1x - originX); // punto avería
+  const ay = Math.round(p1y - originY);
+  const bx = Math.round(p2x - originX); // salida furgoneta
+  const by = Math.round(p2y - originY);
+
+  // Línea + pin rojo (avería) + furgoneta azul (salida), todo en un SVG superpuesto
+  const overlaySvg = Buffer.from(
+    `<svg width="${outW}" height="${outH}" xmlns="http://www.w3.org/2000/svg">` +
+    `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="3" stroke-dasharray="7,5" opacity="0.85"/>` +
+    // Furgoneta (salida) — cuadro azul
+    `<rect x="${bx-11}" y="${by-9}" width="22" height="18" rx="3" fill="#2563eb" stroke="white" stroke-width="2"/>` +
+    `<rect x="${bx-6}" y="${by-5}" width="9" height="6" fill="white" opacity="0.9"/>` +
+    // Pin rojo (avería)
+    `<circle cx="${ax}" cy="${ay}" r="9" fill="red" stroke="white" stroke-width="2.5"/>` +
+    `</svg>`
+  );
+  compositeInputs.push({ input: overlaySvg, left: 0, top: 0 });
+
+  try {
+    return await sharp({
+      create: { width: outW, height: outH, channels: 4, background: { r: 220, g: 220, b: 220, alpha: 1 } },
+    })
+      .composite(compositeInputs)
+      .png()
+      .toBuffer();
+  } catch {
+    return null;
+  }
+}
+
 async function fetchImageForPdf(url: string): Promise<Buffer> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -4706,21 +4808,62 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       row("Prioridad:", a.priority === "urgente" ? "URGENTE" : "Normal");
       if (a.notes) row("Notas:", a.notes);
 
-      // Mapa estático de la ubicación
+      // Mapa estático: punto de avería (rojo) + salida furgoneta (azul) en la misma imagen
+      let workshopCoords: { lat: number; lng: number } | null = null;
+      try {
+        const wcfg = await getWorkshopConfig();
+        const wlat = parseFloat(wcfg.taller_lat);
+        const wlng = parseFloat(wcfg.taller_lng);
+        if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshopCoords = { lat: wlat, lng: wlng };
+      } catch { /* sin config taller */ }
+
       if (a.latitude != null && a.longitude != null) {
         doc.moveDown(0.5);
         doc.fontSize(10).font("Helvetica-Bold").text("Localización de la avería:");
         doc.moveDown(0.3);
         try {
-          const mapBuf = await buildMapImage(a.latitude, a.longitude);
+          const mapBuf = workshopCoords
+            ? await buildRouteMapImage({ lat: a.latitude, lng: a.longitude }, workshopCoords)
+            : await buildMapImage(a.latitude, a.longitude);
           if (mapBuf) {
-            doc.image(mapBuf, { fit: [480, 260], align: "left" });
+            doc.image(mapBuf, { fit: [480, 300], align: "left" });
+            doc.moveDown(0.2);
+            // Leyenda
+            doc.fontSize(8).font("Helvetica")
+              .text(workshopCoords
+                ? "● Punto de avería (rojo)   ■ Salida furgoneta / taller (azul)"
+                : "● Punto de avería");
           } else {
             doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
           }
         } catch {
           doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
         }
+        // Coordenadas GPS del punto de avería
+        doc.fontSize(9).font("Helvetica-Bold").text("GPS punto de avería: ", { continued: true });
+        doc.font("Helvetica").text(`${a.latitude.toFixed(6)}, ${a.longitude.toFixed(6)}`);
+      }
+
+      // Matrícula de la furgoneta asignada (desde roadside_vehicles)
+      let vanPlate = "-";
+      if (a.webfleetVehicleId) {
+        try {
+          const vp = await db.query(
+            `SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`,
+            [a.webfleetVehicleId]
+          );
+          if (vp.rows[0]?.plate) vanPlate = vp.rows[0].plate;
+        } catch { /* sin matrícula */ }
+      }
+
+      // Kilómetros recorridos (ida y vuelta: taller -> avería -> taller)
+      let kmTotal = "-";
+      if (workshopCoords && a.latitude != null && a.longitude != null) {
+        try {
+          const eta = await calcularETA(workshopCoords, { lat: a.latitude, lng: a.longitude });
+          const ida = parseFloat(eta.kilometros);
+          if (Number.isFinite(ida)) kmTotal = `${(ida * 2).toFixed(1)} km (ida y vuelta)`;
+        } catch { /* sin ruta */ }
       }
 
       doc.moveDown(1);
@@ -4728,6 +4871,8 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       doc.moveDown(0.3);
       row("Operario:", a.assignedTechName || "-");
       row("Vehículo asignado:", a.assignedVehicleName || "-");
+      row("Matrícula furgoneta:", vanPlate);
+      row("Kilómetros recorridos:", kmTotal);
 
       doc.moveDown(1);
       doc.fontSize(13).font("Helvetica-Bold").text("Tiempos");
