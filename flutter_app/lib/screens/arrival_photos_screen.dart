@@ -352,6 +352,29 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
 
                   // Fotos obligatorias (solo modo normal)
                   if (!widget.extraMode) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF16213e),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.lightBlue, size: 18),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Matrícula BLANCA = camión · Matrícula ROJA = remolque.\n'
+                              'Si en la foto salen las dos, la blanca es del camión y la roja del remolque.',
+                              style: TextStyle(color: Colors.white60, fontSize: 12, height: 1.4),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     _PhotoTile(
                       icon: Icons.local_shipping,
                       label: 'Matrícula del camión *',
@@ -490,12 +513,12 @@ class _PhotoTile extends StatelessWidget {
       child: Container(
         height: 140,
         decoration: BoxDecoration(
-          color: const Color(0xFF16213e),
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: photo != null
-                ? Colors.green.withOpacity(0.6)
-                : Colors.white24,
+                ? Colors.green
+                : Colors.black26,
             width: 1.5,
           ),
         ),
@@ -540,15 +563,15 @@ class _PhotoTile extends StatelessWidget {
             : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, color: Colors.white38, size: 32),
+                  Icon(icon, color: Colors.black45, size: 32),
                   const SizedBox(height: 8),
                   Text(label,
                       style: const TextStyle(
-                          color: Colors.white54, fontSize: 13)),
+                          color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
                   const Text('Toca para fotografiar',
                       style:
-                          TextStyle(color: Colors.white30, fontSize: 11)),
+                          TextStyle(color: Colors.black45, fontSize: 11)),
                 ],
               ),
       ),

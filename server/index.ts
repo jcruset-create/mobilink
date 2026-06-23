@@ -4306,8 +4306,19 @@ function normalizePlateText(value: unknown) {
   return cleaned;
 }
 
-async function detectPlateFromImage(imageUrl: string): Promise<string | null> {
+async function detectPlateFromImage(
+  imageUrl: string,
+  options: { preferColor?: "white" | "red" } = {}
+): Promise<string | null> {
+  const preferColor = options.preferColor ?? "white";
   try {
+    const colorInstruction =
+      preferColor === "red"
+        ? "En España, la matrícula ROJA es la del REMOLQUE. " +
+          "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula ROJA (la del remolque). "
+        : "En España, la matrícula BLANCA es la del CAMIÓN/vehículo tractor y la matrícula ROJA es la del REMOLQUE. " +
+          "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula BLANCA (la del camión), ignorando la roja. ";
+
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -4318,6 +4329,7 @@ async function detectPlateFromImage(imageUrl: string): Promise<string | null> {
               type: "text",
               text:
                 "Esta es una foto de la matrícula de un vehículo español. " +
+                colorInstruction +
                 "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
                 "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
             },
@@ -4377,7 +4389,9 @@ app.post(
 
       let detectedPlate: string | null = null;
       if (PLATE_KINDS.has(kind)) {
-        detectedPlate = await detectPlateFromImage(publicData.publicUrl);
+        // matricula_remolque → roja; matricula_camion → blanca
+        const preferColor = kind === "matricula_remolque" ? "red" : "white";
+        detectedPlate = await detectPlateFromImage(publicData.publicUrl, { preferColor });
       }
 
       const result = await db.query(
