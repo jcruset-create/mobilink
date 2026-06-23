@@ -7083,6 +7083,62 @@ function startWorkshopAutoStandbyChecker() {
 
 
 /* =========================================================
+   GEOFENCING WEBFLEET — llegada al taller via posición Webfleet
+========================================================= */
+
+async function checkWebfleetWorkshopArrival() {
+  try {
+    // Busca asistencias en_camino_base con furgoneta Webfleet asignada
+    const result = await db.query(`
+      SELECT ra.id, ra."webfleetVehicleId"
+      FROM roadside_assistances ra
+      WHERE ra.status = 'en_camino_base'
+        AND ra."arrivedAtWorkshopMs" IS NULL
+        AND ra."webfleetVehicleId" IS NOT NULL
+    `);
+    if (result.rows.length === 0) return;
+
+    const cfg = await getWorkshopConfig();
+    const tallerLat = parseFloat(cfg.taller_lat);
+    const tallerLng = parseFloat(cfg.taller_lng);
+    const radioM = parseFloat(cfg.taller_radio_m) || 300;
+    if (!isFinite(tallerLat) || !isFinite(tallerLng)) return;
+
+    for (const row of result.rows) {
+      try {
+        const pos = await getWebfleetVehiclePosition(row.webfleetVehicleId);
+        const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
+        console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
+
+        if (distM <= radioM) {
+          const now = Date.now();
+          await db.query(
+            `UPDATE roadside_assistances
+             SET status = 'llegada_taller', "arrivedAtWorkshopMs" = $2
+             WHERE id = $1 AND status = 'en_camino_base' AND "arrivedAtWorkshopMs" IS NULL`,
+            [row.id, now]
+          );
+          await db.query(
+            `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+             VALUES ($1, 'llegada_taller', 'Llegada al taller detectada por Webfleet GPS', 'sistema', $2)`,
+            [row.id, now]
+          );
+          console.log(`✓ Asistencia #${row.id} → llegada_taller (Webfleet geofence)`);
+        }
+      } catch (err) {
+        console.warn(`Webfleet geofence error para asistencia #${row.id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error("checkWebfleetWorkshopArrival error:", err);
+  }
+}
+
+// Comprobar cada 2 minutos
+setInterval(() => { void checkWebfleetWorkshopArrival(); }, 2 * 60 * 1000);
+void checkWebfleetWorkshopArrival();
+
+/* =========================================================
    ALMACEN NEUMATICOS - OCR ALBARANES
 ========================================================= */
 
