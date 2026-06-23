@@ -1312,7 +1312,10 @@ async function getExpectedRoadsideOperatorCode(techName: string) {
 }
 
 async function getRoadsideOperatorFromRequest(req: express.Request) {
-  const techName = String(req.headers["x-roadside-operator-name"] ?? "").trim();
+  const techNameRaw = String(req.headers["x-roadside-operator-name"] ?? "").trim();
+  // La APK envía el nombre codificado (las cabeceras HTTP no admiten acentos)
+  let techName = techNameRaw;
+  try { techName = decodeURIComponent(techNameRaw); } catch { /* nombre sin codificar (APK antigua) */ }
   const code = String(req.headers["x-roadside-operator-code"] ?? "").trim();
   const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 

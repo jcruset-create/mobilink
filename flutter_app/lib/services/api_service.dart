@@ -11,7 +11,8 @@ class ApiService {
 
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
-        'x-roadside-operator-name': techName,
+        // Codificado: las cabeceras HTTP no admiten acentos/ñ (Iván, Jesús…)
+        'x-roadside-operator-name': Uri.encodeComponent(techName),
         'x-roadside-operator-code': code,
       };
 
@@ -259,7 +260,7 @@ class ApiService {
       Uri.parse('$kBackendUrl/api/roadside-assistances/$id/files'),
     );
     req.headers.addAll({
-      'x-roadside-operator-name': techName,
+      'x-roadside-operator-name': Uri.encodeComponent(techName),
       'x-roadside-operator-code': code,
     });
     req.fields['kind'] = kind;
