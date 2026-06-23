@@ -351,6 +351,7 @@ export default function RoadsideTrackingPage() {
                 assistanceLng={assistance.longitude}
                 vehicleLat={data?.vehiclePosition?.lat}
                 vehicleLng={data?.vehiclePosition?.lng}
+                vehiclePlate={assistance.plate || null}
                 etaMinutos={assistance.etaMinutos}
                 etaKm={assistance.etaKm}
               />

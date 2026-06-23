@@ -11,13 +11,31 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-const vehicleIcon = L.divIcon({
-  html: `<img src="/van-icon.png" style="width:60px;height:90px;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));" />`,
-  className: "",
-  iconSize: [60, 90],
-  iconAnchor: [30, 90],
-  popupAnchor: [0, -90],
-});
+function makeVehicleIcon(plate?: string | null) {
+  if (!plate) {
+    return L.divIcon({
+      html: `<img src="/van-icon.png" style="width:60px;height:90px;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));" />`,
+      className: "",
+      iconSize: [60, 90],
+      iconAnchor: [30, 90],
+      popupAnchor: [0, -90],
+    });
+  }
+  return L.divIcon({
+    html: `
+      <div style="text-align:center">
+        <img src="/van-icon.png" style="width:60px;height:90px;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));" />
+        <div style="background:#1e3a5f;color:#f0c040;font-size:11px;font-weight:900;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;border:1px solid #2d4a6a;letter-spacing:0.5px;">
+          ${plate}
+        </div>
+      </div>
+    `,
+    className: "",
+    iconSize: [70, 110],
+    iconAnchor: [35, 90],
+    popupAnchor: [0, -94],
+  });
+}
 
 const workshopIcon = L.divIcon({
   html: `<div style="font-size:32px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4))">🏭</div>`,
@@ -32,6 +50,7 @@ type Props = {
   assistanceLng: number;
   vehicleLat?: number | null;
   vehicleLng?: number | null;
+  vehiclePlate?: string | null;
   etaMinutos?: number | null;
   etaKm?: string | null;
   // Para modo "vuelta al taller": muestra el taller como destino
@@ -61,6 +80,7 @@ export default function RoadsideMap({
   assistanceLng,
   vehicleLat,
   vehicleLng,
+  vehiclePlate,
   etaMinutos,
   etaKm,
   workshopLat,
@@ -118,7 +138,7 @@ export default function RoadsideMap({
 
       {/* Pin de la furgoneta */}
       {hasVehicle && (
-        <Marker position={[vehicleLat!, vehicleLng!]} icon={vehicleIcon}>
+        <Marker position={[vehicleLat!, vehicleLng!]} icon={makeVehicleIcon(vehiclePlate)}>
           <Popup>
             <strong>Furgoneta</strong>
             {etaMinutos != null && etaKm != null && (
