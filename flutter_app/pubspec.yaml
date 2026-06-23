@@ -3,7 +3,7 @@ description: App de operarios SEA Tarragona
 
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -11,6 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  package_info_plus: ^8.0.0
   http: ^1.2.1
   shared_preferences: ^2.2.3
   url_launcher: ^6.3.0

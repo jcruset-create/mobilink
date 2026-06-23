@@ -1,37 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
 import 'payments_screen.dart';
 
-const _statusLabels = {
-  'pendiente': 'Pendiente',
-  'asignada': 'Asignada',
-  'en_camino': 'En camino',
-  'en_punto': 'En punto',
-  'inicio_reparacion': 'Reparando',
-  'finalizada': 'Finalizada',
-  'llegada_taller': 'En taller',
-  'cancelada': 'Cancelada',
-};
-
-const _statusColors = {
-  'pendiente': Colors.orange,
-  'asignada': Colors.blue,
-  'en_camino': Colors.lightBlue,
-  'en_punto': Colors.purple,
-  'inicio_reparacion': Colors.deepOrange,
-  'finalizada': Colors.green,
-  'llegada_taller': Colors.teal,
-  'cancelada': Colors.grey,
-};
-
 class AssistancesScreen extends StatefulWidget {
   final ApiService api;
-
   const AssistancesScreen({super.key, required this.api});
 
   @override
@@ -44,11 +24,15 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   List<Map<String, dynamic>> _assistances = [];
   bool _loading = true;
   String? _error;
+  String _techName = '';
+  String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _loadTechName();
+    _loadVersion();
     _load();
   }
 
@@ -58,11 +42,18 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     super.dispose();
   }
 
+  Future<void> _loadTechName() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _techName = prefs.getString('techName') ?? '');
+  }
+
+  Future<void> _loadVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) setState(() => _appVersion = 'v${info.version}');
+  }
+
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    setState(() { _loading = true; _error = null; });
     try {
       final data = await widget.api.getAssistances();
       setState(() => _assistances = data);
@@ -74,56 +65,114 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   }
 
   Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Cerrar sesión', style: TextStyle(color: AppColors.textPrimary)),
+        content: const Text('¿Seguro que quieres salir?', style: TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: AppColors.textSecondary))),
+          TextButton(onPressed: () => Navigator.pop(context, true),  child: const Text('Salir', style: TextStyle(color: AppColors.danger))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-    );
+    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
+  }
+
+  Future<void> _toggleExteriorMode() async {
+    final newVal = !exteriorMode.value;
+    exteriorMode.value = newVal;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('exteriorMode', newVal);
   }
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final isExterior = exteriorMode.value;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF1a1a2e),
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(110),
+        preferredSize: Size.fromHeight(isExterior ? 120 : 108),
         child: Container(
-          color: const Color(0xFF16213e),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          color: AppColors.background,
           child: SafeArea(
-            child: Row(
-              children: [
-                // Logo grande
-                Expanded(
-                  child: Image.asset(
-                    'assets/logo_horizontal.png',
-                    height: 90,
-                    fit: BoxFit.contain,
-                    alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      // Logo + nombre
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Image.asset(
+                              'assets/logo_horizontal.png',
+                              height: isExterior ? 56 : 50,
+                              fit: BoxFit.contain,
+                              alignment: Alignment.centerLeft,
+                            ),
+                            if (_techName.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 2, top: 2),
+                                child: Text(
+                                  _techName,
+                                  style: tt.labelSmall?.copyWith(color: AppColors.textSecondary),
+                                ),
+                              ),
+                            if (_appVersion.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 2, top: 1),
+                                child: Text(
+                                  _appVersion,
+                                  style: tt.labelSmall?.copyWith(color: AppColors.textHint, fontSize: 11),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      // Pestañas
+                      TabBar(
+                        controller: _tabController,
+                        isScrollable: true,
+                        tabAlignment: TabAlignment.start,
+                        dividerColor: Colors.transparent,
+                        tabs: [
+                          Tab(icon: Icon(Icons.assignment_outlined, size: isExterior ? 28 : 24), text: 'Activas'),
+                          Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
+                          Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
+                          Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),
+                        ],
+                      ),
+                      // Acciones
+                      const SizedBox(width: 4),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: exteriorMode,
+                        builder: (_, ext, __) => _TopBarIcon(
+                          icon: ext ? Icons.wb_sunny : Icons.wb_sunny_outlined,
+                          color: ext ? AppColors.primary : AppColors.textSecondary,
+                          tooltip: ext ? 'Modo exterior activo' : 'Activar modo exterior',
+                          onPressed: _toggleExteriorMode,
+                        ),
+                      ),
+                      _TopBarIcon(icon: Icons.refresh_outlined,      color: AppColors.textSecondary, tooltip: 'Actualizar',    onPressed: _load),
+                      _TopBarIcon(icon: Icons.logout,                 color: AppColors.danger,        tooltip: 'Cerrar sesión', onPressed: _logout),
+                    ],
                   ),
-                ),
-                // Pestañas inline
-                TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  indicatorColor: Colors.blue,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.white54,
-                  tabAlignment: TabAlignment.start,
-                  labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  tabs: const [
-                    Tab(icon: Icon(Icons.assignment, size: 26), text: 'Activas'),
-                    Tab(icon: Icon(Icons.history, size: 26), text: 'Historial'),
-                    Tab(icon: Icon(Icons.receipt_long, size: 26), text: 'Cobros'),
-                    Tab(icon: Icon(Icons.add_card, size: 26), text: 'Pagos'),
-                  ],
-                ),
-                // Acciones
-                IconButton(iconSize: 28, icon: const Icon(Icons.refresh, color: Colors.white), onPressed: _load),
-                IconButton(iconSize: 28, icon: const Icon(Icons.logout, color: Colors.white), onPressed: _logout),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -147,6 +196,33 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   }
 }
 
+// ── Icono de barra superior ───────────────────────────────────────────────────
+class _TopBarIcon extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  const _TopBarIcon({required this.icon, required this.color, required this.tooltip, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: Icon(icon, color: color, size: 26),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Tab de asistencias activas ────────────────────────────────────────────────
 class _ActiveAssistancesTab extends StatelessWidget {
   final bool loading;
   final String? error;
@@ -164,88 +240,138 @@ class _ActiveAssistancesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Center(child: CircularProgressIndicator());
+    final tt = Theme.of(context).textTheme;
+
+    if (loading) {
+      return Center(child: CircularProgressIndicator(color: AppColors.primary));
+    }
+
     if (error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.wifi_off_outlined, color: AppColors.danger, size: 48),
+              const SizedBox(height: 16),
+              Text('Sin conexión', style: tt.titleMedium),
+              const SizedBox(height: 8),
+              Text(error!, style: tt.bodyMedium, textAlign: TextAlign.center),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: 200,
+                child: ElevatedButton.icon(
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reintentar'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (assistances.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(error!, style: const TextStyle(color: Colors.redAccent)),
+            const Icon(Icons.assignment_outlined, color: AppColors.textHint, size: 56),
             const SizedBox(height: 16),
-            ElevatedButton(onPressed: onRefresh, child: const Text('Reintentar')),
+            Text('Sin asistencias asignadas', style: tt.bodyLarge?.copyWith(color: AppColors.textSecondary)),
           ],
         ),
       );
     }
-    if (assistances.isEmpty) {
-      return const Center(
-        child: Text('No tienes asistencias asignadas',
-            style: TextStyle(color: Colors.white54)),
-      );
-    }
+
     return RefreshIndicator(
+      color: AppColors.primary,
+      backgroundColor: AppColors.surface,
       onRefresh: onRefresh,
       child: ListView.builder(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         itemCount: assistances.length,
         itemBuilder: (_, i) {
           final a = assistances[i];
           final status = a['status'] as String? ?? '';
-          final color = _statusColors[status] ?? Colors.grey;
+          final color = statusColor(status);
+          final label = statusLabel(status);
+          final plate = (a['plate'] as String? ?? '').toUpperCase();
+          final customer = a['customerName'] as String? ?? '';
+          final address = a['address'] as String? ?? '';
+
           return Card(
-            color: const Color(0xFF16213e),
-            margin: const EdgeInsets.only(bottom: 12),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-            child: ListTile(
-              contentPadding: const EdgeInsets.all(16),
-              title: Text(
-                a['customerName'] ?? '',
-                style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 4),
-                  Text(a['plate'] ?? '',
-                      style: const TextStyle(
-                          color: Colors.white70, fontSize: 13)),
-                  const SizedBox(height: 2),
-                  Text(a['address'] ?? '',
-                      style: const TextStyle(
-                          color: Colors.white54, fontSize: 12),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                ],
-              ),
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: color, width: 1),
-                ),
-                child: Text(
-                  _statusLabels[status] ?? status,
-                  style: TextStyle(
-                      color: color,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600),
-                ),
-              ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
               onTap: () async {
                 await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AssistanceDetailScreen(
-                      api: api,
-                      assistance: a,
-                    ),
-                  ),
+                  MaterialPageRoute(builder: (_) => AssistanceDetailScreen(api: api, assistance: a)),
                 );
                 onRefresh();
               },
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    // Indicador de estado lateral
+                    Container(
+                      width: 4,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: color,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    // Contenido principal
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(plate, style: tt.titleMedium),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  customer,
+                                  style: tt.bodyMedium,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            address,
+                            style: tt.bodyMedium?.copyWith(color: AppColors.textHint),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 8),
+                          // Badge de estado
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              border: Border.all(color: color.withValues(alpha: 0.5)),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              label,
+                              style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Icon(Icons.chevron_right, color: color, size: 28),
+                  ],
+                ),
+              ),
             ),
           );
         },
