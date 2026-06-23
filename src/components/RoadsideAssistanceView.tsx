@@ -282,6 +282,7 @@ export default function RoadsideAssistanceView({
   const [photosLoading, setPhotosLoading] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [mapAssistance, setMapAssistance] = useState<RoadsideAssistance | null>(null);
+  const [workshopCoords, setWorkshopCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [reportAssistance, setReportAssistance] = useState<RoadsideAssistance | null>(null);
   const [reportChannels, setReportChannels] = useState<{ whatsapp: boolean; email: boolean }>({
     whatsapp: true,
@@ -326,6 +327,19 @@ export default function RoadsideAssistanceView({
   useEffect(() => {
     if (!mapAssistance) return;
 
+    // Cargar coordenadas del taller si estamos en modo "vuelta al taller"
+    if (mapAssistance.status === "en_camino_base" && !workshopCoords) {
+      const token = localStorage.getItem("sea-admin-token") ?? "";
+      fetch(`${API_BASE}/api/workshop-config`, { headers: { "x-admin-token": token } })
+        .then((r) => r.json())
+        .then((cfg) => {
+          const lat = parseFloat(cfg.taller_lat);
+          const lng = parseFloat(cfg.taller_lng);
+          if (isFinite(lat) && isFinite(lng)) setWorkshopCoords({ lat, lng });
+        })
+        .catch(() => {});
+    }
+
     const refresh = () => {
       fetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}`)
         .then((r) => r.json())
@@ -335,6 +349,7 @@ export default function RoadsideAssistanceView({
         .catch(() => {});
     };
 
+    // Refrescar cada 15s (la posición Webfleet se actualiza cada 2min en el servidor)
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
   }, [mapAssistance?.id]);
@@ -676,6 +691,14 @@ export default function RoadsideAssistanceView({
                 Configuracion
               </button>
             )}
+            <a
+              href="/flota"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-800 hover:bg-blue-100"
+            >
+              🚐 Mapa flota
+            </a>
             <button
               type="button"
               onClick={onRefresh}
@@ -2081,13 +2104,16 @@ export default function RoadsideAssistanceView({
                     assistanceLng={mapAssistance.longitude}
                     vehicleLat={mapAssistance.operatorLat ?? null}
                     vehicleLng={mapAssistance.operatorLng ?? null}
+                    workshopLat={mapAssistance.status === "en_camino_base" ? workshopCoords?.lat : null}
+                    workshopLng={mapAssistance.status === "en_camino_base" ? workshopCoords?.lng : null}
                   />
                   <div className="mt-3 text-xs font-bold text-slate-500">
+                    {mapAssistance.status === "en_camino_base" && (
+                      <span className="mr-2 rounded-full bg-teal-100 px-2 py-0.5 text-teal-700">🚐 Vuelta al taller · posición Webfleet</span>
+                    )}
                     {mapAssistance.operatorLocationAtMs
-                      ? `Última actualización: ${new Date(
-                          mapAssistance.operatorLocationAtMs
-                        ).toLocaleTimeString()}`
-                      : "El operario aún no ha compartido su ubicación"}
+                      ? `Actualizado: ${new Date(mapAssistance.operatorLocationAtMs).toLocaleTimeString()}`
+                      : "Sin posición recibida aún"}
                   </div>
                 </>
               ) : (

@@ -2848,6 +2848,14 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
     const data = await response.json();
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
+    // Cruzar con matrícula de nuestra BD
+    const dbVehicles = await db.query(
+      `SELECT "webfleetVehicleId", plate FROM vehicles WHERE "webfleetVehicleId" IS NOT NULL`
+    );
+    const plateByWebfleetId = new Map<string, string>(
+      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r.plate])
+    );
+
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     res.json(
       vehicles.map((v: any) => ({
@@ -2857,6 +2865,8 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
         lng: Number(v.longitude_mdeg) / 1_000_000,
         postext: v.postext_short ?? v.postext ?? null,
         timestamp: v.pos_time ?? null,
+        plate: plateByWebfleetId.get(v.objectno) ?? null,
+        speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
       }))
     );
   } catch (error: any) {
@@ -7109,6 +7119,14 @@ async function checkWebfleetWorkshopArrival() {
         const pos = await getWebfleetVehiclePosition(row.webfleetVehicleId);
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
         console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
+
+        // Actualizar posición del operario para que el mapa del panel esté en vivo
+        await db.query(
+          `UPDATE roadside_assistances
+           SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+           WHERE id = $1 AND status = 'en_camino_base'`,
+          [row.id, pos.lat, pos.lng, Date.now()]
+        );
 
         if (distM <= radioM) {
           const now = Date.now();

@@ -19,6 +19,14 @@ const vehicleIcon = L.divIcon({
   popupAnchor: [0, -90],
 });
 
+const workshopIcon = L.divIcon({
+  html: `<div style="font-size:32px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4))">🏭</div>`,
+  className: "",
+  iconSize: [36, 36],
+  iconAnchor: [18, 18],
+  popupAnchor: [0, -20],
+});
+
 type Props = {
   assistanceLat: number;
   assistanceLng: number;
@@ -26,6 +34,10 @@ type Props = {
   vehicleLng?: number | null;
   etaMinutos?: number | null;
   etaKm?: string | null;
+  // Para modo "vuelta al taller": muestra el taller como destino
+  workshopLat?: number | null;
+  workshopLng?: number | null;
+  workshopLabel?: string;
 };
 
 function FitBounds({ points }: { points: [number, number][] }) {
@@ -51,6 +63,9 @@ export default function RoadsideMap({
   vehicleLng,
   etaMinutos,
   etaKm,
+  workshopLat,
+  workshopLng,
+  workshopLabel = "Taller SEA",
 }: Props) {
   const hasVehicle =
     vehicleLat != null &&
@@ -58,12 +73,27 @@ export default function RoadsideMap({
     Number.isFinite(vehicleLat) &&
     Number.isFinite(vehicleLng);
 
-  const points: [number, number][] = [[assistanceLat, assistanceLng]];
+  const hasWorkshop =
+    workshopLat != null &&
+    workshopLng != null &&
+    Number.isFinite(workshopLat) &&
+    Number.isFinite(workshopLng);
+
+  // En modo "vuelta al taller", el centro es el taller; si no, el punto de asistencia
+  const centerLat = hasWorkshop ? workshopLat! : assistanceLat;
+  const centerLng = hasWorkshop ? workshopLng! : assistanceLng;
+
+  const points: [number, number][] = [];
+  if (hasWorkshop) {
+    points.push([workshopLat!, workshopLng!]);
+  } else {
+    points.push([assistanceLat, assistanceLng]);
+  }
   if (hasVehicle) points.push([vehicleLat!, vehicleLng!]);
 
   return (
     <MapContainer
-      center={[assistanceLat, assistanceLng]}
+      center={[centerLat, centerLng]}
       zoom={13}
       className="h-64 w-full rounded-lg"
       scrollWheelZoom={false}
@@ -75,14 +105,18 @@ export default function RoadsideMap({
 
       <FitBounds points={points} />
 
-      {/* Pin de la asistencia */}
-      <Marker position={[assistanceLat, assistanceLng]}>
-        <Popup>
-          <strong>Punto de asistencia</strong>
-        </Popup>
-      </Marker>
+      {/* Pin del taller (destino de vuelta) o punto de asistencia */}
+      {hasWorkshop ? (
+        <Marker position={[workshopLat!, workshopLng!]} icon={workshopIcon}>
+          <Popup><strong>{workshopLabel}</strong><br /><span className="text-xs text-gray-500">Destino</span></Popup>
+        </Marker>
+      ) : (
+        <Marker position={[assistanceLat, assistanceLng]}>
+          <Popup><strong>Punto de asistencia</strong></Popup>
+        </Marker>
+      )}
 
-      {/* Pin de la furgoneta (posición aproximada) */}
+      {/* Pin de la furgoneta */}
       {hasVehicle && (
         <Marker position={[vehicleLat!, vehicleLng!]} icon={vehicleIcon}>
           <Popup>
@@ -90,7 +124,7 @@ export default function RoadsideMap({
             {etaMinutos != null && etaKm != null && (
               <div>ETA: {etaMinutos} min · {etaKm} km</div>
             )}
-            <div className="text-xs text-gray-500">Posición aproximada</div>
+            <div className="text-xs text-gray-500">Posición {hasWorkshop ? "Webfleet" : "aproximada"}</div>
           </Popup>
         </Marker>
       )}

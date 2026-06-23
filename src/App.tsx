@@ -6,6 +6,7 @@ import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
 import WorkshopOperatorPage from "./pages/WorkshopOperatorPage";
 import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
 import RoadsideReportPage from "./pages/RoadsideReportPage";
+import FlotaMapPage from "./pages/FlotaMapPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -102,6 +103,7 @@ export default function App() {
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
       <Route path="/track/:token" element={<RoadsideTrackingPage />} />
       <Route path="/informe/:token" element={<RoadsideReportPage />} />
+      <Route path="/flota" element={<FlotaMapPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/almacen-neumaticos/login" element={<Login />} />
 
