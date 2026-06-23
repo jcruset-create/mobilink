@@ -8521,7 +8521,7 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
 
     const result = await db.query(
       `UPDATE whatsapp_capture_sessions
-       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL, ai_raw_response = NULL
+       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL
        WHERE id = $1
        RETURNING *`,
       [id]
