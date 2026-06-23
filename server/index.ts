@@ -2850,7 +2850,7 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
 
     // Cruzar con matrícula de nuestra BD
     const dbVehicles = await db.query(
-      `SELECT "webfleetVehicleId", plate FROM vehicles WHERE "webfleetVehicleId" IS NOT NULL`
+      `SELECT "webfleetVehicleId", plate FROM roadside_vehicles WHERE "webfleetVehicleId" IS NOT NULL`
     );
     const plateByWebfleetId = new Map<string, string>(
       dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r.plate])
