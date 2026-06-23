@@ -571,6 +571,7 @@ const ROADSIDE_ASSISTANCE_STATUSES = new Set([
   "en_punto",
   "inicio_reparacion",
   "finalizada",
+  "en_camino_base",
   "llegada_taller",
   "cancelada",
 ]);
@@ -668,8 +669,8 @@ function normalizeRoadsideVehicleRow(row: any) {
   };
 }
 
-const ROADSIDE_ACTIVE_STATUSES = new Set(["asignada", "en_camino", "en_punto", "inicio_reparacion"]);
-const ROADSIDE_CLOSED_STATUSES = new Set(["finalizada", "llegada_taller", "cancelada"]);
+const ROADSIDE_ACTIVE_STATUSES = new Set(["asignada", "en_camino", "en_punto", "inicio_reparacion", "finalizada", "en_camino_base"]);
+const ROADSIDE_CLOSED_STATUSES = new Set(["llegada_taller", "cancelada"]);
 
 async function occupyTechForRoadside(techName: string, assistanceId: number) {
   await db.query(
@@ -718,6 +719,7 @@ function getRoadsideStatusTimestampField(status: string) {
   if (status === "en_punto") return "arrivedAtPointMs";
   if (status === "inicio_reparacion") return "inicioReparacionAtMs";
   if (status === "finalizada") return "finishedAtMs";
+  if (status === "en_camino_base") return null;
   if (status === "llegada_taller") return "arrivedAtWorkshopMs";
   if (status === "cancelada") return "cancelledAtMs";
   return null;
@@ -3093,7 +3095,7 @@ app.post(
             UPDATE roadside_assistances
             SET status = 'llegada_taller', "arrivedAtWorkshopMs" = $2
             WHERE id = $1
-              AND status IN ('inicio_reparacion', 'finalizada')
+              AND status = 'en_camino_base'
               AND "arrivedAtWorkshopMs" IS NULL
           `,
           [id, Date.now()]
@@ -3264,7 +3266,7 @@ app.get(
       const result = await db.query(
         `SELECT * FROM roadside_assistances
          WHERE "assignedTechName" = $1
-           AND status IN ('finalizada', 'llegada_taller', 'cancelada')
+           AND status IN ('llegada_taller', 'cancelada')
          ORDER BY "createdAtMs" DESC
          LIMIT 100`,
         [operator.techName]
@@ -3603,6 +3605,7 @@ app.post(
         "en_punto",
         "inicio_reparacion",
         "finalizada",
+        "en_camino_base",
         "llegada_taller",
       ]);
 
@@ -3686,6 +3689,20 @@ app.post(
           [id, reportToken]
         );
         updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
+      }
+
+      // Auto-transición: al finalizar la reparación, pasar automáticamente a en_camino_base
+      if (status === "finalizada") {
+        await db.query(
+          `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+           VALUES ($1, 'en_camino_base', 'Vuelta al taller automática', $2, $3)`,
+          [id, operator.techName, now + 1]
+        );
+        const baseResult = await db.query(
+          `UPDATE roadside_assistances SET status = 'en_camino_base', "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
+          [id, now + 1]
+        );
+        updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
       }
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);

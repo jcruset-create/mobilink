@@ -89,17 +89,8 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.car_repair, size: 64, color: Colors.blue),
-                const SizedBox(height: 16),
-                const Text(
-                  'SEA Tarragona',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
+                Image.asset('assets/logo_transparent.png', width: 300),
+                const SizedBox(height: 24),
                 const Text(
                   'Acceso operarios',
                   style: TextStyle(color: Colors.white54, fontSize: 14),

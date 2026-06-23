@@ -275,7 +275,7 @@ class CobroDetailSheet extends StatefulWidget {
   });
 
   @override
-  State<_CobroDetailSheet> createState() => _CobroDetailSheetState();
+  State<CobroDetailSheet> createState() => _CobroDetailSheetState();
 }
 
 class _CobroDetailSheetState extends State<CobroDetailSheet> {

@@ -32,6 +32,7 @@ const STATUS_STYLES: Record<RoadsideAssistanceStatus, string> = {
   en_punto: "border-violet-200 bg-violet-50 text-violet-800",
   inicio_reparacion: "border-violet-200 bg-violet-50 text-violet-800",
   finalizada: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  en_camino_base: "border-teal-200 bg-teal-50 text-teal-800",
   llegada_taller: "border-slate-200 bg-slate-100 text-slate-700",
   cancelada: "border-red-200 bg-red-50 text-red-800",
 };

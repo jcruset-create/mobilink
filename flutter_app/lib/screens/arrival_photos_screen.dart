@@ -136,9 +136,9 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
       message = 'La matrícula detectada (${detected ?? ''}) coincide con la registrada.';
       color = Colors.green;
     } else {
-      title = '⚠️ Matrícula no coincide';
-      message = 'La IA detectó ${detected ?? '(no legible)'} pero la asistencia tiene ${current ?? '(sin matrícula)'}. Avisa a oficina si hay error.';
-      color = Colors.orange;
+      // Matrícula no coincide → diálogo con opciones
+      await _showPlateMismatchDialog(detected: detected, current: current);
+      return;
     }
 
     await showDialog<void>(
@@ -154,6 +154,115 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _showPlateMismatchDialog({String? detected, String? current}) async {
+    final plateCtrl = TextEditingController(text: detected ?? '');
+    bool reporting = false;
+    bool reported = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          backgroundColor: const Color(0xFF16213e),
+          title: const Text('⚠️ Matrícula no coincide',
+              style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              RichText(
+                text: TextSpan(
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  children: [
+                    const TextSpan(text: 'IA detectó: '),
+                    TextSpan(
+                        text: detected ?? '(no legible)',
+                        style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+                    const TextSpan(text: '\nAsistencia tiene: '),
+                    TextSpan(
+                        text: current ?? '(sin matrícula)',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('¿Qué quieres hacer?',
+                  style: TextStyle(color: Colors.white54, fontSize: 13)),
+              const SizedBox(height: 10),
+              // Campo para cambiar matrícula
+              TextField(
+                controller: plateCtrl,
+                style: const TextStyle(color: Colors.white),
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(
+                  labelText: 'Nueva matrícula',
+                  labelStyle: const TextStyle(color: Colors.white38),
+                  filled: true,
+                  fillColor: Colors.white10,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  enabledBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Colors.white24),
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+              if (reported)
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: Text('✓ Incidencia notificada a la oficina',
+                      style: TextStyle(color: Colors.green, fontSize: 13)),
+                ),
+            ],
+          ),
+          actions: [
+            // Avisar a oficina
+            TextButton.icon(
+              icon: reporting
+                  ? const SizedBox(width: 14, height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange))
+                  : const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+              label: Text(reported ? 'Notificado' : 'Avisar a oficina',
+                  style: const TextStyle(color: Colors.orange)),
+              onPressed: reported || reporting
+                  ? null
+                  : () async {
+                      setS(() => reporting = true);
+                      try {
+                        await widget.api.reportPlateMismatch(
+                            widget.assistanceId,
+                            detected: detected,
+                            current: current);
+                        setS(() => reported = true);
+                      } catch (_) {}
+                      setS(() => reporting = false);
+                    },
+            ),
+            // Cambiar matrícula
+            ElevatedButton.icon(
+              icon: const Icon(Icons.edit, size: 16),
+              label: const Text('Cambiar matrícula'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+              onPressed: () async {
+                final newPlate = plateCtrl.text.trim().toUpperCase();
+                if (newPlate.isEmpty) return;
+                try {
+                  await widget.api.updatePlate(widget.assistanceId, newPlate);
+                } catch (_) {}
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+            ),
+            // Continuar sin cambiar
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Continuar así', style: TextStyle(color: Colors.white38)),
+            ),
+          ],
+        ),
+      ),
+    );
+    plateCtrl.dispose();
   }
 
   Future<void> _confirm() async {
@@ -211,7 +320,8 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
-        title: Text(widget.extraMode ? 'Añadir fotos' : 'Fotos de llegada'),
+        toolbarHeight: 110,
+        title: Image.asset('assets/logo_horizontal.png', height: 90),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),

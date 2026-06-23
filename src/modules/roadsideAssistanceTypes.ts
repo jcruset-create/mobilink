@@ -7,6 +7,7 @@ export type RoadsideAssistanceStatus =
   | "en_punto"
   | "inicio_reparacion"
   | "finalizada"
+  | "en_camino_base"
   | "llegada_taller"
   | "cancelada";
 
@@ -151,7 +152,8 @@ export const ROADSIDE_ASSISTANCE_STATUS_LABELS: Record<
   en_punto: "En punto",
   inicio_reparacion: "Reparando",
   finalizada: "Finalizada",
-  llegada_taller: "Finalizada ✓ en taller",
+  en_camino_base: "En camino a taller",
+  llegada_taller: "En taller ✓",
   cancelada: "Cancelada",
 };
 
@@ -162,5 +164,6 @@ export const ROADSIDE_ASSISTANCE_STATUS_FLOW: RoadsideAssistanceStatus[] = [
   "en_punto",
   "inicio_reparacion",
   "finalizada",
+  "en_camino_base",
   "llegada_taller",
 ];

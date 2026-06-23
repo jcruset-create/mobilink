@@ -22,6 +22,7 @@ class AssistanceDetailScreen extends StatefulWidget {
 class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   late Map<String, dynamic> _a;
   bool _loading = false;
+  bool _navigating = false; // evita doble pulsación en acciones con navegación
   Timer? _locationTimer;
   Map<String, dynamic>? _whatsappCapture;
   bool _loadingCapture = false;
@@ -32,7 +33,7 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   void initState() {
     super.initState();
     _a = widget.assistance;
-    if (_status == 'en_camino') _startLocationTracking();
+    if (_status == 'en_camino' || _status == 'en_camino_base') _startLocationTracking();
     _loadWhatsAppCapture();
     _loadCobro();
   }
@@ -90,7 +91,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     _locationTimer?.cancel();
     _sendLocation(); // envío inmediato
     _locationTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (_status == 'en_camino') {
+      // Seguimos enviando en 'en_camino' y 'en_camino_base' (vuelta al taller para geofencing)
+      if (_status == 'en_camino' || _status == 'en_camino_base') {
         _sendLocation();
       } else {
         _locationTimer?.cancel();
@@ -123,7 +125,12 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     try {
       final updated = await widget.api.updateStatus(_a['id'] as int, status);
       setState(() => _a = updated);
-      _locationTimer?.cancel();
+      // El servidor auto-transiciona 'finalizada' → 'en_camino_base'; arrancar GPS tracking
+      if (updated['status'] == 'en_camino_base') {
+        _startLocationTracking();
+      } else {
+        _locationTimer?.cancel();
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -185,30 +192,41 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   }
 
   Future<void> _onHeArrived() async {
-    await _changeStatus('en_punto');
-    if (!mounted) return;
-    // Fotos de llegada: matrícula + avería antes de reparar
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ArrivalPhotosScreen(
-          api: widget.api,
-          assistanceId: _a['id'] as int,
-          onDone: () => _changeStatus('inicio_reparacion'),
+    if (_navigating) return;
+    setState(() => _navigating = true);
+    try {
+      await _changeStatus('en_punto');
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ArrivalPhotosScreen(
+            api: widget.api,
+            assistanceId: _a['id'] as int,
+            onDone: () => _changeStatus('inicio_reparacion'),
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      if (mounted) setState(() => _navigating = false);
+    }
   }
 
   Future<void> _addExtraPhotos() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ArrivalPhotosScreen(
-          api: widget.api,
-          assistanceId: _a['id'] as int,
-          extraMode: true,
+    if (_navigating) return;
+    setState(() => _navigating = true);
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ArrivalPhotosScreen(
+            api: widget.api,
+            assistanceId: _a['id'] as int,
+            extraMode: true,
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      if (mounted) setState(() => _navigating = false);
+    }
   }
 
   Future<void> _openMaps() async {
@@ -501,7 +519,8 @@ class _InfoCard extends StatelessWidget {
         'en_punto': 'En punto',
         'inicio_reparacion': 'Reparando',
         'finalizada': 'Finalizada',
-        'llegada_taller': 'En taller',
+        'en_camino_base': 'Vuelta al taller',
+        'llegada_taller': 'En taller ✓',
         'cancelada': 'Cancelada',
       }[s] ??
       s;
@@ -513,7 +532,8 @@ class _InfoCard extends StatelessWidget {
         'en_punto': Colors.purple,
         'inicio_reparacion': Colors.deepOrange,
         'finalizada': Colors.green,
-        'llegada_taller': Colors.teal,
+        'en_camino_base': Colors.teal,
+        'llegada_taller': Colors.grey,
         'cancelada': Colors.grey,
       }[s] ??
       Colors.grey;
