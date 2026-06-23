@@ -8505,6 +8505,38 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
   }
 });
 
+// POST reopen a closed session to receive more WhatsApp messages
+app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    // No puede haber otra sesión activa
+    const existing = await db.query(
+      `SELECT id FROM whatsapp_capture_sessions WHERE status = 'ACTIVE' AND id != $1 LIMIT 1`,
+      [id]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: "Ya existe otra captura activa. Ciérrala primero." });
+    }
+
+    const result = await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL, ai_raw_response = NULL
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Sesión no encontrada" });
+    const row = result.rows[0];
+    row.started_at = row.started_at ? Number(row.started_at) : null;
+    row.ended_at = null;
+    return res.json(row);
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions/:id/reopen error:", error);
+    return res.status(500).json({ error: "Error reabriendo sesión" });
+  }
+});
+
 // POST apply AI suggestion to assistance
 app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (req, res) => {
   try {

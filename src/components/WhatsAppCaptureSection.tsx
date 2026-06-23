@@ -273,6 +273,26 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     }
   }
 
+  async function reopenCapture() {
+    if (!session) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/reopen`, {
+        method: "POST",
+        headers: getAdminHeaders(),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        setError(d.error ?? "Error reabriendo captura");
+        return;
+      }
+      await fetchSession();
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function closeCapture() {
     if (!session) return;
     setActionLoading(true);
@@ -412,11 +432,15 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
             <>
               <button
                 onClick={closeCapture}
-                disabled={actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-700 disabled:opacity-50"
+                disabled={actionLoading || messages.length === 0}
+                title={messages.length === 0 ? "Sin mensajes — espera recibir WhatsApp del cliente antes de analizar" : undefined}
+                className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {actionLoading ? "…" : "⏹ Finalizar captura + Analizar IA"}
               </button>
+              {messages.length === 0 && (
+                <span className="text-xs text-amber-400 self-center">Sin mensajes — espera al cliente</span>
+              )}
               <button
                 onClick={fetchSession}
                 className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
@@ -427,6 +451,15 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
           )}
           {isClosed && !suggestions && (
             <span className="text-xs text-slate-400 self-center">Analizando con IA…</span>
+          )}
+          {isClosed && (
+            <button
+              onClick={reopenCapture}
+              disabled={actionLoading}
+              className="flex items-center gap-2 rounded-lg bg-slate-600 px-4 py-2 text-sm font-black text-white hover:bg-slate-500 disabled:opacity-50"
+            >
+              {actionLoading ? "…" : "↺ Reabrir captura"}
+            </button>
           )}
         </div>
 
