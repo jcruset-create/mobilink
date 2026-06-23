@@ -4349,6 +4349,50 @@ async function detectPlateFromImage(
   }
 }
 
+// Detecta a la vez la matrícula BLANCA (camión) y la ROJA (remolque) de una sola foto.
+// Devuelve { white, red } con cada matrícula normalizada o null si no se lee.
+async function detectBothPlatesFromImage(
+  imageUrl: string
+): Promise<{ white: string | null; red: string | null }> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
+                "y la matrícula ROJA es del REMOLQUE. " +
+                "Identifica las matrículas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
+                '{"blanca":"XXXX","roja":"YYYY"}. ' +
+                "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
+            },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ] as any,
+        },
+      ],
+      max_tokens: 60,
+      response_format: { type: "json_object" } as any,
+    });
+
+    const raw = response.choices[0]?.message?.content?.trim() ?? "{}";
+    let parsed: any = {};
+    try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+
+    const normOrNull = (v: unknown) => {
+      const p = normalizePlateText(v);
+      return p && p !== "NONE" && p.length >= 5 ? p : null;
+    };
+    return { white: normOrNull(parsed.blanca), red: normOrNull(parsed.roja) };
+  } catch (error) {
+    console.error("detectBothPlatesFromImage error:", error);
+    return { white: null, red: null };
+  }
+}
+
 app.post(
   "/api/roadside-assistances/:id/files",
   requireRoadsideOperator,
@@ -4388,10 +4432,14 @@ app.post(
         .getPublicUrl(storagePath);
 
       let detectedPlate: string | null = null;
-      if (PLATE_KINDS.has(kind)) {
-        // matricula_remolque → roja; matricula_camion → blanca
-        const preferColor = kind === "matricula_remolque" ? "red" : "white";
-        detectedPlate = await detectPlateFromImage(publicData.publicUrl, { preferColor });
+      let detectedRemolquePlate: string | null = null;
+      if (kind === "matricula_camion") {
+        // Detecta blanca (camión) y roja (remolque) a la vez
+        const both = await detectBothPlatesFromImage(publicData.publicUrl);
+        detectedPlate = both.white;
+        detectedRemolquePlate = both.red;
+      } else if (kind === "matricula_remolque") {
+        detectedPlate = await detectPlateFromImage(publicData.publicUrl, { preferColor: "red" });
       }
 
       const result = await db.query(
@@ -4399,6 +4447,16 @@ app.post(
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
         [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
+
+      // Si en la foto del camión también sale matrícula roja → asignar al remolque
+      // automáticamente (registro matricula_remolque apuntando a la misma foto)
+      if (kind === "matricula_camion" && detectedRemolquePlate) {
+        await db.query(
+          `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate")
+           VALUES ($1, 'matricula_remolque', $2, $3, $4, $5)`,
+          [id, publicData.publicUrl, req.file.originalname, Date.now() + 1, detectedRemolquePlate]
+        );
+      }
 
       let plateAction: "none" | "assigned" | "match" | "mismatch" = "none";
       let currentPlateAfter: string | null = null;
@@ -4435,6 +4493,7 @@ app.post(
         plateAction,
         detectedPlate: detectedPlate ?? null,
         currentPlate: currentPlateAfter,
+        detectedRemolquePlate: detectedRemolquePlate ?? null,
       });
     } catch (error: any) {
       console.error("POST /api/roadside-assistances/:id/files error:", error);

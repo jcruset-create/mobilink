@@ -120,8 +120,30 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     final action = result['plateAction'] as String? ?? 'none';
     final detected = result['detectedPlate'] as String?;
     final current = result['currentPlate'] as String?;
+    final remolque = result['detectedRemolquePlate'] as String?;
 
-    if (action == 'none' || !mounted) return;
+    // Aviso si la IA ha detectado también la matrícula roja del remolque
+    final remolqueMsg = (remolque != null && remolque.isNotEmpty)
+        ? '\n\n🚛 Matrícula roja detectada: $remolque → asignada automáticamente al remolque.'
+        : '';
+
+    if (action == 'none') {
+      if (remolqueMsg.isNotEmpty && mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Remolque detectado',
+                style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+            content: Text(remolqueMsg.trim()),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Entendido')),
+            ],
+          ),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
 
     String title;
     String message;
@@ -129,11 +151,11 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
 
     if (action == 'assigned') {
       title = 'Matrícula detectada';
-      message = 'La IA ha leído la matrícula ${detected ?? ''} y la ha asignado a esta asistencia.';
+      message = 'La IA ha leído la matrícula ${detected ?? ''} y la ha asignado a esta asistencia.$remolqueMsg';
       color = Colors.green;
     } else if (action == 'match') {
       title = '✓ Matrícula correcta';
-      message = 'La matrícula detectada (${detected ?? ''}) coincide con la registrada.';
+      message = 'La matrícula detectada (${detected ?? ''}) coincide con la registrada.$remolqueMsg';
       color = Colors.green;
     } else {
       // Matrícula no coincide → diálogo con opciones
