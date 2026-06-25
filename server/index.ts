@@ -2609,9 +2609,19 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       } catch { /* sin matrícula */ }
     }
 
+    // Coordenadas del taller (destino en vuelta al taller)
+    let workshop: { lat: number; lng: number } | null = null;
+    try {
+      const wcfg = await getWorkshopConfig();
+      const wlat = parseFloat(wcfg.taller_lat);
+      const wlng = parseFloat(wcfg.taller_lng);
+      if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
+    } catch { /* sin config */ }
+
     res.json({
       assistance,
       vanPlate,
+      workshop,
       events: eventsResult.rows.map((e: any) => ({
         status: e.status,
         createdAtMs: Number(e.createdAtMs),

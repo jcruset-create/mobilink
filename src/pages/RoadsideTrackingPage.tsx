@@ -290,12 +290,16 @@ export default function RoadsideTrackingPage() {
         </section>
 
         {/* ETA banner */}
-        {assistance.status === "en_camino" && (
-          <section className="rounded-lg border border-blue-200 bg-blue-600 p-5 shadow-sm">
+        {(assistance.status === "en_camino" || assistance.status === "en_camino_base") && (
+          <section className={`rounded-lg border p-5 shadow-sm ${assistance.status === "en_camino_base" ? "border-teal-200 bg-teal-600" : "border-blue-200 bg-blue-600"}`}>
             <div className="flex items-center gap-3">
               <img src="/van-icon.png" style={{height:48,width:"auto",flexShrink:0}} alt="furgoneta" />
               <div className="text-white flex-1">
-                <div className="text-lg font-black">El técnico está en camino</div>
+                <div className="text-lg font-black">
+                  {assistance.status === "en_camino_base"
+                    ? "El técnico vuelve al taller"
+                    : "El técnico está en camino"}
+                </div>
                 {assistance.etaMinutos != null && assistance.etaKm != null ? (
                   <div className="mt-1 text-sm font-semibold text-blue-100">
                     Tiempo estimado de llegada:{" "}
@@ -355,6 +359,8 @@ export default function RoadsideTrackingPage() {
                 vehiclePlate={data?.vanPlate || null}
                 etaMinutos={assistance.etaMinutos}
                 etaKm={assistance.etaKm}
+                workshopLat={assistance.status === "en_camino_base" ? data?.workshop?.lat ?? null : null}
+                workshopLng={assistance.status === "en_camino_base" ? data?.workshop?.lng ?? null : null}
               />
             </Suspense>
             {assistance.etaActualizadoAt != null && (
