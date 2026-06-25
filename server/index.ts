@@ -3856,6 +3856,61 @@ app.get("/api/roadside-assistances/:id", async (req, res) => {
   }
 });
 
+// Posición en vivo (Webfleet) + velocidad + ETA al destino correcto.
+// Para en_camino → ETA al punto de avería; en_camino_base → ETA al taller.
+app.get("/api/roadside-assistances/:id/live-position", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+
+    if (!a.webfleetVehicleId) {
+      return res.json({ available: false, reason: "sin_furgoneta" });
+    }
+
+    const enCaminoBase = a.status === "en_camino_base";
+    let destino: { lat: number; lng: number } | null = null;
+    if (enCaminoBase) {
+      const wcfg = await getWorkshopConfig();
+      const wlat = parseFloat(wcfg.taller_lat);
+      const wlng = parseFloat(wcfg.taller_lng);
+      if (Number.isFinite(wlat) && Number.isFinite(wlng)) destino = { lat: wlat, lng: wlng };
+    } else if (a.latitude != null && a.longitude != null) {
+      destino = { lat: a.latitude, lng: a.longitude };
+    }
+
+    const pos = await getWebfleetVehiclePosition(a.webfleetVehicleId);
+
+    let etaMinutos: number | null = null;
+    let etaKm: string | null = null;
+    if (destino) {
+      try {
+        const eta = await calcularETA({ lat: pos.lat, lng: pos.lng }, destino);
+        etaMinutos = eta.minutos;
+        etaKm = eta.kilometros;
+      } catch { /* sin ruta */ }
+    }
+
+    return res.json({
+      available: true,
+      lat: pos.lat,
+      lng: pos.lng,
+      speedKmh: pos.speedKmh,
+      moving: pos.moving,
+      etaMinutos,
+      etaKm,
+      destino: enCaminoBase ? "taller" : "punto",
+      updatedAtMs: Date.now(),
+    });
+  } catch (error: any) {
+    console.error("GET /api/roadside-assistances/:id/live-position error:", error);
+    return res.status(500).json({ error: error?.message || "Error obteniendo posición" });
+  }
+});
+
 app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) => {
   try {
     const body = req.body ?? {};

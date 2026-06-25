@@ -285,6 +285,10 @@ export default function RoadsideAssistanceView({
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [mapAssistance, setMapAssistance] = useState<RoadsideAssistance | null>(null);
   const [workshopCoords, setWorkshopCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [livePos, setLivePos] = useState<{
+    lat: number; lng: number; speedKmh: number | null; moving: boolean | null;
+    etaMinutos: number | null; etaKm: string | null; destino: string;
+  } | null>(null);
   const [reportAssistance, setReportAssistance] = useState<RoadsideAssistance | null>(null);
   const [reportChannels, setReportChannels] = useState<{ whatsapp: boolean; email: boolean }>({
     whatsapp: true,
@@ -327,7 +331,7 @@ export default function RoadsideAssistanceView({
   }, [photosAssistance]);
 
   useEffect(() => {
-    if (!mapAssistance) return;
+    if (!mapAssistance) { setLivePos(null); return; }
 
     // Cargar coordenadas del taller si estamos en modo "vuelta al taller"
     if (mapAssistance.status === "en_camino_base" && !workshopCoords) {
@@ -342,6 +346,8 @@ export default function RoadsideAssistanceView({
         .catch(() => {});
     }
 
+    const token = localStorage.getItem("sea-admin-token") ?? "";
+
     const refresh = () => {
       fetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}`)
         .then((r) => r.json())
@@ -351,8 +357,26 @@ export default function RoadsideAssistanceView({
         .catch(() => {});
     };
 
-    // Refrescar cada 15s (la posición Webfleet se actualiza cada 2min en el servidor)
-    const interval = setInterval(refresh, 15000);
+    // Posición en vivo (Webfleet) + velocidad + ETA
+    const refreshLive = () => {
+      fetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}/live-position`, {
+        headers: { "x-admin-token": token },
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.available) {
+            setLivePos({
+              lat: d.lat, lng: d.lng, speedKmh: d.speedKmh, moving: d.moving,
+              etaMinutos: d.etaMinutos, etaKm: d.etaKm, destino: d.destino,
+            });
+          }
+        })
+        .catch(() => {});
+    };
+    refreshLive();
+
+    // Refrescar cada 15s
+    const interval = setInterval(() => { refresh(); refreshLive(); }, 15000);
     return () => clearInterval(interval);
   }, [mapAssistance?.id]);
 
@@ -2139,8 +2163,8 @@ export default function RoadsideAssistanceView({
                   <RoadsideMap
                     assistanceLat={mapAssistance.latitude}
                     assistanceLng={mapAssistance.longitude}
-                    vehicleLat={mapAssistance.operatorLat ?? null}
-                    vehicleLng={mapAssistance.operatorLng ?? null}
+                    vehicleLat={livePos?.lat ?? mapAssistance.operatorLat ?? null}
+                    vehicleLng={livePos?.lng ?? mapAssistance.operatorLng ?? null}
                     vehiclePlate={
                       vehicles.find(
                         (v) => v.webfleetVehicleId && v.webfleetVehicleId === mapAssistance.webfleetVehicleId
@@ -2149,13 +2173,43 @@ export default function RoadsideAssistanceView({
                     workshopLat={mapAssistance.status === "en_camino_base" ? workshopCoords?.lat : null}
                     workshopLng={mapAssistance.status === "en_camino_base" ? workshopCoords?.lng : null}
                   />
-                  <div className="mt-3 text-xs font-bold text-slate-500">
+
+                  {/* Panel velocidad / km restantes / ETA */}
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                      <div className="text-[10px] font-black uppercase text-slate-400">Velocidad</div>
+                      <div className="text-lg font-black text-slate-800">
+                        {livePos?.speedKmh != null ? `${Math.round(livePos.speedKmh)}` : "-"}
+                        <span className="text-xs font-bold text-slate-400"> km/h</span>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                      <div className="text-[10px] font-black uppercase text-slate-400">
+                        {livePos?.destino === "taller" ? "Faltan (taller)" : "Faltan"}
+                      </div>
+                      <div className="text-lg font-black text-slate-800">
+                        {livePos?.etaKm ?? mapAssistance.etaKm ?? "-"}
+                        <span className="text-xs font-bold text-slate-400"> km</span>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                      <div className="text-[10px] font-black uppercase text-slate-400">Llegada en</div>
+                      <div className="text-lg font-black text-slate-800">
+                        {(livePos?.etaMinutos ?? mapAssistance.etaMinutos) != null
+                          ? `${livePos?.etaMinutos ?? mapAssistance.etaMinutos}`
+                          : "-"}
+                        <span className="text-xs font-bold text-slate-400"> min</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 text-xs font-bold text-slate-500">
                     {mapAssistance.status === "en_camino_base" && (
                       <span className="mr-2 rounded-full bg-teal-100 px-2 py-0.5 text-teal-700">🚐 Vuelta al taller · posición Webfleet</span>
                     )}
-                    {mapAssistance.operatorLocationAtMs
-                      ? `Actualizado: ${new Date(mapAssistance.operatorLocationAtMs).toLocaleTimeString()}`
-                      : "Sin posición recibida aún"}
+                    {livePos
+                      ? `Actualizado: ${new Date().toLocaleTimeString()}`
+                      : "Obteniendo posición…"}
                   </div>
                 </>
               ) : (
