@@ -5202,6 +5202,7 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
       assistances={visibleRoadsideAssistances}
       techs={visibleRoadsideTechs}
       vehicles={visibleRoadsideVehicles}
+      currentBase={getWorkshopById(selectedWorkshopId).city}
       loading={roadsideAssistancesLoading}
       error={
         roadsideAssistanceError ||

@@ -203,6 +203,7 @@ type Props = {
   techs: Tech[];
   vehicles: RoadsideVehicle[];
   webfleetVehicles: WebfleetVehicle[];
+  currentBase?: string;
   loading: boolean;
   error: string;
   onBack: () => void;
@@ -274,6 +275,7 @@ export default function RoadsideAssistanceView({
   techs,
   vehicles,
   webfleetVehicles,
+  currentBase,
   loading,
   error,
   onBack,
@@ -462,8 +464,14 @@ export default function RoadsideAssistanceView({
   }, [assistances]);
 
   const activeVehicles = useMemo(
-    () => vehicles.filter((vehicle) => vehicle.active),
-    [vehicles]
+    () =>
+      vehicles.filter((vehicle) => {
+        if (!vehicle.active) return false;
+        // Solo furgonetas de la base de la sede actual (las sin base se muestran igual)
+        if (!currentBase || !vehicle.base) return true;
+        return vehicle.base.trim().toLowerCase() === currentBase.trim().toLowerCase();
+      }),
+    [vehicles, currentBase]
   );
 
   async function handleRedirect(assistance: RoadsideAssistance) {
