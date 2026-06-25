@@ -573,6 +573,7 @@ const ROADSIDE_ASSISTANCE_STATUSES = new Set([
   "finalizada",
   "en_camino_base",
   "llegada_taller",
+  "redirigida",
   "cancelada",
 ]);
 
@@ -642,6 +643,11 @@ function normalizeRoadsideAssistanceRow(row: any) {
     operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     plateRemolque: row.plateRemolque ?? null,
+    redirectionLat: normalizeNullableNumber(row.redirectionLat),
+    redirectionLng: normalizeNullableNumber(row.redirectionLng),
+    redirectedAtMs: row.redirectedAtMs != null ? Number(row.redirectedAtMs) : null,
+    redirectedToId: row.redirectedToId != null ? Number(row.redirectedToId) : null,
+    redirectedFromId: row.redirectedFromId != null ? Number(row.redirectedFromId) : null,
     conductorNombre: row.conductorNombre ?? null,
     conductorDni: row.conductorDni ?? null,
     observacionesReparacion: row.observacionesReparacion ?? null,
@@ -671,7 +677,7 @@ function normalizeRoadsideVehicleRow(row: any) {
 }
 
 const ROADSIDE_ACTIVE_STATUSES = new Set(["asignada", "en_camino", "en_punto", "inicio_reparacion", "finalizada", "en_camino_base"]);
-const ROADSIDE_CLOSED_STATUSES = new Set(["llegada_taller", "cancelada"]);
+const ROADSIDE_CLOSED_STATUSES = new Set(["llegada_taller", "redirigida", "cancelada"]);
 
 async function occupyTechForRoadside(techName: string, assistanceId: number) {
   await db.query(
@@ -722,6 +728,7 @@ function getRoadsideStatusTimestampField(status: string) {
   if (status === "finalizada") return "finishedAtMs";
   if (status === "en_camino_base") return null;
   if (status === "llegada_taller") return "arrivedAtWorkshopMs";
+  if (status === "redirigida") return null;
   if (status === "cancelada") return "cancelledAtMs";
   return null;
 }
@@ -3911,6 +3918,76 @@ app.get("/api/roadside-assistances/:id/live-position", async (req, res) => {
   }
 });
 
+// Redirigir una asistencia en camino al taller a una nueva sin pasar por el taller.
+// Cierra la actual como "redirigida" guardando la posición GPS del momento.
+app.post("/api/roadside-assistances/:id/redirect", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+
+    if (a.status !== "en_camino_base") {
+      return res.status(409).json({ error: "Solo se puede redirigir una asistencia 'En camino a taller'" });
+    }
+
+    // Posición actual: Webfleet → fallback a última conocida (operatorLat/Lng)
+    let redirectLat: number | null = null;
+    let redirectLng: number | null = null;
+    if (a.webfleetVehicleId) {
+      try {
+        const pos = await getWebfleetVehiclePosition(a.webfleetVehicleId);
+        redirectLat = pos.lat;
+        redirectLng = pos.lng;
+      } catch { /* fallback abajo */ }
+    }
+    if (redirectLat == null || redirectLng == null) {
+      redirectLat = a.operatorLat ?? null;
+      redirectLng = a.operatorLng ?? null;
+    }
+
+    const now = Date.now();
+    await db.query(
+      `UPDATE roadside_assistances
+       SET status = 'redirigida',
+           "redirectionLat" = $2,
+           "redirectionLng" = $3,
+           "redirectedAtMs" = $4,
+           "updatedAtMs" = $4
+       WHERE id = $1`,
+      [id, redirectLat, redirectLng, now]
+    );
+
+    await db.query(
+      `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+       VALUES ($1, 'redirigida', 'Redirigida a nueva asistencia sin pasar por el taller', 'oficina', $2)`,
+      [id, now]
+    );
+
+    // Liberar la furgoneta/operario de la asistencia cerrada
+    if (a.assignedTechName) {
+      await freeTechFromRoadside(a.assignedTechName, id);
+    }
+
+    return res.json({
+      ok: true,
+      // Datos para pre-rellenar la nueva asistencia (solo operario + furgoneta)
+      prefill: {
+        assignedTechName: a.assignedTechName ?? "",
+        assignedVehicleName: a.assignedVehicleName ?? "",
+        webfleetVehicleId: a.webfleetVehicleId ?? "",
+      },
+      redirectionLat: redirectLat,
+      redirectionLng: redirectLng,
+    });
+  } catch (error: any) {
+    console.error("POST /api/roadside-assistances/:id/redirect error:", error);
+    return res.status(500).json({ error: error?.message || "Error redirigiendo asistencia" });
+  }
+});
+
 app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) => {
   try {
     const body = req.body ?? {};
@@ -4003,6 +4080,19 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
     );
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+    // Enlace de redirección: si viene de otra asistencia, vincular ambas
+    const redirectedFromId = Number(body.redirectedFromId);
+    if (Number.isFinite(redirectedFromId) && redirectedFromId > 0) {
+      await db.query(
+        `UPDATE roadside_assistances SET "redirectedFromId" = $2 WHERE id = $1`,
+        [assistance.id, redirectedFromId]
+      );
+      await db.query(
+        `UPDATE roadside_assistances SET "redirectedToId" = $2 WHERE id = $1`,
+        [redirectedFromId, assistance.id]
+      );
+    }
 
     await db.query(
       `
@@ -5002,9 +5092,23 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       let kmTotal = "-";
       if (workshopCoords && a.latitude != null && a.longitude != null) {
         try {
-          const eta = await calcularETA(workshopCoords, { lat: a.latitude, lng: a.longitude });
-          const ida = parseFloat(eta.kilometros);
-          if (Number.isFinite(ida)) kmTotal = `${(ida * 2).toFixed(1)} km (ida y vuelta)`;
+          const etaIda = await calcularETA(workshopCoords, { lat: a.latitude, lng: a.longitude });
+          const ida = parseFloat(etaIda.kilometros);
+
+          if (a.status === "redirigida" && a.redirectionLat != null && a.redirectionLng != null) {
+            // Redirigida: ida (taller->avería) + vuelta teórica (punto de desvío -> taller)
+            const etaVuelta = await calcularETA(
+              { lat: a.redirectionLat, lng: a.redirectionLng },
+              workshopCoords
+            );
+            const vuelta = parseFloat(etaVuelta.kilometros);
+            if (Number.isFinite(ida) && Number.isFinite(vuelta)) {
+              kmTotal = `${(ida + vuelta).toFixed(1)} km (ida + vuelta desde desvío)`;
+            }
+          } else if (Number.isFinite(ida)) {
+            // Normal: ida y vuelta completas
+            kmTotal = `${(ida * 2).toFixed(1)} km (ida y vuelta)`;
+          }
         } catch { /* sin ruta */ }
       }
 
@@ -5015,6 +5119,8 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       row("Vehículo asignado:", a.assignedVehicleName || "-");
       row("Matrícula furgoneta:", vanPlate);
       row("Kilómetros recorridos:", kmTotal);
+      if (a.redirectedToId) row("Redirigida a asistencia:", `#${a.redirectedToId}`);
+      if (a.redirectedFromId) row("Procede de asistencia:", `#${a.redirectedFromId}`);
 
       doc.moveDown(1);
       doc.fontSize(13).font("Helvetica-Bold").text("Tiempos");

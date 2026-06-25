@@ -78,6 +78,7 @@ const STATUS_BADGES: Record<RoadsideAssistanceStatus, string> = {
   finalizada: "border-emerald-200 bg-emerald-50 text-emerald-800",
   en_camino_base: "border-teal-200 bg-teal-50 text-teal-800",
   llegada_taller: "border-slate-200 bg-slate-100 text-slate-700",
+  redirigida: "border-orange-200 bg-orange-50 text-orange-800",
   cancelada: "border-red-200 bg-red-50 text-red-800",
 };
 
@@ -275,6 +276,7 @@ export default function RoadsideAssistanceView({
   const [localError, setLocalError] = useState("");
   const [editError, setEditError] = useState("");
   const [changingId, setChangingId] = useState<number | null>(null);
+  const [redirectingId, setRedirectingId] = useState<number | null>(null);
   const [sendingWhatsappId, setSendingWhatsappId] = useState<number | null>(
     null
   );
@@ -443,6 +445,36 @@ export default function RoadsideAssistanceView({
     () => vehicles.filter((vehicle) => vehicle.active),
     [vehicles]
   );
+
+  async function handleRedirect(assistance: RoadsideAssistance) {
+    setLocalError("");
+    setRedirectingId(assistance.id);
+    try {
+      const token = localStorage.getItem("sea-admin-token") ?? "";
+      const res = await fetch(
+        `${API_BASE}/api/roadside-assistances/${assistance.id}/redirect`,
+        { method: "POST", headers: { "x-admin-token": token, "Content-Type": "application/json" } }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "No se pudo redirigir");
+
+      // Pre-rellenar el formulario de nueva asistencia con operario + furgoneta
+      setDraft({
+        ...INITIAL_DRAFT,
+        assignedTechName: data.prefill?.assignedTechName ?? "",
+        assignedVehicleName: data.prefill?.assignedVehicleName ?? "",
+        webfleetVehicleId: data.prefill?.webfleetVehicleId ?? "",
+        redirectedFromId: assistance.id,
+      });
+      onRefresh();
+      // Llevar al formulario de creación
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : "Error redirigiendo");
+    } finally {
+      setRedirectingId(null);
+    }
+  }
 
   async function handleCreate() {
     setLocalError("");
@@ -766,6 +798,12 @@ export default function RoadsideAssistanceView({
               </h2>
               <Plus className="h-5 w-5 text-slate-500" />
             </div>
+
+            {draft.redirectedFromId && (
+              <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-800">
+                ↪ Redirección de la asistencia #{draft.redirectedFromId}. Operario y furgoneta ya asignados.
+              </div>
+            )}
 
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
@@ -1384,6 +1422,17 @@ export default function RoadsideAssistanceView({
                             Ubicación en vivo
                           </button>
                         )}
+
+                      {assistance.status === "en_camino_base" && (
+                        <button
+                          type="button"
+                          onClick={() => handleRedirect(assistance)}
+                          disabled={redirectingId === assistance.id}
+                          className="inline-flex items-center gap-2 rounded-lg border border-orange-300 bg-orange-100 px-3 py-2 text-sm font-black text-orange-800 hover:bg-orange-200 disabled:opacity-50"
+                        >
+                          ↪ {redirectingId === assistance.id ? "Redirigiendo…" : "Redirigir a nueva asistencia"}
+                        </button>
+                      )}
 
                       <button
                         type="button"

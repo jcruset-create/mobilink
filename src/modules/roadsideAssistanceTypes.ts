@@ -9,6 +9,7 @@ export type RoadsideAssistanceStatus =
   | "finalizada"
   | "en_camino_base"
   | "llegada_taller"
+  | "redirigida"
   | "cancelada";
 
 export type RoadsideAssistancePriority = "normal" | "urgente";
@@ -60,6 +61,11 @@ export type RoadsideAssistance = {
   longitude?: number | null;
   plate: string;
   plateRemolque?: string | null;
+  redirectionLat?: number | null;
+  redirectionLng?: number | null;
+  redirectedAtMs?: number | null;
+  redirectedToId?: number | null;
+  redirectedFromId?: number | null;
   vehicleDescription?: string | null;
   webfleetVehicleId?: string | null;
   assignedTechName?: string | null;
@@ -108,6 +114,7 @@ export type RoadsideAssistanceDraft = {
   priority: RoadsideAssistancePriority;
   notes: string;
   sendTrackingWhatsapp: boolean;
+  redirectedFromId?: number | null;
 };
 
 export type RoadsideAssistanceEditDraft = RoadsideAssistanceDraft & {
@@ -157,6 +164,7 @@ export const ROADSIDE_ASSISTANCE_STATUS_LABELS: Record<
   finalizada: "Finalizada",
   en_camino_base: "En camino a taller",
   llegada_taller: "En taller ✓",
+  redirigida: "Redirigida",
   cancelada: "Cancelada",
 };
 
