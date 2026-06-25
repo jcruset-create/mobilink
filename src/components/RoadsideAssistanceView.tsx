@@ -93,6 +93,25 @@ function formatTime(value?: number | string | null) {
   });
 }
 
+function renderWaStatus(waStatus?: string | null, atMs?: number | null) {
+  if (!waStatus) return null;
+  const hora = atMs ? ` ${formatTime(atMs)}` : "";
+  switch (waStatus) {
+    case "queued":
+    case "sent":
+      return <span className="text-slate-500">· ✓ Enviado{hora}</span>;
+    case "delivered":
+      return <span className="text-slate-600">· ✓✓ Entregado{hora}</span>;
+    case "read":
+      return <span className="text-sky-600">· ✓✓ Leído{hora}</span>;
+    case "failed":
+    case "undelivered":
+      return <span className="text-red-600">· ✗ No entregado</span>;
+    default:
+      return <span className="text-slate-500">· {waStatus}</span>;
+  }
+}
+
 function getNextStatus(
   status: RoadsideAssistanceStatus
 ): RoadsideAssistanceStatus | null {
@@ -1263,6 +1282,9 @@ export default function RoadsideAssistanceView({
                               assistance.trackingWhatsappSentAtMs
                             )}`
                           : "pendiente"}
+                        {assistance.trackingWhatsappSentAtMs && (
+                          <span className="ml-2">{renderWaStatus(assistance.waStatus, assistance.waStatusAtMs)}</span>
+                        )}
                       </div>
                     </div>
 

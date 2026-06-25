@@ -73,6 +73,8 @@ export type RoadsideAssistance = {
   trackingToken: string;
   trackingWhatsappSentAtMs?: number | null;
   trackingWhatsappSid?: string | null;
+  waStatus?: string | null;
+  waStatusAtMs?: number | null;
   notes?: string | null;
   createdAtMs: number;
   assignedAtMs?: number | null;

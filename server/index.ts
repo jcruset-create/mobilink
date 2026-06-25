@@ -624,6 +624,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     trackingToken: row.trackingToken ?? "",
     trackingWhatsappSentAtMs: row.trackingWhatsappSentAtMs ?? null,
     trackingWhatsappSid: row.trackingWhatsappSid ?? null,
+    waStatus: row.waStatus ?? null,
+    waStatusAtMs: row.waStatusAtMs != null ? Number(row.waStatusAtMs) : null,
     notes: row.notes ?? null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
     assignedAtMs: row.assignedAtMs != null ? Number(row.assignedAtMs) : null,
@@ -807,6 +809,9 @@ async function sendRoadsideTrackingWhatsApp(
     process.env.TWILIO_ROADSIDE_CONTENT_SID || ""
   ).trim();
 
+  // URL de callback para que Twilio nos informe de entregado/leído
+  const statusCallback = `${getPublicAppBaseUrl(req, preferredBaseUrl)}/api/whatsapp/status`;
+
   if (contentSid) {
     return twilioClient.messages.create({
       from: getWhatsAppFromNumber(),
@@ -818,6 +823,7 @@ async function sendRoadsideTrackingWhatsApp(
         "3": trackingUrl,
         "4": assistance.assignedTechName || "-",
       }),
+      statusCallback,
     });
   }
 
@@ -825,6 +831,7 @@ async function sendRoadsideTrackingWhatsApp(
     from: getWhatsAppFromNumber(),
     to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
     body: buildRoadsideTrackingMessage(assistance, trackingUrl),
+    statusCallback,
   });
 }
 
@@ -8621,6 +8628,26 @@ app.post(
     try {
       const { MessageSid, MessageStatus, ErrorCode } = req.body;
       console.log(`WhatsApp status update: ${MessageSid} → ${MessageStatus}${ErrorCode ? ` (err ${ErrorCode})` : ""}`);
+
+      // Actualizar estado del WhatsApp de seguimiento en la asistencia correspondiente.
+      // Ranking para no rebajar (p.ej. un 'delivered' tardío no debe pisar 'read').
+      if (MessageSid && MessageStatus) {
+        await db.query(
+          `UPDATE roadside_assistances
+           SET "waStatus" = $2, "waStatusAtMs" = $3
+           WHERE "trackingWhatsappSid" = $1
+             AND (
+               $2 IN ('failed','undelivered')
+               OR COALESCE(CASE "waStatus"
+                    WHEN 'queued' THEN 0 WHEN 'sent' THEN 1
+                    WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE -1 END, -1)
+                  <= CASE $2
+                    WHEN 'queued' THEN 0 WHEN 'sent' THEN 1
+                    WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE -1 END
+             )`,
+          [MessageSid, MessageStatus, Date.now()]
+        );
+      }
       return res.status(200).send("OK");
     } catch (error) {
       console.error("POST /api/whatsapp/status error:", error);

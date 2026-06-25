@@ -263,6 +263,12 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "redirectedFromId" INTEGER;
 
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "waStatus" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "waStatusAtMs" BIGINT;
+
     ALTER TABLE roadside_assistance_files
     ADD COLUMN IF NOT EXISTS "detectedPlate" TEXT;
 
