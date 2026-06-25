@@ -327,8 +327,8 @@ export default function RoadsideAssistanceView({
   const [whatsappCaptureId, setWhatsappCaptureId] = useState<number | null>(null);
 
   // ── Pestañas panel derecho ──────────────────────────────────────────────────
-  type PanelTab = "activas" | "cerradas" | "historial";
-  const [panelTab, setPanelTab] = useState<PanelTab>("activas");
+  type PanelTab = "nueva" | "activas" | "cerradas" | "historial";
+  const [panelTab, setPanelTab] = useState<PanelTab>("nueva");
 
   // ── Historial ───────────────────────────────────────────────────────────────
   type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null };
@@ -486,7 +486,8 @@ export default function RoadsideAssistanceView({
         redirectedFromId: assistance.id,
       });
       onRefresh();
-      // Llevar al formulario de creación
+      // Llevar a la pantalla de nueva asistencia
+      setPanelTab("nueva");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : "Error redirigiendo");
@@ -511,6 +512,7 @@ export default function RoadsideAssistanceView({
     try {
       await onCreate(draft);
       setDraft(INITIAL_DRAFT);
+      setPanelTab("activas");
     } catch (createError) {
       setLocalError(
         createError instanceof Error
@@ -808,8 +810,32 @@ export default function RoadsideAssistanceView({
           ))}
         </section>
 
-        <div className="grid gap-5 xl:grid-cols-[390px_minmax(0,1fr)]">
-          <div className="space-y-5">
+        {/* ── Navegación de pantallas ── */}
+        <nav className="flex flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+          {([
+            ["nueva", "➕ Nueva asistencia"],
+            ["activas", `📋 Activas (${activeAssistances.length})`],
+            ["cerradas", "✓ Últimas cerradas"],
+            ["historial", "🗂 Historial"],
+          ] as const).map(([tab, label]) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setPanelTab(tab as PanelTab)}
+              className={`flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-black uppercase tracking-wide transition-colors ${
+                panelTab === tab
+                  ? "bg-slate-900 text-white"
+                  : "text-slate-500 hover:bg-slate-50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="space-y-5">
+          {panelTab === "nueva" && (
+          <div className="mx-auto w-full max-w-4xl">
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-sm font-black uppercase text-slate-700">
@@ -825,7 +851,7 @@ export default function RoadsideAssistanceView({
             )}
 
             <div className="space-y-3">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
                     Cliente
@@ -939,7 +965,7 @@ export default function RoadsideAssistanceView({
                 <div className="text-xs font-bold text-red-600">{geocodeCreateError}</div>
               )}
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
                     Latitud
@@ -967,7 +993,7 @@ export default function RoadsideAssistanceView({
                 </label>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
                     Matricula camión
@@ -1018,7 +1044,7 @@ export default function RoadsideAssistanceView({
                 </label>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
                     Operario
@@ -1144,30 +1170,15 @@ export default function RoadsideAssistanceView({
               </button>
             </div>
           </section>
-
           </div>
+          )}
 
           <section className="space-y-3">
-            {/* ── Pestañas ── */}
-            <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
-              {(["activas", "cerradas", "historial"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setPanelTab(tab)}
-                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-black uppercase tracking-wide transition-colors ${
-                    panelTab === tab
-                      ? "bg-slate-900 text-white"
-                      : "text-slate-500 hover:bg-slate-50"
-                  }`}
-                >
-                  {tab === "activas" ? `Activas (${activeAssistances.length})` : tab === "cerradas" ? "Últimas cerradas" : "Historial"}
-                </button>
-              ))}
-              {loading && panelTab !== "historial" && (
-                <Clock3 className="h-4 w-4 shrink-0 text-slate-400" />
-              )}
-            </div>
+            {loading && panelTab !== "historial" && panelTab !== "nueva" && (
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
+                <Clock3 className="h-4 w-4 shrink-0" /> Cargando…
+              </div>
+            )}
 
             {/* ── Tab: Activas ── */}
             {panelTab === "activas" && activeAssistances.length === 0 && (
