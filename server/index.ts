@@ -641,6 +641,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     operatorLng: normalizeNullableNumber(row.operatorLng),
     operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
+    plateRemolque: row.plateRemolque ?? null,
     conductorNombre: row.conductorNombre ?? null,
     conductorDni: row.conductorDni ?? null,
     observacionesReparacion: row.observacionesReparacion ?? null,
@@ -3884,6 +3885,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           latitude,
           longitude,
           plate,
+          "plateRemolque",
           "vehicleDescription",
           "webfleetVehicleId",
           "assignedTechName",
@@ -3902,7 +3904,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
         )
         RETURNING *
       `,
@@ -3918,6 +3920,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         latitude,
         longitude,
         String(body.plate || "").trim().toUpperCase(),
+        body.plateRemolque ? String(body.plateRemolque).trim().toUpperCase() : null,
         body.vehicleDescription ? String(body.vehicleDescription).trim() : null,
         body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
         assignedTechName || null,
@@ -4030,6 +4033,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "assignedTechName" = $14,
           "assignedVehicleName" = $15,
           notes = $16,
+          "plateRemolque" = $18,
           "updatedAtMs" = $17
           ${
             timestampField
@@ -4057,6 +4061,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.assignedVehicleName ? String(body.assignedVehicleName).trim() : null,
         body.notes ? String(body.notes).trim() : null,
         now,
+        body.plateRemolque ? String(body.plateRemolque).trim().toUpperCase() : null,
       ]
     );
 
@@ -4875,7 +4880,8 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       row("Nombre:", a.customerName || "-");
       row("Teléfono:", a.customerPhone || "-");
       row("Dirección:", a.address || "-");
-      row("Matrícula:", a.plate || "-");
+      row("Matrícula camión:", a.plate || "-");
+      if (a.plateRemolque) row("Matrícula remolque:", a.plateRemolque);
       row("Vehículo:", a.vehicleDescription || "-");
       row("Prioridad:", a.priority === "urgente" ? "URGENTE" : "Normal");
       if (a.notes) row("Notas:", a.notes);

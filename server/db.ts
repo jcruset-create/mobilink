@@ -245,6 +245,9 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "plateMismatch" BOOLEAN NOT NULL DEFAULT false;
 
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "plateRemolque" TEXT;
+
     ALTER TABLE roadside_assistance_files
     ADD COLUMN IF NOT EXISTS "detectedPlate" TEXT;
 

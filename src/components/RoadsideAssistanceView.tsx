@@ -51,6 +51,7 @@ const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   latitude: "",
   longitude: "",
   plate: "",
+  plateRemolque: "",
   vehicleDescription: "",
   webfleetVehicleId: "",
   assignedTechName: "",
@@ -155,6 +156,7 @@ function buildEditDraft(
     address: assistance.address || "",
     googleMapsUrl: assistance.googleMapsUrl || "",
     plate: assistance.plate || "",
+    plateRemolque: assistance.plateRemolque || "",
     vehicleDescription: assistance.vehicleDescription || "",
     assignedTechName: assistance.assignedTechName || "",
     assignedVehicleName: assistance.assignedVehicleName || "",
@@ -887,7 +889,7 @@ export default function RoadsideAssistanceView({
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
-                    Matricula
+                    Matricula camión
                   </span>
                   <input
                     value={draft.plate}
@@ -897,6 +899,23 @@ export default function RoadsideAssistanceView({
                         plate: event.target.value.toUpperCase(),
                       }))
                     }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Matrícula remolque
+                  </span>
+                  <input
+                    value={draft.plateRemolque}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        plateRemolque: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="Opcional"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
                   />
                 </label>
@@ -1717,7 +1736,7 @@ export default function RoadsideAssistanceView({
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
-                    Matricula
+                    Matricula camión
                   </span>
                   <input
                     value={editDraft.plate}
@@ -1727,6 +1746,23 @@ export default function RoadsideAssistanceView({
                         plate: event.target.value.toUpperCase(),
                       }))
                     }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Matrícula remolque
+                  </span>
+                  <input
+                    value={editDraft.plateRemolque}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        plateRemolque: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="Opcional"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
                   />
                 </label>

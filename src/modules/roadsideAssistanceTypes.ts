@@ -59,6 +59,7 @@ export type RoadsideAssistance = {
   latitude?: number | null;
   longitude?: number | null;
   plate: string;
+  plateRemolque?: string | null;
   vehicleDescription?: string | null;
   webfleetVehicleId?: string | null;
   assignedTechName?: string | null;
@@ -99,6 +100,7 @@ export type RoadsideAssistanceDraft = {
   latitude: string;
   longitude: string;
   plate: string;
+  plateRemolque: string;
   vehicleDescription: string;
   webfleetVehicleId: string;
   assignedTechName: string;

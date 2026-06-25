@@ -5270,6 +5270,7 @@ if (view === "whatsapp_inbox" && canAccessView(userRole, "whatsapp_inbox")) {
           latitude: extracted.latitud ?? "",
           longitude: extracted.longitud ?? "",
           plate: extracted.matricula ?? "",
+          plateRemolque: (extracted as any).matriculaRemolque ?? "",
           vehicleDescription: extracted.vehiculo ?? "",
           webfleetVehicleId: "",
           assignedTechName: "",
