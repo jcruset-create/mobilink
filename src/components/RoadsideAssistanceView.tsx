@@ -2104,7 +2104,11 @@ export default function RoadsideAssistanceView({
                     assistanceLng={mapAssistance.longitude}
                     vehicleLat={mapAssistance.operatorLat ?? null}
                     vehicleLng={mapAssistance.operatorLng ?? null}
-                    vehiclePlate={mapAssistance.plate || null}
+                    vehiclePlate={
+                      vehicles.find(
+                        (v) => v.webfleetVehicleId && v.webfleetVehicleId === mapAssistance.webfleetVehicleId
+                      )?.plate || null
+                    }
                     workshopLat={mapAssistance.status === "en_camino_base" ? workshopCoords?.lat : null}
                     workshopLng={mapAssistance.status === "en_camino_base" ? workshopCoords?.lng : null}
                   />

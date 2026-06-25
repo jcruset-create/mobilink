@@ -127,6 +127,7 @@ export type RoadsideAssistanceFile = {
 
 export type RoadsideTrackingResponse = {
   assistance: RoadsideAssistance;
+  vanPlate?: string | null;
   events: Array<{
     status: RoadsideAssistanceStatus;
     createdAtMs: number;

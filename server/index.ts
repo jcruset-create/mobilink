@@ -2580,8 +2580,21 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       ),
     ]);
 
+    // Matrícula de NUESTRA furgoneta (no la del camión asistido)
+    let vanPlate: string | null = null;
+    if (assistance.webfleetVehicleId) {
+      try {
+        const vp = await db.query(
+          `SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`,
+          [assistance.webfleetVehicleId]
+        );
+        vanPlate = vp.rows[0]?.plate ?? null;
+      } catch { /* sin matrícula */ }
+    }
+
     res.json({
       assistance,
+      vanPlate,
       events: eventsResult.rows.map((e: any) => ({
         status: e.status,
         createdAtMs: Number(e.createdAtMs),
