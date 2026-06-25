@@ -121,21 +121,29 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 export default function RoadsideBackofficeModal({
   assistance,
   onClose,
+  draftMode = false,
+  initialData,
+  onSaveDraft,
 }: {
-  assistance: RoadsideAssistance;
+  assistance?: RoadsideAssistance;
   onClose: () => void;
+  // Modo borrador: usar al crear una asistencia (aún sin id). No llama a la API.
+  draftMode?: boolean;
+  initialData?: BackofficeData;
+  onSaveDraft?: (data: BackofficeData) => void;
 }) {
   const [tab, setTab] = useState<Tab>("contactos");
-  const [data, setData] = useState<BackofficeData>({});
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<BackofficeData>(initialData ?? {});
+  const [loading, setLoading] = useState(!draftMode);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
+    if (draftMode || !assistance) { setLoading(false); return; }
     async function load() {
       try {
         const res = await fetch(
-          `${API_BASE}/api/roadside-assistances/${assistance.id}/backoffice`,
+          `${API_BASE}/api/roadside-assistances/${assistance!.id}/backoffice`,
           { headers: getAdminHeaders() as HeadersInit }
         );
         if (res.ok) {
@@ -158,7 +166,7 @@ export default function RoadsideBackofficeModal({
       }
     }
     load();
-  }, [assistance.id]);
+  }, [assistance?.id, draftMode]);
 
   function set<K extends keyof BackofficeData>(key: K, value: BackofficeData[K]) {
     setSaved(false);
@@ -179,6 +187,14 @@ export default function RoadsideBackofficeModal({
   }
 
   async function handleSave() {
+    // Modo borrador: no llama a la API, devuelve los datos al formulario de creación
+    if (draftMode) {
+      onSaveDraft?.(data);
+      setSaved(true);
+      onClose();
+      return;
+    }
+    if (!assistance) return;
     setSaving(true);
     try {
       await fetch(
@@ -208,10 +224,12 @@ export default function RoadsideBackofficeModal({
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <div className="text-xs font-bold text-slate-400">
-              BACK OFFICE · #{assistance.id}
+              BACK OFFICE · {assistance ? `#${assistance.id}` : "Nueva asistencia"}
             </div>
             <h2 className="text-lg font-black text-slate-900">
-              {assistance.plate || "Sin matrícula"} · {assistance.customerName || "Sin cliente"}
+              {assistance
+                ? `${assistance.plate || "Sin matrícula"} · ${assistance.customerName || "Sin cliente"}`
+                : "Datos previos a la creación"}
             </h2>
           </div>
           <div className="flex items-center gap-2">
@@ -283,7 +301,7 @@ export default function RoadsideBackofficeModal({
 
                   <SectionTitle>Conductor</SectionTitle>
                   <Field label="Nombre conductor">
-                    <input className={inputCls} value={assistance.conductorNombre ?? ""} disabled placeholder="(del formulario principal)" />
+                    <input className={inputCls} value={assistance?.conductorNombre ?? ""} disabled placeholder="(del formulario principal)" />
                   </Field>
                   <Field label="Teléfono conductor">
                     <input className={inputCls} type="tel" value={t("conductorTelefono")} onChange={(e) => set("conductorTelefono", e.target.value)} placeholder="6XX XXX XXX" />

@@ -117,6 +117,7 @@ export type RoadsideAssistanceDraft = {
   notes: string;
   sendTrackingWhatsapp: boolean;
   redirectedFromId?: number | null;
+  backoffice?: Record<string, unknown> | null;
 };
 
 export type RoadsideAssistanceEditDraft = RoadsideAssistanceDraft & {

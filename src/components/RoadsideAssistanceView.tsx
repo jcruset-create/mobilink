@@ -22,7 +22,7 @@ import {
   XCircle,
   Briefcase,
 } from "lucide-react";
-import RoadsideBackofficeModal from "./RoadsideBackofficeModal";
+import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
@@ -324,6 +324,7 @@ export default function RoadsideAssistanceView({
   const [geocodeEditError, setGeocodeEditError] = useState("");
 
   const [backofficeAssistance, setBackofficeAssistance] = useState<RoadsideAssistance | null>(null);
+  const [showNewBackoffice, setShowNewBackoffice] = useState(false);
   const [whatsappCaptureId, setWhatsappCaptureId] = useState<number | null>(null);
 
   // ── Pestañas panel derecho ──────────────────────────────────────────────────
@@ -841,7 +842,18 @@ export default function RoadsideAssistanceView({
               <h2 className="text-sm font-black uppercase text-slate-700">
                 Nueva asistencia
               </h2>
-              <Plus className="h-5 w-5 text-slate-500" />
+              <button
+                type="button"
+                onClick={() => setShowNewBackoffice(true)}
+                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-black ${
+                  draft.backoffice
+                    ? "border-indigo-300 bg-indigo-100 text-indigo-800 hover:bg-indigo-200"
+                    : "border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100"
+                }`}
+              >
+                <Briefcase className="h-4 w-4" />
+                {draft.backoffice ? "Back Office ✓" : "Back Office"}
+              </button>
             </div>
 
             {draft.redirectedFromId && (
@@ -2325,6 +2337,18 @@ export default function RoadsideAssistanceView({
         <RoadsideBackofficeModal
           assistance={backofficeAssistance}
           onClose={() => setBackofficeAssistance(null)}
+        />
+      )}
+
+      {/* Modal Back Office en creación (borrador) */}
+      {showNewBackoffice && (
+        <RoadsideBackofficeModal
+          draftMode
+          initialData={(draft.backoffice as BackofficeData) ?? {}}
+          onClose={() => setShowNewBackoffice(false)}
+          onSaveDraft={(data) =>
+            setDraft((prev) => ({ ...prev, backoffice: data as Record<string, unknown> }))
+          }
         />
       )}
 
