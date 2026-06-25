@@ -1131,6 +1131,77 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
   };
 }
 
+// ── Webfleet: viajes y recorrido para informe de seguimiento ──────────────────
+function webfleetRange(fromMs: number, toMs: number): Record<string, string> {
+  return {
+    range_pattern: "ud",
+    rangefrom_string: new Date(fromMs).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    rangeto_string: new Date(toMs).toISOString().replace(/\.\d{3}Z$/, "Z"),
+  };
+}
+
+type WebfleetTrip = {
+  start_time: string; end_time: string;
+  start_latitude: number; start_longitude: number;
+  end_latitude: number; end_longitude: number;
+  start_postext?: string; end_postext?: string;
+  distance: number; duration: number; idle_time?: number;
+  avg_speed?: number; max_speed?: number; drivername?: string;
+};
+
+async function getWebfleetTrips(objectno: string, fromMs: number, toMs: number): Promise<WebfleetTrip[]> {
+  const { url, headers } = buildWebfleetRequest("showTripReportExtern", { objectno, ...webfleetRange(fromMs, toMs) });
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error(`Webfleet trips HTTP ${r.status}`);
+  const data = await r.json();
+  if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
+  const trips = (Array.isArray(data) ? data : []) as WebfleetTrip[];
+  return trips.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+}
+
+async function getWebfleetTracks(objectno: string, fromMs: number, toMs: number): Promise<{ lat: number; lng: number }[]> {
+  const { url, headers } = buildWebfleetRequest("showTracks", { objectno, ...webfleetRange(fromMs, toMs) });
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error(`Webfleet tracks HTTP ${r.status}`);
+  const data = await r.json();
+  if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
+  const pts = (Array.isArray(data) ? data : []) as any[];
+  return pts
+    .map((p) => ({ lat: Number(p.latitude) / 1_000_000, lng: Number(p.longitude) / 1_000_000 }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0));
+}
+
+// Paradas = huecos entre el fin de un viaje y el inicio del siguiente (umbral en segundos)
+type VehicleStop = { n: number; lat: number; lng: number; place: string; arrival: number; departure: number; durationSec: number };
+function computeStops(trips: WebfleetTrip[], minSec: number): VehicleStop[] {
+  const stops: VehicleStop[] = [];
+  let n = 0;
+  for (let i = 0; i < trips.length - 1; i++) {
+    const endMs = new Date(trips[i].end_time).getTime();
+    const nextStartMs = new Date(trips[i + 1].start_time).getTime();
+    const gap = Math.round((nextStartMs - endMs) / 1000);
+    if (gap >= minSec) {
+      n++;
+      stops.push({
+        n,
+        lat: Number(trips[i].end_latitude) / 1_000_000,
+        lng: Number(trips[i].end_longitude) / 1_000_000,
+        place: trips[i].end_postext || "Parada",
+        arrival: endMs,
+        departure: nextStartMs,
+        durationSec: gap,
+      });
+    }
+  }
+  return stops;
+}
+
+function fmtDuration(sec: number): string {
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)}h ${m % 60}min`;
+}
+
 function getJobOperationLabel(job: any) {
   return (
     job.quickEntryLabel ||
@@ -4961,6 +5032,92 @@ async function buildRouteMapImage(
   }
 }
 
+// Mapa estilo Webfleet: recorrido (polyline) + paradas numeradas. Auto-zoom a todos los puntos.
+async function buildTrackMapImage(
+  track: { lat: number; lng: number }[],
+  stops: { lat: number; lng: number; n: number }[]
+): Promise<Buffer | null> {
+  const all = [...track, ...stops];
+  if (all.length === 0) return null;
+
+  const outW = 480;
+  const outH = 380;
+  const pad = 50;
+
+  const lngToWorldX = (lng: number, z: number) => (lng + 180) / 360 * 256 * Math.pow(2, z);
+  const latToWorldY = (lat: number, z: number) => {
+    const r = lat * Math.PI / 180;
+    return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 256 * Math.pow(2, z);
+  };
+
+  const minLat = Math.min(...all.map((p) => p.lat));
+  const maxLat = Math.max(...all.map((p) => p.lat));
+  const minLng = Math.min(...all.map((p) => p.lng));
+  const maxLng = Math.max(...all.map((p) => p.lng));
+
+  let zoom = 16;
+  for (let z = 16; z >= 3; z--) {
+    const dx = Math.abs(lngToWorldX(maxLng, z) - lngToWorldX(minLng, z));
+    const dy = Math.abs(latToWorldY(minLat, z) - latToWorldY(maxLat, z));
+    if (dx <= outW - pad && dy <= outH - pad) { zoom = z; break; }
+    zoom = z;
+  }
+
+  const centerX = (lngToWorldX(minLng, zoom) + lngToWorldX(maxLng, zoom)) / 2;
+  const centerY = (latToWorldY(minLat, zoom) + latToWorldY(maxLat, zoom)) / 2;
+  const originX = centerX - outW / 2;
+  const originY = centerY - outH / 2;
+
+  const tileMinX = Math.floor(originX / 256);
+  const tileMaxX = Math.floor((originX + outW) / 256);
+  const tileMinY = Math.floor(originY / 256);
+  const tileMaxY = Math.floor((originY + outH) / 256);
+
+  const jobs: Promise<{ tx: number; ty: number; buf: Buffer | null }>[] = [];
+  for (let tx = tileMinX; tx <= tileMaxX; tx++) {
+    for (let ty = tileMinY; ty <= tileMaxY; ty++) {
+      jobs.push((async () => {
+        try {
+          const r = await fetch(`https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`,
+            { headers: { "User-Agent": "SEATarragona-Informe/1.0 (internal)" }, signal: AbortSignal.timeout(6000) });
+          return { tx, ty, buf: r.ok ? Buffer.from(await r.arrayBuffer()) : null };
+        } catch { return { tx, ty, buf: null }; }
+      })());
+    }
+  }
+  const tiles = await Promise.all(jobs);
+
+  const composite: sharp.OverlayOptions[] = [];
+  for (const { tx, ty, buf } of tiles) {
+    if (buf) composite.push({ input: buf, left: Math.round(tx * 256 - originX), top: Math.round(ty * 256 - originY) });
+  }
+
+  const toPx = (p: { lat: number; lng: number }) => ({
+    x: Math.round(lngToWorldX(p.lng, zoom) - originX),
+    y: Math.round(latToWorldY(p.lat, zoom) - originY),
+  });
+
+  const linePts = track.map(toPx).map((p) => `${p.x},${p.y}`).join(" ");
+  const stopCircles = stops.map((s) => {
+    const p = toPx(s);
+    return `<circle cx="${p.x}" cy="${p.y}" r="11" fill="#1e3a8a" stroke="white" stroke-width="2"/>` +
+      `<text x="${p.x}" y="${p.y + 4}" font-size="12" font-weight="bold" fill="white" text-anchor="middle" font-family="Arial">${s.n}</text>`;
+  }).join("");
+
+  const overlay = Buffer.from(
+    `<svg width="${outW}" height="${outH}" xmlns="http://www.w3.org/2000/svg">` +
+    (linePts ? `<polyline points="${linePts}" fill="none" stroke="#2563eb" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>` : "") +
+    stopCircles +
+    `</svg>`
+  );
+  composite.push({ input: overlay, left: 0, top: 0 });
+
+  try {
+    return await sharp({ create: { width: outW, height: outH, channels: 4, background: { r: 220, g: 220, b: 220, alpha: 1 } } })
+      .composite(composite).png().toBuffer();
+  } catch { return null; }
+}
+
 async function fetchImageForPdf(url: string): Promise<Buffer> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -5268,6 +5425,147 @@ app.get(
     }
   }
 );
+
+// ── Informe de seguimiento de furgoneta (recorrido + paradas, estilo Webfleet) ──
+async function buildVehicleTrackingPdfBuffer(
+  objectno: string,
+  fromMs: number,
+  toMs: number,
+  opts: { minStopSec?: number; plate?: string | null; titleExtra?: string } = {}
+): Promise<Buffer> {
+  const minStopSec = opts.minStopSec ?? 180;
+
+  const [trips, track] = await Promise.all([
+    getWebfleetTrips(objectno, fromMs, toMs),
+    getWebfleetTracks(objectno, fromMs, toMs).catch(() => [] as { lat: number; lng: number }[]),
+  ]);
+  const stops = computeStops(trips, minStopSec);
+
+  const totalKm = trips.reduce((s, t) => s + (t.distance || 0), 0) / 1000;
+  const driveSec = trips.reduce((s, t) => s + (t.duration || 0), 0);
+  const stoppedSec = stops.reduce((s, st) => s + st.durationSec, 0);
+  const driver = trips.find((t) => t.drivername)?.drivername || "-";
+  const firstStart = trips.length ? new Date(trips[0].start_time).getTime() : null;
+  const lastEnd = trips.length ? new Date(trips[trips.length - 1].end_time).getTime() : null;
+
+  const doc = new PDFDocument({ margin: 40, size: "A4" });
+  const chunks: Buffer[] = [];
+  doc.on("data", (c) => chunks.push(c));
+  const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  doc.fontSize(18).font("Helvetica-Bold").text("SEA Tarragona – Seguimiento de furgoneta", { align: "center" });
+  doc.moveDown(0.3);
+  doc.fontSize(11).font("Helvetica").text(
+    `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`,
+    { align: "center" }
+  );
+  doc.fontSize(10).text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, { align: "center" });
+  doc.moveDown(1);
+
+  function row(label: string, value: string) {
+    doc.fontSize(10).font("Helvetica-Bold").text(label, { continued: true, width: 180 });
+    doc.font("Helvetica").text(value);
+  }
+
+  doc.fontSize(13).font("Helvetica-Bold").text("Resumen");
+  doc.moveDown(0.3);
+  row("Conductor:", driver);
+  row("Km recorridos:", `${totalKm.toFixed(1)} km`);
+  row("Tiempo en marcha:", fmtDuration(driveSec));
+  row("Tiempo parado total:", fmtDuration(stoppedSec));
+  row("Nº de paradas:", String(stops.length));
+  row("Primera salida:", firstStart ? formatDateEs(firstStart) : "-");
+  row("Última llegada:", lastEnd ? formatDateEs(lastEnd) : "-");
+
+  if (track.length > 0 || stops.length > 0) {
+    doc.moveDown(0.8);
+    doc.fontSize(13).font("Helvetica-Bold").text("Recorrido");
+    doc.moveDown(0.3);
+    try {
+      const mapBuf = await buildTrackMapImage(track, stops);
+      if (mapBuf) doc.image(mapBuf, { fit: [480, 380], align: "left" });
+    } catch { /* sin mapa */ }
+  }
+
+  doc.moveDown(0.8);
+  doc.fontSize(13).font("Helvetica-Bold").text("Paradas");
+  doc.moveDown(0.3);
+  if (stops.length === 0) {
+    doc.fontSize(10).font("Helvetica").text("Sin paradas registradas en el periodo.");
+  } else {
+    for (const s of stops) {
+      doc.fontSize(10).font("Helvetica-Bold").text(`${s.n}. ${s.place}`);
+      doc.fontSize(9).font("Helvetica").text(
+        `   Llegada: ${formatDateEs(s.arrival)}  ·  Salida: ${formatDateEs(s.departure)}  ·  Parado: ${fmtDuration(s.durationSec)}`
+      );
+      doc.moveDown(0.2);
+    }
+  }
+
+  doc.moveDown(0.6);
+  doc.fontSize(13).font("Helvetica-Bold").text("Trayectos");
+  doc.moveDown(0.3);
+  if (trips.length === 0) {
+    doc.fontSize(10).font("Helvetica").text("Sin trayectos en el periodo.");
+  } else {
+    for (const t of trips) {
+      doc.fontSize(9).font("Helvetica").text(
+        `${formatDateEs(new Date(t.start_time).getTime())} → ${formatDateEs(new Date(t.end_time).getTime())}  ·  ` +
+        `${((t.distance || 0) / 1000).toFixed(1)} km  ·  ${fmtDuration(t.duration || 0)}  ·  ` +
+        `máx ${t.max_speed ?? "-"} km/h  ·  ${t.end_postext || ""}`
+      );
+    }
+  }
+
+  doc.end();
+  return finished;
+}
+
+// Por furgoneta + rango de fechas
+app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole, async (req, res) => {
+  try {
+    const objectno = String(req.params.objectno);
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    const minStop = req.query.minStop ? Number(req.query.minStop) : 180;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) {
+      return res.status(400).json({ error: "Parámetros from/to (ms) requeridos" });
+    }
+    const vp = await db.query(`SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`, [objectno]);
+    const buffer = await buildVehicleTrackingPdfBuffer(objectno, from, to, { minStopSec: minStop, plate: vp.rows[0]?.plate });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="seguimiento_${objectno}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET tracking-report.pdf (vehicle) error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
+
+// Por asistencia (recorrido durante la asistencia: salida → llegada al taller o ahora)
+app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+    if (!a.webfleetVehicleId) return res.status(400).json({ error: "La asistencia no tiene furgoneta Webfleet asignada" });
+
+    const fromMs = a.departedAtMs || a.assignedAtMs || a.createdAtMs;
+    const toMs = a.arrivedAtWorkshopMs || a.finishedAtMs || Date.now();
+    const buffer = await buildVehicleTrackingPdfBuffer(a.webfleetVehicleId, fromMs, toMs, {
+      plate: a.assignedVehicleName || a.webfleetVehicleId,
+      titleExtra: `Asistencia #${a.id}`,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="seguimiento_asistencia_${id}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET tracking-report.pdf (asistencia) error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
 
 let mailTransport: import("nodemailer").Transporter | null = null;
 function getMailTransport() {

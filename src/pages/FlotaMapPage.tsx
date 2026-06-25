@@ -61,6 +61,19 @@ export default function FlotaMapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [reportDate, setReportDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+
+  function openTrackingReport(objectno: string) {
+    const day = new Date(`${reportDate}T00:00:00`);
+    const from = day.getTime();
+    const to = from + 24 * 60 * 60 * 1000 - 1;
+    const token =
+      (typeof localStorage !== "undefined" && (localStorage.getItem("sea-admin-token") || localStorage.getItem("adminToken"))) || "";
+    window.open(
+      `${API_BASE}/api/webfleet/vehicle/${objectno}/tracking-report.pdf?from=${from}&to=${to}&token=${encodeURIComponent(token)}`,
+      "_blank"
+    );
+  }
 
   async function load() {
     try {
@@ -99,6 +112,15 @@ export default function FlotaMapPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 text-xs text-slate-400">
+            Informe del día:
+            <input
+              type="date"
+              value={reportDate}
+              onChange={(e) => setReportDate(e.target.value)}
+              className="rounded bg-[#1e3a5f] px-2 py-1 text-xs text-white border border-[#2d4a6a]"
+            />
+          </label>
           {lastUpdate && (
             <span className="text-xs text-slate-500">
               Actualizado {lastUpdate.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -149,6 +171,12 @@ export default function FlotaMapPage() {
                         {new Date(v.timestamp).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
                       </div>
                     )}
+                    <button
+                      onClick={() => openTrackingReport(v.objectno)}
+                      className="mt-2 w-full rounded bg-blue-600 px-2 py-1 text-xs font-bold text-white hover:bg-blue-700"
+                    >
+                      🛰️ Informe seguimiento (día)
+                    </button>
                   </div>
                 </Popup>
               </Marker>
