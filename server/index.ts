@@ -2530,8 +2530,10 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       moving: boolean | null;
     } | null = null;
 
+    // En camino al punto (en_camino) o de vuelta al taller (en_camino_base)
+    const enCaminoBase = assistance.status === "en_camino_base";
     const canRecalculate =
-      assistance.status === "en_camino" &&
+      (assistance.status === "en_camino" || enCaminoBase) &&
       assistance.webfleetVehicleId &&
       assistance.latitude != null &&
       assistance.longitude != null;
@@ -2539,10 +2541,17 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
     if (canRecalculate) {
       try {
         vehiclePosition = await getWebfleetVehiclePosition(assistance.webfleetVehicleId!);
-        const eta = await calcularETA(
-          vehiclePosition,
-          { lat: assistance.latitude!, lng: assistance.longitude! }
-        );
+
+        // Destino: si vuelve al taller, ETA al taller; si no, al punto de avería
+        let destino = { lat: assistance.latitude!, lng: assistance.longitude! };
+        if (enCaminoBase) {
+          const wcfg = await getWorkshopConfig();
+          const wlat = parseFloat(wcfg.taller_lat);
+          const wlng = parseFloat(wcfg.taller_lng);
+          if (Number.isFinite(wlat) && Number.isFinite(wlng)) destino = { lat: wlat, lng: wlng };
+        }
+
+        const eta = await calcularETA(vehiclePosition, destino);
         const now = Date.now();
 
         await db.query(

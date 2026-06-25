@@ -1347,7 +1347,8 @@ export default function RoadsideAssistanceView({
                       </button>
 
                       {(assistance.status === "en_camino" ||
-                        assistance.status === "en_punto") &&
+                        assistance.status === "en_punto" ||
+                        assistance.status === "en_camino_base") &&
                         assistance.latitude != null &&
                         assistance.longitude != null && (
                           <button
