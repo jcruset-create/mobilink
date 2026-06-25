@@ -796,16 +796,16 @@ export default function RoadsideAssistanceView({
           </div>
         </header>
 
-        <section className="grid gap-3 md:grid-cols-6">
+        <section className="grid grid-cols-4 gap-2 sm:grid-cols-8">
           {statusCounts.map(({ status, count }) => (
             <div
               key={status}
-              className={`rounded-lg border px-3 py-2 ${STATUS_BADGES[status]}`}
+              className={`rounded-md border px-2 py-1 ${STATUS_BADGES[status]}`}
             >
-              <div className="text-[11px] font-black uppercase">
+              <div className="text-[9px] font-black uppercase leading-tight">
                 {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
               </div>
-              <div className="mt-1 text-2xl font-black">{count}</div>
+              <div className="text-base font-black leading-none">{count}</div>
             </div>
           ))}
         </section>
@@ -835,7 +835,7 @@ export default function RoadsideAssistanceView({
 
         <div className="space-y-5">
           {panelTab === "nueva" && (
-          <div className="mx-auto w-full max-w-4xl">
+          <div className="w-full">
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-sm font-black uppercase text-slate-700">
