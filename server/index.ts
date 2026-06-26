@@ -3221,16 +3221,21 @@ app.post(
         : Infinity;
 
       if (distM <= radioM) {
-        await db.query(
+        const upd = await db.query(
           `
             UPDATE roadside_assistances
             SET status = 'llegada_taller', "arrivedAtWorkshopMs" = $2
             WHERE id = $1
               AND status = 'en_camino_base'
               AND "arrivedAtWorkshopMs" IS NULL
+            RETURNING "assignedTechName"
           `,
           [id, Date.now()]
         );
+        // Liberar al técnico al cerrar la asistencia
+        if (upd.rows[0]?.assignedTechName) {
+          await freeTechFromRoadside(upd.rows[0].assignedTechName, id);
+        }
       }
 
       res.json({ ok: true, distToWorkshopM: Math.round(distM) });
@@ -7897,10 +7902,11 @@ async function checkWebfleetWorkshopArrival() {
 
         if (distM <= radioM) {
           const now = Date.now();
-          await db.query(
+          const upd = await db.query(
             `UPDATE roadside_assistances
              SET status = 'llegada_taller', "arrivedAtWorkshopMs" = $2
-             WHERE id = $1 AND status = 'en_camino_base' AND "arrivedAtWorkshopMs" IS NULL`,
+             WHERE id = $1 AND status = 'en_camino_base' AND "arrivedAtWorkshopMs" IS NULL
+             RETURNING "assignedTechName"`,
             [row.id, now]
           );
           await db.query(
@@ -7908,6 +7914,10 @@ async function checkWebfleetWorkshopArrival() {
              VALUES ($1, 'llegada_taller', 'Llegada al taller detectada por Webfleet GPS', 'sistema', $2)`,
             [row.id, now]
           );
+          // Liberar al técnico al cerrar la asistencia
+          if (upd.rows[0]?.assignedTechName) {
+            await freeTechFromRoadside(upd.rows[0].assignedTechName, row.id);
+          }
           console.log(`✓ Asistencia #${row.id} → llegada_taller (Webfleet geofence)`);
         }
       } catch (err) {
@@ -7919,9 +7929,36 @@ async function checkWebfleetWorkshopArrival() {
   }
 }
 
+// Libera técnicos cuya asistencia de carretera ya está cerrada o no existe (autocuración)
+async function reconcileTechRoadsideOccupation() {
+  try {
+    const r = await db.query(
+      `UPDATE techs t
+       SET status = 'disponible', "currentRoadsideAssistanceId" = NULL
+       WHERE t."currentRoadsideAssistanceId" IS NOT NULL
+         AND (
+           NOT EXISTS (SELECT 1 FROM roadside_assistances r WHERE r.id = t."currentRoadsideAssistanceId")
+           OR EXISTS (SELECT 1 FROM roadside_assistances r
+                      WHERE r.id = t."currentRoadsideAssistanceId"
+                        AND r.status IN ('llegada_taller','redirigida','cancelada'))
+         )
+       RETURNING name`
+    );
+    if (r.rows.length > 0) {
+      console.log(`Técnicos liberados (asistencia cerrada): ${r.rows.map((x: any) => x.name).join(", ")}`);
+    }
+  } catch (err) {
+    console.error("reconcileTechRoadsideOccupation error:", err);
+  }
+}
+
 // Comprobar cada 2 minutos
-setInterval(() => { void checkWebfleetWorkshopArrival(); }, 2 * 60 * 1000);
+setInterval(() => {
+  void checkWebfleetWorkshopArrival();
+  void reconcileTechRoadsideOccupation();
+}, 2 * 60 * 1000);
 void checkWebfleetWorkshopArrival();
+void reconcileTechRoadsideOccupation();
 
 /* =========================================================
    ALMACEN NEUMATICOS - OCR ALBARANES
