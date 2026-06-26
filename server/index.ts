@@ -7947,6 +7947,24 @@ async function reconcileTechRoadsideOccupation() {
     if (r.rows.length > 0) {
       console.log(`Técnicos liberados (asistencia cerrada): ${r.rows.map((x: any) => x.name).join(", ")}`);
     }
+
+    // Cerrar capturas WhatsApp huérfanas (asistencia cerrada o inexistente)
+    const cs = await db.query(
+      `UPDATE whatsapp_capture_sessions s
+       SET status = 'CLOSED', ended_at = $1
+       WHERE s.status = 'ACTIVE'
+         AND (
+           NOT EXISTS (SELECT 1 FROM roadside_assistances r WHERE r.id = s.job_id)
+           OR EXISTS (SELECT 1 FROM roadside_assistances r
+                      WHERE r.id = s.job_id
+                        AND r.status IN ('llegada_taller','redirigida','cancelada'))
+         )
+       RETURNING s.id`,
+      [Date.now()]
+    );
+    if (cs.rows.length > 0) {
+      console.log(`Capturas WhatsApp cerradas (asistencia cerrada): ${cs.rows.map((x: any) => x.id).join(", ")}`);
+    }
   } catch (err) {
     console.error("reconcileTechRoadsideOccupation error:", err);
   }
@@ -9361,19 +9379,33 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
     const { job_id, created_by } = req.body;
     if (!job_id) return res.status(400).json({ error: "job_id requerido" });
 
-    // Check no active session exists
+    // Solo puede haber una captura activa a la vez (los WhatsApp entrantes se
+    // enrutan a la sesión activa). Si la que bloquea es de una asistencia ya
+    // cerrada, se cierra sola y se permite la nueva.
     const existing = await db.query(
-      `SELECT s.id, s.job_id, ra.plate, ra."customerName"
+      `SELECT s.id, s.job_id, ra.plate, ra."customerName", ra.status AS job_status
        FROM whatsapp_capture_sessions s
        LEFT JOIN roadside_assistances ra ON ra.id = s.job_id
-       WHERE s.status = 'ACTIVE'
-       LIMIT 1`
+       WHERE s.status = 'ACTIVE'`
     );
-    if (existing.rows.length > 0) {
-      const active = existing.rows[0];
+    const CLOSED = new Set(["llegada_taller", "redirigida", "cancelada"]);
+    for (const active of existing.rows) {
+      // Misma asistencia: ya tiene su captura, no creamos otra
+      if (Number(active.job_id) === Number(job_id)) {
+        return res.status(409).json({ error: "Esta asistencia ya tiene una captura activa" });
+      }
+      // Captura huérfana (asistencia cerrada o inexistente) → cerrarla automáticamente
+      if (!active.job_status || CLOSED.has(active.job_status)) {
+        await db.query(
+          `UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`,
+          [active.id, Date.now()]
+        );
+        continue;
+      }
+      // Captura activa de otra asistencia AÚN ABIERTA → bloquear
       const label = active.plate || active.customerName || `#${active.job_id}`;
       return res.status(409).json({
-        error: `Ya existe una captura WhatsApp activa en la asistencia ${label}`,
+        error: `Ya hay una captura activa en la asistencia ${label}. Ciérrala antes de empezar otra.`,
         activeSession: active,
       });
     }
