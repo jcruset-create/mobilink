@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import 'arrival_photos_screen.dart';
 import 'cobros_screen.dart';
 import 'finish_screen.dart';
@@ -288,73 +290,63 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
-        toolbarHeight: 110,
-        title: Image.asset('assets/logo_horizontal.png', height: 90),
-        backgroundColor: const Color(0xFF16213e),
+        toolbarHeight: 80,
+        title: Image.asset('assets/logo_horizontal.png', height: 56),
+        backgroundColor: AppColors.background,
         foregroundColor: Colors.white,
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _InfoCard(assistance: _a),
-                  // Cobro asociado a esta asistencia
                   if (!_loadingCobro && _cobro != null) ...[
-                    const SizedBox(height: 16),
-                    _CobroMiniCard(
-                      cobro: _cobro!,
-                      onTap: () => _abrirCobro(_cobro!),
-                    ),
+                    const SizedBox(height: 12),
+                    _CobroMiniCard(cobro: _cobro!, onTap: () => _abrirCobro(_cobro!)),
                   ],
                   if (_loadingCapture) ...[
                     const SizedBox(height: 16),
                     const Center(child: CircularProgressIndicator(strokeWidth: 2)),
                   ] else if (_whatsappCapture != null) ...[
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
                     _WhatsAppCaptureCard(capture: _whatsappCapture!),
                   ],
                   const SizedBox(height: 24),
                   _section('Acciones rápidas'),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
                         child: _ActionButton(
-                          icon: Icons.navigation,
+                          icon: Icons.navigation_outlined,
                           label: 'Navegar',
-                          color: Colors.deepPurple,
+                          color: AppColors.statusEnPunto,
                           enabled: _hasLocation,
                           onPressed: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => NavigationScreen(
-                                api: widget.api,
-                                assistance: _a,
-                              ),
-                            ),
+                            MaterialPageRoute(builder: (_) => NavigationScreen(api: widget.api, assistance: _a)),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: _ActionButton(
-                          icon: Icons.map,
-                          label: 'Google Maps',
-                          color: Colors.blue,
+                          icon: Icons.map_outlined,
+                          label: 'Maps',
+                          color: AppColors.statusAsignada,
                           enabled: _hasLocation,
                           onPressed: _openMaps,
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: _ActionButton(
-                          icon: Icons.phone,
+                          icon: Icons.phone_outlined,
                           label: 'Llamar',
-                          color: Colors.green,
+                          color: AppColors.statusFinalizada,
                           enabled: _hasPhone,
                           onPressed: _call,
                         ),
@@ -363,54 +355,54 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                   ),
                   const SizedBox(height: 24),
                   _section('Cambiar estado'),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _ActionButton(
-                    icon: Icons.directions_car,
+                    icon: Icons.directions_car_outlined,
                     label: 'Estoy en camino',
-                    color: Colors.lightBlue,
+                    color: AppColors.statusEnCamino,
                     enabled: _canGoEnCamino,
                     fullWidth: true,
                     onPressed: _goEnCamino,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _ActionButton(
-                    icon: Icons.location_on,
+                    icon: Icons.location_on_outlined,
                     label: 'He llegado al punto',
-                    color: Colors.purple,
+                    color: AppColors.statusEnPunto,
                     enabled: _canHeArrived,
                     fullWidth: true,
                     onPressed: _onHeArrived,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _ActionButton(
-                    icon: Icons.build,
+                    icon: Icons.build_outlined,
                     label: 'Iniciar reparación',
-                    color: Colors.deepOrange,
+                    color: AppColors.statusInicioReparacion,
                     enabled: _canInicioReparacion,
                     fullWidth: true,
                     onPressed: () => _changeStatus('inicio_reparacion'),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _ActionButton(
-                    icon: Icons.add_a_photo,
+                    icon: Icons.add_a_photo_outlined,
                     label: 'Añadir fotos',
-                    color: Colors.indigo,
+                    color: AppColors.secondary,
                     enabled: _canAddPhotos,
                     fullWidth: true,
                     onPressed: _addExtraPhotos,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   _ActionButton(
-                    icon: Icons.check_circle,
+                    icon: Icons.check_circle_outline,
                     label: 'Finalizar asistencia',
-                    color: Colors.teal,
+                    color: AppColors.primary,
                     enabled: _canFinalize,
                     fullWidth: true,
                     onPressed: _onFinalize,
                   ),
-                  if (_status == 'en_camino') ...[
+                  if (_status == 'en_camino' || _status == 'en_camino_base') ...[
                     const SizedBox(height: 16),
-                    _GpsTrackingBanner(),
+                    _GpsTrackingBanner(status: _status),
                   ],
                 ],
               ),
@@ -420,32 +412,31 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
 
   Widget _section(String label) => Text(
         label,
-        style: const TextStyle(
-            color: Colors.white54,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 1),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(letterSpacing: 0.08),
       );
 }
 
 class _GpsTrackingBanner extends StatelessWidget {
+  final String status;
+  const _GpsTrackingBanner({required this.status});
+
   @override
   Widget build(BuildContext context) {
+    final isBase = status == 'en_camino_base';
+    final color = isBase ? AppColors.statusEnCaminoBase : AppColors.statusEnCamino;
+    final text = isBase ? 'GPS activo · Detectando llegada al taller' : 'Enviando ubicación al cliente cada 30s';
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.lightBlue.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.lightBlue.withOpacity(0.4)),
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
-      child: const Row(
+      child: Row(
         children: [
-          Icon(Icons.my_location, size: 16, color: Colors.lightBlue),
-          SizedBox(width: 8),
-          Text(
-            'Enviando ubicación al cliente cada 30s',
-            style: TextStyle(color: Colors.lightBlue, fontSize: 12),
-          ),
+          Icon(Icons.my_location, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w500))),
         ],
       ),
     );
@@ -488,12 +479,42 @@ class _InfoCard extends StatelessWidget {
           if (status == 'en_camino' && etaMin != null)
             _row(Icons.timer, 'ETA: $etaMin min · ${etaKm ?? '-'} km',
                 color: Colors.lightBlue),
+          if ((a['descripcionAveria'] as String? ?? '').isNotEmpty)
+            _block('🔧 AVERÍA', a['descripcionAveria'] ?? '', AppColors.warning),
+          if ((a['trabajosARealizar'] as String? ?? '').isNotEmpty)
+            _block('📋 TRABAJOS A REALIZAR', a['trabajosARealizar'] ?? '', AppColors.primary),
           if ((a['notes'] as String? ?? '').isNotEmpty)
             _row(Icons.sticky_note_2, a['notes'] ?? ''),
         ],
       ),
     );
   }
+
+  Widget _block(String title, String text, Color color) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5)),
+            const SizedBox(height: 4),
+            Text(text,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 15, height: 1.35)),
+          ],
+        ),
+      );
 
   Widget _row(IconData icon, String text, {Color? color}) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
@@ -512,31 +533,8 @@ class _InfoCard extends StatelessWidget {
         ),
       );
 
-  String _statusLabel(String s) => {
-        'pendiente': 'Pendiente',
-        'asignada': 'Asignada',
-        'en_camino': 'En camino',
-        'en_punto': 'En punto',
-        'inicio_reparacion': 'Reparando',
-        'finalizada': 'Finalizada',
-        'en_camino_base': 'Vuelta al taller',
-        'llegada_taller': 'En taller ✓',
-        'cancelada': 'Cancelada',
-      }[s] ??
-      s;
-
-  Color _statusColor(String s) => {
-        'pendiente': Colors.orange,
-        'asignada': Colors.blue,
-        'en_camino': Colors.lightBlue,
-        'en_punto': Colors.purple,
-        'inicio_reparacion': Colors.deepOrange,
-        'finalizada': Colors.green,
-        'en_camino_base': Colors.teal,
-        'llegada_taller': Colors.grey,
-        'cancelada': Colors.grey,
-      }[s] ??
-      Colors.grey;
+  String _statusLabel(String s) => statusLabel(s);
+  Color  _statusColor(String s) => statusColor(s);
 }
 
 class _ActionButton extends StatelessWidget {
@@ -558,20 +556,34 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isExterior = exteriorMode.value;
+    final minHeight = isExterior ? 80.0 : 72.0;
+    final iconSz    = isExterior ? 26.0 : 22.0;
+    final fontSize  = isExterior ? 18.0 : 16.0;
+
     final btn = ElevatedButton.icon(
       onPressed: enabled ? onPressed : null,
-      icon: Icon(icon),
-      label: Text(label),
+      icon: Icon(icon, size: iconSz),
+      label: Text(label, style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w500)),
       style: ElevatedButton.styleFrom(
-        backgroundColor: enabled ? color : Colors.white12,
-        foregroundColor: enabled ? Colors.white : Colors.white38,
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: enabled ? color : AppColors.disabledBtn,
+        foregroundColor: enabled ? _contrastColor(color) : AppColors.textDisabled,
+        disabledBackgroundColor: AppColors.disabledBtn,
+        disabledForegroundColor: AppColors.textDisabled,
+        minimumSize: Size(fullWidth ? double.infinity : 140, minHeight),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        elevation: 0,
       ),
     );
 
     return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
+  }
+
+  // Garantiza texto legible sobre cualquier color de estado
+  Color _contrastColor(Color bg) {
+    final luminance = bg.computeLuminance();
+    return luminance > 0.35 ? AppColors.onPrimary : AppColors.textPrimary;
   }
 }
 

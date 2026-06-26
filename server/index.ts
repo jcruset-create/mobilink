@@ -645,6 +645,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     plateRemolque: row.plateRemolque ?? null,
+    descripcionAveria: row.descripcionAveria ?? null,
+    trabajosARealizar: row.trabajosARealizar ?? null,
     redirectionLat: normalizeNullableNumber(row.redirectionLat),
     redirectionLng: normalizeNullableNumber(row.redirectionLng),
     redirectedAtMs: row.redirectedAtMs != null ? Number(row.redirectedAtMs) : null,
@@ -4120,6 +4122,8 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           longitude,
           plate,
           "plateRemolque",
+          "descripcionAveria",
+          "trabajosARealizar",
           "vehicleDescription",
           "webfleetVehicleId",
           "assignedTechName",
@@ -4138,7 +4142,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
         )
         RETURNING *
       `,
@@ -4155,6 +4159,8 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         longitude,
         String(body.plate || "").trim().toUpperCase(),
         body.plateRemolque ? String(body.plateRemolque).trim().toUpperCase() : null,
+        body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
+        body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
         body.vehicleDescription ? String(body.vehicleDescription).trim() : null,
         body.webfleetVehicleId ? String(body.webfleetVehicleId).trim() : null,
         assignedTechName || null,
@@ -4290,6 +4296,8 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "assignedVehicleName" = $15,
           notes = $16,
           "plateRemolque" = $18,
+          "descripcionAveria" = $19,
+          "trabajosARealizar" = $20,
           "updatedAtMs" = $17
           ${
             timestampField
@@ -4318,6 +4326,8 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.notes ? String(body.notes).trim() : null,
         now,
         body.plateRemolque ? String(body.plateRemolque).trim().toUpperCase() : null,
+        body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
+        body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
       ]
     );
 
@@ -9190,14 +9200,41 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
     const transcript = (tr.text || "").trim();
 
     // Guardamos la transcripción y la usamos como text_content para que el análisis IA la incluya
-    await db.query(
+    const upd = await db.query(
       `UPDATE whatsapp_capture_messages
        SET transcript = $2, transcript_status = 'done',
            text_content = COALESCE(NULLIF(text_content, ''), $2)
-       WHERE id = $1`,
+       WHERE id = $1
+       RETURNING job_id`,
       [captureMessageId, transcript]
     );
     console.log(`WhatsApp audio transcrito (capture msg #${captureMessageId}): ${transcript.slice(0, 80)}…`);
+
+    // Si el audio empieza por "trabajos a realizar", añadir el resto al campo de la asistencia
+    const jobId = upd.rows[0]?.job_id;
+    if (jobId) {
+      const norm = transcript
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, ""); // sin acentos
+      if (norm.startsWith("trabajos a realizar")) {
+        // Quita el encabezado "trabajos a realizar" (y posible ":" o "-") del texto original
+        const cuerpo = transcript.replace(/^\s*trabajos a realizar\s*[:.\-]?\s*/i, "").trim();
+        if (cuerpo) {
+          await db.query(
+            `UPDATE roadside_assistances
+             SET "trabajosARealizar" =
+                   CASE WHEN COALESCE("trabajosARealizar", '') = ''
+                        THEN $2
+                        ELSE "trabajosARealizar" || E'\\n' || $2 END,
+                 "updatedAtMs" = $3
+             WHERE id = $1`,
+            [jobId, cuerpo, Date.now()]
+          );
+          console.log(`Trabajos a realizar añadidos a asistencia #${jobId} desde audio`);
+        }
+      }
+    }
   } catch (e) {
     console.error("transcribeCaptureAudio error:", e);
     await db.query(

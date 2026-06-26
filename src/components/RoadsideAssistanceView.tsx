@@ -52,6 +52,8 @@ const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   longitude: "",
   plate: "",
   plateRemolque: "",
+  descripcionAveria: "",
+  trabajosARealizar: "",
   vehicleDescription: "",
   webfleetVehicleId: "",
   assignedTechName: "",
@@ -177,6 +179,8 @@ function buildEditDraft(
     googleMapsUrl: assistance.googleMapsUrl || "",
     plate: assistance.plate || "",
     plateRemolque: assistance.plateRemolque || "",
+    descripcionAveria: assistance.descripcionAveria || "",
+    trabajosARealizar: assistance.trabajosARealizar || "",
     vehicleDescription: assistance.vehicleDescription || "",
     assignedTechName: assistance.assignedTechName || "",
     assignedVehicleName: assistance.assignedVehicleName || "",
@@ -1158,6 +1162,34 @@ export default function RoadsideAssistanceView({
 
               <label className="block">
                 <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Descripción de la avería
+                </span>
+                <textarea
+                  value={draft.descripcionAveria}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, descripcionAveria: event.target.value }))
+                  }
+                  rows={2}
+                  className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Trabajos a realizar (instrucciones para el técnico)
+                </span>
+                <textarea
+                  value={draft.trabajosARealizar}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, trabajosARealizar: event.target.value }))
+                  }
+                  rows={2}
+                  className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
                   Observaciones
                 </span>
                 <textarea
@@ -2041,6 +2073,34 @@ export default function RoadsideAssistanceView({
                   <span className="text-sm font-black text-emerald-800">
                     Enviar WhatsApp con enlace privado al guardar
                   </span>
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Descripción de la avería
+                  </span>
+                  <textarea
+                    value={editDraft.descripcionAveria}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, descripcionAveria: event.target.value }))
+                    }
+                    rows={2}
+                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
+                </label>
+
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    Trabajos a realizar (instrucciones para el técnico)
+                  </span>
+                  <textarea
+                    value={editDraft.trabajosARealizar}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, trabajosARealizar: event.target.value }))
+                    }
+                    rows={2}
+                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  />
                 </label>
 
                 <label className="block md:col-span-2">
