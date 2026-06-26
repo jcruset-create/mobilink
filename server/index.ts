@@ -5323,6 +5323,25 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       doc.text(`  · Tiempo total (salida -> taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
 
       // Events
+      // Transcripciones de audios recibidos por WhatsApp
+      const audioRows = await db.query(
+        `SELECT transcript, received_at FROM whatsapp_capture_messages
+         WHERE job_id = $1 AND message_type = 'audio' AND transcript IS NOT NULL AND transcript <> ''
+         ORDER BY received_at ASC`,
+        [id]
+      );
+      if (audioRows.rows.length > 0) {
+        doc.moveDown(1);
+        doc.fontSize(13).font("Helvetica-Bold").text("Transcripción de audios (WhatsApp)");
+        doc.moveDown(0.3);
+        for (const a of audioRows.rows) {
+          doc.fontSize(9).font("Helvetica-Bold")
+            .text(`🎤 Transcripción de audio · ${formatDateEs(Number(a.received_at))}`);
+          doc.fontSize(9).font("Helvetica").text(a.transcript, { indent: 10 });
+          doc.moveDown(0.4);
+        }
+      }
+
       if (eventsResult.rows.length > 0) {
         doc.moveDown(1);
         doc.fontSize(13).font("Helvetica-Bold").text("Historial de estados");
