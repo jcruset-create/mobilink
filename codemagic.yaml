@@ -1,0 +1,49 @@
+workflows:
+  ios-testflight:
+    name: SEA Asistencia · iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        # Crea esta integración en Codemagic: Teams → Integrations → App Store Connect
+        # y registra el bundle id com.seatarragona.operario en Apple Developer.
+        distribution_type: app_store
+        bundle_identifier: com.seatarragona.operario
+      vars:
+        APP_STORE_APPLE_ID: "PENDIENTE"   # ID numérico de la app en App Store Connect (al crearla)
+      groups:
+        - appstore_connect            # grupo con las credenciales App Store Connect (UI de Codemagic)
+    working_directory: flutter_app
+    scripts:
+      - name: Flutter pub get
+        script: flutter pub get
+      - name: Instalar pods
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      - name: Set build number (incremental)
+        script: |
+          # Usa el nº de build de Codemagic para no repetir versión en TestFlight
+          agvtool new-version -all $(($BUILD_NUMBER + 100)) || true
+      - name: Build IPA
+        script: |
+          flutter build ipa --release \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - flutter_app/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # Grupos de testers internos que reciben la build automáticamente:
+        beta_groups:
+          - SEA Tecnicos
+      email:
+        recipients:
+          - jcruset@gmail.com
+        notify:
+          success: true
+          failure: true
