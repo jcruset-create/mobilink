@@ -34,6 +34,8 @@ export type WhatsAppCaptureMessage = {
   address: string | null;
   contact_name: string | null;
   contact_phone: string | null;
+  transcript: string | null;
+  transcript_status: "none" | "pending" | "done" | "error" | null;
   received_at: number;
   processed: boolean;
 };

@@ -173,6 +173,22 @@ function MessageRow({
         {mediaUrl && msg.message_type === "audio" && (
           <audio controls className="mt-2 w-full" src={mediaUrl} />
         )}
+        {msg.message_type === "audio" && (
+          <div className="mt-1">
+            {msg.transcript_status === "pending" && (
+              <p className="text-xs italic text-slate-400">Transcribiendo audio…</p>
+            )}
+            {msg.transcript_status === "error" && (
+              <p className="text-xs italic text-red-400">No se pudo transcribir el audio.</p>
+            )}
+            {msg.transcript && (
+              <div className="mt-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                <span className="text-[10px] font-black uppercase text-slate-400">Transcripción</span>
+                <p className="text-slate-800 whitespace-pre-wrap break-words">{msg.transcript}</p>
+              </div>
+            )}
+          </div>
+        )}
         {mediaUrl && !["image", "video", "audio"].includes(msg.message_type) && (
           <a
             href={mediaUrl}

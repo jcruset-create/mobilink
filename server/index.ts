@@ -12,7 +12,7 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
@@ -8884,13 +8884,15 @@ app.post(
           }
         }
 
-        await db.query(
+        const capMsg = await db.query(
           `INSERT INTO whatsapp_capture_messages
             (session_id, job_id, message_sid, from_phone, message_type,
              text_content, media_url, media_stored_url,
              latitude, longitude, address, contact_name, contact_phone,
-             raw_payload, received_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+             raw_payload, received_at,
+             transcript_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+           RETURNING id`,
           [
             sessionId, jobId, MessageSid, From, effectiveMsgType,
             effectiveMsgType === "location" ? null : (Body ?? null),
@@ -8903,9 +8905,16 @@ app.post(
             vcardContactPhone,
             JSON.stringify(req.body),
             Date.now(),
+            effectiveMsgType === "audio" ? "pending" : "none",
           ]
         );
         console.log(`WhatsApp capture: message ${MessageSid} routed to session #${sessionId} (job ${jobId})`);
+
+        // Audio → transcribir en segundo plano (no bloquea la respuesta a Twilio)
+        if (effectiveMsgType === "audio" && mediaUrl0 && capMsg.rows[0]?.id) {
+          void transcribeCaptureAudio(capMsg.rows[0].id, mediaUrl0);
+        }
+
         return res.status(200).type("text/xml").send("<Response></Response>");
       }
 
@@ -9073,10 +9082,61 @@ app.post("/api/whatsapp/send", requireSupervisorRole, async (req, res) => {
 ========================================================= */
 
 // Helper: AI analysis of capture session messages
+// Transcribe un audio de WhatsApp (Whisper) y lo guarda en el mensaje de captura.
+// Se ejecuta async tras responder a Twilio (no bloquea el webhook).
+async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: string) {
+  try {
+    await db.query(
+      `UPDATE whatsapp_capture_messages SET transcript_status = 'pending' WHERE id = $1`,
+      [captureMessageId]
+    );
+
+    const resp = await fetch(twilioMediaUrl, {
+      headers: {
+        Authorization:
+          "Basic " +
+          Buffer.from(
+            `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+          ).toString("base64"),
+      },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!resp.ok) throw new Error(`Audio download HTTP ${resp.status}`);
+
+    const contentType = resp.headers.get("content-type") ?? "audio/ogg";
+    const ext = (contentType.split("/")[1] || "ogg").split(";")[0];
+    const buffer = Buffer.from(await resp.arrayBuffer());
+
+    const file = await toFile(buffer, `audio.${ext}`, { type: contentType });
+    const tr = await openai.audio.transcriptions.create({
+      file,
+      model: "whisper-1",
+      prompt: "Asistencia en carretera: matrícula, avería, ubicación, chofer, autorización.",
+    });
+    const transcript = (tr.text || "").trim();
+
+    // Guardamos la transcripción y la usamos como text_content para que el análisis IA la incluya
+    await db.query(
+      `UPDATE whatsapp_capture_messages
+       SET transcript = $2, transcript_status = 'done',
+           text_content = COALESCE(NULLIF(text_content, ''), $2)
+       WHERE id = $1`,
+      [captureMessageId, transcript]
+    );
+    console.log(`WhatsApp audio transcrito (capture msg #${captureMessageId}): ${transcript.slice(0, 80)}…`);
+  } catch (e) {
+    console.error("transcribeCaptureAudio error:", e);
+    await db.query(
+      `UPDATE whatsapp_capture_messages SET transcript_status = 'error' WHERE id = $1`,
+      [captureMessageId]
+    ).catch(() => {});
+  }
+}
+
 async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<string, any>> {
   const result = await db.query(
     `SELECT message_type, text_content, latitude, longitude, address,
-            contact_name, contact_phone, media_stored_url, media_url
+            contact_name, contact_phone, media_stored_url, media_url, transcript
      FROM whatsapp_capture_messages
      WHERE session_id = $1
      ORDER BY received_at ASC`,
@@ -9097,7 +9157,7 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
       if (url) imageUrls.push(url);
       lines.push(`[IMAGEN enviada]`);
     }
-    else if (m.message_type === "audio") lines.push(`[AUDIO]`);
+    else if (m.message_type === "audio") lines.push(m.transcript ? `[AUDIO transcrito] ${m.transcript}` : `[AUDIO sin transcribir]`);
     else if (m.message_type === "document") lines.push(`[DOCUMENTO]`);
   }
 

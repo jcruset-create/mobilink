@@ -505,6 +505,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS wcm_session_idx ON whatsapp_capture_messages(session_id);
     CREATE INDEX IF NOT EXISTS wcm_job_idx ON whatsapp_capture_messages(job_id);
     CREATE INDEX IF NOT EXISTS wcm_received_idx ON whatsapp_capture_messages(received_at DESC);
+
+    ALTER TABLE whatsapp_capture_messages
+      ADD COLUMN IF NOT EXISTS transcript TEXT;
+    ALTER TABLE whatsapp_capture_messages
+      ADD COLUMN IF NOT EXISTS transcript_status TEXT DEFAULT 'none';
   `);
 
   await pool.query(`
