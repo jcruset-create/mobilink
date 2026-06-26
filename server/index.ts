@@ -4650,8 +4650,10 @@ async function detectBothPlatesFromImage(
               text:
                 "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
                 "y la matrícula ROJA es del REMOLQUE. " +
+                "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
                 "Identifica las matrículas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
-                '{"blanca":"XXXX","roja":"YYYY"}. ' +
+                '{"blanca":"XXXX","roja":"RYYYYZZZ"}. ' +
+                "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
                 "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
             },
             { type: "image_url", image_url: { url: imageUrl } },
@@ -9281,6 +9283,12 @@ INSTRUCCIONES CRÍTICAS para imágenes:
    - Si encuentras coordenadas DMS, conviértelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
 3. Busca direcciones, nombres de calles, municipios visibles en imágenes de mapas o capturas de pantalla.
 
+MATRÍCULAS (España):
+- Matrícula BLANCA = camión/vehículo tractor → campo "plate".
+- Matrícula ROJA = REMOLQUE → campo "plateRemolque". Formato del remolque: una "R" seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). Devuélvela sin espacios ni guiones, empezando por R.
+- Si en una imagen aparecen la blanca y la roja juntas: la blanca es del camión ("plate") y la roja del remolque ("plateRemolque").
+- No pongas una matrícula roja (que empieza por R con formato R+4 dígitos+3 letras) en "plate"; esa va siempre en "plateRemolque".
+
 Responde SOLO con JSON válido, sin markdown.
 Campos a extraer (null si no disponible):
 {
@@ -9289,7 +9297,8 @@ Campos a extraer (null si no disponible):
   "empresa": string,
   "contactoNombre": string,
   "contactoTelefono": string,
-  "plate": string (matrícula del vehículo averiado, sin espacios ni guiones),
+  "plate": string (matrícula BLANCA del vehículo averiado/camión, sin espacios ni guiones),
+  "plateRemolque": string (matrícula ROJA del remolque, formato R+4 dígitos+3 letras, ej. R0000BBB, o null),
   "vehicleBrand": string,
   "vehicleModel": string,
   "vehicleDescription": string,
@@ -9585,6 +9594,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       customerPhone: '"customerPhone"',
       conductorNombre: '"conductorNombre"',
       plate: "plate",
+      plateRemolque: '"plateRemolque"',
       address: "address",
       latitude: "latitude",
       longitude: "longitude",

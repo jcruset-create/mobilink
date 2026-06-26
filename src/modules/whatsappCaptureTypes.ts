@@ -50,6 +50,7 @@ export type WhatsAppAiSuggestions = {
   contactoTelefono?: string | null;
   // Vehículo
   plate?: string | null;
+  plateRemolque?: string | null;
   vehicleBrand?: string | null;
   vehicleModel?: string | null;
   vehicleDescription?: string | null;
