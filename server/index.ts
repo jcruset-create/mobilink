@@ -3309,7 +3309,7 @@ app.get(
           ${
             includeClosed
               ? ""
-              : `AND status NOT IN ('llegada_taller', 'cancelada')`
+              : `AND status NOT IN ('llegada_taller', 'cancelada', 'redirigida')`
           }
           ORDER BY "createdAtMs" DESC
           LIMIT 100

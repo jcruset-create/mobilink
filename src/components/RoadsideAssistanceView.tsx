@@ -141,7 +141,7 @@ function getActionIcon(status: RoadsideAssistanceStatus) {
 }
 
 function isClosed(status: RoadsideAssistanceStatus) {
-  return status === "llegada_taller" || status === "cancelada";
+  return status === "llegada_taller" || status === "cancelada" || status === "redirigida";
 }
 
 function getTrackingUrl(assistance: RoadsideAssistance) {
