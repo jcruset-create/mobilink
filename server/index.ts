@@ -3317,7 +3317,33 @@ app.get(
         [operator.techName]
       );
 
-      res.json(result.rows.map(normalizeRoadsideAssistanceRow));
+      const rows = result.rows.map(normalizeRoadsideAssistanceRow) as any[];
+
+      // Adjuntar fotos (archivos subidos + imágenes recibidas por WhatsApp) a cada asistencia
+      const ids = rows.map((r) => r.id);
+      if (ids.length > 0) {
+        const photos = await db.query(
+          `SELECT "assistanceId" AS jid, url, "createdAtMs" AS ts
+             FROM roadside_assistance_files
+             WHERE "assistanceId" = ANY($1) AND kind <> 'firma' AND url IS NOT NULL
+           UNION ALL
+           SELECT job_id AS jid, COALESCE(media_stored_url, media_url) AS url, received_at AS ts
+             FROM whatsapp_capture_messages
+             WHERE job_id = ANY($1) AND message_type = 'image'
+               AND (media_stored_url IS NOT NULL OR media_url IS NOT NULL)
+           ORDER BY ts ASC`,
+          [ids]
+        );
+        const byJob = new Map<number, string[]>();
+        for (const p of photos.rows) {
+          const arr = byJob.get(Number(p.jid)) ?? [];
+          if (p.url && !arr.includes(p.url)) arr.push(p.url);
+          byJob.set(Number(p.jid), arr);
+        }
+        for (const r of rows) r.photoUrls = byJob.get(r.id) ?? [];
+      }
+
+      res.json(rows);
     } catch (error) {
       console.error("GET /api/roadside-operator/assistances error:", error);
       res.status(500).json({ error: "Error obteniendo asistencias operario" });

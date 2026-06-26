@@ -222,6 +222,36 @@ class _TopBarIcon extends StatelessWidget {
   }
 }
 
+// ── Bloque destacado (avería / trabajos) en la tarjeta ────────────────────────
+class _CardBlock extends StatelessWidget {
+  final String title;
+  final String text;
+  final Color color;
+  const _CardBlock({required this.title, required this.text, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
+              style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+          const SizedBox(height: 3),
+          Text(text, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, height: 1.3)),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Tab de asistencias activas ────────────────────────────────────────────────
 class _ActiveAssistancesTab extends StatelessWidget {
   final bool loading;
@@ -301,6 +331,9 @@ class _ActiveAssistancesTab extends StatelessWidget {
           final plate = (a['plate'] as String? ?? '').toUpperCase();
           final customer = a['customerName'] as String? ?? '';
           final address = a['address'] as String? ?? '';
+          final averia = (a['descripcionAveria'] as String? ?? '').trim();
+          final trabajos = (a['trabajosARealizar'] as String? ?? '').trim();
+          final photoUrls = (a['photoUrls'] as List<dynamic>?)?.cast<String>() ?? const <String>[];
 
           return Card(
             child: InkWell(
@@ -313,12 +346,13 @@ class _ActiveAssistancesTab extends StatelessWidget {
               },
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Row(
+                child: IntrinsicHeight(
+                  child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     // Indicador de estado lateral
                     Container(
                       width: 4,
-                      height: 72,
                       decoration: BoxDecoration(
                         color: color,
                         borderRadius: BorderRadius.circular(2),
@@ -364,12 +398,46 @@ class _ActiveAssistancesTab extends StatelessWidget {
                               style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
                             ),
                           ),
+                          // Avería
+                          if (averia.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            _CardBlock(title: '🔧 AVERÍA', text: averia, color: AppColors.warning),
+                          ],
+                          // Trabajos a realizar
+                          if (trabajos.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            _CardBlock(title: '📋 TRABAJOS A REALIZAR', text: trabajos, color: AppColors.primary),
+                          ],
+                          // Fotos
+                          if (photoUrls.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              height: 64,
+                              child: ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: photoUrls.length,
+                                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                                itemBuilder: (_, p) => ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.network(
+                                    photoUrls[p],
+                                    width: 64, height: 64, fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => Container(
+                                      width: 64, height: 64, color: AppColors.surfaceVariant,
+                                      child: const Icon(Icons.broken_image, color: AppColors.textHint, size: 20),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
                     const SizedBox(width: 12),
                     Icon(Icons.chevron_right, color: color, size: 28),
                   ],
+                ),
                 ),
               ),
             ),
