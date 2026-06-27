@@ -3249,6 +3249,67 @@ app.post(
   }
 );
 
+// Lote de posiciones capturadas offline (migas de pan). Se envían al recuperar señal.
+app.post(
+  "/api/roadside-operator/assistances/:id/locations-batch",
+  requireRoadsideOperator,
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      const id = Number(req.params.id);
+      const points = Array.isArray(req.body?.points) ? req.body.points : [];
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+      const check = await db.query(
+        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        [id, operator.techName]
+      );
+      if (check.rows.length === 0) {
+        return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
+      }
+
+      // Guardar todas las migas de pan (rastro), ordenadas por hora
+      const valid = points
+        .map((p: any) => ({ lat: Number(p.lat), lng: Number(p.lng), ts: Number(p.ts) || Date.now() }))
+        .filter((p: any) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+        .sort((a: any, b: any) => a.ts - b.ts);
+
+      for (const p of valid) {
+        await db.query(
+          `INSERT INTO roadside_operator_track ("assistanceId", lat, lng, "ts") VALUES ($1,$2,$3,$4)`,
+          [id, p.lat, p.lng, p.ts]
+        );
+      }
+
+      // Aplicar la ÚLTIMA posición como ubicación actual + geovalla de taller
+      if (valid.length > 0) {
+        const last = valid[valid.length - 1];
+        await db.query(
+          `UPDATE roadside_assistances SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4 WHERE id = $1`,
+          [id, last.lat, last.lng, last.ts]
+        );
+        const cfg = await getWorkshopConfig();
+        const tLat = parseFloat(cfg.taller_lat), tLng = parseFloat(cfg.taller_lng);
+        const radioM = parseFloat(cfg.taller_radio_m) || 300;
+        if (isFinite(tLat) && isFinite(tLng) && haversineDistanceM(last.lat, last.lng, tLat, tLng) <= radioM) {
+          const upd = await db.query(
+            `UPDATE roadside_assistances SET status = 'llegada_taller', "arrivedAtWorkshopMs" = $2
+             WHERE id = $1 AND status = 'en_camino_base' AND "arrivedAtWorkshopMs" IS NULL
+             RETURNING "assignedTechName"`,
+            [id, Date.now()]
+          );
+          if (upd.rows[0]?.assignedTechName) await freeTechFromRoadside(upd.rows[0].assignedTechName, id);
+        }
+      }
+
+      res.json({ ok: true, stored: valid.length });
+    } catch (error) {
+      console.error("POST locations-batch error:", error);
+      res.status(500).json({ error: "Error guardando rastro" });
+    }
+  }
+);
+
 app.post(
   "/api/roadside-operator/assistances/:id/en-camino",
   requireRoadsideOperator,

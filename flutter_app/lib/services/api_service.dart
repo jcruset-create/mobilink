@@ -139,6 +139,28 @@ class ApiService {
         break;
       }
     }
+
+    // Migas de pan GPS guardadas offline → enviar en lote
+    if (OfflineStore.hasLocations()) {
+      final byAssist = OfflineStore.locationsByAssistance();
+      var allOk = true;
+      for (final entry in byAssist.entries) {
+        try {
+          final res = await http
+              .post(
+                Uri.parse('$kBackendUrl/api/roadside-operator/assistances/${entry.key}/locations-batch'),
+                headers: _headers,
+                body: jsonEncode({'points': entry.value}),
+              )
+              .timeout(const Duration(seconds: 20));
+          if (res.statusCode != 200) allOk = false;
+        } catch (e) {
+          if (_isNetworkError(e)) return;
+          allOk = false;
+        }
+      }
+      if (allOk) await OfflineStore.clearLocations();
+    }
   }
 
   Future<List<Map<String, dynamic>>> getHistory() async {
@@ -262,12 +284,21 @@ class ApiService {
   }
 
   Future<void> sendLocation(int id, double lat, double lng) async {
-    await http.post(
-      Uri.parse(
-          '$kBackendUrl/api/roadside-operator/assistances/$id/location'),
-      headers: _headers,
-      body: jsonEncode({'lat': lat, 'lng': lng}),
-    );
+    try {
+      await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/location'),
+            headers: _headers,
+            body: jsonEncode({'lat': lat, 'lng': lng}),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        // Sin red → guardar la posición como miga de pan para enviarla al reconectar
+        await OfflineStore.enqueueLocation(id, lat, lng);
+      }
+      // No relanzamos: el seguimiento GPS no debe interrumpir al técnico
+    }
   }
 
   Future<Map<String, dynamic>> saveConductor(

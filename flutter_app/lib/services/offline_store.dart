@@ -8,6 +8,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 class OfflineStore {
   static late Box _cache;
   static late Box _outbox;
+  static late Box _track; // migas de pan GPS offline
 
   /// Notifican a la UI: nº de cambios pendientes y si estamos offline.
   static final ValueNotifier<int> pendingCount = ValueNotifier<int>(0);
@@ -17,6 +18,7 @@ class OfflineStore {
     await Hive.initFlutter();
     _cache = await Hive.openBox('sea_cache');
     _outbox = await Hive.openBox('sea_outbox');
+    _track = await Hive.openBox('sea_track');
     pendingCount.value = _outbox.length;
   }
 
@@ -111,6 +113,33 @@ class OfflineStore {
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
     pendingCount.value = _outbox.length;
+  }
+
+  // ── Migas de pan GPS (offline) ──
+  static Future<void> enqueueLocation(int assistanceId, double lat, double lng) async {
+    await _track.add({
+      'assistanceId': assistanceId,
+      'lat': lat,
+      'lng': lng,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  // Devuelve las migas agrupadas por asistencia: {assistanceId: [{lat,lng,ts}]}
+  static Map<int, List<Map<String, dynamic>>> locationsByAssistance() {
+    final out = <int, List<Map<String, dynamic>>>{};
+    for (final v in _track.values) {
+      final m = Map<String, dynamic>.from(v as Map);
+      final id = m['assistanceId'] as int;
+      out.putIfAbsent(id, () => []).add(m);
+    }
+    return out;
+  }
+
+  static bool hasLocations() => _track.isNotEmpty;
+
+  static Future<void> clearLocations() async {
+    await _track.clear();
   }
 
   // ── Cola de captura de destino (GPS al llegar) ──

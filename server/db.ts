@@ -280,6 +280,15 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS roadside_operator_track (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "ts" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS rot_assist_idx ON roadside_operator_track("assistanceId");
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "redirectionLat" DOUBLE PRECISION;
 
