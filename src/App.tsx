@@ -8,6 +8,7 @@ import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
 import RoadsideReportPage from "./pages/RoadsideReportPage";
 import FlotaMapPage from "./pages/FlotaMapPage";
 import OtfPage from "./pages/OtfPage";
+import OtfTvPage from "./pages/OtfTvPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -106,6 +107,7 @@ export default function App() {
       <Route path="/informe/:token" element={<RoadsideReportPage />} />
       <Route path="/flota" element={<FlotaMapPage />} />
       <Route path="/otf" element={<OtfPage />} />
+      <Route path="/otf-tv" element={<OtfTvPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/almacen-neumaticos/login" element={<Login />} />
 
