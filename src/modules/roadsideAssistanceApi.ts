@@ -102,6 +102,17 @@ export async function updateOtfTrabajo(tid: number, body: Record<string, unknown
   return res.json();
 }
 
+export async function fetchVehiculoHistorial(plate: string) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vehiculo-historial?plate=${encodeURIComponent(plate)}`, {
+    headers: getAdminHeaders(),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => null);
+    throw new Error(e?.error || "No se pudo cargar el historial");
+  }
+  return res.json();
+}
+
 export async function deleteOtfTrabajo(tid: number) {
   const res = await fetchWithTimeout(`${API_BASE}/api/otf/trabajos/${tid}`, {
     method: "DELETE",

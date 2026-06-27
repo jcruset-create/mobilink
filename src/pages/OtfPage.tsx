@@ -211,7 +211,9 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
           <div key={t.id} className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-black">{t.plate || "—"}</span>
+                {t.plate ? (
+                  <a href={`/vehiculo?plate=${encodeURIComponent(t.plate)}`} target="_blank" rel="noopener noreferrer" className="font-black underline decoration-dotted hover:text-blue-700">{t.plate}</a>
+                ) : <span className="font-black">—</span>}
                 <span className="text-xs text-slate-500">{t.tipoVehiculo}</span>
                 {t.origen === "tecnico_campo" && (
                   <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-black text-orange-800">AÑADIDO EN CAMPO{t.creadoPorTecnico ? ` · ${t.creadoPorTecnico}` : ""}</span>

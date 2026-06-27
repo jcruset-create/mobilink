@@ -830,6 +830,14 @@ export default function RoadsideAssistanceView({
             >
               🚛 OTF
             </a>
+            <a
+              href="/vehiculo"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              🔎 Historial vehículo
+            </a>
             <button
               type="button"
               onClick={onRefresh}
@@ -1332,7 +1340,17 @@ export default function RoadsideAssistanceView({
                         </div>
 
                         <h3 className="mt-3 truncate text-lg font-black">
-                          {assistance.plate || "Sin matricula"}
+                          {assistance.plate ? (
+                            <a
+                              href={`/vehiculo?plate=${encodeURIComponent(assistance.plate)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-slate-900 underline decoration-dotted hover:text-blue-700"
+                              title="Ver historial del vehículo"
+                            >
+                              {assistance.plate}
+                            </a>
+                          ) : "Sin matricula"}
                         </h3>
                         <div className="mt-1 truncate text-sm font-semibold text-slate-600">
                           {assistance.customerName || "Cliente sin nombre"}

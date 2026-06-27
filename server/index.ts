@@ -10423,6 +10423,66 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
   }
 });
 
+// Historial completo de un vehículo por matrícula (asistencias + trabajos OTF)
+app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
+  try {
+    const raw = String(req.query.plate ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!raw || raw.length < 4) return res.status(400).json({ error: "Matrícula no válida" });
+    const norm = `UPPER(REPLACE(REPLACE(COALESCE(%COL%,''),' ',''),'-','')) = $1`;
+
+    // Asistencias (por matrícula del camión o del remolque)
+    const asis = await db.query(
+      `SELECT * FROM roadside_assistances
+       WHERE ${norm.replace("%COL%", "plate")} OR ${norm.replace("%COL%", '"plateRemolque"')}
+       ORDER BY "createdAtMs" DESC LIMIT 200`,
+      [raw]
+    );
+    const asistencias = asis.rows.map(normalizeRoadsideAssistanceRow);
+
+    // Trabajos de OTF
+    const trab = await db.query(
+      `SELECT t.*, o."clientName", o."baseName", o."fechaProgramadaMs", o."createdAtMs" AS otf_created
+       FROM otf_trabajos t JOIN otf o ON o.id = t."otfId"
+       WHERE ${norm.replace("%COL%", "t.plate")} OR ${norm.replace("%COL%", 't."plateRemolque"')}
+       ORDER BY t."createdAtMs" DESC LIMIT 200`,
+      [raw]
+    );
+    const trabajosOtf = trab.rows.map((r: any) => ({
+      ...normalizeOtfTrabajo(r),
+      clientName: r.clientName ?? null,
+      baseName: r.baseName ?? null,
+      fecha: r.otf_created != null ? Number(r.otf_created) : null,
+    }));
+
+    // Clientes asociados
+    const clientes = Array.from(new Set([
+      ...asistencias.map((a: any) => a.customerName).filter(Boolean),
+      ...trabajosOtf.map((t: any) => t.clientName).filter(Boolean),
+    ]));
+
+    // Incidencias repetidas: ≥2 asistencias en los últimos 90 días
+    const hace90 = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const recientes = asistencias.filter((a: any) => (a.createdAtMs ?? 0) >= hace90).length;
+    const alerta = recientes >= 2 ? `⚠️ ${recientes} intervenciones en los últimos 90 días` : null;
+
+    res.json({
+      plate: raw,
+      resumen: {
+        totalAsistencias: asistencias.length,
+        totalTrabajosOtf: trabajosOtf.length,
+        clientes,
+        ultimaMs: asistencias[0]?.createdAtMs ?? trabajosOtf[0]?.fecha ?? null,
+      },
+      alerta,
+      asistencias,
+      trabajosOtf,
+    });
+  } catch (e) {
+    console.error("GET /api/vehiculo-historial error:", e);
+    res.status(500).json({ error: "Error obteniendo historial" });
+  }
+});
+
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
