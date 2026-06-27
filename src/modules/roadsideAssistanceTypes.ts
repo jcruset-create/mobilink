@@ -30,6 +30,20 @@ export type RoadsideVehicle = {
   updatedAtMs: number;
 };
 
+export type KnownPlace = {
+  id: number;
+  nombre: string;
+  tipo: string;
+  direccion?: string | null;
+  lat: number | null;
+  lng: number | null;
+  clientId?: number | null;
+  clientName?: string | null;
+  notas?: string | null;
+  active?: boolean;
+  createdAtMs?: number | null;
+};
+
 export type RoadsideVehicleDraft = {
   name: string;
   plate: string;

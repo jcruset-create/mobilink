@@ -8,7 +8,46 @@ import type {
   RoadsideTrackingResponse,
   RoadsideVehicle,
   RoadsideVehicleDraft,
+  KnownPlace,
 } from "./roadsideAssistanceTypes";
+
+export async function fetchKnownPlaces(clientId?: number | null): Promise<KnownPlace[]> {
+  const url = new URL(`${API_BASE}/api/roadside-known-places`, window.location.origin);
+  if (clientId) url.searchParams.set("clientId", String(clientId));
+  const res = await fetchWithTimeout(url.pathname + url.search, { headers: getAdminHeaders() });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
+}
+
+export async function createKnownPlace(body: Partial<KnownPlace>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/roadside-known-places`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo crear el lugar");
+  return res.json();
+}
+
+export async function updateKnownPlace(id: number, body: Partial<KnownPlace>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/roadside-known-places/${id}`, {
+    method: "PUT",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo actualizar el lugar");
+  return res.json();
+}
+
+export async function deleteKnownPlace(id: number) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/roadside-known-places/${id}`, {
+    method: "DELETE",
+    headers: getAdminHeaders(),
+  });
+  if (!res.ok) throw new Error("No se pudo eliminar el lugar");
+  return res.json();
+}
 
 export async function geocodeAddress(address: string) {
   const response = await fetchWithTimeout(`${API_BASE}/api/geocode`, {

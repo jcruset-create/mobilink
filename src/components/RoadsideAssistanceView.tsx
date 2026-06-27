@@ -26,7 +26,12 @@ import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackoffi
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
-import { geocodeAddress } from "../modules/roadsideAssistanceApi";
+import {
+  geocodeAddress,
+  fetchKnownPlaces,
+  updateKnownPlace,
+  deleteKnownPlace,
+} from "../modules/roadsideAssistanceApi";
 
 import type { Tech } from "../modules/workshopTypes";
 import { API_BASE } from "../modules/workshopApi";
@@ -36,6 +41,7 @@ import type {
   RoadsideAssistanceEditDraft,
   RoadsideAssistanceStatus,
   RoadsideVehicle,
+  KnownPlace,
 } from "../modules/roadsideAssistanceTypes";
 import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
@@ -331,6 +337,24 @@ export default function RoadsideAssistanceView({
 
   const [backofficeAssistance, setBackofficeAssistance] = useState<RoadsideAssistance | null>(null);
   const [showNewBackoffice, setShowNewBackoffice] = useState(false);
+  const [knownPlaces, setKnownPlaces] = useState<KnownPlace[]>([]);
+  const [showPlacesManager, setShowPlacesManager] = useState(false);
+
+  useEffect(() => {
+    fetchKnownPlaces().then(setKnownPlaces).catch(() => {});
+  }, []);
+
+  function applyKnownPlaceToDraft(placeId: string, edit: boolean) {
+    const place = knownPlaces.find((p) => String(p.id) === placeId);
+    if (!place) return;
+    const patch = {
+      address: place.direccion || place.nombre,
+      latitude: place.lat != null ? String(place.lat) : "",
+      longitude: place.lng != null ? String(place.lng) : "",
+    };
+    if (edit) setEditDraft((prev) => ({ ...prev, ...patch }));
+    else setDraft((prev) => ({ ...prev, ...patch }));
+  }
   const [whatsappCaptureId, setWhatsappCaptureId] = useState<number | null>(null);
 
   // ── Pestañas panel derecho ──────────────────────────────────────────────────
@@ -793,6 +817,13 @@ export default function RoadsideAssistanceView({
             </a>
             <button
               type="button"
+              onClick={() => setShowPlacesManager(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-800 hover:bg-teal-100"
+            >
+              📍 Lugares
+            </button>
+            <button
+              type="button"
               onClick={onRefresh}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
             >
@@ -942,6 +973,27 @@ export default function RoadsideAssistanceView({
                   Enviar WhatsApp con enlace privado al crear
                 </span>
               </label>
+
+              {knownPlaces.length > 0 && (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                    📍 Lugar conocido{" "}
+                    <span className="font-normal text-slate-400">(parking, base de cliente…)</span>
+                  </span>
+                  <select
+                    defaultValue=""
+                    onChange={(e) => { applyKnownPlaceToDraft(e.target.value, false); e.target.value = ""; }}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    <option value="">— Elegir lugar conocido —</option>
+                    {knownPlaces.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nombre}{p.clientName ? ` · ${p.clientName}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               <label className="block">
                 <span className="mb-1 block text-xs font-bold text-slate-600">
@@ -1830,6 +1882,22 @@ export default function RoadsideAssistanceView({
                   />
                 </label>
 
+                {knownPlaces.length > 0 && (
+                  <label className="block md:col-span-2">
+                    <span className="mb-1 block text-xs font-bold text-slate-600">📍 Lugar conocido</span>
+                    <select
+                      defaultValue=""
+                      onChange={(e) => { applyKnownPlaceToDraft(e.target.value, true); e.target.value = ""; }}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    >
+                      <option value="">— Elegir lugar conocido —</option>
+                      {knownPlaces.map((p) => (
+                        <option key={p.id} value={p.id}>{p.nombre}{p.clientName ? ` · ${p.clientName}` : ""}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
                 <label className="block md:col-span-2">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
                     Direccion
@@ -2406,6 +2474,61 @@ export default function RoadsideAssistanceView({
           assistance={backofficeAssistance}
           onClose={() => setBackofficeAssistance(null)}
         />
+      )}
+
+      {/* Modal gestión de Lugares Conocidos */}
+      {showPlacesManager && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-10">
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <h2 className="text-lg font-black text-slate-900">📍 Lugares conocidos</h2>
+              <button type="button" onClick={() => setShowPlacesManager(false)} className="rounded-full p-1 hover:bg-slate-100">
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {knownPlaces.length === 0 ? (
+                <div className="py-10 text-center text-sm font-bold text-slate-400">
+                  Aún no hay lugares. Se crean automáticamente cuando el operario llega a un punto nuevo.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {knownPlaces.map((p) => (
+                    <div key={p.id} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <input
+                          defaultValue={p.nombre}
+                          onBlur={async (e) => {
+                            const nombre = e.target.value.trim();
+                            if (nombre && nombre !== p.nombre) {
+                              await updateKnownPlace(p.id, { nombre });
+                              setKnownPlaces((prev) => prev.map((x) => x.id === p.id ? { ...x, nombre } : x));
+                            }
+                          }}
+                          className="w-full rounded border border-slate-200 px-2 py-1 text-sm font-bold"
+                        />
+                        <div className="mt-1 text-xs text-slate-500">
+                          {p.tipo}{p.direccion ? ` · ${p.direccion}` : ""}{p.clientName ? ` · ${p.clientName}` : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!confirm(`¿Eliminar "${p.nombre}"?`)) return;
+                          await deleteKnownPlace(p.id);
+                          setKnownPlaces((prev) => prev.filter((x) => x.id !== p.id));
+                        }}
+                        className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-black text-red-700 hover:bg-red-100"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal Back Office en creación (borrador) */}
