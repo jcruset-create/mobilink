@@ -275,6 +275,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS rkp_active_idx ON roadside_known_places(active);
     CREATE INDEX IF NOT EXISTS rkp_client_idx ON roadside_known_places("clientId");
 
+    CREATE TABLE IF NOT EXISTS processed_actions (
+      action_id TEXT PRIMARY KEY,
+      "createdAtMs" BIGINT NOT NULL
+    );
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "redirectionLat" DOUBLE PRECISION;
 

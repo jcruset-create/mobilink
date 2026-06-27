@@ -1,7 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../config.dart';
+import 'offline_store.dart';
+
+/// ¿El error indica falta de conexión (no un error real del servidor)?
+bool _isNetworkError(Object e) =>
+    e is SocketException ||
+    e is TimeoutException ||
+    e is http.ClientException;
 
 class ApiService {
   final String techName;
@@ -31,15 +39,64 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getAssistances() async {
-    final res = await http.get(
-      Uri.parse('$kBackendUrl/api/roadside-operator/assistances'),
-      headers: _headers,
-    );
-    if (res.statusCode != 200) {
-      throw Exception('Error cargando asistencias');
+    try {
+      // Antes de leer, intentamos enviar los cambios pendientes
+      await flushOutbox();
+
+      final res = await http
+          .get(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) {
+        throw Exception('Error cargando asistencias');
+      }
+      final list = (jsonDecode(res.body) as List<dynamic>).cast<Map<String, dynamic>>();
+      OfflineStore.offline.value = false;
+      await OfflineStore.cacheAssistances(list);
+      return list;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        // Sin cobertura → devolvemos la última copia cacheada
+        OfflineStore.offline.value = true;
+        return OfflineStore.cachedAssistances();
+      }
+      rethrow;
     }
-    final list = jsonDecode(res.body) as List<dynamic>;
-    return list.cast<Map<String, dynamic>>();
+  }
+
+  /// Envía a servidor los cambios de estado encolados (offline). Best-effort.
+  Future<void> flushOutbox() async {
+    for (final entry in OfflineStore.pending()) {
+      final item = entry.value;
+      final id = item['assistanceId'] as int;
+      final status = item['status'] as String;
+      final type = item['type'] as String;
+      final actionId = item['actionId'] as String;
+      try {
+        final url = type == 'en_camino'
+            ? '$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'
+            : '$kBackendUrl/api/roadside-operator/assistances/$id/status';
+        final res = await http
+            .post(
+              Uri.parse(url),
+              headers: _headers,
+              body: jsonEncode(type == 'en_camino'
+                  ? {'clientActionId': actionId}
+                  : {'status': status, 'clientActionId': actionId}),
+            )
+            .timeout(const Duration(seconds: 12));
+        if (res.statusCode == 200) {
+          await OfflineStore.removePending(entry.key);
+        } else {
+          break; // error real del servidor: paramos para no perder orden
+        }
+      } catch (e) {
+        if (_isNetworkError(e)) return; // sigue sin red, reintentar luego
+        break;
+      }
+    }
   }
 
   Future<List<Map<String, dynamic>>> getHistory() async {
@@ -99,31 +156,67 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> updateStatus(int id, String status) async {
-    final res = await http.post(
-      Uri.parse(
-          '$kBackendUrl/api/roadside-operator/assistances/$id/status'),
-      headers: _headers,
-      body: jsonEncode({'status': status}),
-    );
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Error actualizando estado');
+    final actionId = '${DateTime.now().millisecondsSinceEpoch}-$id-$status';
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/status'),
+            headers: _headers,
+            body: jsonEncode({'status': status, 'clientActionId': actionId}),
+          )
+          .timeout(const Duration(seconds: 12));
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode != 200) {
+        throw Exception(data['error'] ?? 'Error actualizando estado');
+      }
+      OfflineStore.offline.value = false;
+      return data;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        // Sin red → encolar y aplicar el cambio en local
+        OfflineStore.offline.value = true;
+        await OfflineStore.enqueueStatus(assistanceId: id, status: status, type: 'status');
+        return _localAssistance(id, status);
+      }
+      rethrow;
     }
-    return data;
   }
 
   // Usa el endpoint dedicado que envía WhatsApp al cliente
   Future<Map<String, dynamic>> enCamino(int id) async {
-    final res = await http.post(
-      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'),
-      headers: _headers,
-      body: jsonEncode({}),
-    );
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Error actualizando estado');
+    final actionId = '${DateTime.now().millisecondsSinceEpoch}-$id-en_camino';
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'),
+            headers: _headers,
+            body: jsonEncode({'clientActionId': actionId}),
+          )
+          .timeout(const Duration(seconds: 12));
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode != 200) {
+        throw Exception(data['error'] ?? 'Error actualizando estado');
+      }
+      OfflineStore.offline.value = false;
+      return data;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        OfflineStore.offline.value = true;
+        await OfflineStore.enqueueStatus(assistanceId: id, status: 'en_camino', type: 'en_camino');
+        return _localAssistance(id, 'en_camino');
+      }
+      rethrow;
     }
-    return data;
+  }
+
+  // Devuelve la asistencia desde la caché con el estado actualizado (modo offline)
+  Map<String, dynamic> _localAssistance(int id, String status) {
+    final cached = OfflineStore.cachedAssistances();
+    final found = cached.firstWhere(
+      (a) => a['id'] == id,
+      orElse: () => <String, dynamic>{'id': id},
+    );
+    return {...found, 'status': status};
   }
 
   Future<void> sendLocation(int id, double lat, double lng) async {

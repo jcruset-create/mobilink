@@ -3271,6 +3271,11 @@ app.post(
         return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
       }
 
+      // Reenvío offline ya procesado → devolver estado actual sin reaplicar
+      if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+        return res.json(normalizeRoadsideAssistanceRow(check.rows[0]));
+      }
+
       if (check.rows[0].status !== "asignada") {
         return res.status(400).json({ error: "La asistencia no está en estado asignada" });
       }
@@ -3756,6 +3761,23 @@ app.get("/api/cobros", requireAdminRole, async (_req, res) => {
   }
 });
 
+// Idempotencia: evita aplicar dos veces la misma acción reenviada desde la APK
+// (modo offline). Devuelve true si ya se procesó.
+async function isDuplicateAction(actionId: unknown): Promise<boolean> {
+  const aid = String(actionId ?? "").trim();
+  if (!aid) return false;
+  try {
+    const r = await db.query(
+      `INSERT INTO processed_actions(action_id, "createdAtMs") VALUES($1,$2)
+       ON CONFLICT (action_id) DO NOTHING RETURNING action_id`,
+      [aid, Date.now()]
+    );
+    return r.rows.length === 0;
+  } catch {
+    return false;
+  }
+}
+
 app.post(
   "/api/roadside-operator/assistances/:id/status",
   requireRoadsideOperator,
@@ -3796,6 +3818,12 @@ app.post(
 
       if (currentResult.rows.length === 0) {
         return res.status(404).json({ error: "Asistencia no encontrada" });
+      }
+
+      // Acción ya procesada (reenvío offline) → devolver estado actual sin reaplicar
+      if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+        const cur = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
+        return res.json(normalizeRoadsideAssistanceRow(cur.rows[0]));
       }
 
       if (currentResult.rows[0].assignedTechName !== operator.techName) {

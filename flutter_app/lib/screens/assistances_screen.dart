@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
+import '../services/offline_store.dart';
 import '../theme/app_theme.dart';
 import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
@@ -26,6 +29,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   String? _error;
   String _techName = '';
   String _appVersion = '';
+  StreamSubscription<List<ConnectivityResult>>? _connSub;
 
   @override
   void initState() {
@@ -34,10 +38,16 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     _loadTechName();
     _loadVersion();
     _load();
+    // Al recuperar conexión, recargar (esto envía la cola de cambios pendientes)
+    _connSub = Connectivity().onConnectivityChanged.listen((results) {
+      final hasNet = results.any((r) => r != ConnectivityResult.none);
+      if (hasNet) _load();
+    });
   }
 
   @override
   void dispose() {
+    _connSub?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -177,20 +187,64 @@ class _AssistancesScreenState extends State<AssistancesScreen>
           ),
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: Column(
         children: [
-          _ActiveAssistancesTab(
-            loading: _loading,
-            error: _error,
-            assistances: _assistances,
-            onRefresh: _load,
-            api: widget.api,
+          const _OfflineBanner(),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _ActiveAssistancesTab(
+                  loading: _loading,
+                  error: _error,
+                  assistances: _assistances,
+                  onRefresh: _load,
+                  api: widget.api,
+                ),
+                HistoryScreen(api: widget.api),
+                CobrosScreen(api: widget.api),
+                PaymentsScreen(api: widget.api),
+              ],
+            ),
           ),
-          HistoryScreen(api: widget.api),
-          CobrosScreen(api: widget.api),
-          PaymentsScreen(api: widget.api),
         ],
+      ),
+    );
+  }
+}
+
+// ── Banner de conexión / pendientes de sincronizar ───────────────────────────
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: OfflineStore.offline,
+      builder: (_, isOffline, __) => ValueListenableBuilder<int>(
+        valueListenable: OfflineStore.pendingCount,
+        builder: (_, pending, __) {
+          if (!isOffline && pending == 0) return const SizedBox.shrink();
+          final color = isOffline ? AppColors.warning : AppColors.info;
+          final text = isOffline
+              ? (pending > 0
+                  ? 'Sin conexión · $pending cambio${pending == 1 ? '' : 's'} pendiente${pending == 1 ? '' : 's'}'
+                  : 'Sin conexión · trabajando offline')
+              : '$pending cambio${pending == 1 ? '' : 's'} pendiente${pending == 1 ? '' : 's'} de sincronizar';
+          return Container(
+            width: double.infinity,
+            color: color.withValues(alpha: 0.18),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(isOffline ? Icons.cloud_off : Icons.sync, size: 16, color: color),
+                const SizedBox(width: 8),
+                Text(text, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w700)),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

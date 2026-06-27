@@ -3,8 +3,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
 import 'screens/assistances_screen.dart';
 import 'services/api_service.dart';
+import 'services/offline_store.dart';
+import 'theme/app_theme.dart';
 
-void main() {
+// Notifier global accesible desde cualquier pantalla
+final exteriorMode = ValueNotifier<bool>(false);
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await OfflineStore.init(); // base de datos local (modo offline)
+  final prefs = await SharedPreferences.getInstance();
+  exteriorMode.value = prefs.getBool('exteriorMode') ?? false;
   runApp(const SeaApp());
 }
 
@@ -13,11 +22,16 @@ class SeaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'SEA Tarragona',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(),
-      home: const SplashScreen(),
+    return ValueListenableBuilder<bool>(
+      valueListenable: exteriorMode,
+      builder: (_, exterior, __) {
+        return MaterialApp(
+          title: 'SEA Tarragona',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.build(exterior: exterior),
+          home: const SplashScreen(),
+        );
+      },
     );
   }
 }
@@ -45,7 +59,6 @@ class _SplashScreenState extends State<SplashScreen> {
 
     if (techName.isNotEmpty && code.isNotEmpty) {
       try {
-        // Verify credentials are still valid
         await ApiService.login(techName, code);
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
@@ -56,9 +69,7 @@ class _SplashScreenState extends State<SplashScreen> {
           ),
         );
         return;
-      } catch (_) {
-        // Credentials expired or invalid, go to login
-      }
+      } catch (_) {}
     }
 
     if (!mounted) return;
@@ -70,14 +81,13 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1a1a2e),
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Image.asset('assets/logo_transparent.png', width: 260),
             const SizedBox(height: 40),
-            const CircularProgressIndicator(color: Colors.white54),
+            CircularProgressIndicator(color: AppColors.primary),
           ],
         ),
       ),
