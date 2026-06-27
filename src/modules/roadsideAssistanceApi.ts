@@ -114,6 +114,12 @@ export async function updateOtfTrabajo(tid: number, body: Record<string, unknown
   return res.json();
 }
 
+export async function fetchDashboardKpis(days = 30) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/dashboard/kpis?days=${days}`, { headers: getAdminHeaders() });
+  if (!res.ok) throw new Error("No se pudieron cargar los KPIs");
+  return res.json();
+}
+
 export async function fetchVehiculoHistorial(plate: string) {
   const res = await fetchWithTimeout(`${API_BASE}/api/vehiculo-historial?plate=${encodeURIComponent(plate)}`, {
     headers: getAdminHeaders(),

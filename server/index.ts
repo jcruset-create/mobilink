@@ -10512,6 +10512,90 @@ app.post(
   }
 );
 
+// KPIs / Dashboard de dirección
+app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(365, Number(req.query.days) || 30));
+    const now = Date.now();
+    const cutoff = now - days * 86400000;
+    const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+    const ms7 = now - 7 * 86400000;
+
+    const a = await db.query(
+      `SELECT * FROM roadside_assistances WHERE "createdAtMs" >= $1 ORDER BY "createdAtMs" DESC LIMIT 5000`,
+      [cutoff]
+    );
+    const rows = a.rows.map(normalizeRoadsideAssistanceRow);
+
+    const CLOSED = new Set(["llegada_taller", "cancelada", "redirigida"]);
+    const avg = (vals: number[]) => vals.length ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) : 0;
+    const diffMin = (x?: number | null, y?: number | null) =>
+      x && y ? Math.round(Math.abs(y - x) / 60000) : null;
+
+    const tiemposSalidaPunto: number[] = [];
+    const tiemposPuntoFin: number[] = [];
+    const porTecnico = new Map<string, { total: number; finalizadas: number }>();
+    let hoy = 0, semana = 0;
+
+    for (const r of rows as any[]) {
+      if (r.createdAtMs >= startToday.getTime()) hoy++;
+      if (r.createdAtMs >= ms7) semana++;
+      const t1 = diffMin(r.departedAtMs, r.arrivedAtPointMs); if (t1 != null) tiemposSalidaPunto.push(t1);
+      const t2 = diffMin(r.arrivedAtPointMs, r.finishedAtMs); if (t2 != null) tiemposPuntoFin.push(t2);
+      const tech = r.assignedTechName || "Sin asignar";
+      const e = porTecnico.get(tech) ?? { total: 0, finalizadas: 0 };
+      e.total++;
+      if (r.status === "llegada_taller") e.finalizadas++;
+      porTecnico.set(tech, e);
+    }
+
+    // Estado actual (no del periodo): conteo de activas por estado
+    const estadoActual = await db.query(
+      `SELECT status, COUNT(*)::int AS n FROM roadside_assistances
+       WHERE status NOT IN ('llegada_taller','cancelada','redirigida') GROUP BY status`
+    );
+
+    // OTF
+    const otf = await db.query(
+      `SELECT COUNT(*) FILTER (WHERE status IN ('planificada','en_curso'))::int AS activas,
+              COUNT(*)::int AS total FROM otf`
+    );
+    const otfTrab = await db.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado'))::int AS hechos
+       FROM otf_trabajos t JOIN otf o ON o.id = t."otfId" WHERE o.status IN ('planificada','en_curso')`
+    );
+
+    res.json({
+      dias: days,
+      asistencias: {
+        periodo: rows.length,
+        hoy,
+        semana,
+        cerradasPeriodo: rows.filter((r: any) => r.status === "llegada_taller").length,
+        canceladasPeriodo: rows.filter((r: any) => r.status === "cancelada").length,
+      },
+      estadoActual: estadoActual.rows.reduce((acc: any, r: any) => { acc[r.status] = r.n; return acc; }, {}),
+      tiempos: {
+        salidaPuntoMin: avg(tiemposSalidaPunto),
+        puntoFinMin: avg(tiemposPuntoFin),
+      },
+      porTecnico: Array.from(porTecnico.entries())
+        .map(([tech, v]) => ({ tech, ...v }))
+        .sort((x, y) => y.total - x.total),
+      otf: {
+        activas: otf.rows[0]?.activas ?? 0,
+        total: otf.rows[0]?.total ?? 0,
+        trabajos: otfTrab.rows[0]?.total ?? 0,
+        trabajosHechos: otfTrab.rows[0]?.hechos ?? 0,
+      },
+    });
+  } catch (e) {
+    console.error("GET /api/dashboard/kpis error:", e);
+    res.status(500).json({ error: "Error calculando KPIs" });
+  }
+});
+
 // Historial completo de un vehículo por matrícula (asistencias + trabajos OTF)
 app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
   try {

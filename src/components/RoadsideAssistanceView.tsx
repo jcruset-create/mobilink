@@ -838,6 +838,14 @@ export default function RoadsideAssistanceView({
             >
               🔎 Historial vehículo
             </a>
+            <a
+              href="/dashboard"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              📊 Panel
+            </a>
             <button
               type="button"
               onClick={onRefresh}
