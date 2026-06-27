@@ -356,6 +356,69 @@ export async function initDb() {
       ON roadside_vehicles(active);
   `);
 
+  // ── Órdenes de Trabajo de Flota (OTF) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS otf (
+      id SERIAL PRIMARY KEY,
+      "workshopId" TEXT,
+      "clientName" TEXT NOT NULL DEFAULT '',
+      "clientId" INTEGER,
+      "knownPlaceId" INTEGER,
+      "baseName" TEXT,
+      direccion TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      "fechaProgramadaMs" BIGINT,
+      status TEXT NOT NULL DEFAULT 'planificada',
+      "assignedTechName" TEXT,
+      "assignedVehicleName" TEXT,
+      "webfleetVehicleId" TEXT,
+      notas TEXT,
+      "arrivedAtBaseMs" BIGINT,
+      "finishedAtMs" BIGINT,
+      "firmaUrl" TEXT,
+      "firmanteNombre" TEXT,
+      "firmanteDni" TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS otf_status_idx ON otf(status);
+    CREATE INDEX IF NOT EXISTS otf_tech_idx ON otf("assignedTechName");
+
+    CREATE TABLE IF NOT EXISTS otf_trabajos (
+      id SERIAL PRIMARY KEY,
+      "otfId" INTEGER NOT NULL REFERENCES otf(id) ON DELETE CASCADE,
+      plate TEXT,
+      "plateRemolque" TEXT,
+      "tipoVehiculo" TEXT,
+      "trabajoPlantilla" TEXT,
+      "detalleManual" TEXT,
+      trabajo TEXT,
+      status TEXT NOT NULL DEFAULT 'pendiente',
+      origen TEXT NOT NULL DEFAULT 'oficina',
+      "creadoPorTecnico" TEXT,
+      "motivoAltaCampo" TEXT,
+      "fechaAltaCampoMs" BIGINT,
+      observaciones TEXT,
+      "requiereAprobacion" BOOLEAN NOT NULL DEFAULT false,
+      "aprobadoPor" TEXT,
+      "fechaAprobacionMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS otf_trabajos_otf_idx ON otf_trabajos("otfId");
+
+    CREATE TABLE IF NOT EXISTS otf_trabajo_files (
+      id SERIAL PRIMARY KEY,
+      "trabajoId" INTEGER NOT NULL REFERENCES otf_trabajos(id) ON DELETE CASCADE,
+      "otfId" INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      url TEXT NOT NULL,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS otf_trabajo_files_trabajo_idx ON otf_trabajo_files("trabajoId");
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tech_breaks (
       id SERIAL PRIMARY KEY,

@@ -9967,6 +9967,344 @@ app.post("/api/roadside-operator/known-places", requireRoadsideOperator, async (
 });
 
 /* =========================================================
+   OTF — Órdenes de Trabajo de Flota
+========================================================= */
+
+function normalizeOtf(row: any) {
+  return {
+    id: Number(row.id),
+    workshopId: row.workshopId ?? null,
+    clientName: row.clientName ?? "",
+    clientId: row.clientId != null ? Number(row.clientId) : null,
+    knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
+    baseName: row.baseName ?? null,
+    direccion: row.direccion ?? null,
+    lat: row.lat != null ? Number(row.lat) : null,
+    lng: row.lng != null ? Number(row.lng) : null,
+    fechaProgramadaMs: row.fechaProgramadaMs != null ? Number(row.fechaProgramadaMs) : null,
+    status: row.status ?? "planificada",
+    assignedTechName: row.assignedTechName ?? null,
+    assignedVehicleName: row.assignedVehicleName ?? null,
+    webfleetVehicleId: row.webfleetVehicleId ?? null,
+    notas: row.notas ?? null,
+    arrivedAtBaseMs: row.arrivedAtBaseMs != null ? Number(row.arrivedAtBaseMs) : null,
+    finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    firmaUrl: row.firmaUrl ?? null,
+    firmanteNombre: row.firmanteNombre ?? null,
+    firmanteDni: row.firmanteDni ?? null,
+    createdAtMs: Number(row.createdAtMs ?? Date.now()),
+    updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
+  };
+}
+
+function normalizeOtfTrabajo(row: any) {
+  return {
+    id: Number(row.id),
+    otfId: Number(row.otfId),
+    plate: row.plate ?? null,
+    plateRemolque: row.plateRemolque ?? null,
+    tipoVehiculo: row.tipoVehiculo ?? null,
+    trabajoPlantilla: row.trabajoPlantilla ?? null,
+    detalleManual: row.detalleManual ?? null,
+    trabajo: row.trabajo ?? null,
+    status: row.status ?? "pendiente",
+    origen: row.origen ?? "oficina",
+    creadoPorTecnico: row.creadoPorTecnico ?? null,
+    motivoAltaCampo: row.motivoAltaCampo ?? null,
+    fechaAltaCampoMs: row.fechaAltaCampoMs != null ? Number(row.fechaAltaCampoMs) : null,
+    observaciones: row.observaciones ?? null,
+    requiereAprobacion: row.requiereAprobacion === true,
+    createdAtMs: Number(row.createdAtMs ?? Date.now()),
+  };
+}
+
+function combineTrabajo(plantilla?: string | null, manual?: string | null): string {
+  return [plantilla, manual].map((x) => (x ?? "").trim()).filter(Boolean).join(" - ");
+}
+
+async function otfWithDetails(id: number) {
+  const h = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+  if (!h.rows[0]) return null;
+  const t = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
+  const f = await db.query(`SELECT * FROM otf_trabajo_files WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
+  const filesByTrabajo = new Map<number, any[]>();
+  for (const file of f.rows) {
+    const arr = filesByTrabajo.get(Number(file.trabajoId)) ?? [];
+    arr.push({ id: Number(file.id), kind: file.kind, url: file.url });
+    filesByTrabajo.set(Number(file.trabajoId), arr);
+  }
+  const trabajos = t.rows.map((r: any) => ({ ...normalizeOtfTrabajo(r), fotos: filesByTrabajo.get(Number(r.id)) ?? [] }));
+  const total = trabajos.length;
+  const hechos = trabajos.filter((x: any) => x.status === "finalizado" || x.status === "no_realizado").length;
+  return { ...normalizeOtf(h.rows[0]), trabajos, progreso: { hechos, total } };
+}
+
+// ── Oficina ──
+app.get("/api/otf", requireAdminRole, async (req, res) => {
+  try {
+    const status = req.query.status ? String(req.query.status) : null;
+    const params: any[] = [];
+    const where = status ? `WHERE status = $1` : "";
+    if (status) params.push(status);
+    const r = await db.query(`SELECT * FROM otf ${where} ORDER BY "createdAtMs" DESC LIMIT 200`, params);
+    // progreso por OTF en una sola consulta
+    const ids = r.rows.map((x: any) => Number(x.id));
+    const prog = new Map<number, { hechos: number; total: number }>();
+    if (ids.length) {
+      const p = await db.query(
+        `SELECT "otfId",
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado')) AS hechos
+         FROM otf_trabajos WHERE "otfId" = ANY($1) GROUP BY "otfId"`,
+        [ids]
+      );
+      for (const row of p.rows) prog.set(Number(row.otfId), { hechos: Number(row.hechos), total: Number(row.total) });
+    }
+    res.json(r.rows.map((x: any) => ({ ...normalizeOtf(x), progreso: prog.get(Number(x.id)) ?? { hechos: 0, total: 0 } })));
+  } catch (e) {
+    console.error("GET /api/otf error:", e);
+    res.status(500).json({ error: "Error obteniendo OTF" });
+  }
+});
+
+app.get("/api/otf/:id", requireAdminRole, async (req, res) => {
+  try {
+    const data = await otfWithDetails(Number(req.params.id));
+    if (!data) return res.status(404).json({ error: "OTF no encontrada" });
+    res.json(data);
+  } catch (e) {
+    console.error("GET /api/otf/:id error:", e);
+    res.status(500).json({ error: "Error obteniendo OTF" });
+  }
+});
+
+app.post("/api/otf", requireSupervisorRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO otf ("workshopId","clientName","clientId","knownPlaceId","baseName",direccion,lat,lng,
+        "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planificada',$10,$11,$12,$13,$14,$14) RETURNING *`,
+      [
+        b.workshopId ?? null, String(b.clientName ?? "").trim(), b.clientId ?? null, b.knownPlaceId ?? null,
+        b.baseName ?? null, b.direccion ?? null,
+        b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
+        b.fechaProgramadaMs ?? null, b.assignedTechName ?? null, b.assignedVehicleName ?? null,
+        b.webfleetVehicleId ?? null, b.notas ?? null, now,
+      ]
+    );
+    res.json(normalizeOtf(r.rows[0]));
+  } catch (e) {
+    console.error("POST /api/otf error:", e);
+    res.status(500).json({ error: "Error creando OTF" });
+  }
+});
+
+app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body ?? {};
+    await db.query(
+      `UPDATE otf SET
+         "clientName" = COALESCE($2,"clientName"),
+         "knownPlaceId" = $3, "baseName" = $4, direccion = $5, lat = $6, lng = $7,
+         "fechaProgramadaMs" = $8, status = COALESCE($9,status),
+         "assignedTechName" = $10, "assignedVehicleName" = $11, "webfleetVehicleId" = $12,
+         notas = $13, "updatedAtMs" = $14
+       WHERE id = $1`,
+      [id, b.clientName ?? null, b.knownPlaceId ?? null, b.baseName ?? null, b.direccion ?? null,
+       b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
+       b.fechaProgramadaMs ?? null, b.status ?? null, b.assignedTechName ?? null,
+       b.assignedVehicleName ?? null, b.webfleetVehicleId ?? null, b.notas ?? null, Date.now()]
+    );
+    res.json(await otfWithDetails(id));
+  } catch (e) {
+    console.error("PUT /api/otf/:id error:", e);
+    res.status(500).json({ error: "Error actualizando OTF" });
+  }
+});
+
+app.post("/api/otf/:id/trabajos", requireSupervisorRole, async (req, res) => {
+  try {
+    const otfId = Number(req.params.id);
+    const b = req.body ?? {};
+    const trabajo = combineTrabajo(b.trabajoPlantilla, b.detalleManual);
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO otf_trabajos ("otfId",plate,"plateRemolque","tipoVehiculo","trabajoPlantilla","detalleManual",trabajo,
+        status,origen,observaciones,"createdAtMs","updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'pendiente'),'oficina',$9,$10,$10) RETURNING *`,
+      [otfId, (b.plate ?? "").toUpperCase().trim() || null, (b.plateRemolque ?? "").toUpperCase().trim() || null,
+       b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
+       b.status ?? null, b.observaciones ?? null, now]
+    );
+    res.json(normalizeOtfTrabajo(r.rows[0]));
+  } catch (e) {
+    console.error("POST /api/otf/:id/trabajos error:", e);
+    res.status(500).json({ error: "Error añadiendo trabajo" });
+  }
+});
+
+app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
+  try {
+    const tid = Number(req.params.tid);
+    const b = req.body ?? {};
+    const trabajo = b.trabajoPlantilla != null || b.detalleManual != null
+      ? combineTrabajo(b.trabajoPlantilla, b.detalleManual) : null;
+    const r = await db.query(
+      `UPDATE otf_trabajos SET
+         plate = COALESCE($2,plate), "plateRemolque" = $3, "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
+         "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = COALESCE($7,trabajo),
+         status = COALESCE($8,status), observaciones = $9, "updatedAtMs" = $10
+       WHERE id = $1 RETURNING *`,
+      [tid, b.plate != null ? String(b.plate).toUpperCase().trim() : null, b.plateRemolque ?? null,
+       b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
+       b.status ?? null, b.observaciones ?? null, Date.now()]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+    res.json(normalizeOtfTrabajo(r.rows[0]));
+  } catch (e) {
+    console.error("PUT /api/otf/trabajos/:tid error:", e);
+    res.status(500).json({ error: "Error actualizando trabajo" });
+  }
+});
+
+app.delete("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
+  try {
+    await db.query(`DELETE FROM otf_trabajos WHERE id = $1`, [Number(req.params.tid)]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE /api/otf/trabajos/:tid error:", e);
+    res.status(500).json({ error: "Error eliminando trabajo" });
+  }
+});
+
+// ── Operario (APK) ──
+app.get("/api/roadside-operator/otf", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const r = await db.query(
+      `SELECT * FROM otf WHERE "assignedTechName" = $1 AND status NOT IN ('finalizada','cancelada')
+       ORDER BY "createdAtMs" DESC LIMIT 100`,
+      [operator.techName]
+    );
+    const ids = r.rows.map((x: any) => Number(x.id));
+    const prog = new Map<number, { hechos: number; total: number }>();
+    if (ids.length) {
+      const p = await db.query(
+        `SELECT "otfId", COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado')) AS hechos
+         FROM otf_trabajos WHERE "otfId" = ANY($1) GROUP BY "otfId"`, [ids]);
+      for (const row of p.rows) prog.set(Number(row.otfId), { hechos: Number(row.hechos), total: Number(row.total) });
+    }
+    res.json(r.rows.map((x: any) => ({ ...normalizeOtf(x), progreso: prog.get(Number(x.id)) ?? { hechos: 0, total: 0 } })));
+  } catch (e) {
+    console.error("GET operator otf error:", e);
+    res.status(500).json({ error: "Error obteniendo OTF" });
+  }
+});
+
+app.get("/api/roadside-operator/otf/:id", requireRoadsideOperator, async (req, res) => {
+  try {
+    const data = await otfWithDetails(Number(req.params.id));
+    if (!data) return res.status(404).json({ error: "OTF no encontrada" });
+    res.json(data);
+  } catch (e) {
+    console.error("GET operator otf/:id error:", e);
+    res.status(500).json({ error: "Error obteniendo OTF" });
+  }
+});
+
+// Trabajo añadido EN CAMPO por el técnico (directo, sin aprobación)
+app.post("/api/roadside-operator/otf/:id/trabajos", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const otfId = Number(req.params.id);
+    const b = req.body ?? {};
+    if (!b.plate || !b.tipoVehiculo || (!b.trabajoPlantilla && !b.detalleManual) || !b.motivoAltaCampo) {
+      return res.status(400).json({ error: "Matrícula, tipo, trabajo y motivo son obligatorios" });
+    }
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      const dup = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id DESC LIMIT 1`, [otfId]);
+      return res.json(normalizeOtfTrabajo(dup.rows[0]));
+    }
+    const trabajo = combineTrabajo(b.trabajoPlantilla, b.detalleManual);
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO otf_trabajos ("otfId",plate,"plateRemolque","tipoVehiculo","trabajoPlantilla","detalleManual",trabajo,
+        status,origen,"creadoPorTecnico","motivoAltaCampo","fechaAltaCampoMs","createdAtMs","updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'pendiente'),'tecnico_campo',$9,$10,$11,$11,$11) RETURNING *`,
+      [otfId, String(b.plate).toUpperCase().trim(), (b.plateRemolque ?? "").toUpperCase().trim() || null,
+       b.tipoVehiculo, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
+       b.status ?? null, operator.techName, b.motivoAltaCampo, now]
+    );
+    res.json(normalizeOtfTrabajo(r.rows[0]));
+  } catch (e) {
+    console.error("POST operator otf trabajos error:", e);
+    res.status(500).json({ error: "Error añadiendo trabajo en campo" });
+  }
+});
+
+app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperator, async (req, res) => {
+  try {
+    const tid = Number(req.params.tid);
+    const status = String(req.body?.status ?? "");
+    const allowed = new Set(["pendiente", "en_proceso", "finalizado", "no_realizado"]);
+    if (!allowed.has(status)) return res.status(400).json({ error: "Estado no válido" });
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      const cur = await db.query(`SELECT * FROM otf_trabajos WHERE id = $1`, [tid]);
+      return res.json(cur.rows[0] ? normalizeOtfTrabajo(cur.rows[0]) : { ok: true });
+    }
+    const r = await db.query(
+      `UPDATE otf_trabajos SET status = $2, "updatedAtMs" = $3 WHERE id = $1 RETURNING *`,
+      [tid, status, Date.now()]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+    res.json(normalizeOtfTrabajo(r.rows[0]));
+  } catch (e) {
+    console.error("PUT operator otf trabajo status error:", e);
+    res.status(500).json({ error: "Error actualizando estado" });
+  }
+});
+
+// Subir foto de un trabajo de OTF (operario)
+app.post(
+  "/api/roadside-operator/otf/trabajos/:tid/files",
+  requireRoadsideOperator,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const tid = Number(req.params.tid);
+      const kind = String(req.body?.kind || "foto").trim();
+      if (!req.file) return res.status(400).json({ error: "No se recibió archivo" });
+      if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+        return res.json({ ok: true, deduped: true });
+      }
+      const tr = await db.query(`SELECT "otfId" FROM otf_trabajos WHERE id = $1`, [tid]);
+      if (!tr.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+      const otfId = Number(tr.rows[0].otfId);
+
+      const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as Record<string, string>)[req.file.mimetype] ?? "jpg";
+      const storagePath = `otf/${otfId}/${tid}/${kind}_${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+      if (upErr) throw new Error(upErr.message);
+      const { data: pub } = supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(storagePath);
+      const r = await db.query(
+        `INSERT INTO otf_trabajo_files ("trabajoId","otfId",kind,url,"createdAtMs") VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [tid, otfId, kind, pub.publicUrl, Date.now()]
+      );
+      res.json({ ok: true, file: { id: Number(r.rows[0].id), kind, url: pub.publicUrl } });
+    } catch (e: any) {
+      console.error("POST otf trabajo files error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo foto" });
+    }
+  }
+);
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
