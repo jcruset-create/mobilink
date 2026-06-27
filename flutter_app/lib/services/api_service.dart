@@ -301,6 +301,74 @@ class ApiService {
     }
   }
 
+  // ── OTF (Órdenes de Trabajo de Flota) ──
+  Future<List<Map<String, dynamic>>> getOtfList() async {
+    final res = await http
+        .get(Uri.parse('$kBackendUrl/api/roadside-operator/otf'), headers: _headers)
+        .timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) throw Exception('Error cargando OTF');
+    return (jsonDecode(res.body) as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
+  Future<Map<String, dynamic>> getOtf(int id) async {
+    final res = await http
+        .get(Uri.parse('$kBackendUrl/api/roadside-operator/otf/$id'), headers: _headers)
+        .timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) throw Exception('Error cargando OTF');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> addOtfFieldTrabajo(
+    int otfId, {
+    required String plate,
+    required String tipoVehiculo,
+    String? trabajoPlantilla,
+    String? detalleManual,
+    required String motivoAltaCampo,
+    String? status,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/trabajos'),
+      headers: _headers,
+      body: jsonEncode({
+        'plate': plate,
+        'tipoVehiculo': tipoVehiculo,
+        'trabajoPlantilla': trabajoPlantilla,
+        'detalleManual': detalleManual,
+        'motivoAltaCampo': motivoAltaCampo,
+        if (status != null) 'status': status,
+      }),
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200) throw Exception(data['error'] ?? 'Error añadiendo trabajo');
+    return data;
+  }
+
+  Future<void> updateOtfTrabajoStatus(int trabajoId, String status) async {
+    final res = await http.put(
+      Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/status'),
+      headers: _headers,
+      body: jsonEncode({'status': status}),
+    );
+    if (res.statusCode != 200) throw Exception('Error actualizando estado');
+  }
+
+  Future<void> uploadOtfTrabajoFile(int trabajoId, File file, String kind) async {
+    final req = http.MultipartRequest(
+      'POST',
+      Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/files'),
+    );
+    req.headers.addAll({
+      'x-roadside-operator-name': Uri.encodeComponent(techName),
+      'x-roadside-operator-code': code,
+    });
+    req.fields['kind'] = kind;
+    req.files.add(await http.MultipartFile.fromPath('file', file.path));
+    final streamed = await req.send().timeout(const Duration(seconds: 40));
+    await streamed.stream.drain();
+    if (streamed.statusCode != 200) throw Exception('Error subiendo foto');
+  }
+
   Future<Map<String, dynamic>> saveConductor(
       int id, String nombre, String dni, {String? observaciones, String? actionId}) async {
     final body = <String, dynamic>{

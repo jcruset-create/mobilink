@@ -11,6 +11,7 @@ import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
+import 'otf_screen.dart';
 import 'payments_screen.dart';
 
 class AssistancesScreen extends StatefulWidget {
@@ -34,7 +35,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadTechName();
     _loadVersion();
     _load();
@@ -161,6 +162,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                         dividerColor: Colors.transparent,
                         tabs: [
                           Tab(icon: Icon(Icons.assignment_outlined, size: isExterior ? 28 : 24), text: 'Activas'),
+                          Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
                           Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
                           Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
                           Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),
@@ -201,6 +203,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                   onRefresh: _load,
                   api: widget.api,
                 ),
+                OtfListTab(api: widget.api),
                 HistoryScreen(api: widget.api),
                 CobrosScreen(api: widget.api),
                 PaymentsScreen(api: widget.api),
