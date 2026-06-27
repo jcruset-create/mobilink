@@ -10472,6 +10472,46 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
   }
 });
 
+// Escaneo de matrícula con IA (operario): foto → matrícula → asistencia abierta
+app.post(
+  "/api/roadside-operator/scan-plate",
+  requireRoadsideOperator,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const operator = (req as any).roadsideOperator as { techName: string };
+      if (!req.file) return res.status(400).json({ error: "No se recibió imagen" });
+
+      // Subir a Supabase para tener una URL que la IA pueda leer
+      const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as Record<string, string>)[req.file.mimetype] ?? "jpg";
+      const storagePath = `scan/${operator.techName}/${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+      if (upErr) throw new Error(upErr.message);
+      const { data: pub } = supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(storagePath);
+
+      const plate = await detectPlateFromImage(pub.publicUrl);
+      if (!plate) return res.json({ plate: null });
+
+      // Buscar asistencia ABIERTA del técnico con esa matrícula
+      const norm = plate.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const r = await db.query(
+        `SELECT id FROM roadside_assistances
+         WHERE "assignedTechName" = $1
+           AND status NOT IN ('llegada_taller','cancelada','redirigida')
+           AND UPPER(REPLACE(REPLACE(COALESCE(plate,''),' ',''),'-','')) = $2
+         ORDER BY "createdAtMs" DESC LIMIT 1`,
+        [operator.techName, norm]
+      );
+      return res.json({ plate, assistanceId: r.rows[0]?.id ?? null });
+    } catch (e: any) {
+      console.error("POST scan-plate error:", e);
+      res.status(500).json({ error: e?.message || "Error escaneando matrícula" });
+    }
+  }
+);
+
 // Historial completo de un vehículo por matrícula (asistencias + trabajos OTF)
 app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
   try {

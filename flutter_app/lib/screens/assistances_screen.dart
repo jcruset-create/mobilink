@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart' show exteriorMode;
@@ -97,6 +99,41 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
   }
 
+  Future<void> _scanPlate() async {
+    final picker = ImagePicker();
+    final x = await picker.pickImage(source: ImageSource.camera, maxWidth: 1600);
+    if (x == null) return;
+    if (!mounted) return;
+    showDialog(context: context, barrierDismissible: false, builder: (_) =>
+        Center(child: CircularProgressIndicator(color: AppColors.primary)));
+    try {
+      final r = await widget.api.scanPlate(File(x.path));
+      if (mounted) Navigator.of(context).pop(); // cerrar loader
+      final plate = r['plate'] as String?;
+      final assistanceId = r['assistanceId'] as int?;
+      if (plate == null) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No se pudo leer la matrícula'), backgroundColor: Colors.red));
+        return;
+      }
+      if (assistanceId != null) {
+        final found = _assistances.firstWhere((a) => a['id'] == assistanceId, orElse: () => {'id': assistanceId});
+        if (!mounted) return;
+        await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => AssistanceDetailScreen(api: widget.api, assistance: found)));
+        _load();
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Matrícula $plate · sin asistencia abierta asignada a ti'),
+          backgroundColor: AppColors.info));
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')), backgroundColor: Colors.red));
+    }
+  }
+
   Future<void> _toggleExteriorMode() async {
     final newVal = !exteriorMode.value;
     exteriorMode.value = newVal;
@@ -179,6 +216,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                           onPressed: _toggleExteriorMode,
                         ),
                       ),
+                      _TopBarIcon(icon: Icons.qr_code_scanner,        color: AppColors.info,          tooltip: 'Escanear matrícula', onPressed: _scanPlate),
                       _TopBarIcon(icon: Icons.refresh_outlined,      color: AppColors.textSecondary, tooltip: 'Actualizar',    onPressed: _load),
                       _TopBarIcon(icon: Icons.logout,                 color: AppColors.danger,        tooltip: 'Cerrar sesión', onPressed: _logout),
                     ],

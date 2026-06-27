@@ -353,6 +353,23 @@ class ApiService {
     if (res.statusCode != 200) throw Exception('Error actualizando estado');
   }
 
+  // Escanea una matrícula desde una foto. Devuelve {plate, assistanceId?}
+  Future<Map<String, dynamic>> scanPlate(File file) async {
+    final req = http.MultipartRequest(
+      'POST',
+      Uri.parse('$kBackendUrl/api/roadside-operator/scan-plate'),
+    );
+    req.headers.addAll({
+      'x-roadside-operator-name': Uri.encodeComponent(techName),
+      'x-roadside-operator-code': code,
+    });
+    req.files.add(await http.MultipartFile.fromPath('file', file.path));
+    final streamed = await req.send().timeout(const Duration(seconds: 40));
+    final body = await streamed.stream.bytesToString();
+    if (streamed.statusCode != 200) throw Exception('Error escaneando matrícula');
+    return jsonDecode(body) as Map<String, dynamic>;
+  }
+
   // Check-in manual a la base de la OTF (si el GPS automático falla)
   Future<Map<String, dynamic>> checkinOtf(int otfId) async {
     final res = await http.post(
