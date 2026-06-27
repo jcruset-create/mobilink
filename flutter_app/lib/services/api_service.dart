@@ -168,6 +168,42 @@ class ApiService {
     return data as Map<String, dynamic>;
   }
 
+  // Captura el GPS de destino al llegar. Devuelve {alreadyKnown, place?}
+  Future<Map<String, dynamic>> captureDestination(int id, double lat, double lng) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/capture-destination'),
+      headers: _headers,
+      body: jsonEncode({'lat': lat, 'lng': lng}),
+    );
+    if (res.statusCode != 200) throw Exception('Error capturando destino');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // Crea un lugar conocido desde la APK (con dedup) y lo enlaza a la asistencia
+  Future<Map<String, dynamic>> createKnownPlace({
+    required int assistanceId,
+    required String nombre,
+    required String tipo,
+    String? direccion,
+    required double lat,
+    required double lng,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/known-places'),
+      headers: _headers,
+      body: jsonEncode({
+        'assistanceId': assistanceId,
+        'nombre': nombre,
+        'tipo': tipo,
+        'direccion': direccion,
+        'lat': lat,
+        'lng': lng,
+      }),
+    );
+    if (res.statusCode != 200) throw Exception('Error creando lugar');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   Future<List<Map<String, dynamic>>> getCobros() async {
     final res = await http.get(
       Uri.parse('$kBackendUrl/api/roadside-operator/cobros'),

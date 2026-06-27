@@ -647,6 +647,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateRemolque: row.plateRemolque ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
+    knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
     redirectionLat: normalizeNullableNumber(row.redirectionLat),
     redirectionLng: normalizeNullableNumber(row.redirectionLng),
     redirectedAtMs: row.redirectedAtMs != null ? Number(row.redirectedAtMs) : null,
@@ -9654,6 +9655,210 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions/:id/apply error:", error);
     return res.status(500).json({ error: "Error aplicando sugerencia" });
+  }
+});
+
+/* =========================================================
+   LUGARES CONOCIDOS (parkings, bases de cliente…)
+========================================================= */
+
+const KNOWN_PLACE_RADIUS_M = 300;
+
+function normalizeKnownPlace(row: any) {
+  return {
+    id: Number(row.id),
+    nombre: row.nombre ?? "",
+    tipo: row.tipo ?? "otro",
+    direccion: row.direccion ?? null,
+    lat: row.lat != null ? Number(row.lat) : null,
+    lng: row.lng != null ? Number(row.lng) : null,
+    clientId: row.clientId != null ? Number(row.clientId) : null,
+    clientName: row.clientName ?? null,
+    notas: row.notas ?? null,
+    active: row.active !== false,
+    createdAtMs: row.createdAtMs != null ? Number(row.createdAtMs) : null,
+  };
+}
+
+// Devuelve el lugar conocido activo más cercano dentro del radio, o null
+async function findNearbyKnownPlace(lat: number, lng: number, radiusM = KNOWN_PLACE_RADIUS_M) {
+  const r = await db.query(`SELECT * FROM roadside_known_places WHERE active = true`);
+  let best: any = null;
+  let bestDist = Infinity;
+  for (const p of r.rows) {
+    const d = haversineDistanceM(lat, lng, Number(p.lat), Number(p.lng));
+    if (d <= radiusM && d < bestDist) { best = p; bestDist = d; }
+  }
+  return best ? { place: normalizeKnownPlace(best), distM: Math.round(bestDist) } : null;
+}
+
+// Crea un lugar conocido evitando duplicados por cercanía. Devuelve {place, reused}
+async function createKnownPlaceDedup(data: {
+  nombre: string; tipo?: string; direccion?: string | null;
+  lat: number; lng: number; clientId?: number | null; clientName?: string | null;
+  notas?: string | null; createdBy?: string | null;
+}) {
+  const nearby = await findNearbyKnownPlace(data.lat, data.lng);
+  if (nearby) return { place: nearby.place, reused: true };
+  const now = Date.now();
+  const r = await db.query(
+    `INSERT INTO roadside_known_places
+      (nombre, tipo, direccion, lat, lng, "clientId", "clientName", notas, "createdBy", active, "createdAtMs", "updatedAtMs")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$10) RETURNING *`,
+    [
+      data.nombre || "Lugar sin nombre",
+      data.tipo || "otro",
+      data.direccion ?? null,
+      data.lat, data.lng,
+      data.clientId ?? null, data.clientName ?? null,
+      data.notas ?? null, data.createdBy ?? null,
+      now,
+    ]
+  );
+  return { place: normalizeKnownPlace(r.rows[0]), reused: false };
+}
+
+// ── Admin CRUD ──
+app.get("/api/roadside-known-places", requireAdminRole, async (req, res) => {
+  try {
+    const clientId = req.query.clientId ? Number(req.query.clientId) : null;
+    const q = String(req.query.q ?? "").trim().toLowerCase();
+    const params: any[] = [];
+    const conds: string[] = ["active = true"];
+    if (clientId) { params.push(clientId); conds.push(`"clientId" = $${params.length}`); }
+    if (q) { params.push(`%${q}%`); conds.push(`(LOWER(nombre) LIKE $${params.length} OR LOWER(COALESCE(direccion,'')) LIKE $${params.length})`); }
+    const r = await db.query(
+      `SELECT * FROM roadside_known_places WHERE ${conds.join(" AND ")} ORDER BY nombre ASC LIMIT 200`,
+      params
+    );
+    res.json(r.rows.map(normalizeKnownPlace));
+  } catch (e) {
+    console.error("GET known-places error:", e);
+    res.status(500).json({ error: "Error obteniendo lugares" });
+  }
+});
+
+app.get("/api/roadside-known-places/near", requireAdminRole, async (req, res) => {
+  try {
+    const lat = Number(req.query.lat), lng = Number(req.query.lng);
+    const radius = req.query.radius ? Number(req.query.radius) : KNOWN_PLACE_RADIUS_M;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
+    res.json(await findNearbyKnownPlace(lat, lng, radius));
+  } catch (e) {
+    console.error("GET known-places/near error:", e);
+    res.status(500).json({ error: "Error buscando lugar cercano" });
+  }
+});
+
+app.post("/api/roadside-known-places", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const lat = Number(b.lat), lng = Number(b.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
+    const result = await createKnownPlaceDedup({
+      nombre: String(b.nombre ?? "").trim(), tipo: b.tipo, direccion: b.direccion ?? null,
+      lat, lng, clientId: b.clientId ?? null, clientName: b.clientName ?? null,
+      notas: b.notas ?? null, createdBy: "oficina",
+    });
+    res.json(result);
+  } catch (e) {
+    console.error("POST known-places error:", e);
+    res.status(500).json({ error: "Error creando lugar" });
+  }
+});
+
+app.put("/api/roadside-known-places/:id", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE roadside_known_places SET
+         nombre = COALESCE($2, nombre), tipo = COALESCE($3, tipo),
+         direccion = $4, lat = COALESCE($5, lat), lng = COALESCE($6, lng),
+         "clientId" = $7, "clientName" = $8, notas = $9, "updatedAtMs" = $10
+       WHERE id = $1 RETURNING *`,
+      [id, b.nombre ?? null, b.tipo ?? null, b.direccion ?? null,
+       b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
+       b.clientId ?? null, b.clientName ?? null, b.notas ?? null, Date.now()]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Lugar no encontrado" });
+    res.json(normalizeKnownPlace(r.rows[0]));
+  } catch (e) {
+    console.error("PUT known-places error:", e);
+    res.status(500).json({ error: "Error actualizando lugar" });
+  }
+});
+
+app.delete("/api/roadside-known-places/:id", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await db.query(`UPDATE roadside_known_places SET active = false, "updatedAtMs" = $2 WHERE id = $1`, [id, Date.now()]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE known-places error:", e);
+    res.status(500).json({ error: "Error eliminando lugar" });
+  }
+});
+
+// ── Operario: capturar destino al llegar + crear lugar ──
+// Captura el GPS de destino (si la asistencia no tenía) y comprueba si ya es un lugar conocido.
+app.post("/api/roadside-operator/assistances/:id/capture-destination", requireRoadsideOperator, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const lat = Number(req.body?.lat), lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
+
+    const cur = await db.query(`SELECT latitude, longitude, "clientName" FROM roadside_assistances WHERE id = $1`, [id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });
+
+    // Si no tenía coordenadas, guardamos el destino capturado
+    if (cur.rows[0].latitude == null || cur.rows[0].longitude == null) {
+      await db.query(
+        `UPDATE roadside_assistances SET latitude = $2, longitude = $3, "updatedAtMs" = $4 WHERE id = $1`,
+        [id, lat, lng, Date.now()]
+      );
+    }
+
+    // ¿Ya es un lugar conocido?
+    const nearby = await findNearbyKnownPlace(lat, lng);
+    if (nearby) {
+      await db.query(`UPDATE roadside_assistances SET "knownPlaceId" = $2 WHERE id = $1`, [id, nearby.place.id]);
+      return res.json({ alreadyKnown: true, place: nearby.place });
+    }
+    return res.json({ alreadyKnown: false });
+  } catch (e) {
+    console.error("POST capture-destination error:", e);
+    res.status(500).json({ error: "Error capturando destino" });
+  }
+});
+
+// Crea un lugar conocido desde la APK (con dedup) y lo enlaza a la asistencia
+app.post("/api/roadside-operator/known-places", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const b = req.body ?? {};
+    const lat = Number(b.lat), lng = Number(b.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
+
+    let clientName: string | null = null;
+    if (b.assistanceId) {
+      const a = await db.query(`SELECT "customerName" FROM roadside_assistances WHERE id = $1`, [Number(b.assistanceId)]);
+      clientName = a.rows[0]?.customerName ?? null;
+    }
+
+    const result = await createKnownPlaceDedup({
+      nombre: String(b.nombre ?? "").trim() || (b.direccion ?? "Lugar nuevo"),
+      tipo: b.tipo ?? "otro", direccion: b.direccion ?? null,
+      lat, lng, clientName, createdBy: operator.techName,
+    });
+
+    if (b.assistanceId) {
+      await db.query(`UPDATE roadside_assistances SET "knownPlaceId" = $2 WHERE id = $1`, [Number(b.assistanceId), result.place.id]);
+    }
+    res.json(result);
+  } catch (e) {
+    console.error("POST operator known-places error:", e);
+    res.status(500).json({ error: "Error creando lugar" });
   }
 });
 

@@ -255,6 +255,27 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "trabajosARealizar" TEXT;
 
     ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "knownPlaceId" INTEGER;
+
+    CREATE TABLE IF NOT EXISTS roadside_known_places (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      tipo TEXT NOT NULL DEFAULT 'otro',
+      direccion TEXT,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "clientId" INTEGER,
+      "clientName" TEXT,
+      notas TEXT,
+      "createdBy" TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS rkp_active_idx ON roadside_known_places(active);
+    CREATE INDEX IF NOT EXISTS rkp_client_idx ON roadside_known_places("clientId");
+
+    ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "redirectionLat" DOUBLE PRECISION;
 
     ALTER TABLE roadside_assistances

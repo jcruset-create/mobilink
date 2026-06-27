@@ -198,6 +198,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     setState(() => _navigating = true);
     try {
       await _changeStatus('en_punto');
+      // Capturar GPS de destino y gestionar Lugar Conocido
+      await _captureDestinationAndPlace();
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
@@ -211,6 +213,105 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     } finally {
       if (mounted) setState(() => _navigating = false);
     }
+  }
+
+  // Al llegar: captura el GPS, y si no es un lugar conocido propone guardarlo
+  Future<void> _captureDestinationAndPlace() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        await Geolocator.requestPermission();
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+      final result = await widget.api
+          .captureDestination(_a['id'] as int, pos.latitude, pos.longitude);
+      if (!mounted) return;
+
+      if (result['alreadyKnown'] == true) {
+        final place = result['place'] as Map<String, dynamic>?;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Este lugar ya es conocido: ${place?['nombre'] ?? ''}'),
+          backgroundColor: AppColors.info,
+        ));
+      } else {
+        await _showSaveKnownPlaceDialog(pos.latitude, pos.longitude);
+      }
+    } catch (_) {
+      // GPS no disponible — la asistencia sigue su curso
+    }
+  }
+
+  Future<void> _showSaveKnownPlaceDialog(double lat, double lng) async {
+    final nameCtrl = TextEditingController(
+        text: (_a['address'] as String? ?? '').trim());
+    String tipo = 'parking';
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: const Text('¿Guardar como Lugar Conocido?',
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 18)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                style: const TextStyle(color: Colors.black87),
+                decoration: const InputDecoration(
+                  labelText: 'Nombre del lugar',
+                  filled: true, fillColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: tipo,
+                dropdownColor: AppColors.surface,
+                decoration: const InputDecoration(
+                  labelText: 'Tipo', filled: true, fillColor: Colors.white),
+                items: const [
+                  DropdownMenuItem(value: 'parking', child: Text('Parking de camiones')),
+                  DropdownMenuItem(value: 'base_cliente', child: Text('Base de cliente')),
+                  DropdownMenuItem(value: 'taller_externo', child: Text('Taller externo')),
+                  DropdownMenuItem(value: 'otro', child: Text('Otro')),
+                ],
+                onChanged: (v) => setS(() => tipo = v ?? 'parking'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('No, gracias', style: TextStyle(color: AppColors.textSecondary))),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Guardar lugar')),
+          ],
+        ),
+      ),
+    );
+    if (save == true) {
+      try {
+        await widget.api.createKnownPlace(
+          assistanceId: _a['id'] as int,
+          nombre: nameCtrl.text.trim(),
+          tipo: tipo,
+          direccion: (_a['address'] as String? ?? '').trim(),
+          lat: lat, lng: lng,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Lugar conocido guardado'),
+            backgroundColor: AppColors.success,
+          ));
+        }
+      } catch (_) {}
+    }
+    nameCtrl.dispose();
   }
 
   Future<void> _addExtraPhotos() async {
