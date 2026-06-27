@@ -233,6 +233,10 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
           .captureDestination(_a['id'] as int, pos.latitude, pos.longitude);
       if (!mounted) return;
 
+      if (result['offline'] == true) {
+        // Sin red: el GPS se guardará al sincronizar; no se puede comprobar/crear lugar ahora
+        return;
+      }
       if (result['alreadyKnown'] == true) {
         final place = result['place'] as Map<String, dynamic>?;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(

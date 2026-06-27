@@ -3946,6 +3946,12 @@ app.post(
         return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
       }
 
+      // Reenvío offline ya procesado → devolver actual sin reaplicar
+      if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+        const cur = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
+        return res.json(normalizeRoadsideAssistanceRow(cur.rows[0]));
+      }
+
       const result = await db.query(
         `UPDATE roadside_assistances
          SET "conductorNombre" = $2, "conductorDni" = $3, "observacionesReparacion" = COALESCE($4, "observacionesReparacion")
@@ -4749,6 +4755,11 @@ app.post(
 
       if (!req.file) {
         return res.status(400).json({ error: "No se recibió archivo" });
+      }
+
+      // Reenvío offline ya procesado → no duplicar el archivo
+      if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+        return res.json({ ok: true, deduped: true });
       }
 
       const mimeToExt: Record<string, string> = {
@@ -9835,6 +9846,10 @@ app.post("/api/roadside-operator/assistances/:id/capture-destination", requireRo
     const id = Number(req.params.id);
     const lat = Number(req.body?.lat), lng = Number(req.body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
+
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      return res.json({ alreadyKnown: false, deduped: true });
+    }
 
     const cur = await db.query(`SELECT latitude, longitude, "clientName" FROM roadside_assistances WHERE id = $1`, [id]);
     if (!cur.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });

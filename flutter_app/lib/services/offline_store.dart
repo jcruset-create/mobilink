@@ -76,4 +76,57 @@ class OfflineStore {
     await _outbox.delete(key);
     pendingCount.value = _outbox.length;
   }
+
+  // ── Cola de subida de fotos/firma ──
+  static Future<void> enqueueUpload({
+    required int assistanceId,
+    required String kind,
+    required String localPath,
+  }) async {
+    await _outbox.add({
+      'actionId': '${DateTime.now().millisecondsSinceEpoch}-up-$assistanceId-$kind',
+      'type': 'upload_file',
+      'assistanceId': assistanceId,
+      'kind': kind,
+      'localPath': localPath,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    pendingCount.value = _outbox.length;
+  }
+
+  // ── Cola de datos del conductor (cierre) ──
+  static Future<void> enqueueConductor({
+    required int assistanceId,
+    required String nombre,
+    required String dni,
+    String? observaciones,
+  }) async {
+    await _outbox.add({
+      'actionId': '${DateTime.now().millisecondsSinceEpoch}-cond-$assistanceId',
+      'type': 'save_conductor',
+      'assistanceId': assistanceId,
+      'nombre': nombre,
+      'dni': dni,
+      'observaciones': observaciones,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    pendingCount.value = _outbox.length;
+  }
+
+  // ── Cola de captura de destino (GPS al llegar) ──
+  static Future<void> enqueueCaptureDestination({
+    required int assistanceId,
+    required double lat,
+    required double lng,
+  }) async {
+    await _outbox.add({
+      'actionId': '${DateTime.now().millisecondsSinceEpoch}-dest-$assistanceId',
+      'type': 'capture_destination',
+      'assistanceId': assistanceId,
+      'lat': lat,
+      'lng': lng,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    pendingCount.value = _outbox.length;
+  }
 }

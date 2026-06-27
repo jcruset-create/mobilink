@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import '../config.dart';
 import 'offline_store.dart';
 
@@ -66,31 +67,72 @@ class ApiService {
     }
   }
 
-  /// Envía a servidor los cambios de estado encolados (offline). Best-effort.
+  /// Envía a servidor las acciones encoladas (offline) en orden. Best-effort.
   Future<void> flushOutbox() async {
     for (final entry in OfflineStore.pending()) {
       final item = entry.value;
       final id = item['assistanceId'] as int;
-      final status = item['status'] as String;
       final type = item['type'] as String;
       final actionId = item['actionId'] as String;
       try {
-        final url = type == 'en_camino'
-            ? '$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'
-            : '$kBackendUrl/api/roadside-operator/assistances/$id/status';
-        final res = await http
-            .post(
-              Uri.parse(url),
-              headers: _headers,
-              body: jsonEncode(type == 'en_camino'
-                  ? {'clientActionId': actionId}
-                  : {'status': status, 'clientActionId': actionId}),
-            )
-            .timeout(const Duration(seconds: 12));
-        if (res.statusCode == 200) {
+        bool ok = false;
+        if (type == 'en_camino' || type == 'status') {
+          final url = type == 'en_camino'
+              ? '$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'
+              : '$kBackendUrl/api/roadside-operator/assistances/$id/status';
+          final res = await http
+              .post(Uri.parse(url), headers: _headers,
+                  body: jsonEncode(type == 'en_camino'
+                      ? {'clientActionId': actionId}
+                      : {'status': item['status'], 'clientActionId': actionId}))
+              .timeout(const Duration(seconds: 12));
+          ok = res.statusCode == 200;
+        } else if (type == 'upload_file') {
+          final path = item['localPath'] as String;
+          final f = File(path);
+          if (!await f.exists()) { ok = true; } // archivo ya no existe → descartar
+          else {
+            final req = http.MultipartRequest(
+              'POST', Uri.parse('$kBackendUrl/api/roadside-assistances/$id/files'));
+            req.headers.addAll({
+              'x-roadside-operator-name': Uri.encodeComponent(techName),
+              'x-roadside-operator-code': code,
+            });
+            req.fields['kind'] = item['kind'] as String;
+            req.fields['clientActionId'] = actionId;
+            req.files.add(await http.MultipartFile.fromPath('file', path));
+            final streamed = await req.send().timeout(const Duration(seconds: 40));
+            await streamed.stream.drain();
+            ok = streamed.statusCode == 200;
+            if (ok) { try { await f.delete(); } catch (_) {} }
+          }
+        } else if (type == 'save_conductor') {
+          final res = await http
+              .post(Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/conductor'),
+                  headers: _headers,
+                  body: jsonEncode({
+                    'conductorNombre': item['nombre'],
+                    'conductorDni': item['dni'],
+                    'clientActionId': actionId,
+                    if (item['observaciones'] != null) 'observacionesReparacion': item['observaciones'],
+                  }))
+              .timeout(const Duration(seconds: 12));
+          ok = res.statusCode == 200;
+        } else if (type == 'capture_destination') {
+          final res = await http
+              .post(Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/capture-destination'),
+                  headers: _headers,
+                  body: jsonEncode({'lat': item['lat'], 'lng': item['lng'], 'clientActionId': actionId}))
+              .timeout(const Duration(seconds: 12));
+          ok = res.statusCode == 200;
+        } else {
+          ok = true; // tipo desconocido → descartar
+        }
+
+        if (ok) {
           await OfflineStore.removePending(entry.key);
         } else {
-          break; // error real del servidor: paramos para no perder orden
+          break; // error real del servidor: paramos para mantener el orden
         }
       } catch (e) {
         if (_isNetworkError(e)) return; // sigue sin red, reintentar luego
@@ -229,24 +271,37 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> saveConductor(
-      int id, String nombre, String dni, {String? observaciones}) async {
+      int id, String nombre, String dni, {String? observaciones, String? actionId}) async {
     final body = <String, dynamic>{
       'conductorNombre': nombre,
       'conductorDni': dni,
+      if (actionId != null) 'clientActionId': actionId,
       if (observaciones != null && observaciones.isNotEmpty)
         'observacionesReparacion': observaciones,
     };
-    final res = await http.post(
-      Uri.parse(
-          '$kBackendUrl/api/roadside-operator/assistances/$id/conductor'),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Error guardando conductor');
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/conductor'),
+            headers: _headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 12));
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode != 200) {
+        throw Exception(data['error'] ?? 'Error guardando conductor');
+      }
+      OfflineStore.offline.value = false;
+      return data;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        OfflineStore.offline.value = true;
+        await OfflineStore.enqueueConductor(
+            assistanceId: id, nombre: nombre, dni: dni, observaciones: observaciones);
+        return {'offline': true};
+      }
+      rethrow;
     }
-    return data;
   }
 
   Future<Map<String, dynamic>?> getWhatsAppCapture(int id) async {
@@ -261,15 +316,27 @@ class ApiService {
     return data as Map<String, dynamic>;
   }
 
-  // Captura el GPS de destino al llegar. Devuelve {alreadyKnown, place?}
+  // Captura el GPS de destino al llegar. Devuelve {alreadyKnown, place?, offline?}
   Future<Map<String, dynamic>> captureDestination(int id, double lat, double lng) async {
-    final res = await http.post(
-      Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/capture-destination'),
-      headers: _headers,
-      body: jsonEncode({'lat': lat, 'lng': lng}),
-    );
-    if (res.statusCode != 200) throw Exception('Error capturando destino');
-    return jsonDecode(res.body) as Map<String, dynamic>;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/capture-destination'),
+            headers: _headers,
+            body: jsonEncode({'lat': lat, 'lng': lng}),
+          )
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) throw Exception('Error capturando destino');
+      OfflineStore.offline.value = false;
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        OfflineStore.offline.value = true;
+        await OfflineStore.enqueueCaptureDestination(assistanceId: id, lat: lat, lng: lng);
+        return {'alreadyKnown': false, 'offline': true};
+      }
+      rethrow;
+    }
   }
 
   // Crea un lugar conocido desde la APK (con dedup) y lo enlaza a la asistencia
@@ -383,23 +450,47 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> uploadFile(
-      int id, File file, String kind) async {
-    final req = http.MultipartRequest(
-      'POST',
-      Uri.parse('$kBackendUrl/api/roadside-assistances/$id/files'),
-    );
-    req.headers.addAll({
-      'x-roadside-operator-name': Uri.encodeComponent(techName),
-      'x-roadside-operator-code': code,
-    });
-    req.fields['kind'] = kind;
-    req.files.add(await http.MultipartFile.fromPath('file', file.path));
-    final streamed = await req.send();
-    final body = await streamed.stream.bytesToString();
-    final data = jsonDecode(body) as Map<String, dynamic>;
-    if (streamed.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Error subiendo foto');
+      int id, File file, String kind, {String? actionId}) async {
+    try {
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse('$kBackendUrl/api/roadside-assistances/$id/files'),
+      );
+      req.headers.addAll({
+        'x-roadside-operator-name': Uri.encodeComponent(techName),
+        'x-roadside-operator-code': code,
+      });
+      req.fields['kind'] = kind;
+      if (actionId != null) req.fields['clientActionId'] = actionId;
+      req.files.add(await http.MultipartFile.fromPath('file', file.path));
+      final streamed = await req.send().timeout(const Duration(seconds: 30));
+      final body = await streamed.stream.bytesToString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      if (streamed.statusCode != 200) {
+        throw Exception(data['error'] ?? 'Error subiendo foto');
+      }
+      OfflineStore.offline.value = false;
+      return data;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        // Sin red → copiar el archivo a almacenamiento persistente y encolar
+        OfflineStore.offline.value = true;
+        final persisted = await _persistFile(file, kind);
+        await OfflineStore.enqueueUpload(assistanceId: id, kind: kind, localPath: persisted);
+        return {'plateAction': 'none', 'offline': true};
+      }
+      rethrow;
     }
-    return data;
+  }
+
+  // Copia un archivo a un directorio permanente (sobrevive hasta subirse)
+  Future<String> _persistFile(File file, String kind) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final outDir = Directory('${dir.path}/offline_uploads');
+    if (!await outDir.exists()) await outDir.create(recursive: true);
+    final ext = file.path.split('.').last;
+    final dest = '${outDir.path}/${kind}_${DateTime.now().microsecondsSinceEpoch}.$ext';
+    await file.copy(dest);
+    return dest;
   }
 }
