@@ -353,6 +353,24 @@ class ApiService {
     if (res.statusCode != 200) throw Exception('Error actualizando estado');
   }
 
+  // Finaliza la OTF con firma única (PNG) del responsable
+  Future<void> finalizarOtf(int otfId, File firmaPng, String? firmanteNombre, String? firmanteDni) async {
+    final req = http.MultipartRequest(
+      'POST',
+      Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/finalizar'),
+    );
+    req.headers.addAll({
+      'x-roadside-operator-name': Uri.encodeComponent(techName),
+      'x-roadside-operator-code': code,
+    });
+    if (firmanteNombre != null) req.fields['firmanteNombre'] = firmanteNombre;
+    if (firmanteDni != null) req.fields['firmanteDni'] = firmanteDni;
+    req.files.add(await http.MultipartFile.fromPath('firma', firmaPng.path));
+    final streamed = await req.send().timeout(const Duration(seconds: 30));
+    await streamed.stream.drain();
+    if (streamed.statusCode != 200) throw Exception('Error finalizando OTF');
+  }
+
   Future<void> uploadOtfTrabajoFile(int trabajoId, File file, String kind) async {
     final req = http.MultipartRequest(
       'POST',

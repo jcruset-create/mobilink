@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:signature/signature.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 
@@ -197,10 +200,36 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
                     ),
                     const SizedBox(height: 16),
                     ...trabajos.map((t) => _trabajoCard(t)),
+                    const SizedBox(height: 16),
+                    if (o['status'] != 'finalizada')
+                      SizedBox(width: double.infinity, child: ElevatedButton.icon(
+                        onPressed: _finalizarVisita,
+                        icon: const Icon(Icons.draw),
+                        label: const Text('Finalizar visita (firma)'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.success, foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                      )),
+                    if (o['status'] == 'finalizada')
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(color: AppColors.success.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
+                        child: Text('✓ Visita finalizada${o['firmanteNombre'] != null ? ' · Firmó: ${o['firmanteNombre']}' : ''}',
+                            style: const TextStyle(color: AppColors.success, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
+                      ),
                     const SizedBox(height: 80),
                   ],
                 ),
     );
+  }
+
+  Future<void> _finalizarVisita() async {
+    final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => OtfFirmaScreen(api: widget.api, otfId: widget.otfId),
+    ));
+    if (ok == true) _load();
   }
 
   Widget _trabajoCard(Map<String, dynamic> t) {
@@ -426,4 +455,94 @@ class _OtfAddTrabajoScreenState extends State<OtfAddTrabajoScreen> {
                 ]),
         ),
       );
+}
+
+// ── Firma única de la visita ──
+class OtfFirmaScreen extends StatefulWidget {
+  final ApiService api;
+  final int otfId;
+  const OtfFirmaScreen({super.key, required this.api, required this.otfId});
+  @override
+  State<OtfFirmaScreen> createState() => _OtfFirmaScreenState();
+}
+
+class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
+  final _sig = SignatureController(penStrokeWidth: 3, penColor: Colors.black, exportBackgroundColor: Colors.white);
+  final _nombre = TextEditingController();
+  final _dni = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _sig.dispose(); _nombre.dispose(); _dni.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_sig.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Falta la firma'), backgroundColor: Colors.red));
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final Uint8List? bytes = await _sig.toPngBytes(height: 200, width: 600);
+      if (bytes == null) throw Exception('No se pudo exportar la firma');
+      final tmp = await getTemporaryDirectory();
+      final f = File('${tmp.path}/otf_firma_${DateTime.now().millisecondsSinceEpoch}.png');
+      await f.writeAsBytes(bytes);
+      await widget.api.finalizarOtf(widget.otfId, f,
+          _nombre.text.trim().isEmpty ? null : _nombre.text.trim(),
+          _dni.text.trim().isEmpty ? null : _dni.text.trim());
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(title: const Text('Firma de la visita'), backgroundColor: AppColors.surface, foregroundColor: AppColors.textPrimary),
+      body: _saving
+          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Firma única del responsable de la base (valida todos los trabajos de la visita).',
+                    style: TextStyle(color: AppColors.textSecondary)),
+                const SizedBox(height: 14),
+                TextField(controller: _nombre, style: const TextStyle(color: Colors.black87),
+                    decoration: const InputDecoration(labelText: 'Nombre (opcional)', filled: true, fillColor: Colors.white)),
+                const SizedBox(height: 10),
+                TextField(controller: _dni, style: const TextStyle(color: Colors.black87),
+                    decoration: const InputDecoration(labelText: 'DNI (opcional)', filled: true, fillColor: Colors.white)),
+                const SizedBox(height: 14),
+                const Text('Firma *', style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                Container(
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.black26)),
+                  child: ClipRRect(borderRadius: BorderRadius.circular(11),
+                      child: Signature(controller: _sig, height: 260, backgroundColor: Colors.white)),
+                ),
+                Align(alignment: Alignment.centerRight, child: TextButton.icon(
+                  onPressed: () => setState(() => _sig.clear()),
+                  icon: const Icon(Icons.refresh, size: 16, color: AppColors.textHint),
+                  label: const Text('Borrar', style: TextStyle(color: AppColors.textHint)),
+                )),
+                const SizedBox(height: 8),
+                SizedBox(width: double.infinity, child: ElevatedButton.icon(
+                  onPressed: _save, icon: const Icon(Icons.check),
+                  label: const Text('Finalizar visita'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 16)),
+                )),
+              ]),
+            ),
+    );
+  }
 }

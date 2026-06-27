@@ -10304,6 +10304,125 @@ app.post(
   }
 );
 
+// Finalizar OTF con firma única del responsable (operario)
+app.post(
+  "/api/roadside-operator/otf/:id/finalizar",
+  requireRoadsideOperator,
+  upload.single("firma"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const firmanteNombre = String(req.body?.firmanteNombre || "").trim() || null;
+      const firmanteDni = String(req.body?.firmanteDni || "").trim() || null;
+      let firmaUrl: string | null = null;
+
+      if (req.file) {
+        const storagePath = `otf/${id}/firma_${Date.now()}.png`;
+        const { error: upErr } = await supabase.storage
+          .from(SUPABASE_ROADSIDE_BUCKET)
+          .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype || "image/png", upsert: false });
+        if (!upErr) {
+          firmaUrl = supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(storagePath).data.publicUrl ?? null;
+        }
+      }
+
+      const now = Date.now();
+      await db.query(
+        `UPDATE otf SET status = 'finalizada', "finishedAtMs" = $2,
+           "firmaUrl" = COALESCE($3, "firmaUrl"),
+           "firmanteNombre" = COALESCE($4, "firmanteNombre"),
+           "firmanteDni" = COALESCE($5, "firmanteDni"),
+           "updatedAtMs" = $2
+         WHERE id = $1`,
+        [id, now, firmaUrl, firmanteNombre, firmanteDni]
+      );
+      res.json(await otfWithDetails(id));
+    } catch (e: any) {
+      console.error("POST otf finalizar error:", e);
+      res.status(500).json({ error: e?.message || "Error finalizando OTF" });
+    }
+  }
+);
+
+// Informe PDF de la OTF
+app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const data = await otfWithDetails(id);
+    if (!data) return res.status(404).json({ error: "OTF no encontrada" });
+
+    const doc = new PDFDocument({ margin: 40, size: "A4" });
+    const chunks: Buffer[] = [];
+    doc.on("data", (c) => chunks.push(c));
+    const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+    doc.fontSize(18).font("Helvetica-Bold").text("SEA Tarragona – Orden de Trabajo de Flota", { align: "center" });
+    doc.moveDown(0.3);
+    doc.fontSize(11).font("Helvetica").text(`OTF nº ${data.id}   |   ${formatDateEs(data.createdAtMs)}`, { align: "center" });
+    doc.moveDown(1);
+
+    const row = (l: string, v: string) => {
+      doc.fontSize(10).font("Helvetica-Bold").text(l, { continued: true, width: 170 });
+      doc.font("Helvetica").text(v);
+    };
+    doc.fontSize(13).font("Helvetica-Bold").text("Datos");
+    doc.moveDown(0.3);
+    row("Cliente:", data.clientName || "-");
+    row("Base:", data.baseName || data.direccion || "-");
+    row("Operario:", data.assignedTechName || "-");
+    row("Furgoneta:", data.assignedVehicleName || "-");
+    row("Estado:", data.status);
+    row("Progreso:", `${data.progreso.hechos} / ${data.progreso.total}`);
+
+    doc.moveDown(1);
+    doc.fontSize(13).font("Helvetica-Bold").text("Trabajos");
+    doc.moveDown(0.3);
+    const planificados = data.trabajos.filter((t: any) => t.origen !== "tecnico_campo");
+    const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
+
+    const printT = (t: any) => {
+      doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
+      doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
+      if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
+      doc.moveDown(0.2);
+    };
+
+    doc.fontSize(11).font("Helvetica-Bold").text("Planificados por oficina:");
+    if (planificados.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
+    planificados.forEach(printT);
+
+    doc.moveDown(0.4);
+    doc.fontSize(11).font("Helvetica-Bold").text("Añadidos en campo por el técnico:");
+    if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
+    enCampo.forEach(printT);
+
+    // Firma única
+    if (data.firmaUrl || data.firmanteNombre) {
+      doc.moveDown(1);
+      doc.fontSize(13).font("Helvetica-Bold").text("Conformidad del responsable");
+      doc.moveDown(0.3);
+      if (data.firmanteNombre) row("Firmante:", data.firmanteNombre);
+      if (data.firmanteDni) row("DNI:", data.firmanteDni);
+      if (data.firmaUrl) {
+        try {
+          const buf = await fetchImageForPdf(data.firmaUrl);
+          doc.moveDown(0.3);
+          doc.image(buf, { fit: [220, 110] });
+        } catch { /* sin firma */ }
+      }
+    }
+
+    doc.end();
+    const buffer = await finished;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="otf_${id}.pdf"`);
+    res.send(buffer);
+  } catch (e: any) {
+    console.error("GET otf report.pdf error:", e);
+    if (!res.headersSent) res.status(500).json({ error: "Error generando PDF" });
+  }
+});
+
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */

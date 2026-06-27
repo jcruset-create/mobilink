@@ -192,6 +192,15 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
         <div className="text-right">
           <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${STATUS_OTF[otf.status] ?? ""}`}>{otf.status}</span>
           <div className="mt-1 text-sm font-black">{otf.progreso?.hechos ?? 0} / {otf.progreso?.total ?? 0}</div>
+          <button
+            onClick={() => {
+              const token = localStorage.getItem("sea-admin-token") ?? "";
+              window.open(`/api/otf/${otf.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+            }}
+            className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50"
+          >
+            📄 Informe PDF
+          </button>
         </div>
       </div>
 
