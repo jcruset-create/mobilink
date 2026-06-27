@@ -49,6 +49,68 @@ export async function deleteKnownPlace(id: number) {
   return res.json();
 }
 
+// ── OTF (Órdenes de Trabajo de Flota) ──
+export async function fetchOtfList() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf`, { headers: getAdminHeaders() });
+  if (!res.ok) return [];
+  return (await res.json().catch(() => [])) as any[];
+}
+
+export async function fetchOtf(id: number) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf/${id}`, { headers: getAdminHeaders() });
+  if (!res.ok) throw new Error("No se pudo cargar la OTF");
+  return res.json();
+}
+
+export async function createOtf(body: Record<string, unknown>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo crear la OTF");
+  return res.json();
+}
+
+export async function updateOtf(id: number, body: Record<string, unknown>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf/${id}`, {
+    method: "PUT",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo actualizar la OTF");
+  return res.json();
+}
+
+export async function addOtfTrabajo(otfId: number, body: Record<string, unknown>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf/${otfId}/trabajos`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo añadir el trabajo");
+  return res.json();
+}
+
+export async function updateOtfTrabajo(tid: number, body: Record<string, unknown>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf/trabajos/${tid}`, {
+    method: "PUT",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo actualizar el trabajo");
+  return res.json();
+}
+
+export async function deleteOtfTrabajo(tid: number) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf/trabajos/${tid}`, {
+    method: "DELETE",
+    headers: getAdminHeaders(),
+  });
+  if (!res.ok) throw new Error("No se pudo eliminar el trabajo");
+  return res.json();
+}
+
 export async function geocodeAddress(address: string) {
   const response = await fetchWithTimeout(`${API_BASE}/api/geocode`, {
     method: "POST",

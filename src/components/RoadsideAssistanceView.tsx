@@ -822,6 +822,14 @@ export default function RoadsideAssistanceView({
             >
               📍 Lugares
             </button>
+            <a
+              href="/otf"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800 hover:bg-amber-100"
+            >
+              🚛 OTF
+            </a>
             <button
               type="button"
               onClick={onRefresh}
