@@ -196,6 +196,23 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
                         const SizedBox(height: 8),
                         Text('Progreso: ${prog['hechos'] ?? 0} / ${prog['total'] ?? 0}',
                             style: const TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.w800)),
+                        if (o['arrivedAtBaseMs'] != null)
+                          Padding(padding: const EdgeInsets.only(top: 6), child: Text(
+                            '✓ Llegada a base registrada',
+                            style: const TextStyle(color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w700))),
+                        if (o['status'] == 'planificada' && o['arrivedAtBaseMs'] == null) ...[
+                          const SizedBox(height: 10),
+                          SizedBox(width: double.infinity, child: OutlinedButton.icon(
+                            onPressed: _checkin,
+                            icon: const Icon(Icons.location_on),
+                            label: const Text('Confirmar llegada a base'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.info,
+                              side: const BorderSide(color: AppColors.info),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          )),
+                        ],
                       ]),
                     ),
                     const SizedBox(height: 16),
@@ -223,6 +240,18 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
                   ],
                 ),
     );
+  }
+
+  Future<void> _checkin() async {
+    try {
+      await widget.api.checkinOtf(widget.otfId);
+      _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')), backgroundColor: Colors.red));
+      }
+    }
   }
 
   Future<void> _finalizarVisita() async {

@@ -353,6 +353,17 @@ class ApiService {
     if (res.statusCode != 200) throw Exception('Error actualizando estado');
   }
 
+  // Check-in manual a la base de la OTF (si el GPS automático falla)
+  Future<Map<String, dynamic>> checkinOtf(int otfId) async {
+    final res = await http.post(
+      Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/checkin'),
+      headers: _headers,
+      body: jsonEncode({}),
+    );
+    if (res.statusCode != 200) throw Exception('Error en check-in');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   // Finaliza la OTF con firma única (PNG) del responsable
   Future<void> finalizarOtf(int otfId, File firmaPng, String? firmanteNombre, String? firmanteDni) async {
     final req = http.MultipartRequest(

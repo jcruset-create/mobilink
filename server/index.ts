@@ -8109,13 +8109,44 @@ async function reconcileTechRoadsideOccupation() {
   }
 }
 
+// Check-in automático: la furgoneta entra en la geozona de la base de una OTF
+async function checkOtfBaseArrival() {
+  try {
+    const r = await db.query(`
+      SELECT id, "webfleetVehicleId", lat, lng FROM otf
+      WHERE status = 'planificada' AND "arrivedAtBaseMs" IS NULL
+        AND "webfleetVehicleId" IS NOT NULL AND lat IS NOT NULL AND lng IS NOT NULL
+    `);
+    for (const o of r.rows) {
+      try {
+        const pos = await getWebfleetVehiclePosition(o.webfleetVehicleId);
+        const dist = haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng));
+        if (dist <= KNOWN_PLACE_RADIUS_M) {
+          await db.query(
+            `UPDATE otf SET status = 'en_curso', "arrivedAtBaseMs" = $2, "updatedAtMs" = $2
+             WHERE id = $1 AND status = 'planificada' AND "arrivedAtBaseMs" IS NULL`,
+            [o.id, Date.now()]
+          );
+          console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${Math.round(dist)}m)`);
+        }
+      } catch (err) {
+        console.warn(`OTF check-in error #${o.id}:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("checkOtfBaseArrival error:", e);
+  }
+}
+
 // Comprobar cada 2 minutos
 setInterval(() => {
   void checkWebfleetWorkshopArrival();
   void reconcileTechRoadsideOccupation();
+  void checkOtfBaseArrival();
 }, 2 * 60 * 1000);
 void checkWebfleetWorkshopArrival();
 void reconcileTechRoadsideOccupation();
+void checkOtfBaseArrival();
 
 /* =========================================================
    ALMACEN NEUMATICOS - OCR ALBARANES
@@ -10213,6 +10244,24 @@ app.get("/api/roadside-operator/otf/:id", requireRoadsideOperator, async (req, r
   } catch (e) {
     console.error("GET operator otf/:id error:", e);
     res.status(500).json({ error: "Error obteniendo OTF" });
+  }
+});
+
+// Check-in manual a la base (si el GPS automático falla)
+app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const now = Date.now();
+    await db.query(
+      `UPDATE otf SET status = CASE WHEN status = 'planificada' THEN 'en_curso' ELSE status END,
+         "arrivedAtBaseMs" = COALESCE("arrivedAtBaseMs", $2), "updatedAtMs" = $2
+       WHERE id = $1`,
+      [id, now]
+    );
+    res.json(await otfWithDetails(id));
+  } catch (e) {
+    console.error("POST otf checkin error:", e);
+    res.status(500).json({ error: "Error en check-in" });
   }
 });
 
