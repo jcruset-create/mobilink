@@ -7,6 +7,8 @@ import {
   updateOtfTrabajo,
   deleteOtfTrabajo,
   fetchKnownPlaces,
+  fetchRoadsideVehiclesSimple,
+  fetchRoadsideTechsSimple,
 } from "../modules/roadsideAssistanceApi";
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 
@@ -32,6 +34,8 @@ export default function OtfPage() {
   const [sel, setSel] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [techs, setTechs] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
 
   async function loadList() {
     setLoading(true);
@@ -45,6 +49,8 @@ export default function OtfPage() {
   useEffect(() => {
     loadList();
     fetchKnownPlaces().then(setPlaces).catch(() => {});
+    fetchRoadsideTechsSimple().then(setTechs).catch(() => {});
+    fetchRoadsideVehiclesSimple().then(setVehicles).catch(() => {});
   }, []);
 
   async function openOtf(id: number) {
@@ -110,17 +116,17 @@ export default function OtfPage() {
       </div>
 
       {showNew && (
-        <NewOtfModal places={places} onClose={() => setShowNew(false)} onCreated={(o) => { setShowNew(false); loadList(); openOtf(o.id); }} />
+        <NewOtfModal places={places} techs={techs} vehicles={vehicles} onClose={() => setShowNew(false)} onCreated={(o) => { setShowNew(false); loadList(); openOtf(o.id); }} />
       )}
     </div>
   );
 }
 
-function NewOtfModal({ places, onClose, onCreated }: { places: KnownPlace[]; onClose: () => void; onCreated: (o: any) => void }) {
+function NewOtfModal({ places, techs, vehicles, onClose, onCreated }: { places: KnownPlace[]; techs: any[]; vehicles: any[]; onClose: () => void; onCreated: (o: any) => void }) {
   const [clientName, setClientName] = useState("");
   const [placeId, setPlaceId] = useState("");
   const [tech, setTech] = useState("");
-  const [vehicle, setVehicle] = useState("");
+  const [vehicleName, setVehicleName] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -128,6 +134,7 @@ function NewOtfModal({ places, onClose, onCreated }: { places: KnownPlace[]; onC
     setSaving(true);
     try {
       const place = places.find((p) => String(p.id) === placeId);
+      const veh = vehicles.find((v) => v.name === vehicleName);
       const o = await createOtf({
         clientName: clientName.trim(),
         knownPlaceId: place?.id ?? null,
@@ -135,8 +142,9 @@ function NewOtfModal({ places, onClose, onCreated }: { places: KnownPlace[]; onC
         direccion: place?.direccion ?? null,
         lat: place?.lat ?? null,
         lng: place?.lng ?? null,
-        assignedTechName: tech.trim() || null,
-        assignedVehicleName: vehicle.trim() || null,
+        assignedTechName: tech || null,
+        assignedVehicleName: vehicleName || null,
+        webfleetVehicleId: veh?.webfleetVehicleId ?? null,
       });
       onCreated(o);
     } finally {
@@ -157,8 +165,18 @@ function NewOtfModal({ places, onClose, onCreated }: { places: KnownPlace[]; onC
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Operario"><input value={tech} onChange={(e) => setTech(e.target.value)} className={inputCls} /></Field>
-            <Field label="Furgoneta"><input value={vehicle} onChange={(e) => setVehicle(e.target.value)} className={inputCls} /></Field>
+            <Field label="Operario">
+              <select value={tech} onChange={(e) => setTech(e.target.value)} className={inputCls}>
+                <option value="">— Sin asignar —</option>
+                {techs.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Furgoneta">
+              <select value={vehicleName} onChange={(e) => setVehicleName(e.target.value)} className={inputCls}>
+                <option value="">— Sin asignar —</option>
+                {vehicles.map((v) => <option key={v.id} value={v.name}>{v.name}{v.plate ? ` (${v.plate})` : ""}</option>)}
+              </select>
+            </Field>
           </div>
         </div>
         <div className="mt-4 flex justify-end gap-2">

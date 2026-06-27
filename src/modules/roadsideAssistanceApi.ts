@@ -49,6 +49,18 @@ export async function deleteKnownPlace(id: number) {
   return res.json();
 }
 
+export async function fetchRoadsideVehiclesSimple(): Promise<any[]> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/roadside-vehicles`, { headers: getAdminHeaders() });
+  if (!res.ok) return [];
+  return (await res.json().catch(() => [])) as any[];
+}
+
+export async function fetchRoadsideTechsSimple(): Promise<any[]> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/roadside-operator/techs`, { headers: getAdminHeaders() });
+  if (!res.ok) return [];
+  return (await res.json().catch(() => [])) as any[];
+}
+
 // ── OTF (Órdenes de Trabajo de Flota) ──
 export async function fetchOtfList() {
   const res = await fetchWithTimeout(`${API_BASE}/api/otf`, { headers: getAdminHeaders() });
