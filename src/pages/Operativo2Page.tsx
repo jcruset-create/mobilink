@@ -101,7 +101,10 @@ export default function Operativo2Page() {
       {/* Barra superior */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <span style={{ fontSize: 15, fontWeight: 600 }}>📊 SEA Tarragona · Operativo 2</span>
-        <span style={{ fontSize: 12, color: C.dim }}>Actualizado {clock}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 12, color: C.dim }}>Actualizado {clock}</span>
+          <a href="/" style={{ fontSize: 12, color: C.text, textDecoration: "none", background: C.panel, borderRadius: 6, padding: "4px 10px" }}>← Volver</a>
+        </div>
       </div>
 
       {/* CABECERA: trabajando · disponibles · entradas */}

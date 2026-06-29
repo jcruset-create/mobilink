@@ -4396,8 +4396,7 @@ return (
     <button
       type="button"
       onClick={() => {
-        setView("operativo2");
-        void reloadMaintenanceAvailabilityFromBackend();
+        window.location.href = "/operativo2";
       }}
       className={`rounded-2xl px-4 py-2 text-sm font-medium ${
         view === "operativo2"
