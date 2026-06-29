@@ -11,6 +11,7 @@ import OtfPage from "./pages/OtfPage";
 import OtfTvPage from "./pages/OtfTvPage";
 import VehiculoHistorialPage from "./pages/VehiculoHistorialPage";
 import DashboardPage from "./pages/DashboardPage";
+import Operativo2Page from "./pages/Operativo2Page";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -112,6 +113,7 @@ export default function App() {
       <Route path="/otf-tv" element={<OtfTvPage />} />
       <Route path="/vehiculo" element={<VehiculoHistorialPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
+      <Route path="/operativo2" element={<Operativo2Page />} />
       <Route path="/login" element={<Login />} />
       <Route path="/almacen-neumaticos/login" element={<Login />} />
 
