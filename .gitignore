@@ -31,3 +31,5 @@ supabase/.temp/
 *.njsproj*
 *.sln
 *.sw?
+
+.tmp.driveupload/
