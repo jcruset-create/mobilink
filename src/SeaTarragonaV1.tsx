@@ -221,31 +221,8 @@ import {
 import RoadsideAssistanceView from "./components/RoadsideAssistanceView";
 import RoadsideAssistanceAdminView from "./components/RoadsideAssistanceAdminView";
 import WhatsAppInboxView from "./components/WhatsAppInboxView";
-import {
-  createRoadsideAssistanceInBackend,
-  createRoadsideVehicleInBackend,
-  deactivateRoadsideVehicleInBackend,
-  deleteRoadsideOperatorCodeInBackend,
-  enCaminoRoadsideAssistanceInBackend,
-  loadRoadsideAssistancesFromBackend,
-  loadRoadsideOperatorCodesFromBackend,
-  loadRoadsideVehiclesFromBackend,
-  loadWebfleetVehiclesFromBackend,
-  sendRoadsideTrackingWhatsappInBackend,
-  updateRoadsideAssistanceInBackend,
-  updateRoadsideAssistanceStatusInBackend,
-  updateRoadsideOperatorCodeInBackend,
-  updateRoadsideVehicleInBackend,
-} from "./modules/roadsideAssistanceApi";
-import type {
-  RoadsideAssistance,
-  RoadsideAssistanceDraft,
-  RoadsideAssistanceEditDraft,
-  RoadsideAssistanceStatus,
-  RoadsideOperatorCode,
-  RoadsideVehicle,
-  RoadsideVehicleDraft,
-} from "./modules/roadsideAssistanceTypes";
+import { loadWebfleetVehiclesFromBackend } from "./modules/roadsideAssistanceApi";
+import { useRoadside } from "./modules/useRoadside";
 import {
   applyAssignmentToTechs,
   belongsToWorkshop,
@@ -310,21 +287,6 @@ useEffect(() => {
     { id: string; name: string }[]
   >([]);
 
-  const [roadsideAssistances, setRoadsideAssistances] = useState<
-    RoadsideAssistance[]
-  >([]);
-  const [roadsideVehicles, setRoadsideVehicles] = useState<RoadsideVehicle[]>(
-    []
-  );
-  const [roadsideOperatorCodes, setRoadsideOperatorCodes] = useState<
-    RoadsideOperatorCode[]
-  >([]);
-  const [roadsideAssistancesLoading, setRoadsideAssistancesLoading] =
-    useState(false);
-  const [roadsideAssistanceError, setRoadsideAssistanceError] = useState("");
-  const [roadsideVehicleError, setRoadsideVehicleError] = useState("");
-  const [roadsideOperatorCodeError, setRoadsideOperatorCodeError] =
-    useState("");
   const scheduledJobsLoadedRef = useRef(false);
   const scheduledJobsDirtyRef = useRef(false);
   const scheduledJobsSaveVersionRef = useRef(0);
@@ -579,22 +541,6 @@ const visibleScheduledJobs = useMemo(
   [scheduledJobs, selectedWorkshopId]
 );
 
-const visibleRoadsideAssistances = useMemo(
-  () =>
-    roadsideAssistances.filter((assistance) =>
-      belongsToWorkshop(assistance, selectedWorkshopId)
-    ),
-  [roadsideAssistances, selectedWorkshopId]
-);
-
-const visibleRoadsideVehicles = useMemo(
-  () =>
-    roadsideVehicles.filter((vehicle) =>
-      belongsToWorkshop(vehicle, selectedWorkshopId)
-    ),
-  [roadsideVehicles, selectedWorkshopId]
-);
-
 const visibleTechs = useMemo(() => {
   const visibleJobIds = new Set(visibleJobs.map((job) => job.id));
 
@@ -608,20 +554,11 @@ const visibleTechs = useMemo(() => {
   });
 }, [effectiveTechs, visibleJobs, selectedWorkshopId]);
 
-const roadsideEligibleTechNames = useMemo(
-  () =>
-    new Set(
-      roadsideOperatorCodes
-        .filter((item) => item.hasCustomCode)
-        .map((item) => item.techName)
-    ),
-  [roadsideOperatorCodes]
-);
-
-const visibleRoadsideTechs = useMemo(
-  () => visibleTechs.filter((tech) => roadsideEligibleTechNames.has(tech.name)),
-  [visibleTechs, roadsideEligibleTechNames]
-);
+const roadside = useRoadside({
+  selectedWorkshopId,
+  visibleTechs,
+  appendLog,
+});
 
 const visibleQuickTemplates = useMemo(
   () =>
@@ -682,9 +619,9 @@ useEffect(() => {
 useEffect(() => {
   if (!isAuthenticated || !isSupervisor) return;
 
-  void reloadRoadsideAssistancesFromBackend();
-  void reloadRoadsideVehiclesFromBackend();
-  void reloadRoadsideOperatorCodesFromBackend();
+  void roadside.reloadRoadsideAssistancesFromBackend();
+  void roadside.reloadRoadsideVehiclesFromBackend();
+  void roadside.reloadRoadsideOperatorCodesFromBackend();
   void loadWebfleetVehiclesFromBackend().then(setWebfleetVehicles);
 }, [isAuthenticated, isSupervisor]);
 
@@ -1174,7 +1111,7 @@ useAutoSync({
     await reloadLogsFromBackend();
     await reloadTechsFromBackend();
     await reloadMaintenanceAvailabilityFromBackend();
-    await reloadRoadsideAssistancesFromBackend();
+    await roadside.reloadRoadsideAssistancesFromBackend();
   },
   onSynced: () => {
     setLastSyncAt(Date.now());
@@ -1541,279 +1478,6 @@ async function reloadScheduledJobsFromBackend() {
   } catch (error) {
     console.error("Error recargando agenda:", error);
   }
-}
-
-async function reloadRoadsideAssistancesFromBackend() {
-  setRoadsideAssistancesLoading(true);
-  setRoadsideAssistanceError("");
-
-  try {
-    const data = await loadRoadsideAssistancesFromBackend(true);
-    setRoadsideAssistances(data);
-  } catch (error) {
-    console.error("Error recargando asistencias carretera:", error);
-    setRoadsideAssistanceError(
-      error instanceof Error
-        ? error.message
-        : "Error cargando asistencias carretera."
-    );
-  } finally {
-    setRoadsideAssistancesLoading(false);
-  }
-}
-
-async function reloadRoadsideVehiclesFromBackend() {
-  setRoadsideVehicleError("");
-
-  try {
-    const data = await loadRoadsideVehiclesFromBackend(true);
-    setRoadsideVehicles(data);
-  } catch (error) {
-    console.error("Error recargando furgonetas carretera:", error);
-    setRoadsideVehicleError(
-      error instanceof Error ? error.message : "Error cargando furgonetas."
-    );
-  }
-}
-
-async function reloadRoadsideOperatorCodesFromBackend() {
-  setRoadsideOperatorCodeError("");
-
-  try {
-    const data = await loadRoadsideOperatorCodesFromBackend();
-    setRoadsideOperatorCodes(data);
-  } catch (error) {
-    console.error("Error recargando codigos de operario:", error);
-    setRoadsideOperatorCodeError(
-      error instanceof Error
-        ? error.message
-        : "Error cargando codigos de operario."
-    );
-  }
-}
-
-async function createRoadsideVehicle(draft: RoadsideVehicleDraft) {
-  const created = await createRoadsideVehicleInBackend({
-    ...draft,
-    workshopId: selectedWorkshopId,
-  });
-
-  setRoadsideVehicles((prev) => [
-    created,
-    ...prev.filter((item) => item.id !== created.id),
-  ]);
-
-  appendLog(`Furgoneta creada: ${created.name}.`);
-}
-
-async function updateRoadsideVehicle(
-  vehicle: RoadsideVehicle,
-  draft: RoadsideVehicleDraft
-) {
-  const updated = await updateRoadsideVehicleInBackend(vehicle.id, {
-    ...draft,
-    workshopId: vehicle.workshopId ?? selectedWorkshopId,
-  });
-
-  setRoadsideVehicles((prev) =>
-    prev.map((item) => (item.id === updated.id ? updated : item))
-  );
-
-  appendLog(`Furgoneta actualizada: ${updated.name}.`);
-}
-
-async function deactivateRoadsideVehicle(vehicle: RoadsideVehicle) {
-  const updated = await deactivateRoadsideVehicleInBackend(vehicle.id);
-
-  setRoadsideVehicles((prev) =>
-    prev.map((item) => (item.id === updated.id ? updated : item))
-  );
-
-  appendLog(`Furgoneta desactivada: ${updated.name}.`);
-}
-
-async function updateRoadsideOperatorCode(techName: string, code: string) {
-  const updated = await updateRoadsideOperatorCodeInBackend(techName, code);
-
-  setRoadsideOperatorCodes((prev) => {
-    const exists = prev.some((item) => item.techName === updated.techName);
-
-    if (!exists) {
-      return [...prev, updated];
-    }
-
-    return prev.map((item) =>
-      item.techName === updated.techName ? updated : item
-    );
-  });
-
-  appendLog(`Codigo operario actualizado: ${updated.techName}.`);
-}
-
-async function deleteRoadsideOperatorCode(techName: string) {
-  const deleted = await deleteRoadsideOperatorCodeInBackend(techName);
-
-  setRoadsideOperatorCodes((prev) =>
-    prev.filter((item) => item.techName !== deleted.techName)
-  );
-
-  appendLog(`Operario baja asistencia: ${deleted.techName}.`);
-}
-
-async function createRoadsideAssistance(draft: RoadsideAssistanceDraft) {
-  const created = await createRoadsideAssistanceInBackend({
-    ...draft,
-    workshopId: selectedWorkshopId,
-  });
-
-  let assistanceToStore = created;
-
-  if (draft.sendTrackingWhatsapp && created.customerPhone) {
-    try {
-      const result = await sendRoadsideTrackingWhatsappInBackend(created.id);
-      assistanceToStore = result.assistance;
-      appendLog(
-        `WhatsApp seguimiento enviado a ${created.customerPhone}: ${
-          created.plate || created.customerName || created.id
-        }.`
-      );
-    } catch (error) {
-      console.error("Error enviando WhatsApp seguimiento:", error);
-      appendLog(
-        `Asistencia creada pero WhatsApp no enviado: ${
-          created.plate || created.customerName || created.id
-        }.`
-      );
-    }
-  }
-
-  setRoadsideAssistances((prev) => [
-    assistanceToStore,
-    ...prev.filter((item) => item.id !== assistanceToStore.id),
-  ]);
-
-  appendLog(
-    `Asistencia carretera creada: ${
-      assistanceToStore.plate ||
-      assistanceToStore.customerName ||
-      assistanceToStore.customerPhone
-    }.`
-  );
-}
-
-async function updateRoadsideAssistance(
-  assistance: RoadsideAssistance,
-  draft: RoadsideAssistanceEditDraft
-) {
-  let updated = await updateRoadsideAssistanceInBackend(assistance.id, {
-    ...draft,
-    workshopId: assistance.workshopId ?? selectedWorkshopId,
-  });
-
-  const assignedNow =
-    !assistance.assignedTechName && Boolean(updated.assignedTechName);
-
-  if (
-    (draft.sendTrackingWhatsapp || assignedNow) &&
-    updated.customerPhone &&
-    !updated.trackingWhatsappSentAtMs
-  ) {
-    try {
-      const result = await sendRoadsideTrackingWhatsappInBackend(updated.id);
-      updated = result.assistance;
-      appendLog(
-        `WhatsApp seguimiento enviado a ${updated.customerPhone}: ${
-          updated.plate || updated.customerName || updated.id
-        }.`
-      );
-    } catch (error) {
-      console.error("Error enviando WhatsApp seguimiento:", error);
-      appendLog(
-        `Asistencia actualizada pero WhatsApp no enviado: ${
-          updated.plate || updated.customerName || updated.id
-        }.`
-      );
-    }
-  }
-
-  setRoadsideAssistances((prev) =>
-    prev.map((item) => (item.id === updated.id ? updated : item))
-  );
-
-  appendLog(
-    `Asistencia carretera actualizada: ${
-      updated.plate || updated.customerName || updated.customerPhone
-    }.`
-  );
-}
-
-async function sendRoadsideTrackingWhatsapp(assistance: RoadsideAssistance) {
-  const result = await sendRoadsideTrackingWhatsappInBackend(assistance.id);
-
-  setRoadsideAssistances((prev) =>
-    prev.map((item) =>
-      item.id === result.assistance.id ? result.assistance : item
-    )
-  );
-
-  appendLog(
-    `WhatsApp seguimiento enviado a ${assistance.customerPhone}: ${
-      assistance.plate || assistance.customerName || assistance.id
-    }.`
-  );
-}
-
-async function updateRoadsideAssistanceStatus(
-  assistance: RoadsideAssistance,
-  status: RoadsideAssistanceStatus
-) {
-  let updated = await updateRoadsideAssistanceStatusInBackend(
-    assistance.id,
-    status
-  );
-
-  if (
-    status === "asignada" &&
-    updated.customerPhone &&
-    !updated.trackingWhatsappSentAtMs
-  ) {
-    try {
-      const result = await sendRoadsideTrackingWhatsappInBackend(updated.id);
-      updated = result.assistance;
-      appendLog(
-        `WhatsApp seguimiento enviado a ${updated.customerPhone}: ${
-          updated.plate || updated.customerName || updated.id
-        }.`
-      );
-    } catch (error) {
-      console.error("Error enviando WhatsApp seguimiento:", error);
-      appendLog(
-        `Estado actualizado pero WhatsApp no enviado: ${
-          updated.plate || updated.customerName || updated.id
-        }.`
-      );
-    }
-  }
-
-  setRoadsideAssistances((prev) =>
-    prev.map((item) => (item.id === updated.id ? updated : item))
-  );
-
-  appendLog(
-    `Asistencia carretera ${updated.id}: estado ${updated.status}.`
-  );
-}
-
-async function enCaminoRoadsideAssistance(assistance: RoadsideAssistance) {
-  const updated = await enCaminoRoadsideAssistanceInBackend(assistance.id);
-
-  setRoadsideAssistances((prev) =>
-    prev.map((item) => (item.id === updated.id ? updated : item))
-  );
-
-  appendLog(
-    `Asistencia ${updated.id} en camino. ETA: ${updated.etaMinutos ?? "?"} min, ${updated.etaKm ?? "?"} km.`
-  );
 }
 
 async function saveScheduledJobsToBackend(
@@ -4989,7 +4653,7 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
     <OperariosTVView
       jobs={jobsForScreens}
       techs={visibleTechs}
-      roadsideAssistances={roadsideAssistances}
+      roadsideAssistances={roadside.roadsideAssistances}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
@@ -5067,19 +4731,19 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
 if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
   return (
     <RoadsideAssistanceView
-      assistances={visibleRoadsideAssistances}
-      techs={visibleRoadsideTechs}
-      vehicles={visibleRoadsideVehicles}
+      assistances={roadside.visibleRoadsideAssistances}
+      techs={roadside.visibleRoadsideTechs}
+      vehicles={roadside.visibleRoadsideVehicles}
       currentBase={getWorkshopById(selectedWorkshopId).city}
-      loading={roadsideAssistancesLoading}
+      loading={roadside.roadsideAssistancesLoading}
       error={
-        roadsideAssistanceError ||
-        roadsideVehicleError
+        roadside.roadsideAssistanceError ||
+        roadside.roadsideVehicleError
       }
       onBack={() => setView("operativo")}
       onRefresh={() => {
-        void reloadRoadsideAssistancesFromBackend();
-        void reloadRoadsideVehiclesFromBackend();
+        void roadside.reloadRoadsideAssistancesFromBackend();
+        void roadside.reloadRoadsideVehiclesFromBackend();
         void loadWebfleetVehiclesFromBackend().then(setWebfleetVehicles);
       }}
       webfleetVehicles={webfleetVehicles}
@@ -5087,16 +4751,16 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
         isAdmin
           ? () => {
               setView("asistencias_config");
-              void reloadRoadsideVehiclesFromBackend();
-              void reloadRoadsideOperatorCodesFromBackend();
+              void roadside.reloadRoadsideVehiclesFromBackend();
+              void roadside.reloadRoadsideOperatorCodesFromBackend();
             }
           : undefined
       }
-      onCreate={createRoadsideAssistance}
-      onUpdate={updateRoadsideAssistance}
-      onSendTrackingWhatsapp={sendRoadsideTrackingWhatsapp}
-      onEnCamino={enCaminoRoadsideAssistance}
-      onStatusChange={updateRoadsideAssistanceStatus}
+      onCreate={roadside.createRoadsideAssistance}
+      onUpdate={roadside.updateRoadsideAssistance}
+      onSendTrackingWhatsapp={roadside.sendRoadsideTrackingWhatsapp}
+      onEnCamino={roadside.enCaminoRoadsideAssistance}
+      onStatusChange={roadside.updateRoadsideAssistanceStatus}
     />
   );
 }
@@ -5108,19 +4772,19 @@ if (
   return (
     <RoadsideAssistanceAdminView
       techs={visibleTechs}
-      vehicles={visibleRoadsideVehicles}
-      operatorCodes={roadsideOperatorCodes}
-      error={roadsideVehicleError || roadsideOperatorCodeError}
+      vehicles={roadside.visibleRoadsideVehicles}
+      operatorCodes={roadside.roadsideOperatorCodes}
+      error={roadside.roadsideVehicleError || roadside.roadsideOperatorCodeError}
       onBack={() => setView("asistencias")}
       onRefresh={() => {
-        void reloadRoadsideVehiclesFromBackend();
-        void reloadRoadsideOperatorCodesFromBackend();
+        void roadside.reloadRoadsideVehiclesFromBackend();
+        void roadside.reloadRoadsideOperatorCodesFromBackend();
       }}
-      onCreateVehicle={createRoadsideVehicle}
-      onUpdateVehicle={updateRoadsideVehicle}
-      onDeactivateVehicle={deactivateRoadsideVehicle}
-      onUpdateOperatorCode={updateRoadsideOperatorCode}
-      onDeleteOperatorCode={deleteRoadsideOperatorCode}
+      onCreateVehicle={roadside.createRoadsideVehicle}
+      onUpdateVehicle={roadside.updateRoadsideVehicle}
+      onDeactivateVehicle={roadside.deactivateRoadsideVehicle}
+      onUpdateOperatorCode={roadside.updateRoadsideOperatorCode}
+      onDeleteOperatorCode={roadside.deleteRoadsideOperatorCode}
     />
   );
 }
@@ -5157,9 +4821,9 @@ if (view === "whatsapp_inbox" && canAccessView(userRole, "whatsapp_inbox")) {
           ].filter(Boolean).join("\n"),
           sendTrackingWhatsapp: Boolean(extracted.telefonoWhatsapp ?? fromPhone),
         };
-        void createRoadsideAssistance(draft).then(() => {
+        void roadside.createRoadsideAssistance(draft).then(() => {
           setView("asistencias");
-          void reloadRoadsideAssistancesFromBackend();
+          void roadside.reloadRoadsideAssistancesFromBackend();
         });
       }}
     />
@@ -5336,9 +5000,9 @@ return (
       type="button"
       onClick={() => {
         setView("asistencias");
-        void reloadRoadsideAssistancesFromBackend();
-        void reloadRoadsideVehiclesFromBackend();
-        void reloadRoadsideOperatorCodesFromBackend();
+        void roadside.reloadRoadsideAssistancesFromBackend();
+        void roadside.reloadRoadsideVehiclesFromBackend();
+        void roadside.reloadRoadsideOperatorCodesFromBackend();
       }}
       className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
         view === "asistencias"
@@ -5355,8 +5019,8 @@ return (
       type="button"
       onClick={() => {
         setView("asistencias_config");
-        void reloadRoadsideVehiclesFromBackend();
-        void reloadRoadsideOperatorCodesFromBackend();
+        void roadside.reloadRoadsideVehiclesFromBackend();
+        void roadside.reloadRoadsideOperatorCodesFromBackend();
       }}
       className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
         view === "asistencias_config"
