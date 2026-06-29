@@ -4641,7 +4641,7 @@ return (
 </div>
       </div>
 
-      {(view === "operativo" || view === "operativo2") && (
+      {view === "operativo" && (
   <section className="rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-md">
     <div className="grid gap-2 md:grid-cols-2">
       <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2">
@@ -6229,7 +6229,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{(view === "operativo" || view === "operativo2") && agenda.dueScheduledJobs.length > 0 && (
+{view === "operativo" && agenda.dueScheduledJobs.length > 0 && (
   <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
     <div className="mb-2 flex items-center justify-between gap-2">
       <div>
@@ -6410,7 +6410,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{(view === "operativo" || view === "operativo2") && validationJobs.length > 0 && (
+{view === "operativo" && validationJobs.length > 0 && (
   <section className="rounded-2xl border border-red-700 bg-red-600 px-4 py-3 shadow-sm">
     <div className="mb-2 flex items-center gap-2">
       <span className="text-xs font-semibold text-white uppercase tracking-wide">Pendientes de validar</span>
@@ -6479,148 +6479,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     </div>
   </section>
 )}
-{/* ── OPERATIVO 2: panel de trabajos compacto para portátil ── */}
-{view === "operativo2" && (
-  <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-    {/* Columna izquierda: trabajos activos */}
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Trabajos activos</h2>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">{runningJobs.length}</span>
-      </div>
-      {runningJobs.length === 0 ? (
-        <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-4 text-center text-xs text-slate-400">Sin trabajos activos ahora mismo.</div>
-      ) : (
-        <div className="space-y-2">
-          {runningJobs.map((job) => {
-            const Icon = AREA_META[job.area].icon;
-            const assignedNames = job.assignedNames ?? [];
-            const workedMins = getWorkedMinutes(job);
-            const prediction = getPredictedTimeForJob(job, operationReport);
-            const templateForJob = job.template != null
-              ? quickTemplates.find((t) => t.key === job.template) ?? null
-              : quickTemplates.find((t) => t.label === job.quickEntryLabel) ?? null;
-            const aiMins = getJobDisplayAiMinutes({ job, prediction, template: templateForJob });
-            return (
-              <div key={job.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                {/* cabecera: icono + matrícula + operación + urgente */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className={`rounded-lg border p-1.5 ${AREA_META[job.area].color}`}>
-                      <Icon className="h-3.5 w-3.5" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-bold text-slate-900">{job.plate}</span>
-                        {job.urgent && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">URGENTE</span>}
-                      </div>
-                      <div className="text-xs text-slate-500">{getOperationLabel(job)}</div>
-                      {job.customerName && <div className="text-xs text-slate-400">{job.customerName}</div>}
-                    </div>
-                  </div>
-                  {/* tiempo */}
-                  <div className="text-right text-[11px] text-slate-500 shrink-0">
-                    <div>⏱ {formatMinutes(workedMins)}</div>
-                    {aiMins > 0 && <div className="text-violet-500">IA: {formatMinutes(aiMins)}</div>}
-                  </div>
-                </div>
-                {/* técnicos asignados */}
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {assignedNames.length === 0
-                    ? <span className="text-[11px] text-slate-400">Sin asignar</span>
-                    : assignedNames.map((name, i) => (
-                        <span key={name} className={`rounded-lg px-2 py-0.5 text-xs font-semibold ${i === 0 ? "bg-slate-900 text-white" : "border border-amber-200 bg-amber-50 text-amber-800"}`}>
-                          {name}{i > 0 && <button type="button" onClick={() => removeSupportByNameFromJob(job.id, name)} className="ml-1 opacity-60 hover:opacity-100">✕</button>}
-                        </span>
-                      ))}
-                </div>
-                {/* controles */}
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <button onClick={() => pauseJob(job.id)} className="rounded-lg border border-orange-200 bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100">Stand by</button>
-                  <select defaultValue="" onChange={(e) => { if (e.target.value) { reassignJob(job.id, e.target.value); e.currentTarget.value = ""; } }} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs">
-                    <option value="">Resp…</option>
-                    {techs.filter((t) => AREA_META[job.area].order.includes(t.name)).filter((t) => t.name === assignedNames[0] || (!isTechBlockedByOutsideMaintenance(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable"))).map((t) => (
-                      <option key={t.name} value={t.name}>{t.name === assignedNames[0] ? `${t.name} ✓` : recommendedTechByJobId[job.id] === t.name ? `⭐ ${t.name}` : t.name}</option>
-                    ))}
-                  </select>
-                  {["camion", "movil"].includes(job.area) && (
-                    <select value="" onChange={(e) => { if (e.target.value) addExtraSupportToJob(job.id, e.target.value); }} className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
-                      <option value="">+ Apoyo…</option>
-                      {techs.filter((t) => !assignedNames.includes(t.name) && canAssignTechManuallyToJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
-                        <option key={t.name} value={t.name}>{t.name}</option>
-                      ))}
-                    </select>
-                  )}
-                  <button onClick={() => finishJob(job.id)} className="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700">✓ Cerrar</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-
-    {/* Columna derecha: cola de espera + stand by */}
-    <div className="flex flex-col gap-4">
-      {/* Cola de espera */}
-      <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-wide text-amber-800">Cola de espera</h2>
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">{waitingJobs.length}</span>
-        </div>
-        {waitingJobs.length === 0 ? (
-          <div className="rounded-xl bg-white px-3 py-3 text-xs text-amber-400">Sin trabajos en espera.</div>
-        ) : (
-          <div className="space-y-2">
-            {waitingJobs.map((job) => {
-              const Icon = AREA_META[job.area].icon;
-              return (
-                <div key={job.id} className="flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-3 py-2">
-                  <div className={`rounded-lg border p-1 ${AREA_META[job.area].color}`}><Icon className="h-3 w-3" /></div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs font-bold text-slate-900">{job.plate}</span>
-                      {job.urgent && <span className="rounded-full bg-red-100 px-1 text-[10px] font-semibold text-red-700">URG</span>}
-                    </div>
-                    <div className="truncate text-[11px] text-slate-500">{getOperationLabel(job)}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Stand by */}
-      {pausedJobs.length > 0 && (
-        <section className="rounded-2xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold uppercase tracking-wide text-orange-800">Stand by</h2>
-            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">{pausedJobs.length}</span>
-          </div>
-          <div className="space-y-2">
-            {pausedJobs.map((job) => {
-              const Icon = AREA_META[job.area].icon;
-              return (
-                <div key={job.id} className="flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-3 py-2">
-                  <div className={`rounded-lg border p-1 ${AREA_META[job.area].color}`}><Icon className="h-3 w-3" /></div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-bold text-slate-900">{job.plate}</div>
-                    <div className="truncate text-[11px] text-slate-500">{getOperationLabel(job)}</div>
-                  </div>
-                  <button onClick={() => reactivatePausedJob(job.id)} className="shrink-0 rounded-lg bg-orange-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-orange-700">▶</button>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-    </div>
-  </div>
-)}
-{/* ── fin Operativo 2 panel ── */}
-
-<div className={`grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr] ${view === "operativo2" ? "hidden" : ""}`}>
+<div className="grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr]">
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Técnicos</h2>
@@ -7406,7 +7265,7 @@ console.log("DEBUG tiempos trabajo activo", {
         </div>
       </div>
 
-{(view === "operativo" || view === "operativo2") && (
+{view === "operativo" && (
   <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
     <div className="mb-3 flex items-center justify-between gap-3">
       <div className="text-sm font-medium text-violet-700">
@@ -7435,7 +7294,7 @@ console.log("DEBUG tiempos trabajo activo", {
   </div>
 )}
 
-{(view === "operativo" || view === "operativo2") && (
+{view === "operativo" && (
 <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
   <div className="mb-3 text-sm font-medium text-slate-700">
     Alertas IA del taller
