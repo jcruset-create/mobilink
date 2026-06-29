@@ -246,96 +246,20 @@ import type {
   RoadsideVehicle,
   RoadsideVehicleDraft,
 } from "./modules/roadsideAssistanceTypes";
-function removeSupportFromPreviousJob(tech: Tech, jobs: Job[]): Job[] {
-  if (tech.currentJobId == null) return jobs;
-
-  return jobs.map((job) => {
-    if (job.id !== tech.currentJobId) return job;
-    if (!job.assignedNames.includes(tech.name)) return job;
-
-    const index = job.assignedNames.indexOf(tech.name);
-
-    // Nunca tocar si era responsable
-    if (index === 0) return job;
-
-    const nextAssignedNames = job.assignedNames.filter((n) => n !== tech.name);
-
-    let nextReason = job.reason;
-
-    if (job.area === "camion") {
-      nextReason =
-        nextAssignedNames.length >= 2
-          ? "Camión asignado con 1 responsable y 1 apoyo disponible."
-          : "Camión asignado con 1 responsable.";
-    } else {
-      nextReason = `${getOperationLabel(job)} sin refuerzo por reasignación automática.`;
-    }
-
-    return {
-      ...job,
-      assignedNames: nextAssignedNames,
-      reason: nextReason,
-    };
-  });
-}
-
-function applyAssignmentToTechs(
-  assignedNames: string[],
-  job: Job,
-  techs: Tech[]
-): Tech[] {
-  return techs.map((tech) => {
-    const idx = assignedNames.indexOf(tech.name);
-    if (idx === -1) return tech;
-    const isMain = idx === 0;
-    return {
-      ...tech,
-      status: (isMain ? "ocupado" : "refuerzo") as TechStatus,
-      currentJobId: job.id,
-    };
-  });
-}
-
-function belongsToWorkshop(
-  item: { workshopId?: string | null },
-  selectedWorkshopId: WorkshopId
-) {
-  return normalizeWorkshopId(item.workshopId) === selectedWorkshopId;
-}
-
-const AUTO_STANDBY_TIMES = ["13:30", "18:30"] as const;
-const AUTO_STANDBY_GRACE_MINUTES = 20;
-
-function formatLocalDateKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function getAutoStandbyTrigger(date: Date) {
-  for (const time of AUTO_STANDBY_TIMES) {
-    const [hours, minutes] = time.split(":").map(Number);
-    const triggerAt = new Date(date);
-    triggerAt.setHours(hours, minutes, 0, 0);
-
-    const elapsedMs = date.getTime() - triggerAt.getTime();
-
-    if (
-      elapsedMs >= 0 &&
-      elapsedMs < AUTO_STANDBY_GRACE_MINUTES * 60 * 1000
-    ) {
-      return time;
-    }
-  }
-
-  return null;
-}
-
-function getAutoStandbyStorageKey(workshopId: WorkshopId, time: string, date: Date) {
-  return `sea-auto-standby:${workshopId}:${formatLocalDateKey(date)}:${time}`;
-}
+import {
+  applyAssignmentToTechs,
+  belongsToWorkshop,
+  removeSupportFromPreviousJob,
+} from "./modules/assignmentMutations";
+import {
+  getAutoStandbyStorageKey,
+  getAutoStandbyTrigger,
+} from "./modules/workshopAutoStandby";
+import {
+  applyManualTechStatusOverrides,
+  timeToMinutes,
+} from "./modules/workshopPureHelpers";
+import { getAdminHeaders } from "./modules/adminHeaders";
 
 export default function SeaTarragonaV1() {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
@@ -1524,14 +1448,6 @@ setView(getDefaultViewForRole(role));
     setLoginLoading(false);
   }
 }
-function getAdminHeaders(extra?: HeadersInit): HeadersInit {
-  const token = localStorage.getItem("sea-admin-token") ?? "";
-
-  return {
-    ...(extra ?? {}),
-    "x-admin-token": token,
-  };
-}
 function appendLog(text: string) {
   const entry: LogItem = {
     id: Date.now() + Math.random(),
@@ -1974,18 +1890,6 @@ function getScheduledJobByRelatedJobId(jobId: number) {
         scheduled.jobId === jobId || scheduled.secondJobId === jobId
     ) ?? null
   );
-}
-
-function timeToMinutes(time: string): number {
-  const [hoursRaw, minutesRaw] = time.split(":");
-  const hours = Number(hoursRaw);
-  const minutes = Number(minutesRaw);
-
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    return 0;
-  }
-
-  return hours * 60 + minutes;
 }
 
 function getScheduledEstimatedMinutesForJob(job: Job): number | null {
@@ -4350,42 +4254,6 @@ const safeTemplate = normalizeExistingQuickTemplateV2(
     : "No se pudo guardar la entrada rápida en el servidor."
 );
   }
-}
-const MANUAL_TECH_STATUS_KEY = "manualTechStatusOverrides";
-
-function normalizeTechNameKey(name: string) {
-  return name
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function getManualTechStatusOverrides(): Record<string, TechStatus> {
-  try {
-    const raw = localStorage.getItem(MANUAL_TECH_STATUS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function applyManualTechStatusOverrides(techsToApply: Tech[]): Tech[] {
-  const overrides = getManualTechStatusOverrides();
-
-  return techsToApply.map((tech) => {
-    const key = normalizeTechNameKey(tech.name);
-    const forcedStatus = overrides[key];
-
-    if (!forcedStatus) return tech;
-
-    return {
-      ...tech,
-      status: forcedStatus,
-      blocked: isManualUnavailableStatus(forcedStatus),
-      currentJobId: null,
-    };
-  });
 }
 async function setTechManual(name: string, nextStatus: TechStatus) {
   const tech = techs.find((item) => item.name === name);
