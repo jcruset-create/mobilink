@@ -668,6 +668,35 @@ useEffect(() => {
   }
 }, [quickDraft.templateKey, quickTemplates]);
 
+// Deep-link desde Operativo 2: abre el modal real de "Nueva entrada rápida".
+useEffect(() => {
+  if (quickTemplates.length === 0) return;
+  const params = new URLSearchParams(window.location.search);
+  const tplKey = params.get("op2Tpl");
+  if (!tplKey) return;
+  const tpl = quickTemplates.find((t) => t.key === tplKey);
+  if (tpl) {
+    setQuickSelectedMode("quick");
+    setQuickSelectedArea(tpl.area);
+    setQuickDraft((prev) => ({
+      ...prev,
+      templateKey: tpl.key,
+      linkedTemplateKey: "",
+      includedTaskIds: [],
+      plate: params.get("op2Plate") || "",
+      urgent: params.get("op2Urgent") === "1",
+    }));
+    setView("operativo");
+    setQuickEntryOpen(true);
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete("op2Tpl");
+  url.searchParams.delete("op2Plate");
+  url.searchParams.delete("op2Urgent");
+  window.history.replaceState({}, "", url.pathname + url.search);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [quickTemplates]);
+
 useEffect(() => {
   async function loadJobs() {
     try {

@@ -4,7 +4,6 @@ import {
   loadTechsFromBackend,
   loadScheduledJobsFromBackend,
   loadQuickTemplatesFromBackend,
-  saveJobToBackend,
 } from "../modules/workshopApi";
 import { AREA_META } from "../modules/workshopConstants";
 import {
@@ -82,38 +81,16 @@ export default function Operativo2Page() {
     return map;
   }, [templates]);
 
-  async function crearEntrada() {
+  function crearEntrada() {
     if (!selArea || selArea === "mant" || !selTpl) return;
     const tpl = templates.find((t) => t.key === selTpl);
     if (!tpl) return;
-    if (!plate.trim()) { setMsg("Escribe una matrícula"); return; }
-    setCreating(true);
-    try {
-      const job: Job = {
-        id: Date.now(),
-        workshopId: ws,
-        area: selArea,
-        plate: plate.trim().toUpperCase(),
-        urgent,
-        status: "espera",
-        assignedNames: [],
-        reason: "Pendiente de asignación",
-        createdAtMs: Date.now(),
-        startedAtMs: null,
-        template: tpl.key as Job["template"],
-        quickEntryLabel: tpl.label,
-        quickEntryMode: tpl.mode,
-        standardMinutes: tpl.standardMinutes ?? null,
-      };
-      await saveJobToBackend(job);
-      setPlate(""); setUrgent(false); setMsg("✔ Entrada creada");
-      await load();
-      setTimeout(() => setMsg(""), 2500);
-    } catch (e: any) {
-      setMsg(e?.message || "Error creando entrada");
-    } finally {
-      setCreating(false);
-    }
+    // Abre el modal real "Nueva entrada rápida" en la pantalla central (Operativo).
+    const params = new URLSearchParams();
+    params.set("op2Tpl", tpl.key);
+    if (plate.trim()) params.set("op2Plate", plate.trim().toUpperCase());
+    if (urgent) params.set("op2Urgent", "1");
+    window.location.href = `/?${params.toString()}`;
   }
 
   async function asignarMantenimiento() {
