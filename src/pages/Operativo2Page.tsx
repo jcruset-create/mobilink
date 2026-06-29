@@ -3,10 +3,18 @@ import {
   loadJobsFromBackend,
   loadTechsFromBackend,
   loadScheduledJobsFromBackend,
+  loadQuickTemplatesFromBackend,
+  saveJobToBackend,
 } from "../modules/workshopApi";
+import { AREA_META } from "../modules/workshopConstants";
 import { normalizeWorkshopId } from "../modules/workshops";
-import type { Job, Tech } from "../modules/workshopTypes";
+import type { Job, Tech, QuickTemplate, AreaKey } from "../modules/workshopTypes";
 import type { ScheduledJob } from "../components/AgendaView";
+
+const AREA_ACCENT: Record<AreaKey, string> = {
+  camion: "#e2504a", movil: "#f0843a", tacografo: "#f0c040", turismo: "#4dc3ff", mecanica: "#3dcea8",
+};
+const AREA_KEYS = Object.keys(AREA_META) as AreaKey[];
 
 const C = {
   bg: "#0b1622", panel: "#101f30", card: "#16263a", line: "#2d4a6a",
@@ -28,21 +36,74 @@ export default function Operativo2Page() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [techs, setTechs] = useState<Tech[]>([]);
   const [scheduled, setScheduled] = useState<ScheduledJob[]>([]);
+  const [templates, setTemplates] = useState<QuickTemplate[]>([]);
   const [clock, setClock] = useState(nowHHMM());
   const ws = normalizeWorkshopId((typeof localStorage !== "undefined" && localStorage.getItem("sea-selected-workshop")) || undefined);
 
+  // Entradas rápidas
+  const [selArea, setSelArea] = useState<AreaKey | null>(null);
+  const [selTpl, setSelTpl] = useState("");
+  const [plate, setPlate] = useState("");
+  const [urgent, setUrgent] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [msg, setMsg] = useState("");
+
   async function load() {
     try {
-      const [j, t, s] = await Promise.all([
+      const [j, t, s, q] = await Promise.all([
         loadJobsFromBackend().catch(() => []),
         loadTechsFromBackend().catch(() => []),
         loadScheduledJobsFromBackend().catch(() => []),
+        loadQuickTemplatesFromBackend().catch(() => []),
       ]);
       const sameWs = (x: any) => normalizeWorkshopId(x?.workshopId) === ws;
       setJobs((Array.isArray(j) ? j : []).filter(sameWs));
       setTechs((Array.isArray(t) ? t : []));
       setScheduled((Array.isArray(s) ? s : []).filter(sameWs));
+      setTemplates((Array.isArray(q) ? q : []).filter((x: any) => !x?.workshopId || normalizeWorkshopId(x.workshopId) === ws));
     } catch { /* mantener */ }
+  }
+
+  const tplsByArea = useMemo(() => {
+    const map = {} as Record<AreaKey, QuickTemplate[]>;
+    for (const a of AREA_KEYS) map[a] = [];
+    for (const t of templates) if (map[t.area]) map[t.area].push(t);
+    for (const a of AREA_KEYS) map[a].sort((x, y) => x.label.localeCompare(y.label, "es", { sensitivity: "base" }));
+    return map;
+  }, [templates]);
+
+  async function crearEntrada() {
+    if (!selArea || !selTpl) return;
+    const tpl = templates.find((t) => t.key === selTpl);
+    if (!tpl) return;
+    if (!plate.trim()) { setMsg("Escribe una matrícula"); return; }
+    setCreating(true);
+    try {
+      const job: Job = {
+        id: Date.now(),
+        workshopId: ws,
+        area: selArea,
+        plate: plate.trim().toUpperCase(),
+        urgent,
+        status: "espera",
+        assignedNames: [],
+        reason: "Pendiente de asignación",
+        createdAtMs: Date.now(),
+        startedAtMs: null,
+        template: tpl.key as Job["template"],
+        quickEntryLabel: tpl.label,
+        quickEntryMode: tpl.mode,
+        standardMinutes: tpl.standardMinutes ?? null,
+      };
+      await saveJobToBackend(job);
+      setPlate(""); setUrgent(false); setMsg("✔ Entrada creada");
+      await load();
+      setTimeout(() => setMsg(""), 2500);
+    } catch (e: any) {
+      setMsg(e?.message || "Error creando entrada");
+    } finally {
+      setCreating(false);
+    }
   }
 
   useEffect(() => {
@@ -139,6 +200,74 @@ export default function Operativo2Page() {
             <span style={{ ...chip, color: bloqueados.length ? C.red : C.text }}>Bloqueados {bloqueados.length}</span>
           </div>
         </div>
+      </div>
+
+      {/* ENTRADAS RÁPIDAS */}
+      <div style={{ ...box, marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: C.mut }}>ENTRADAS RÁPIDAS</div>
+          {msg && <span style={{ fontSize: 11, color: msg.startsWith("✔") ? C.green : C.orange }}>{msg}</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${AREA_KEYS.length}, 1fr)`, gap: 6 }}>
+          {AREA_KEYS.map((a) => {
+            const meta = AREA_META[a];
+            const Icon = meta.icon;
+            const active = selArea === a;
+            const accent = AREA_ACCENT[a];
+            return (
+              <button
+                key={a}
+                type="button"
+                onClick={() => { setSelArea(active ? null : a); setSelTpl(""); setMsg(""); }}
+                style={{
+                  background: active ? C.card : C.bg,
+                  border: `1px solid ${active ? accent : C.line}`,
+                  borderRadius: 7, padding: "8px 6px", cursor: "pointer",
+                  color: C.text, display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                }}
+              >
+                <span style={{ color: accent }}><Icon className="h-4 w-4" /></span>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>{meta.label}</span>
+                <span style={{ fontSize: 9, color: C.dim }}>{tplsByArea[a].length} entradas</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {selArea && (
+          <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <select
+              value={selTpl}
+              onChange={(e) => setSelTpl(e.target.value)}
+              style={{ flex: "2 1 220px", minWidth: 180, background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6, padding: "7px 8px", fontSize: 12 }}
+            >
+              <option value="">{tplsByArea[selArea].length ? "Selecciona trabajo…" : "Sin entradas para esta área"}</option>
+              {tplsByArea[selArea].map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+            <input
+              value={plate}
+              onChange={(e) => setPlate(e.target.value)}
+              placeholder="Matrícula"
+              style={{ flex: "1 1 120px", minWidth: 110, background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6, padding: "7px 8px", fontSize: 12, textTransform: "uppercase" }}
+            />
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.mut, cursor: "pointer" }}>
+              <input type="checkbox" checked={urgent} onChange={(e) => setUrgent(e.target.checked)} /> Urgente
+            </label>
+            <button
+              type="button"
+              onClick={() => void crearEntrada()}
+              disabled={!selTpl || !plate.trim() || creating}
+              style={{
+                background: (!selTpl || !plate.trim() || creating) ? C.line : C.green,
+                color: (!selTpl || !plate.trim() || creating) ? C.dim : "#06231b",
+                border: "none", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 700,
+                cursor: (!selTpl || !plate.trim() || creating) ? "default" : "pointer",
+              }}
+            >
+              {creating ? "Creando…" : "Crear entrada"}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Cuerpo */}
