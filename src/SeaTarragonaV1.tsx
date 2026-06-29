@@ -224,7 +224,7 @@ import { applyManualTechStatusOverrides } from "./modules/workshopPureHelpers";
 import { getAdminHeaders } from "./modules/adminHeaders";
 import { useScheduledJobs } from "./modules/useScheduledJobs";
 
-export default function SeaTarragonaV1() {
+export default function SeaTarragonaV1({ initialView }: { initialView?: AppView } = {}) {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
   const [rules, setRules] = useState<string[]>([]);
   const [newRule, setNewRule] = useState("");
@@ -469,6 +469,8 @@ const [externalAIAnswer, setExternalAIAnswer] = useState("");
 const [externalAILoading, setExternalAILoading] = useState(false);
 const [tick, setTick] = useState(0);
 const [view, setView] = useState<AppView>(() => {
+  if (initialView) return initialView;
+
   const storedRole = localStorage.getItem("sea-role");
 
   if (isValidUserRole(storedRole)) {
@@ -667,35 +669,6 @@ useEffect(() => {
     }));
   }
 }, [quickDraft.templateKey, quickTemplates]);
-
-// Deep-link desde Operativo 2: abre el modal real de "Nueva entrada rápida".
-useEffect(() => {
-  if (quickTemplates.length === 0) return;
-  const params = new URLSearchParams(window.location.search);
-  const tplKey = params.get("op2Tpl");
-  if (!tplKey) return;
-  const tpl = quickTemplates.find((t) => t.key === tplKey);
-  if (tpl) {
-    setQuickSelectedMode("quick");
-    setQuickSelectedArea(tpl.area);
-    setQuickDraft((prev) => ({
-      ...prev,
-      templateKey: tpl.key,
-      linkedTemplateKey: "",
-      includedTaskIds: [],
-      plate: params.get("op2Plate") || "",
-      urgent: params.get("op2Urgent") === "1",
-    }));
-    setView("operativo");
-    setQuickEntryOpen(true);
-  }
-  const url = new URL(window.location.href);
-  url.searchParams.delete("op2Tpl");
-  url.searchParams.delete("op2Plate");
-  url.searchParams.delete("op2Urgent");
-  window.history.replaceState({}, "", url.pathname + url.search);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [quickTemplates]);
 
 useEffect(() => {
   async function loadJobs() {
@@ -4425,7 +4398,8 @@ return (
     <button
       type="button"
       onClick={() => {
-        window.location.href = "/operativo2";
+        setView("operativo2");
+        void reloadMaintenanceAvailabilityFromBackend();
       }}
       className={`rounded-2xl px-4 py-2 text-sm font-medium ${
         view === "operativo2"
@@ -6508,7 +6482,229 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     </div>
   </section>
 )}
-<div className="grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr]">
+{/* ── OPERATIVO 2: pantalla de oficina (oscura) ── */}
+{view === "operativo2" && (() => {
+  const isTestTech = (name: string) => /prova|prueba|\btest\b/i.test(name);
+  const trabajando = workingTechsSummary.filter((t) => !isTestTech(t.name));
+  const disponibles = availableTechsSummary.filter((t) => !isTestTech(t.name));
+  const responsables = new Set<string>();
+  const soportes = new Set<string>();
+  for (const j of runningJobs) (j.assignedNames || []).forEach((n, i) => (i === 0 ? responsables : soportes).add(n));
+  const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : "text-slate-200");
+  const agendados = agenda.dueScheduledJobs ?? [];
+
+  return (
+    <div className="rounded-2xl bg-slate-900 p-3 text-slate-100">
+      {/* Cabecera */}
+      <div className="grid gap-2 md:grid-cols-3">
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1 text-[10px] font-bold text-sky-300">TRABAJANDO ({trabajando.length})</div>
+          <div className="flex flex-wrap gap-1">
+            {trabajando.length === 0 ? <span className="text-[11px] text-slate-500">—</span> :
+              trabajando.map((t) => <span key={t.name} className={`rounded bg-slate-700 px-1.5 py-0.5 text-[11px] font-semibold ${techColor(t.name)}`}>{t.name}</span>)}
+          </div>
+          <div className="mt-1 text-[9px] text-slate-500"><span className="text-rose-400">●</span> responsable · <span className="text-orange-400">●</span> soporte</div>
+        </div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1 text-[10px] font-bold text-emerald-300">DISPONIBLES ({disponibles.length})</div>
+          <div className="flex flex-wrap gap-1">
+            {disponibles.length === 0 ? <span className="text-[11px] text-slate-500">—</span> :
+              disponibles.map((t) => <span key={t.name} className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px] text-emerald-300">{t.name}</span>)}
+          </div>
+        </div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1 text-[10px] font-bold text-sky-300">RESUMEN</div>
+          <div className="flex flex-wrap gap-1 text-[11px]">
+            <span className="rounded bg-slate-700 px-1.5 py-0.5">Activos {runningJobs.length}</span>
+            <span className="rounded bg-slate-700 px-1.5 py-0.5">Cola {waitingJobs.length}</span>
+            <span className="rounded bg-slate-700 px-1.5 py-0.5">Stand by {pausedJobs.length}</span>
+            <span className="rounded bg-slate-700 px-1.5 py-0.5 text-rose-400">Urgentes {runningJobs.filter((j) => j.urgent).length}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Entradas rápidas */}
+      <div className="mt-2 rounded-lg bg-slate-800 p-2">
+        <div className="mb-1 text-[10px] font-bold text-slate-400">ENTRADAS RÁPIDAS</div>
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+          {(Object.keys(AREA_META) as AreaKey[]).map((a) => {
+            const meta = AREA_META[a];
+            const Icon = meta.icon;
+            const count = quickTemplates.filter((t) => t.area === a).length;
+            const active = quickSelectedMode === "quick" && quickSelectedArea === a;
+            return (
+              <button
+                key={a}
+                type="button"
+                onClick={() => {
+                  setQuickSelectedMode("quick");
+                  setQuickSelectedArea(a);
+                  const first = quickTemplates.filter((t) => t.area === a).sort((x, y) => x.label.localeCompare(y.label, "es"))[0];
+                  setQuickDraft((prev) => ({ ...prev, templateKey: first?.key ?? "", linkedTemplateKey: "", includedTaskIds: [] }));
+                }}
+                className={`flex flex-col items-center gap-0.5 rounded-lg border p-2 ${active ? "border-sky-400 bg-slate-700" : "border-slate-600 bg-slate-900"}`}
+              >
+                <Icon className="h-4 w-4 text-slate-200" />
+                <span className="text-[11px] font-semibold">{meta.label}</span>
+                <span className="text-[9px] text-slate-500">{count} entradas</span>
+              </button>
+            );
+          })}
+          {/* Mantenimiento */}
+          <button
+            type="button"
+            onClick={() => setQuickSelectedMode("maintenance")}
+            className={`flex flex-col items-center gap-0.5 rounded-lg border p-2 ${quickSelectedMode === "maintenance" ? "border-amber-400 bg-slate-700" : "border-slate-600 bg-slate-900"}`}
+          >
+            <span className="text-base leading-4">⚙️</span>
+            <span className="text-[11px] font-semibold">Mantenimiento</span>
+            <span className="text-[9px] text-slate-500">{maintenanceTasks.length} tareas</span>
+          </button>
+        </div>
+
+        {quickSelectedMode === "quick" && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <select
+              value={quickDraft.templateKey}
+              onChange={(e) => setQuickDraft((prev) => ({ ...prev, templateKey: e.target.value, linkedTemplateKey: "", includedTaskIds: [] }))}
+              className="min-w-[200px] flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]"
+            >
+              {quickTemplates.filter((t) => t.area === quickSelectedArea).sort((x, y) => x.label.localeCompare(y.label, "es")).map((t) => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!quickDraft.templateKey}
+              onClick={() => setQuickEntryOpen(true)}
+              className="rounded bg-emerald-600 px-4 py-1.5 text-[12px] font-bold text-white disabled:opacity-40"
+            >
+              Crear entrada
+            </button>
+          </div>
+        )}
+
+        {quickSelectedMode === "maintenance" && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <select
+              value={maintenanceDraft.taskId}
+              onChange={(e) => setMaintenanceDraft((prev) => ({ ...prev, taskId: e.target.value }))}
+              className="min-w-[200px] flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]"
+            >
+              <option value="">{maintenanceTasks.length ? "Selecciona tarea…" : "Sin tareas"}</option>
+              {maintenanceTasks.map((t) => <option key={t.id} value={t.id}>{t.label} ({t.type === "fuera_taller" ? "fuera" : "taller"})</option>)}
+            </select>
+            <select
+              value={maintenanceDraft.techName}
+              onChange={(e) => setMaintenanceDraft((prev) => ({ ...prev, techName: e.target.value }))}
+              className="min-w-[140px] rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]"
+            >
+              <option value="">Técnico…</option>
+              {maintenanceTechCandidates.filter((t) => !isTestTech(t.name)).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+            </select>
+            <button
+              type="button"
+              disabled={!maintenanceDraft.taskId || !maintenanceDraft.techName}
+              onClick={() => { void assignQuickMaintenanceTask(); }}
+              className="rounded bg-amber-500 px-4 py-1.5 text-[12px] font-bold text-slate-900 disabled:opacity-40"
+            >
+              Asignar
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Cuerpo */}
+      <div className="mt-2 grid gap-2 lg:grid-cols-[1.4fr_1fr]">
+        {/* Trabajos activos con asignación */}
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1.5 text-[10px] font-bold text-slate-400">TRABAJOS ACTIVOS ({runningJobs.length})</div>
+          {runningJobs.length === 0 ? <div className="text-[11px] text-slate-500">Sin trabajos activos</div> : (
+            <div className="space-y-1.5">
+              {runningJobs.map((job) => {
+                const assignedNames = job.assignedNames ?? [];
+                return (
+                  <div key={job.id} className="rounded-lg bg-slate-900 p-2" style={{ borderLeft: `3px solid ${job.urgent ? "#fb7185" : "#34d399"}` }}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12px] font-bold">{job.plate}{job.urgent ? " ⚠️" : ""} <span className="font-normal text-slate-400">· {getOperationLabel(job)}</span></span>
+                      <span className="text-[10px] text-slate-400">⏱ {formatMinutes(getWorkedMinutes(job))}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                      <select
+                        defaultValue=""
+                        onChange={(e) => { if (e.target.value) { reassignJob(job.id, e.target.value); e.currentTarget.value = ""; } }}
+                        className="rounded border border-slate-600 bg-slate-800 px-1.5 py-1 text-[11px]"
+                      >
+                        <option value="">Resp: {assignedNames[0] ?? "—"}</option>
+                        {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => AREA_META[job.area].order.includes(t.name)).filter((t) => t.name === assignedNames[0] || (!isTechBlockedByOutsideMaintenance(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable"))).map((t) => (
+                          <option key={t.name} value={t.name}>{t.name}</option>
+                        ))}
+                      </select>
+                      {assignedNames.slice(1).map((n) => (
+                        <span key={n} className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300">
+                          {n}<button type="button" onClick={() => removeSupportByNameFromJob(job.id, n)} className="font-bold">✕</button>
+                        </span>
+                      ))}
+                      <select
+                        value=""
+                        onChange={(e) => { if (e.target.value) addExtraSupportToJob(job.id, e.target.value); }}
+                        className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[11px] text-amber-300"
+                      >
+                        <option value="">+ Apoyo…</option>
+                        {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => !assignedNames.includes(t.name) && canAssignTechManuallyToJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
+                          <option key={t.name} value={t.name}>{t.name}</option>
+                        ))}
+                      </select>
+                      <button type="button" onClick={() => pauseJob(job.id)} className="rounded border border-orange-400/40 bg-orange-400/10 px-2 py-1 text-[11px] text-orange-300">Stand by</button>
+                      <button type="button" onClick={() => finishJob(job.id)} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white">✓ Cerrar</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Derecha */}
+        <div className="space-y-2">
+          <div className="rounded-lg bg-slate-800 p-2">
+            <div className="mb-1 text-[10px] font-bold text-slate-400">LLEGADAS / AGENDADOS ({agendados.length})</div>
+            <div className="space-y-1">
+              {agendados.map((s) => (
+                <div key={s.id} className="rounded bg-slate-900 px-2 py-1 text-[11px]">
+                  <span className="text-amber-300">{s.startTime}</span> · {s.plate || s.templateLabel || s.area}
+                </div>
+              ))}
+              <div className="rounded border border-dashed border-slate-600 px-2 py-1.5 text-center text-[10px] text-slate-500">📅 Las citas nuevas de la agenda aparecen aquí</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg bg-slate-800 p-2">
+              <div className="text-[10px] font-bold text-slate-400">COLA ({waitingJobs.length})</div>
+              <div className="mt-1 space-y-0.5 text-[11px] text-slate-300">
+                {waitingJobs.length === 0 ? <span className="text-slate-500">Vacía</span> : waitingJobs.slice(0, 6).map((j) => <div key={j.id}>{j.plate} <span className="text-slate-500">· {getOperationLabel(j)}</span></div>)}
+              </div>
+            </div>
+            <div className="rounded-lg bg-slate-800 p-2">
+              <div className="text-[10px] font-bold text-slate-400">STAND BY ({pausedJobs.length})</div>
+              <div className="mt-1 space-y-1 text-[11px] text-slate-300">
+                {pausedJobs.length === 0 ? <span className="text-slate-500">Sin trabajos</span> : pausedJobs.slice(0, 6).map((j) => (
+                  <div key={j.id} className="flex items-center justify-between gap-1">
+                    <span>{j.plate}</span>
+                    <button type="button" onClick={() => reactivatePausedJob(j.id)} className="rounded bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-900">▶</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+})()}
+{/* ── fin Operativo 2 ── */}
+
+<div className={`grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr] ${view === "operativo2" ? "hidden" : ""}`}>
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Técnicos</h2>

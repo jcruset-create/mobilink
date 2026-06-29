@@ -188,12 +188,12 @@ class _FinishScreenState extends State<FinishScreen> {
                           child: Container(
                             height: 180,
                             decoration: BoxDecoration(
-                              color: const Color(0xFF16213e),
+                              color: Colors.white,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
                                 color: _photoReparacion != null
-                                    ? Colors.green.withOpacity(0.6)
-                                    : Colors.white24,
+                                    ? Colors.green
+                                    : Colors.black26,
                                 width: 1.5,
                               ),
                             ),
@@ -216,10 +216,10 @@ class _FinishScreenState extends State<FinishScreen> {
                                 : const Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Icon(Icons.build_circle, color: Colors.white38, size: 36),
-                                      SizedBox(height: 8),
+                                      Icon(Icons.add_a_photo_outlined, color: Colors.black45, size: 40),
+                                      SizedBox(height: 10),
                                       Text('Toca para fotografiar',
-                                          style: TextStyle(color: Colors.white54, fontSize: 13)),
+                                          style: TextStyle(color: Colors.black54, fontSize: 14, fontWeight: FontWeight.w500)),
                                     ],
                                   ),
                           ),
@@ -366,24 +366,24 @@ class _TextField extends StatelessWidget {
     return TextField(
       controller: controller,
       onChanged: onChanged,
-      style: const TextStyle(color: Colors.white),
+      style: const TextStyle(color: Colors.black87, fontSize: 15),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Colors.white38),
-        prefixIcon: Icon(icon, color: Colors.white38, size: 20),
+        hintStyle: const TextStyle(color: Colors.black38, fontSize: 14),
+        prefixIcon: Icon(icon, color: Colors.black45, size: 20),
         filled: true,
-        fillColor: const Color(0xFF16213e),
+        fillColor: Colors.white,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Colors.white24),
+          borderSide: const BorderSide(color: Colors.black26),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Colors.white24),
+          borderSide: const BorderSide(color: Colors.black26),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Colors.teal),
+          borderSide: const BorderSide(color: Colors.black87, width: 2),
         ),
       ),
     );

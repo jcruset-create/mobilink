@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import 'assistances_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -17,8 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _loading = false;
   String? _error;
 
-  String get _pin =>
-      _pinControllers.map((c) => c.text).join();
+  String get _pin => _pinControllers.map((c) => c.text).join();
 
   Future<void> _login() async {
     final name = _nameController.text.trim();
@@ -29,10 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    setState(() { _loading = true; _error = null; });
 
     try {
       await ApiService.login(name, pin);
@@ -43,9 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (_) => AssistancesScreen(
-            api: ApiService(techName: name, code: pin),
-          ),
+          builder: (_) => AssistancesScreen(api: ApiService(techName: name, code: pin)),
         ),
       );
     } catch (e) {
@@ -61,127 +56,117 @@ class _LoginScreenState extends State<LoginScreen> {
     } else if (value.isEmpty && index > 0) {
       _pinFocusNodes[index - 1].requestFocus();
     }
-    if (index == 3 && value.length == 1) {
-      _login();
-    }
+    if (index == 3 && value.length == 1) _login();
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    for (final c in _pinControllers) {
-      c.dispose();
-    }
-    for (final f in _pinFocusNodes) {
-      f.dispose();
-    }
+    for (final c in _pinControllers) c.dispose();
+    for (final f in _pinFocusNodes) f.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
     return Scaffold(
-      backgroundColor: const Color(0xFF1a1a2e),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset('assets/logo_transparent.png', width: 300),
-                const SizedBox(height: 24),
-                const Text(
-                  'Acceso operarios',
-                  style: TextStyle(color: Colors.white54, fontSize: 14),
-                ),
-                const SizedBox(height: 40),
-                TextField(
-                  controller: _nameController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: 'Tu nombre',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: const BorderSide(color: Colors.white24),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderSide: const BorderSide(color: Colors.blue),
-                      borderRadius: BorderRadius.circular(12),
+            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset('assets/logo_transparent.png', width: 280),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Acceso operarios',
+                    style: tt.bodyMedium,
+                  ),
+                  const SizedBox(height: 48),
+
+                  // Campo nombre
+                  TextField(
+                    controller: _nameController,
+                    style: tt.bodyLarge,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'Tu nombre',
+                      prefixIcon: Icon(Icons.person_outline, color: AppColors.textSecondary),
                     ),
                   ),
-                  textCapitalization: TextCapitalization.words,
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'PIN',
-                  style: TextStyle(color: Colors.white54, fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(4, (i) {
-                    return Container(
-                      width: 56,
-                      height: 64,
-                      margin: const EdgeInsets.symmetric(horizontal: 8),
-                      child: TextField(
-                        controller: _pinControllers[i],
-                        focusNode: _pinFocusNodes[i],
-                        keyboardType: TextInputType.number,
-                        maxLength: 1,
-                        obscureText: true,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold),
-                        decoration: InputDecoration(
-                          counterText: '',
-                          enabledBorder: OutlineInputBorder(
-                            borderSide: const BorderSide(color: Colors.white24),
-                            borderRadius: BorderRadius.circular(12),
+                  const SizedBox(height: 32),
+
+                  // PIN label
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('PIN de acceso', style: tt.bodyMedium),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Dígitos PIN
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(4, (i) {
+                      return Container(
+                        width: 64,
+                        height: 72,
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        child: TextField(
+                          controller: _pinControllers[i],
+                          focusNode: _pinFocusNodes[i],
+                          keyboardType: TextInputType.number,
+                          maxLength: 1,
+                          obscureText: true,
+                          textAlign: TextAlign.center,
+                          style: tt.titleMedium?.copyWith(color: AppColors.primary),
+                          decoration: const InputDecoration(
+                            counterText: '',
+                            fillColor: AppColors.surfaceVariant,
                           ),
-                          focusedBorder: OutlineInputBorder(
-                            borderSide: const BorderSide(color: Colors.blue),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          filled: true,
-                          fillColor: Colors.white10,
+                          onChanged: (v) => _onPinDigit(i, v),
                         ),
-                        onChanged: (v) => _onPinDigit(i, v),
+                      );
+                    }),
+                  ),
+
+                  if (_error != null) ...[
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger.withValues(alpha: 0.15),
+                        border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    );
-                  }),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                    _error!,
-                    style: const TextStyle(color: Colors.redAccent),
-                    textAlign: TextAlign.center,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline, color: AppColors.danger, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(_error!, style: TextStyle(color: AppColors.danger, fontSize: 14))),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  const SizedBox(height: 36),
+
+                  // Botón entrar
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _loading ? null : _login,
+                      icon: _loading
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                          : const Icon(Icons.login, size: 22),
+                      label: Text(_loading ? 'Verificando…' : 'Entrar'),
+                    ),
                   ),
                 ],
-                const SizedBox(height: 32),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _loading ? null : _login,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: _loading
-                        ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text('Entrar',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
