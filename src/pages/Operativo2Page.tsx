@@ -7,6 +7,11 @@ import {
   saveJobToBackend,
 } from "../modules/workshopApi";
 import { AREA_META } from "../modules/workshopConstants";
+import {
+  loadMaintenanceTasksFromBackend,
+  assignMaintenanceTaskToBackend,
+  type MaintenanceTask,
+} from "../modules/maintenanceApi";
 import { normalizeWorkshopId } from "../modules/workshops";
 import type { Job, Tech, QuickTemplate, AreaKey } from "../modules/workshopTypes";
 import type { ScheduledJob } from "../components/AgendaView";
@@ -37,30 +42,35 @@ export default function Operativo2Page() {
   const [techs, setTechs] = useState<Tech[]>([]);
   const [scheduled, setScheduled] = useState<ScheduledJob[]>([]);
   const [templates, setTemplates] = useState<QuickTemplate[]>([]);
+  const [maintTasks, setMaintTasks] = useState<MaintenanceTask[]>([]);
   const [clock, setClock] = useState(nowHHMM());
   const ws = normalizeWorkshopId((typeof localStorage !== "undefined" && localStorage.getItem("sea-selected-workshop")) || undefined);
 
   // Entradas rápidas
-  const [selArea, setSelArea] = useState<AreaKey | null>(null);
+  const [selArea, setSelArea] = useState<AreaKey | "mant" | null>(null);
   const [selTpl, setSelTpl] = useState("");
   const [plate, setPlate] = useState("");
   const [urgent, setUrgent] = useState(false);
+  const [selMaintTask, setSelMaintTask] = useState("");
+  const [selMaintTech, setSelMaintTech] = useState("");
   const [creating, setCreating] = useState(false);
   const [msg, setMsg] = useState("");
 
   async function load() {
     try {
-      const [j, t, s, q] = await Promise.all([
+      const [j, t, s, q, m] = await Promise.all([
         loadJobsFromBackend().catch(() => []),
         loadTechsFromBackend().catch(() => []),
         loadScheduledJobsFromBackend().catch(() => []),
         loadQuickTemplatesFromBackend().catch(() => []),
+        loadMaintenanceTasksFromBackend().catch(() => []),
       ]);
       const sameWs = (x: any) => normalizeWorkshopId(x?.workshopId) === ws;
       setJobs((Array.isArray(j) ? j : []).filter(sameWs));
       setTechs((Array.isArray(t) ? t : []));
       setScheduled((Array.isArray(s) ? s : []).filter(sameWs));
       setTemplates((Array.isArray(q) ? q : []).filter((x: any) => !x?.workshopId || normalizeWorkshopId(x.workshopId) === ws));
+      setMaintTasks(Array.isArray(m) ? m : []);
     } catch { /* mantener */ }
   }
 
@@ -73,7 +83,7 @@ export default function Operativo2Page() {
   }, [templates]);
 
   async function crearEntrada() {
-    if (!selArea || !selTpl) return;
+    if (!selArea || selArea === "mant" || !selTpl) return;
     const tpl = templates.find((t) => t.key === selTpl);
     if (!tpl) return;
     if (!plate.trim()) { setMsg("Escribe una matrícula"); return; }
@@ -101,6 +111,22 @@ export default function Operativo2Page() {
       setTimeout(() => setMsg(""), 2500);
     } catch (e: any) {
       setMsg(e?.message || "Error creando entrada");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function asignarMantenimiento() {
+    const task = maintTasks.find((t) => t.id === selMaintTask);
+    if (!task || !selMaintTech) { setMsg("Selecciona tarea y técnico"); return; }
+    setCreating(true);
+    try {
+      await assignMaintenanceTaskToBackend({ task, techName: selMaintTech });
+      setSelMaintTask(""); setSelMaintTech(""); setMsg("✔ Mantenimiento asignado");
+      await load();
+      setTimeout(() => setMsg(""), 2500);
+    } catch (e: any) {
+      setMsg(e?.message || "Error asignando mantenimiento");
     } finally {
       setCreating(false);
     }
@@ -208,7 +234,7 @@ export default function Operativo2Page() {
           <div style={{ fontSize: 10, fontWeight: 600, color: C.mut }}>ENTRADAS RÁPIDAS</div>
           {msg && <span style={{ fontSize: 11, color: msg.startsWith("✔") ? C.green : C.orange }}>{msg}</span>}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${AREA_KEYS.length}, 1fr)`, gap: 6 }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${AREA_KEYS.length + 1}, 1fr)`, gap: 6 }}>
           {AREA_KEYS.map((a) => {
             const meta = AREA_META[a];
             const Icon = meta.icon;
@@ -232,9 +258,30 @@ export default function Operativo2Page() {
               </button>
             );
           })}
+          {/* Mantenimiento */}
+          {(() => {
+            const active = selArea === "mant";
+            const accent = C.yellow;
+            return (
+              <button
+                type="button"
+                onClick={() => { setSelArea(active ? null : "mant"); setSelMaintTask(""); setSelMaintTech(""); setMsg(""); }}
+                style={{
+                  background: active ? C.card : C.bg,
+                  border: `1px solid ${active ? accent : C.line}`,
+                  borderRadius: 7, padding: "8px 6px", cursor: "pointer",
+                  color: C.text, display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                }}
+              >
+                <span style={{ color: accent, fontSize: 16, lineHeight: "16px" }}>⚙️</span>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>Mantenimiento</span>
+                <span style={{ fontSize: 9, color: C.dim }}>{maintTasks.length} tareas</span>
+              </button>
+            );
+          })()}
         </div>
 
-        {selArea && (
+        {selArea && selArea !== "mant" && (
           <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             <select
               value={selTpl}
@@ -265,6 +312,42 @@ export default function Operativo2Page() {
               }}
             >
               {creating ? "Creando…" : "Crear entrada"}
+            </button>
+          </div>
+        )}
+
+        {selArea === "mant" && (
+          <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <select
+              value={selMaintTask}
+              onChange={(e) => setSelMaintTask(e.target.value)}
+              style={{ flex: "2 1 220px", minWidth: 180, background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6, padding: "7px 8px", fontSize: 12 }}
+            >
+              <option value="">{maintTasks.length ? "Selecciona tarea…" : "Sin tareas de mantenimiento"}</option>
+              {maintTasks.map((t) => (
+                <option key={t.id} value={t.id}>{t.label} ({t.type === "fuera_taller" ? "fuera" : "taller"})</option>
+              ))}
+            </select>
+            <select
+              value={selMaintTech}
+              onChange={(e) => setSelMaintTech(e.target.value)}
+              style={{ flex: "1 1 150px", minWidth: 130, background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6, padding: "7px 8px", fontSize: 12 }}
+            >
+              <option value="">{disponibles.length ? "Técnico…" : "Sin técnicos libres"}</option>
+              {disponibles.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => void asignarMantenimiento()}
+              disabled={!selMaintTask || !selMaintTech || creating}
+              style={{
+                background: (!selMaintTask || !selMaintTech || creating) ? C.line : C.yellow,
+                color: (!selMaintTask || !selMaintTech || creating) ? C.dim : "#3a2e06",
+                border: "none", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 700,
+                cursor: (!selMaintTask || !selMaintTech || creating) ? "default" : "pointer",
+              }}
+            >
+              {creating ? "Asignando…" : "Asignar"}
             </button>
           </div>
         )}
