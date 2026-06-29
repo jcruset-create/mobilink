@@ -3,13 +3,11 @@ import React, {
   useMemo,
   useRef,
   useState,
-  type SetStateAction,
 } from "react";
 import AgendaView from "./components/AgendaView";
 import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import EmptyState from "./components/EmptyState";
 import { APP_VERSION } from "./version";
-import type { ScheduledJob } from "./components/AgendaView";
 import { useAutoSync } from "./modules/useAutoSync";
 import { useMaintenanceAvailability } from "./modules/useMaintenanceAvailability";
 import {
@@ -44,7 +42,6 @@ import type {
   WorkshopAlert,
 } from "./modules/workshopTypes";
 import {
-  addMinutesToTime,
   formatClock,
   formatMinutes,
   getElapsedMinutes,
@@ -113,7 +110,6 @@ import {
   getPausedMinutes,
   getPredictedTimeForJob,
   getWorkedMinutes,
-  isBuiltInTemplateKey,
   isLinkedBlockedJob,
   normalizeJobFromApi,
 } from "./modules/jobHelpers";
@@ -134,10 +130,7 @@ import {
   getValidationProposalForTech,
   runSelfTests,
 } from "./modules/assignment";
-import {
-  getScheduledJobCurrentPhaseLabel,
-  shouldCloseScheduledJobForFinishedJob as shouldCloseScheduledJobForFinishedJobHelper,
-} from "./modules/scheduledJobHelpers";
+import { getScheduledJobCurrentPhaseLabel } from "./modules/scheduledJobHelpers";
 import {
   API_BASE,
   deleteScheduledJobFromBackend,
@@ -146,7 +139,6 @@ import {
   loadLogsFromBackend,
   deleteTechFromBackend,
   loadQuickTemplatesFromBackend,
-  loadScheduledJobsFromBackend,
   loadTechsFromBackend,
   saveJobToBackend,
   saveTechToBackend,
@@ -192,7 +184,6 @@ import {
   type NewCustomExtraTaskV2State,
 } from "./modules/customExtraTaskV2Helpers";
 import CustomExtraTaskV2Fields from "./components/CustomExtraTaskV2Fields";
-import { applyScheduledJobV2FieldsToJob } from "./modules/scheduledJobToWorkV2Adapter";
 import {
   getJobDisplayAiMinutes,
   getJobDisplayPlannedMinutes,
@@ -201,10 +192,7 @@ import WorkV2InfoBox from "./components/WorkV2InfoBox";
 import { getWorkV2LogSuffix } from "./modules/workV2LogHelpers";
 import { applyScheduledJobV2PayloadFields } from "./modules/scheduledJobV2PayloadHelpers";
 import { applyJobV2PayloadFields } from "./modules/jobV2PayloadHelpers";
-import {
-  normalizeJobsV2Fields,
-  normalizeScheduledJobsV2Fields,
-} from "./modules/v2DataNormalizeHelpers";
+import { normalizeJobsV2Fields } from "./modules/v2DataNormalizeHelpers";
 import { checkAllV2Integrity } from "./modules/v2IntegrityCheckHelpers";
 import QuickTemplateV2Fields from "./components/QuickTemplateV2Fields";
 import {
@@ -232,11 +220,9 @@ import {
   getAutoStandbyStorageKey,
   getAutoStandbyTrigger,
 } from "./modules/workshopAutoStandby";
-import {
-  applyManualTechStatusOverrides,
-  timeToMinutes,
-} from "./modules/workshopPureHelpers";
+import { applyManualTechStatusOverrides } from "./modules/workshopPureHelpers";
 import { getAdminHeaders } from "./modules/adminHeaders";
+import { useScheduledJobs } from "./modules/useScheduledJobs";
 
 export default function SeaTarragonaV1() {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
@@ -282,17 +268,12 @@ useEffect(() => {
 }, []);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoaded, setJobsLoaded] = useState(false);
-  const [scheduledJobs, setScheduledJobs] = useState<ScheduledJob[]>([]);
   const [webfleetVehicles, setWebfleetVehicles] = useState<
     { id: string; name: string }[]
   >([]);
 
-  const scheduledJobsLoadedRef = useRef(false);
-  const scheduledJobsDirtyRef = useRef(false);
-  const scheduledJobsSaveVersionRef = useRef(0);
   const autoStandbyRunningRef = useRef(false);
   const pendingRoadsideCapableRef = useRef<Map<string, boolean>>(new Map());
-  const [scheduledJobsLoaded, setScheduledJobsLoaded] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
   return localStorage.getItem("sea-authenticated") === "true";
 });
@@ -533,13 +514,21 @@ const visibleJobs = useMemo(
   [jobs, selectedWorkshopId]
 );
 
-const visibleScheduledJobs = useMemo(
-  () =>
-    scheduledJobs.filter((job) =>
-      belongsToWorkshop(job, selectedWorkshopId)
-    ),
-  [scheduledJobs, selectedWorkshopId]
-);
+const agenda = useScheduledJobs({
+  selectedWorkshopId,
+  visibleJobs,
+  jobs,
+  quickTemplates,
+  effectiveTechs,
+  nextJobId,
+  appendLog,
+  // Callbacks del ciclo de trabajos (PASO 7), inyectados para no acoplar el hook:
+  allocateJob,
+  setJobs,
+  setTechs,
+  setNextJobId,
+  reloadJobsFromBackend,
+});
 
 const visibleTechs = useMemo(() => {
   const visibleJobIds = new Set(visibleJobs.map((job) => job.id));
@@ -868,28 +857,14 @@ return {
 }, []);
 
 useEffect(() => {
-async function loadScheduledJobs() {
-  try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
-    const data = await response.json();
-
-    setScheduledJobs(
-      normalizeScheduledJobsV2Fields(Array.isArray(data) ? data : [])
-    );
-  } catch (error) {
-    console.error("Error cargando agenda:", error);
-    setScheduledJobs([]);
-  } finally {
-    setScheduledJobsLoaded(true);
-  }
-}
-  loadScheduledJobs();
+  agenda.loadScheduledJobs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
 useEffect(() => {
   const issues = checkAllV2Integrity({
     jobs,
-    scheduledJobs,
+    scheduledJobs: agenda.scheduledJobs,
   });
 
   if (issues.length === 0) {
@@ -898,7 +873,7 @@ useEffect(() => {
   }
 
   console.warn("CHECK V2: incidencias encontradas", issues);
-}, [jobs, scheduledJobs]);
+}, [jobs, agenda.scheduledJobs]);
 
 useEffect(() => {
   if (initialAutoAssignDone) return;
@@ -1129,11 +1104,12 @@ useEffect(() => {
 useEffect(() => {
   if (!isAuthenticated) return;
 
-  reloadScheduledJobsFromBackend();
+  agenda.reloadScheduledJobsFromBackend();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [isAuthenticated]);
 
 useEffect(() => {
-  if (!scheduledJobsLoaded) return;
+  if (!agenda.scheduledJobsLoaded) return;
 
   fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
     method: "PUT",
@@ -1141,14 +1117,14 @@ useEffect(() => {
       "Content-Type": "application/json",
     }),
     body: JSON.stringify(
-  scheduledJobs.map((job) =>
+  agenda.scheduledJobs.map((job) =>
     applyScheduledJobV2PayloadFields(job, job)
   )
 ),
   }).catch((error) => {
     console.error("Error guardando agenda:", error);
   });
-}, [scheduledJobs, scheduledJobsLoaded]);
+}, [agenda.scheduledJobs, agenda.scheduledJobsLoaded]);
 
 useEffect(() => {
   saveScheduledTechStatuses(scheduledTechStatuses);
@@ -1235,67 +1211,8 @@ const jobsForScreens = useMemo(
         screenPrevistoMinutes: displayMinutes,
       };
     }),
-  [visibleJobs, scheduledJobs, quickTemplates]
+  [visibleJobs, agenda.scheduledJobs, quickTemplates]
 );
-
-const dueScheduledJobs = useMemo(() => {
-  const nowMsValue = Date.now();
-  const oneHourFromNow = nowMsValue + 60 * 60 * 1000;
-
-  const now = new Date(nowMsValue);
-
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-    2,
-    "0"
-  )}-${String(now.getDate()).padStart(2, "0")}`;
-
-  return visibleScheduledJobs
-  .filter((job) => {
-    const status = String(job.status ?? "").trim().toLowerCase();
-
-    return status === "programado";
-  })
-  .filter((job) => job.jobId == null)
-  .filter((job) => job.secondJobId == null)
-  .filter((job) => job.arrivedAtMs == null)
-  .filter((job) => job.date === today)
-  .filter((job) => {
-    const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
-
-    if (Number.isNaN(startMs)) return false;
-
-    return startMs <= oneHourFromNow;
-  })
-    .sort((a, b) => {
-      const aMs = new Date(`${a.date}T${a.startTime}`).getTime();
-      const bMs = new Date(`${b.date}T${b.startTime}`).getTime();
-
-      return aMs - bMs;
-    });
-}, [visibleScheduledJobs]);
-const arrivedPendingValidationScheduledJobs = useMemo(() => {
-  return visibleScheduledJobs
-    .filter((scheduled) => {
-      if (scheduled.status !== "en_cola") return false;
-
-      if (!scheduled.jobId) return false;
-
-      const linkedJob = visibleJobs.find((job) => job.id === scheduled.jobId);
-
-      if (!linkedJob) return false;
-
-      return linkedJob.status === "validacion";
-    })
-    .sort((a, b) => {
-      const aMs =
-        a.arrivedAtMs ?? new Date(`${a.date}T${a.startTime}`).getTime();
-
-      const bMs =
-        b.arrivedAtMs ?? new Date(`${b.date}T${b.startTime}`).getTime();
-
-      return aMs - bMs;
-    });
-}, [visibleScheduledJobs, visibleJobs]);
 
 
 async function askExternalAIWorkshop() {
@@ -1462,73 +1379,6 @@ blocked: isUnavailableTechStatus(
   }
 }
 
-async function reloadScheduledJobsFromBackend() {
-  try {
-    if (scheduledJobsDirtyRef.current) {
-      console.log(
-        "Agenda con cambios pendientes. No se recarga para no pisar datos locales."
-      );
-      return;
-    }
-
-    const data = await loadScheduledJobsFromBackend();
-
-    scheduledJobsLoadedRef.current = true;
-    setScheduledJobs(data);
-  } catch (error) {
-    console.error("Error recargando agenda:", error);
-  }
-}
-
-async function saveScheduledJobsToBackend(
-  items: ScheduledJob[],
-  saveVersion: number
-) {
-  try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
-      method: "PUT",
-      headers: getAdminHeaders({
-        "Content-Type": "application/json",
-      }),
-      body: JSON.stringify(items),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("Error guardando agenda:", response.status, text);
-      appendLog("Error guardando agenda.");
-      return;
-    }
-
-    if (scheduledJobsSaveVersionRef.current === saveVersion) {
-      scheduledJobsDirtyRef.current = false;
-    }
-  } catch (error) {
-    console.error("Error guardando agenda:", error);
-    appendLog("Error guardando agenda.");
-  }
-}
-
-function setScheduledJobsAndSave(action: SetStateAction<ScheduledJob[]>) {
-  setScheduledJobs((prev) => {
-    const next =
-      typeof action === "function"
-        ? (action as (previous: ScheduledJob[]) => ScheduledJob[])(prev)
-        : action;
-
-    if (scheduledJobsLoadedRef.current) {
-      scheduledJobsDirtyRef.current = true;
-      scheduledJobsSaveVersionRef.current += 1;
-
-      const saveVersion = scheduledJobsSaveVersionRef.current;
-
-      void saveScheduledJobsToBackend(next, saveVersion);
-    }
-
-    return next;
-  });
-}
-
 async function reloadJobsFromBackend() {
   try {
     const data = await loadJobsFromBackend();
@@ -1547,41 +1397,8 @@ async function reloadLogsFromBackend() {
   }
 }
 
-function getScheduledJobByRelatedJobId(jobId: number) {
-  return (
-    scheduledJobs.find(
-      (scheduled) =>
-        scheduled.jobId === jobId || scheduled.secondJobId === jobId
-    ) ?? null
-  );
-}
-
-function getScheduledEstimatedMinutesForJob(job: Job): number | null {
-  const scheduled = getScheduledJobByRelatedJobId(job.id);
-
-  if (!scheduled) return null;
-
-  const directMinutes = Number(scheduled.estimatedMinutes);
-
-  if (Number.isFinite(directMinutes) && directMinutes > 0) {
-    return Math.round(directMinutes);
-  }
-
-  if (scheduled.startTime && scheduled.endTime) {
-    const start = timeToMinutes(scheduled.startTime);
-    const end = timeToMinutes(scheduled.endTime);
-    const diff = end - start;
-
-    if (Number.isFinite(diff) && diff > 0) {
-      return Math.round(diff);
-    }
-  }
-
-  return null;
-}
-
 function getDisplayMinutesForJob(job: Job): number | null {
-  const scheduledMinutes = getScheduledEstimatedMinutesForJob(job);
+  const scheduledMinutes = agenda.getScheduledEstimatedMinutesForJob(job);
 
   if (scheduledMinutes != null && scheduledMinutes > 0) {
     return scheduledMinutes;
@@ -1634,43 +1451,6 @@ function getDisplayMinutesForJob(job: Job): number | null {
   return null;
 }
 
-function shouldCloseScheduledJobForFinishedJob(jobId: number) {
-  const scheduled = getScheduledJobByRelatedJobId(jobId);
-  return shouldCloseScheduledJobForFinishedJobHelper(scheduled, jobId);
-}
-
-async function updateScheduledJobStatusByJobId(
-  jobId: number,
-  status: ScheduledJob["status"]
-) {
-  const updatedScheduledJobs = scheduledJobs.map((scheduled) =>
-    scheduled.jobId === jobId || scheduled.secondJobId === jobId
-      ? {
-          ...scheduled,
-          status,
-        }
-      : scheduled
-  );
-
-  const payload = updatedScheduledJobs.map((scheduled) =>
-    applyScheduledJobV2PayloadFields(scheduled, scheduled)
-  );
-
-  setScheduledJobs(normalizeScheduledJobsV2Fields(updatedScheduledJobs));
-
-  try {
-    await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
-      method: "PUT",
-      headers: getAdminHeaders({
-        "Content-Type": "application/json",
-      }),
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    console.error("Error actualizando estado de agenda:", error);
-    appendLog("Error actualizando estado de una cita en agenda.");
-  }
-}
 async function reloadQuickTemplatesFromBackend() {
   try {
     const data = await loadQuickTemplatesFromBackend();
@@ -1954,356 +1734,6 @@ function recalcWaitingQueue(_updatedTechs = techs, _updatedJobs = jobs) {
   // La cola solo se mueve si el usuario elige técnico manualmente
   // o si hay una reserva para un técnico que acaba de quedar libre.
   return;
-}
-function updateScheduledJobField(
-  scheduledId: number,
-  field: "plate" | "customerName" | "customerPhone" | "notes",
-  value: string
-) {
-  setScheduledJobsAndSave((prev) =>
-    prev.map((item) =>
-      item.id === scheduledId
-        ? {
-            ...item,
-            [field]: field === "plate" ? value.toUpperCase() : value,
-          }
-        : item
-    )
-  );
-}
-
-function updateScheduledJobTemplate(
-  scheduledId: number,
-  nextTemplateKey: string
-) {
-  const template = quickTemplates.find((item) => item.key === nextTemplateKey);
-
-  if (!template) return;
-
-  setScheduledJobsAndSave((prev) =>
-    prev.map((item) => {
-      if (item.id !== scheduledId) return item;
-
-      const standardMinutes = template.standardMinutes ?? 45;
-
-      return {
-        ...item,
-        templateKey: template.key,
-        area: template.area,
-        linkedTemplateId: null,
-        linkedTemplateLabel: null,
-        firstTemplateKey: null,
-        secondTemplateKey: null,
-        endTime: addMinutesToTime(item.startTime, standardMinutes),
-      };
-    })
-  );
-}
-
-function cancelScheduledJob(id: number) {
-  const scheduled = scheduledJobs.find((item) => item.id === id);
-  if (!scheduled) return;
-
-  setScheduledJobsAndSave((prev) =>
-    prev.map((item) =>
-      item.id === id
-        ? {
-            ...item,
-            status: "cancelado",
-            cancelledAtMs: nowMs(),
-          }
-        : item
-    )
-  );
-
-  appendLog(`Cita cancelada: ${scheduled.plate}.`);
-}
-
-async function deleteArrivedScheduledJob(scheduledId: number) {
-  const scheduled = scheduledJobs.find((item) => item.id === scheduledId);
-
-  if (!scheduled) return;
-
-  const linkedJob = scheduled.jobId
-    ? jobs.find((job) => job.id === scheduled.jobId)
-    : null;
-
-  const ok = window.confirm(
-    `¿Eliminar esta cita llegada pendiente?\n\nMatrícula: ${
-      scheduled.plate
-    }\n\nEsto solo quitará la tarjeta de "Citas llegadas pendientes de validar".${
-      linkedJob
-        ? `\n\nEl trabajo operativo ${linkedJob.plate} seguirá en su estado actual: ${linkedJob.status}.`
-        : "\n\nNo se ha encontrado trabajo operativo vinculado."
-    }`
-  );
-
-  if (!ok) return;
-
-  setScheduledJobs((prev) =>
-    prev.filter((item) => item.id !== scheduledId)
-  );
-
-  try {
-    if (deleteScheduledJobFromBackend) {
-      await deleteScheduledJobFromBackend(scheduledId);
-    }
-
-    appendLog(`Cita llegada eliminada: ${scheduled.plate}.`);
-  } catch (error) {
-    console.error("Error eliminando cita llegada:", error);
-
-    setScheduledJobs((prev) => {
-      const exists = prev.some((item) => item.id === scheduled.id);
-      return exists ? prev : [...prev, scheduled];
-    });
-
-    appendLog(`Error eliminando cita llegada ${scheduled.plate}.`);
-
-    alert(
-      "No se pudo eliminar la cita llegada del servidor. Se ha restaurado en pantalla."
-    );
-  }
-}
-
-async function confirmScheduledArrival(scheduled: ScheduledJob) {
-  const currentScheduled =
-    scheduledJobs.find((item) => item.id === scheduled.id) ?? scheduled;
-
-  if (currentScheduled.status !== "programado") return;
-  if (currentScheduled.jobId != null) return;
-
-  const isLinkedJob =
-    !!currentScheduled.firstTemplateKey &&
-    !!currentScheduled.secondTemplateKey &&
-    !!currentScheduled.linkedTemplateLabel;
-
-  const firstTemplateKey = isLinkedJob
-    ? currentScheduled.firstTemplateKey
-    : currentScheduled.templateKey;
-
-  const firstTemplate = quickTemplates.find(
-    (item) => item.key === firstTemplateKey
-  );
-
-  if (!firstTemplate) return;
-
-  const createdAt = nowMs();
-  const arrivedAtMs = nowMs();
-
-  const maxExistingJobId = jobs.reduce(
-    (max, job) => Math.max(max, Number(job.id) || 0),
-    0
-  );
-
-  const firstJobId = Math.max(nextJobId, maxExistingJobId + 1);
-  const secondJobId = firstJobId + 1;
-
-  const linkedGroupId = isLinkedJob
-    ? `linked-${currentScheduled.id}-${createdAt}`
-    : null;
-
-  const scheduledIncludedTasks = Array.isArray(currentScheduled.includedTasks)
-    ? currentScheduled.includedTasks
-    : [];
-
-  const customerInfo = [
-    currentScheduled.customerName
-      ? `Cliente: ${currentScheduled.customerName}`
-      : "",
-    currentScheduled.customerPhone
-      ? `Teléfono: ${currentScheduled.customerPhone}`
-      : "",
-    currentScheduled.notes
-      ? `Observaciones: ${currentScheduled.notes}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  const firstJobReasonBase =
-    scheduledIncludedTasks.length > 0
-      ? `Llegada confirmada desde agenda con tareas incluidas: ${scheduledIncludedTasks
-          .map((task) => task.label)
-          .join(" + ")}.`
-      : isLinkedJob
-      ? `Trabajo combinado iniciado desde agenda: ${currentScheduled.linkedTemplateLabel}.`
-      : `Llegada confirmada desde agenda: ${
-          currentScheduled.customerName || "cliente"
-        }.`;
-
-  const firstJobBase: Job = {
-    id: firstJobId,
-    workshopId: normalizeWorkshopId(
-      currentScheduled.workshopId ?? selectedWorkshopId
-    ),
-    area: firstTemplate.area,
-    plate: currentScheduled.plate.trim().toUpperCase(),
-    urgent: currentScheduled.urgent,
-    status: "espera",
-    assignedNames: [],
-    reason: customerInfo
-      ? `${firstJobReasonBase} ${customerInfo}.`
-      : firstJobReasonBase,
-
-    customerName: currentScheduled.customerName || undefined,
-    customerPhone: currentScheduled.customerPhone || undefined,
-
-    createdAtMs: createdAt,
-    startedAtMs: null,
-    template: isBuiltInTemplateKey(firstTemplate.key) ? firstTemplate.key : null,
-    quickEntryLabel: firstTemplate.label,
-    quickEntryMode: firstTemplate.mode,
-    includedTasks: scheduledIncludedTasks,
-
-    linkedGroupId,
-    linkedOrder: isLinkedJob ? 1 : null,
-    dependsOnJobId: null,
-    blockedReason: null,
-  };
-
-  const firstJob = applyScheduledJobV2FieldsToJob({
-    job: firstJobBase,
-    scheduled: currentScheduled,
-    template: firstTemplate,
-  });
-
-const result = allocateJob(firstJob, effectiveTechs, [firstJob, ...jobs], true);
-  let jobsToSet = result.jobs;
-  let jobsToSave: Job[] = [
-    result.jobs.find((item) => item.id === firstJob.id) ?? firstJob,
-  ];
-
-  let createdSecondJobId: number | null = null;
-
-  if (isLinkedJob) {
-    const secondTemplate = quickTemplates.find(
-      (item) => item.key === currentScheduled.secondTemplateKey
-    );
-
-    if (secondTemplate) {
-      const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${currentScheduled.linkedTemplateLabel}.`;
-
-      const secondJobBase: Job = {
-        id: secondJobId,
-        workshopId: normalizeWorkshopId(
-          currentScheduled.workshopId ?? selectedWorkshopId
-        ),
-        area: secondTemplate.area,
-        plate: currentScheduled.plate.trim().toUpperCase(),
-        urgent: currentScheduled.urgent,
-        status: "parado",
-        assignedNames: [],
-        reason: customerInfo
-          ? `${secondJobReasonBase} ${customerInfo}.`
-          : secondJobReasonBase,
-
-        customerName: currentScheduled.customerName || undefined,
-        customerPhone: currentScheduled.customerPhone || undefined,
-
-        createdAtMs: createdAt + 1,
-        startedAtMs: null,
-        pausedAtMs: arrivedAtMs,
-        workedAccumulatedMinutes: 0,
-        pausedAccumulatedMinutes: 0,
-        template: isBuiltInTemplateKey(secondTemplate.key)
-          ? secondTemplate.key
-          : null,
-        quickEntryLabel: secondTemplate.label,
-        quickEntryMode: secondTemplate.mode,
-        includedTasks: [],
-
-        linkedGroupId,
-        linkedOrder: 2,
-        dependsOnJobId: firstJob.id,
-        blockedReason: `Pendiente de finalizar ${firstTemplate.label}.`,
-      };
-
-      const secondJob = applyScheduledJobV2FieldsToJob({
-        job: secondJobBase,
-        scheduled: {
-          ...currentScheduled,
-          templateKey: secondTemplate.key,
-          includedTasks: [],
-        },
-        template: secondTemplate,
-      });
-
-      jobsToSet = [secondJob, ...result.jobs];
-      jobsToSave = [...jobsToSave, secondJob];
-      createdSecondJobId = secondJob.id;
-    }
-  }
-
-setJobs(normalizeJobsV2Fields(jobsToSet));
-setTechs(result.techs);
-
-  setNextJobId((value) =>
-    Math.max(value, firstJobId + jobsToSave.length)
-  );
-
-// Calculamos el array actualizado aquí (no dentro del setter) para poder
-// guardarlo explícitamente en el try y evitar el bug de fire-and-forget.
-const updatedScheduledJobs = normalizeScheduledJobsV2Fields(
-  scheduledJobs.map((item) =>
-    item.id === currentScheduled.id
-      ? {
-          ...item,
-          status: "en_cola" as const,
-          arrivedAtMs,
-          jobId: firstJob.id,
-          secondJobId: createdSecondJobId,
-        }
-      : item
-  )
-);
-
-// Actualiza UI inmediatamente (sin fire-and-forget)
-setScheduledJobs(updatedScheduledJobs);
-
-  try {
-    for (const job of jobsToSave) {
-      await saveJobToBackend(job);
-    }
-
-    for (const tech of result.techs) {
-      await saveTechToBackend(tech);
-    }
-
-    // Guardamos la agenda de forma explícita (awaited) para que el estado
-    // persista en backend aunque el usuario recargue la página enseguida.
-    scheduledJobsDirtyRef.current = true;
-    scheduledJobsSaveVersionRef.current += 1;
-    await saveScheduledJobsToBackend(
-      updatedScheduledJobs,
-      scheduledJobsSaveVersionRef.current
-    );
-
-    appendLog(
-      scheduledIncludedTasks.length > 0
-        ? `Llegada confirmada: ${currentScheduled.plate} · ${
-            firstTemplate.label
-          } + ${scheduledIncludedTasks
-            .map((task) => task.label)
-            .join(" + ")}${
-            currentScheduled.notes ? ` · Obs: ${currentScheduled.notes}` : ""
-          }. Pendiente de validar antes de iniciar.`
-        : isLinkedJob
-        ? `Llegada confirmada: ${currentScheduled.plate} · ${
-            currentScheduled.linkedTemplateLabel
-          }${
-            currentScheduled.notes ? ` · Obs: ${currentScheduled.notes}` : ""
-          }. Queda pendiente de validar antes de iniciar.`
-        : `Llegada confirmada: ${currentScheduled.plate}${
-            currentScheduled.notes ? ` · Obs: ${currentScheduled.notes}` : ""
-          }. Queda pendiente de validar antes de iniciar.`
-    );
-
-    await reloadJobsFromBackend();
-  } catch (error) {
-    console.error("Error confirmando llegada:", error);
-    appendLog(`Error guardando trabajo ${currentScheduled.plate}.`);
-  }
 }
 
 async function createJob() {
@@ -3213,7 +2643,7 @@ async function authorizeProposedJob(jobId: number) {
   setJobs(updatedJobs);
   setTechs(updatedTechs);
 
-void updateScheduledJobStatusByJobId(jobId, "activo");
+void agenda.updateScheduledJobStatusByJobId(jobId, "activo");
 
   appendLog(
     `Inicio autorizado: ${job.plate} asignado a ${assignedNames.join(" + ")}.`
@@ -3247,7 +2677,7 @@ async function rejectProposedJob(jobId: number) {
   );
 
 setJobs(updatedJobs);
-void updateScheduledJobStatusByJobId(jobId, "en_cola");
+void agenda.updateScheduledJobStatusByJobId(jobId, "en_cola");
 
   appendLog(
     `Propuesta rechazada para ${job.plate}. El trabajo vuelve a cola y queda pendiente de nueva validación.`
@@ -3771,10 +3201,10 @@ async function finishJob(jobId: number) {
  setJobs(normalizeJobsV2Fields(finalJobs));
 setTechs(finalTechs);
 
-  if (shouldCloseScheduledJobForFinishedJob(jobId)) {
-    void updateScheduledJobStatusByJobId(jobId, "cerrado");
+  if (agenda.shouldCloseScheduledJobForFinishedJob(jobId)) {
+    void agenda.updateScheduledJobStatusByJobId(jobId, "cerrado");
   } else {
-    void updateScheduledJobStatusByJobId(jobId, "en_cola");
+    void agenda.updateScheduledJobStatusByJobId(jobId, "en_cola");
   }
 
 appendLog(
@@ -4577,7 +4007,7 @@ if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
     <WorkshopWallScreen
   jobs={visibleJobs}
   techs={visibleTechs}
-  scheduledJobs={visibleScheduledJobs}
+  scheduledJobs={agenda.visibleScheduledJobs}
   quickTemplates={visibleQuickTemplates}
   onBack={() => setView("operativo")}
 />
@@ -4708,8 +4138,8 @@ if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
 if (view === "agenda" && canAccessView(userRole, "agenda")) {
   return (
     <AgendaView
-  scheduledJobs={scheduledJobs}
-  setScheduledJobs={setScheduledJobsAndSave}
+  scheduledJobs={agenda.scheduledJobs}
+  setScheduledJobs={agenda.setScheduledJobsAndSave}
   quickTemplates={visibleQuickTemplates}
   selectedWorkshopId={selectedWorkshopId}
   customExtraTasks={customExtraTasks}
@@ -4717,8 +4147,8 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
   AREA_META={AREA_META}
   onBack={() => setView("operativo")}
   appendLog={appendLog}
-  confirmScheduledArrival={confirmScheduledArrival}
-  cancelScheduledJob={cancelScheduledJob}
+  confirmScheduledArrival={agenda.confirmScheduledArrival}
+  cancelScheduledJob={agenda.cancelScheduledJob}
   deleteScheduledJobFromBackend={deleteScheduledJobFromBackend}
   techs={visibleTechs}
   scheduledTechStatuses={scheduledTechStatuses}
@@ -6696,7 +6126,7 @@ return (
   </div>
 )}
 
-{arrivedPendingValidationScheduledJobs.length > 0 && (
+{agenda.arrivedPendingValidationScheduledJobs.length > 0 && (
   <div className="rounded-3xl border border-violet-200 bg-violet-50 p-5 shadow-sm">
     <div className="mb-3 flex items-center justify-between gap-3">
       <div className="text-sm font-semibold text-violet-900">
@@ -6704,12 +6134,12 @@ return (
       </div>
 
       <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700">
-        {arrivedPendingValidationScheduledJobs.length}
+        {agenda.arrivedPendingValidationScheduledJobs.length}
       </span>
     </div>
 
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {arrivedPendingValidationScheduledJobs.map((scheduled) => {
+      {agenda.arrivedPendingValidationScheduledJobs.map((scheduled) => {
         const relatedJob =
   scheduled.jobId != null
     ? jobs.find((job) => job.id === scheduled.jobId)
@@ -6787,7 +6217,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               Autoriza el inicio desde el bloque “Pendientes de validar”.
               <button
   type="button"
-  onClick={() => deleteArrivedScheduledJob(scheduled.id)}
+  onClick={() => agenda.deleteArrivedScheduledJob(scheduled.id)}
   className="mt-3 w-full rounded-2xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700"
 >
   Eliminar cita llegada
@@ -6800,7 +6230,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{(view === "operativo" || view === "operativo2") && dueScheduledJobs.length > 0 && (
+{(view === "operativo" || view === "operativo2") && agenda.dueScheduledJobs.length > 0 && (
   <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
     <div className="mb-2 flex items-center justify-between gap-2">
       <div>
@@ -6813,12 +6243,12 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
       </div>
 
       <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-black text-amber-800">
-        {dueScheduledJobs.length}
+        {agenda.dueScheduledJobs.length}
       </span>
     </div>
 
     <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-      {dueScheduledJobs.map((job) => {
+      {agenda.dueScheduledJobs.map((job) => {
         const secondTemplate = job.secondTemplateKey
           ? quickTemplates.find(
               (template) => template.key === job.secondTemplateKey
@@ -6848,7 +6278,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                 <input
                   value={job.plate}
                   onChange={(e) =>
-                    updateScheduledJobField(job.id, "plate", e.target.value)
+                    agenda.updateScheduledJobField(job.id, "plate", e.target.value)
                   }
                   placeholder="Matrícula"
                   className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-sm font-black uppercase tracking-wide text-slate-950"
@@ -6878,7 +6308,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <select
                 value={job.firstTemplateKey || job.templateKey}
                 onChange={(e) =>
-                  updateScheduledJobTemplate(job.id, e.target.value)
+                  agenda.updateScheduledJobTemplate(job.id, e.target.value)
                 }
                 className="mt-1 w-full rounded-lg border border-yellow-300 bg-yellow-100 px-2 py-1 text-xs font-bold text-red-700"
               >
@@ -6917,7 +6347,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <input
                 value={job.customerName || ""}
                 onChange={(e) =>
-                  updateScheduledJobField(
+                  agenda.updateScheduledJobField(
                     job.id,
                     "customerName",
                     e.target.value
@@ -6930,7 +6360,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <input
                 value={job.customerPhone || ""}
                 onChange={(e) =>
-                  updateScheduledJobField(
+                  agenda.updateScheduledJobField(
                     job.id,
                     "customerPhone",
                     e.target.value
@@ -6943,7 +6373,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               <textarea
                 value={job.notes || ""}
                 onChange={(e) =>
-                  updateScheduledJobField(job.id, "notes", e.target.value)
+                  agenda.updateScheduledJobField(job.id, "notes", e.target.value)
                 }
                 placeholder="Observaciones"
                 rows={1}
@@ -6960,7 +6390,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
             <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => confirmScheduledArrival(job)}
+                onClick={() => agenda.confirmScheduledArrival(job)}
                 className="rounded-xl bg-green-600 px-2 py-2 text-xs font-black text-white hover:bg-green-700"
               >
                 Llegó
@@ -6968,7 +6398,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
               <button
                 type="button"
-                onClick={() => cancelScheduledJob(job.id)}
+                onClick={() => agenda.cancelScheduledJob(job.id)}
                 className="rounded-xl border border-red-200 bg-white px-2 py-2 text-xs font-bold text-red-600 hover:bg-red-50"
               >
                 Cancelar

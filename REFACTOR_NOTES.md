@@ -126,3 +126,65 @@ typecheck y build**. Si se desea lint, hay que añadir las devDependencies de ES
   cae el `else`. El toggle `onToggleRoadsideCapable` solo actualiza el `setState`, no el ref.
   Probablemente intención perdida (el override "en vuelo" se apoya solo en el state). **No se arregla
   en este paso** (refactor sin cambios de comportamiento); se preserva tal cual para CHAT 6.
+
+### PASO 3 — hook de Agenda / trabajos programados (`useScheduledJobs`)
+
+**Módulo creado:** `src/modules/useScheduledJobs.ts` (hook `useScheduledJobs(deps)`).
+
+**Movido al hook** (estado + memos + funciones, cuerpos copiados literalmente):
+- Estado: `scheduledJobs` (+ setter interno), `scheduledJobsLoaded`, y los refs
+  `scheduledJobsLoadedRef`, `scheduledJobsDirtyRef`, `scheduledJobsSaveVersionRef`.
+- Memos: `visibleScheduledJobs`, `dueScheduledJobs`, `arrivedPendingValidationScheduledJobs`.
+- Funciones: `loadScheduledJobs`, `reloadScheduledJobsFromBackend`, `saveScheduledJobsToBackend`,
+  `setScheduledJobsAndSave`, `getScheduledJobByRelatedJobId`, `getScheduledEstimatedMinutesForJob`,
+  `shouldCloseScheduledJobForFinishedJob`, `updateScheduledJobStatusByJobId`, `updateScheduledJobField`,
+  `updateScheduledJobTemplate`, `cancelScheduledJob`, `deleteArrivedScheduledJob`,
+  `confirmScheduledArrival`. (Reutilizan `scheduledJobHelpers.ts`, `scheduledJobV2PayloadHelpers.ts`,
+  `scheduledJobToWorkV2Adapter.ts`, `v2DataNormalizeHelpers.ts`, `workshopApi.ts`, `adminHeaders.ts`,
+  `workshopPureHelpers.ts`, etc., importados directamente en el hook.)
+
+**Interfaz del hook.** `useScheduledJobs({ selectedWorkshopId, visibleJobs, jobs, quickTemplates,
+effectiveTechs, nextJobId, appendLog, allocateJob, setJobs, setTechs, setNextJobId,
+reloadJobsFromBackend })`.
+
+**Callbacks del ciclo de trabajos (PASO 7) recibidos por parámetro** (para NO acoplar el hook con el
+ciclo de trabajos; **no se mueve aquí `allocateJob` ni `createJob`**): `allocateJob`, `setJobs`,
+`setTechs`, `setNextJobId`, `reloadJobsFromBackend`. Más los valores `jobs`, `effectiveTechs`,
+`quickTemplates`, `nextJobId` que `confirmScheduledArrival` necesita para construir los trabajos.
+`saveJobToBackend` / `saveTechToBackend` son imports de módulo, no hace falta inyectarlos.
+
+**Decisiones:**
+- **`scheduledTechStatuses` / `scheduledTechStatusesLoaded` NO se movieron** (se dejan en el componente
+  para CHAT 6 `useTechManagement`), pese a que el brief los listaba. Los consume `effectiveTechs`
+  (memo de *técnicos*, ~línea 328) que se declara **antes** del call-site del hook (este necesita
+  `visibleJobs`/`effectiveTechs`/`jobs`/`quickTemplates`/`nextJobId` como entradas, así que se llama
+  en ~línea 520). Moverlos provocaría uso-antes-de-declaración, exactamente el mismo caso que
+  `pendingRoadsideCapable` en el PASO 2. Además `applyScheduledStatusesToTechs` (memo técnicos) y
+  `getScheduledStatusForTech` (JSX técnicos) los usan. El plan ya lo contemplaba (CHAT 6:
+  *"scheduledTechStatuses si no se movió en CHAT 3"*).
+- **Los `useEffect` de agenda se quedan en el componente** llamando a funciones/estado del hook
+  (`agenda.loadScheduledJobs()`, `agenda.reloadScheduledJobsFromBackend()`, lectura de
+  `agenda.scheduledJobs` / `agenda.scheduledJobsLoaded`), igual que se hizo con `roadside.reload*` en
+  el PASO 2, para **no alterar el orden de registro de efectos**. Afectados: carga inicial, integridad
+  V2, reload por auth, guardado PUT por cambio de `scheduledJobs`. `useAutoSync` **no** recarga agenda
+  (estaba comentado y se conserva).
+- La variable que recibe el hook se llama **`agenda`** (no `scheduled`) para evitar el shadowing con la
+  variable de iteración `scheduled` (un `ScheduledJob`) usada en el `.map` del JSX operativo.
+- `getDisplayMinutesForJob` (dominio trabajos, CHAT 7) **se queda** en el componente y pasa a llamar
+  `agenda.getScheduledEstimatedMinutesForJob`.
+- Imports eliminados del componente al quedar huérfanos (`noUnusedLocals`): `addMinutesToTime`,
+  `isBuiltInTemplateKey`, `timeToMinutes`, `normalizeScheduledJobsV2Fields`,
+  `applyScheduledJobV2FieldsToJob`, `loadScheduledJobsFromBackend`,
+  `shouldCloseScheduledJobForFinishedJob` (alias helper), `SetStateAction`, tipo `ScheduledJob`.
+  Se conservan `applyScheduledJobV2PayloadFields` (efecto de guardado PUT que sigue en el componente)
+  y `deleteScheduledJobFromBackend` (se pasa como prop a `AgendaView`).
+
+**Resultado tras el refactor:**
+- Typecheck: EXIT 0. Build: EXIT 0 (mismos avisos preexistentes: dynamic import de `RoadsideMap`,
+  chunk > 1000 kB). Lint: no ejecutable (ver baseline).
+- `SeaTarragonaV1.tsx`: 8527 → 7957 líneas (−570 netas; git: 624 borradas / 54 insertadas).
+- `src/modules/useScheduledJobs.ts`: 673 líneas nuevas.
+
+**Bugs detectados:** ninguno nuevo en este paso. (Se mantiene el doble guardado preexistente de la
+agenda —efecto PUT en `[scheduledJobs]` + `saveScheduledJobsToBackend` dentro de `setScheduledJobsAndSave`—
+sin cambios; no es objeto de este refactor.)
