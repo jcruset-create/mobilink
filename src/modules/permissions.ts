@@ -7,6 +7,7 @@ export type AppView =
   | "asistencias"
   | "asistencias_config"
   | "entradas"
+  | "entradas2"
   | "ajustes"
   | "operarios"
   | "workshop_tv_75"
@@ -38,6 +39,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "asistencias",
     "asistencias_config",
     "entradas",
+    "entradas2",
     "ranking",
     "ajustes",
     "tecnicos",
@@ -53,6 +55,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "agenda",
     "asistencias",
     "entradas",
+    "entradas2",
     "ranking",
     "tecnicos",
     "operarios",

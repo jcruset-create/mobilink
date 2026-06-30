@@ -4138,6 +4138,133 @@ if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
     />
   );
 }
+if (view === "entradas2" && canAccessView(userRole, "entradas2")) {
+  const areaTemplates = quickTemplates
+    .filter((t) => t.area === quickSelectedArea)
+    .slice()
+    .sort((a, b) => a.label.localeCompare(b.label, "es", { sensitivity: "base" }));
+  return (
+    <div className="fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-bold">⚡ Entradas rápidas 2 · compacto</span>
+        <button type="button" onClick={() => setView("operativo")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200 hover:bg-slate-700">← Volver</button>
+      </div>
+
+      <div className="grid gap-2 lg:grid-cols-2">
+        {/* Crear entrada rápida */}
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1.5 text-[10px] font-bold text-slate-400">CREAR ENTRADA RÁPIDA</div>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <input
+              value={newQuickTemplate.label}
+              onChange={(e) => setNewQuickTemplate((p) => ({ ...p, label: e.target.value }))}
+              placeholder="Nombre entrada rápida"
+              className="rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px] sm:col-span-2"
+            />
+            <select value={newQuickTemplate.area} onChange={(e) => setNewQuickTemplate((p) => ({ ...p, area: e.target.value as AreaKey }))} className="rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]">
+              {Object.entries(AREA_META).map(([key, meta]) => <option key={key} value={key}>{(meta as any).label}</option>)}
+            </select>
+            <select value={newQuickTemplate.mode} onChange={(e) => setNewQuickTemplate((p) => ({ ...p, mode: e.target.value as any }))} className="rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]">
+              <option value="single">1 técnico</option>
+              <option value="team">técnico + refuerzo</option>
+            </select>
+          </div>
+          <div className="mt-1.5 rounded-lg bg-white p-2 text-slate-900">
+            <QuickTemplateV2Fields draft={newQuickTemplate} setDraft={setNewQuickTemplate} />
+          </div>
+          <div className="mt-1.5 text-[10px] font-bold text-slate-400">TÉCNICOS CAPACITADOS</div>
+          <div className="mt-1 grid grid-cols-2 gap-1 sm:grid-cols-3">
+            {visibleTechs.map((tech) => {
+              const checked = newQuickTemplate.allowedTechs.includes(tech.name);
+              return (
+                <label key={`e2-allowed-${tech.name}`} className="flex items-center gap-1 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[11px]">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const nextAllowed = e.target.checked
+                        ? [...newQuickTemplate.allowedTechs, tech.name]
+                        : newQuickTemplate.allowedTechs.filter((n) => n !== tech.name);
+                      setNewQuickTemplate((prev) => {
+                        const filtered = prev.priorityOrder.filter((n) => nextAllowed.includes(n));
+                        const missing = nextAllowed.filter((n) => !filtered.includes(n));
+                        return { ...prev, allowedTechs: nextAllowed, priorityOrder: [...filtered, ...missing] };
+                      });
+                    }}
+                  />
+                  <span>{tech.name}</span>
+                </label>
+              );
+            })}
+          </div>
+          <button type="button" onClick={() => { void addQuickTemplate(); }} className="mt-2 rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">Añadir entrada rápida</button>
+
+          {/* Plantilla vinculada */}
+          <div className="mt-3 text-[10px] font-bold text-violet-300">PLANTILLA VINCULADA</div>
+          <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
+            <select value={linkedTemplateDraft.firstTemplateKey} onChange={(e) => setLinkedTemplateDraft((p) => ({ ...p, firstTemplateKey: e.target.value }))} className="rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]">
+              <option value="">1º trabajo…</option>
+              {quickTemplates.map((t) => <option key={`l1-${t.key}`} value={t.key}>{t.label}</option>)}
+            </select>
+            <select value={linkedTemplateDraft.secondTemplateKey} onChange={(e) => setLinkedTemplateDraft((p) => ({ ...p, secondTemplateKey: e.target.value }))} className="rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]">
+              <option value="">2º trabajo (bloqueado)…</option>
+              {quickTemplates.map((t) => <option key={`l2-${t.key}`} value={t.key}>{t.label}</option>)}
+            </select>
+            <input value={linkedTemplateDraft.label} onChange={(e) => setLinkedTemplateDraft((p) => ({ ...p, label: e.target.value }))} placeholder="Nombre opcional" className="rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px] sm:col-span-2" />
+          </div>
+          <button type="button" onClick={() => addLinkedTemplate()} className="mt-1.5 rounded bg-violet-600 px-3 py-1.5 text-[12px] font-bold text-white">Guardar vinculada</button>
+          {linkedTemplates.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {linkedTemplates.map((l) => (
+                <span key={l.id} className="inline-flex items-center gap-1 rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[11px] text-violet-200">
+                  {l.label}<button type="button" onClick={() => removeLinkedTemplate(l.id)} className="font-bold">✕</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Plantillas por área */}
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1.5 text-[10px] font-bold text-slate-400">PLANTILLAS POR ÁREA</div>
+          <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+            {(Object.keys(AREA_META) as AreaKey[]).map((a) => {
+              const meta = AREA_META[a];
+              const Icon = meta.icon;
+              const count = quickTemplates.filter((t) => t.area === a).length;
+              const active = quickSelectedArea === a;
+              return (
+                <button key={`e2-area-${a}`} type="button" onClick={() => setQuickSelectedArea(a)} className={`flex flex-col items-center gap-0.5 rounded-lg border p-2 ${active ? "border-sky-400 bg-slate-700" : "border-slate-600 bg-slate-900"}`}>
+                  <Icon className="h-4 w-4 text-slate-200" />
+                  <span className="text-[11px] font-semibold">{meta.label}</span>
+                  <span className="text-[9px] text-slate-500">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-2 space-y-1">
+            {areaTemplates.length === 0 ? <div className="text-[11px] text-slate-500">Sin entradas para {AREA_META[quickSelectedArea].label}.</div> : areaTemplates.map((template) => (
+              <div key={`e2-tpl-${template.key}`}>
+                <div className="flex items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1 text-[11px]">
+                  <span className="font-medium">{template.label}</span>
+                  <span className="flex shrink-0 gap-2">
+                    <button type="button" onClick={() => setEditingQuickTemplateKey(editingQuickTemplateKey === template.key ? null : template.key)} className="font-bold text-sky-300">Editar</button>
+                    <button type="button" onClick={() => { void removeQuickTemplate(template.key); }} className="font-bold text-rose-300">Eliminar</button>
+                  </span>
+                </div>
+                {editingQuickTemplateKey === template.key && (
+                  <div className="mt-1 rounded-lg bg-white p-2 text-slate-900">
+                    <QuickTemplateEditor template={template} techs={techs} onSave={updateQuickTemplate} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 if (view === "agenda" && canAccessView(userRole, "agenda")) {
   return (
     <AgendaView
@@ -4490,6 +4617,20 @@ return (
     }`}
   >
     Entradas rápidas
+  </button>
+)}
+
+{canAccessView(userRole, "entradas2") && (
+  <button
+    type="button"
+    onClick={() => setView("entradas2")}
+    className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+      view === "entradas2"
+        ? "border border-sky-400 bg-sky-300 text-sky-950 shadow-sm"
+        : "border border-sky-200 bg-sky-50 text-sky-900 hover:bg-sky-100"
+    }`}
+  >
+    Entradas rápidas 2
   </button>
 )}
 
