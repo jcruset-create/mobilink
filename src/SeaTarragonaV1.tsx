@@ -342,6 +342,7 @@ useEffect(() => {
 
   const [formOpen, setFormOpen] = useState(false);
   const [quickEntryOpen, setQuickEntryOpen] = useState(false);
+  const [op2CitaOpen, setOp2CitaOpen] = useState(false);
   const [draft, setDraft] = useState<{
     area: AreaKey;
     plate: string;
@@ -6668,7 +6669,10 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         {/* Derecha */}
         <div className="space-y-2">
           <div className="rounded-lg bg-slate-800 p-2">
-            <div className="mb-1 text-[10px] font-bold text-slate-400">LLEGADAS / AGENDADOS ({agendados.length})</div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-400">LLEGADAS / AGENDADOS ({agendados.length})</span>
+              <button type="button" onClick={() => setOp2CitaOpen(true)} className="rounded bg-sky-600 px-2 py-0.5 text-[10px] font-bold text-white">+ Programar cita</button>
+            </div>
             <div className="space-y-1">
               {agendados.map((s) => (
                 <div key={s.id} className="rounded bg-slate-900 px-2 py-1 text-[11px]">
@@ -6699,6 +6703,28 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
           </div>
         </div>
       </div>
+      {op2CitaOpen && (
+        <AgendaView
+          embeddedModalOnly
+          onClose={() => setOp2CitaOpen(false)}
+          scheduledJobs={agenda.scheduledJobs}
+          setScheduledJobs={agenda.setScheduledJobsAndSave}
+          quickTemplates={visibleQuickTemplates}
+          selectedWorkshopId={selectedWorkshopId}
+          customExtraTasks={customExtraTasks}
+          linkedTemplates={visibleLinkedTemplates}
+          AREA_META={AREA_META}
+          onBack={() => setOp2CitaOpen(false)}
+          appendLog={appendLog}
+          confirmScheduledArrival={agenda.confirmScheduledArrival}
+          cancelScheduledJob={agenda.cancelScheduledJob}
+          deleteScheduledJobFromBackend={deleteScheduledJobFromBackend}
+          techs={visibleTechs}
+          scheduledTechStatuses={scheduledTechStatuses}
+          setScheduledTechStatuses={setScheduledTechStatuses}
+          queueJobs={visibleJobs.filter((j) => j.status === "espera" || j.status === "validacion")}
+        />
+      )}
     </div>
   );
 })()}

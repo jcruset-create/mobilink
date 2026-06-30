@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
@@ -187,6 +187,11 @@ type Props = {
     secondTemplateKey: string;
     workshopId?: WorkshopId | string | null;
   }[];
+
+  /** Renderiza SOLO el modal de "Nueva cita" (para abrirlo desde otras pantallas, p.ej. Operativo 2). */
+  embeddedModalOnly?: boolean;
+  /** Se llama al cerrar/guardar la cita en modo embeddedModalOnly. */
+  onClose?: () => void;
 };
 
 const SLOT_MINUTES = 15;
@@ -526,6 +531,8 @@ export default function AgendaView({
   scheduledTechStatuses,
   setScheduledTechStatuses,
   queueJobs = [],
+  embeddedModalOnly = false,
+  onClose,
 }: Props) {
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
@@ -553,6 +560,22 @@ useEffect(() => {
 
   return () => window.clearInterval(timer);
 }, []);
+
+// Modo "solo modal" (p.ej. abierto desde Operativo 2): abre la nueva cita al montar
+// y avisa con onClose cuando el modal se cierra (cancelar o guardar).
+const embeddedOpenedRef = useRef(false);
+useEffect(() => {
+  if (!embeddedModalOnly || embeddedOpenedRef.current) return;
+  embeddedOpenedRef.current = true;
+  openNewAppointmentFromHeader();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [embeddedModalOnly]);
+useEffect(() => {
+  if (embeddedModalOnly && embeddedOpenedRef.current && !modalOpen) {
+    onClose?.();
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [modalOpen]);
   const [calendarMode, setCalendarMode] = useState<"week" | "day">("week");
   const [selectedDayDate, setSelectedDayDate] = useState<string>("");
   const [editingJobId, setEditingJobId] = useState<number | null>(null);
@@ -1380,8 +1403,9 @@ appendLog(
   const allDayReminderRows = Math.max(1, visibleDateReminders.length);
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-50 p-3 text-slate-900">
-      <div className="w-full space-y-4">
+    <div className={embeddedModalOnly ? "" : "h-screen overflow-hidden bg-slate-50 p-3 text-slate-900"}>
+      <div className={embeddedModalOnly ? "" : "w-full space-y-4"}>
+        {!embeddedModalOnly && (<>
         <div className="sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
   <div>
@@ -2188,6 +2212,7 @@ appendLog(
   </div>
 )}
 
+        </>)}
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
             <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
