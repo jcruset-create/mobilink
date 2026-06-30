@@ -4938,7 +4938,7 @@ return (
   </section>
 )}
     <div
-  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 shadow-sm"
+  className={`rounded-2xl border border-slate-200 bg-white px-4 py-2 shadow-sm ${view === "operativo2" ? "hidden" : ""}`}
 >
   <div className="mb-2 flex items-center justify-between gap-3">
     <div className="text-xs font-semibold text-slate-600">
