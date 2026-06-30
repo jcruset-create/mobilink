@@ -8,7 +8,7 @@ export const ADMIN_TOKEN_STORAGE_KEY = "sea-admin-token";
 export function makeAdminHeaders(getToken: () => string) {
   return (extra?: HeadersInit): HeadersInit => ({
     ...(extra ?? {}),
-    "x-admin-token": getToken(),
+    "x-admin-token": encodeURIComponent(getToken()),
   });
 }
 

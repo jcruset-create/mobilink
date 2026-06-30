@@ -34,7 +34,8 @@ export function getAdminHeaders(extra?: HeadersInit): HeadersInit {
 
   return {
     ...(extra ?? {}),
-    "x-admin-token": token,
+    // Codificado: las contraseñas con acentos/símbolos no caben crudas en cabeceras HTTP
+    "x-admin-token": encodeURIComponent(token),
   };
 }
 

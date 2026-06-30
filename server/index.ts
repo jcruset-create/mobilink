@@ -1344,7 +1344,10 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 function getRoleFromRequest(req: express.Request): UserRole | null {
-  const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
+  const rawToken = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
+  // La cabecera puede venir codificada (contraseñas con acentos/símbolos no caben crudas en headers HTTP)
+  let token = rawToken;
+  try { token = decodeURIComponent(rawToken); } catch { token = rawToken; }
 
   if (process.env.ADMIN_PASSWORD && token === process.env.ADMIN_PASSWORD) {
     return "admin";
@@ -6167,7 +6170,9 @@ async function findDbUserByPassword(password: string | undefined): Promise<DbApp
 async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole | null> {
   const sync = getRoleFromRequest(req);
   if (sync) return sync;
-  const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
+  const rawToken = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
+  let token = rawToken;
+  try { token = decodeURIComponent(rawToken); } catch { token = rawToken; }
   if (token) {
     try {
       const u = await findDbUserByPassword(token);
