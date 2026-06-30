@@ -6764,7 +6764,21 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                   <span className="text-[12px] font-bold">{t.taskLabel}</span>
                   <span className="shrink-0 rounded bg-yellow-500/20 px-1.5 py-0.5 text-[9px] font-bold text-yellow-300">MANTENIMIENTO · {t.taskType === "fuera_taller" ? "fuera" : "taller"}</span>
                 </div>
-                <div className="mt-0.5 text-[10px] text-yellow-300">{t.techName}</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-yellow-300">{t.techName}</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await fetchWithTimeout(`${API_BASE}/api/assigned-maintenance-tasks/${t.id}/finish`, { method: "PUT", headers: getAdminHeaders() });
+                        await reloadMaintenanceAvailabilityFromBackend();
+                      } catch { /* noop */ }
+                    }}
+                    className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white"
+                  >
+                    ✓ Finalizar
+                  </button>
+                </div>
               </div>
             ))}
           </div>
