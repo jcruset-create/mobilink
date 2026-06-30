@@ -6499,8 +6499,13 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   );
   for (const a of activeAssistances) if (a.assignedTechName) responsables.add(a.assignedTechName);
 
-  // Tareas de mantenimiento en curso
-  const maintActive = (maintenanceAvailability.activeMaintenanceTasks ?? []).filter((t) => t.techName && !isTestTech(t.techName));
+  // Tareas de mantenimiento en curso.
+  // Si el técnico ya está ocupado en un trabajo real (responsable/apoyo) o en carretera,
+  // se ignora su tarea de mantenimiento (no puede estar en dos sitios a la vez).
+  const busyTechNames = new Set<string>([...responsables, ...soportes]);
+  const maintActive = (maintenanceAvailability.activeMaintenanceTasks ?? []).filter(
+    (t) => t.techName && !isTestTech(t.techName) && !busyTechNames.has(t.techName)
+  );
   const maintTechNames = new Set(maintActive.map((t) => t.techName));
 
   // TRABAJANDO: técnicos de taller ocupados + operarios de asistencias + mantenimiento
