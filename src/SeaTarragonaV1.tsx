@@ -6515,7 +6515,10 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
       {/* Barra superior */}
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm font-bold">📊 SEA Tarragona · Operativo 2</span>
-        <button type="button" onClick={() => setView("operativo")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200 hover:bg-slate-700">← Volver</button>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => { setView("operarios"); void reloadMaintenanceAvailabilityFromBackend(); }} className="rounded bg-sky-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-sky-600">Técnicos</button>
+          <button type="button" onClick={() => setView("operativo")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200 hover:bg-slate-700">← Volver</button>
+        </div>
       </div>
       {/* Cabecera */}
       <div className="grid gap-2 md:grid-cols-3">
