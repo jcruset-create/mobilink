@@ -6,6 +6,7 @@ import React, {
 } from "react";
 import AgendaView from "./components/AgendaView";
 import QuickTemplateEditor from "./components/QuickTemplateEditor";
+import UsersScreen from "./components/UsersScreen";
 import EmptyState from "./components/EmptyState";
 import { APP_VERSION } from "./version";
 import { useAutoSync } from "./modules/useAutoSync";
@@ -292,9 +293,27 @@ const [userRole, setUserRole] = useState<UserRole | null>(() => {
   return null;
 });
 
+const [allowedViews, setAllowedViews] = useState<string[] | null>(() => {
+  try {
+    const raw = localStorage.getItem("sea-allowed-views");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : null;
+  } catch {
+    return null;
+  }
+});
+
 const isAdmin = canUseAdminTools(userRole);
 const isSupervisor = canUseSupervisorTools(userRole);
 const userCanUseScreens = canUseScreens(userRole);
+
+// Acceso por usuario: si el usuario tiene pantallas personalizadas, mandan esas;
+// si no, se usa el acceso por rol.
+function canView(v: AppView) {
+  if (allowedViews && allowedViews.length > 0) return allowedViews.includes(v);
+  return canAccessView(userRole, v);
+}
 const [selectedWorkshopId, setSelectedWorkshopId] = useState<WorkshopId>(() => {
   try {
     const saved = localStorage.getItem("sea-selected-workshop");
@@ -1293,11 +1312,24 @@ localStorage.setItem("sea-role", data.role);
 
 const role = isValidUserRole(data.role) ? data.role : null;
 
+const userAllowedViews = Array.isArray(data.allowedViews) && data.allowedViews.length > 0
+  ? data.allowedViews.map(String)
+  : null;
+if (userAllowedViews) {
+  localStorage.setItem("sea-allowed-views", JSON.stringify(userAllowedViews));
+} else {
+  localStorage.removeItem("sea-allowed-views");
+}
+setAllowedViews(userAllowedViews);
+
 setUserRole(role);
 setIsAuthenticated(true);
 setLoginPassword("");
 
-setView(getDefaultViewForRole(role));
+const firstView: AppView = userAllowedViews && !userAllowedViews.includes(getDefaultViewForRole(role))
+  ? (userAllowedViews[0] as AppView)
+  : getDefaultViewForRole(role);
+setView(firstView);
   } catch (error) {
     console.error("Error iniciando sesión:", error);
     setLoginError("No se pudo iniciar sesión");
@@ -3996,6 +4028,8 @@ if (userRole === "tv75") {
         localStorage.removeItem("sea-authenticated");
         localStorage.removeItem("sea-admin-token");
         localStorage.removeItem("sea-role");
+        localStorage.removeItem("sea-allowed-views");
+        setAllowedViews(null);
 
         setUserRole(null);
         setIsAuthenticated(false);
@@ -4005,7 +4039,7 @@ if (userRole === "tv75") {
   );
 }
 
-if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
+if (view === "pantalla" && canView("pantalla")) {
   return (
     <WorkshopWallScreen
   jobs={visibleJobs}
@@ -4018,7 +4052,7 @@ if (view === "pantalla" && canAccessView(userRole, "pantalla")) {
 }
 
 
-if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
+if (view === "tecnicos" && canView("tecnicos")) {
   return (
     <TecnicosView
       techs={visibleTechs}
@@ -4081,7 +4115,7 @@ if (view === "tecnicos" && canAccessView(userRole, "tecnicos")) {
   );
 }
 
-if (view === "operarios" && canAccessView(userRole, "operarios")) {
+if (view === "operarios" && canView("operarios")) {
   return (
     <OperariosTVView
       jobs={jobsForScreens}
@@ -4095,11 +4129,13 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
         void reloadMaintenanceAvailabilityFromBackend();
       }}
       onGoWorkshopScreen={() => setView("pantalla")}
-      canGoBack={canAccessView(userRole, "operativo")}
+      canGoBack={canView("operativo")}
       onLogout={() => {
         localStorage.removeItem("sea-authenticated");
         localStorage.removeItem("sea-admin-token");
         localStorage.removeItem("sea-role");
+        localStorage.removeItem("sea-allowed-views");
+        setAllowedViews(null);
 
         setUserRole(null);
         setIsAuthenticated(false);
@@ -4113,7 +4149,7 @@ if (view === "operarios" && canAccessView(userRole, "operarios")) {
     />
   );
 }
-if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
+if (view === "workshop_tv_75" && canView("workshop_tv_75")) {
   return (
     <WorkshopTV75View
       jobs={jobsForScreens}
@@ -4122,7 +4158,7 @@ if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
       onBack={
-        canAccessView(userRole, "operativo")
+        canView("operativo")
           ? () => setView("operativo")
           : undefined
       }
@@ -4130,6 +4166,8 @@ if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
         localStorage.removeItem("sea-authenticated");
         localStorage.removeItem("sea-admin-token");
         localStorage.removeItem("sea-role");
+        localStorage.removeItem("sea-allowed-views");
+        setAllowedViews(null);
 
         setUserRole(null);
         setIsAuthenticated(false);
@@ -4138,7 +4176,10 @@ if (view === "workshop_tv_75" && canAccessView(userRole, "workshop_tv_75")) {
     />
   );
 }
-if (view === "entradas2" && canAccessView(userRole, "entradas2")) {
+if (view === "usuarios" && canView("usuarios")) {
+  return <UsersScreen onBack={() => setView("operativo")} />;
+}
+if (view === "entradas2" && canView("entradas2")) {
   const areaTemplates = quickTemplates
     .filter((t) => t.area === quickSelectedArea)
     .slice()
@@ -4265,7 +4306,7 @@ if (view === "entradas2" && canAccessView(userRole, "entradas2")) {
     </div>
   );
 }
-if (view === "agenda" && canAccessView(userRole, "agenda")) {
+if (view === "agenda" && canView("agenda")) {
   return (
     <AgendaView
   scheduledJobs={agenda.scheduledJobs}
@@ -4288,7 +4329,7 @@ if (view === "agenda" && canAccessView(userRole, "agenda")) {
   );
 }
 
-if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
+if (view === "asistencias" && canView("asistencias")) {
   return (
     <RoadsideAssistanceView
       assistances={roadside.visibleRoadsideAssistances}
@@ -4327,7 +4368,7 @@ if (view === "asistencias" && canAccessView(userRole, "asistencias")) {
 
 if (
   view === "asistencias_config" &&
-  canAccessView(userRole, "asistencias_config")
+  canView("asistencias_config")
 ) {
   return (
     <RoadsideAssistanceAdminView
@@ -4349,7 +4390,7 @@ if (
   );
 }
 
-if (view === "whatsapp_inbox" && canAccessView(userRole, "whatsapp_inbox")) {
+if (view === "whatsapp_inbox" && canView("whatsapp_inbox")) {
   return (
     <WhatsAppInboxView
       onBack={() => setView("operativo")}
@@ -4390,7 +4431,7 @@ if (view === "whatsapp_inbox" && canAccessView(userRole, "whatsapp_inbox")) {
   );
 }
 
-if (view === "ranking" && canAccessView(userRole, "ranking")) {
+if (view === "ranking" && canView("ranking")) {
   return (
     <WorkRankingView
       jobs={visibleJobs}
@@ -4402,7 +4443,7 @@ if (view === "ranking" && canAccessView(userRole, "ranking")) {
   );
 }
 
-if (view === "historico" && canAccessView(userRole, "historico")) {
+if (view === "historico" && canView("historico")) {
   return (
     <FinishedAndCancelledJobsView
       jobs={visibleJobs}
@@ -4505,7 +4546,7 @@ return (
   </select>
 </div>
        <div className="flex flex-wrap gap-2">
-  {canAccessView(userRole, "operativo") && (
+  {canView("operativo") && (
     <button
       type="button"
       onClick={() => {
@@ -4522,7 +4563,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "operativo2") && (
+  {canView("operativo2") && (
     <button
       type="button"
       onClick={() => {
@@ -4539,7 +4580,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "agenda") && (
+  {canView("agenda") && (
     <button
   type="button"
   onClick={() => setView("agenda")}
@@ -4555,7 +4596,7 @@ return (
 
   )}
 
-  {canAccessView(userRole, "asistencias") && (
+  {canView("asistencias") && (
     <button
       type="button"
       onClick={() => {
@@ -4574,7 +4615,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "asistencias_config") && (
+  {canView("asistencias_config") && (
     <button
       type="button"
       onClick={() => {
@@ -4592,7 +4633,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "whatsapp_inbox") && (
+  {canView("whatsapp_inbox") && (
     <button
       type="button"
       onClick={() => setView("whatsapp_inbox")}
@@ -4606,7 +4647,7 @@ return (
     </button>
   )}
 
-{canAccessView(userRole, "entradas") && (
+{canView("entradas") && (
   <button
     type="button"
     onClick={() => setView("entradas")}
@@ -4620,7 +4661,7 @@ return (
   </button>
 )}
 
-{canAccessView(userRole, "entradas2") && (
+{canView("entradas2") && (
   <button
     type="button"
     onClick={() => setView("entradas2")}
@@ -4653,7 +4694,7 @@ return (
 >
   Cobros
 </button>
-{canAccessView(userRole, "ranking") && (
+{canView("ranking") && (
   <button
     type="button"
     onClick={() => setView("ranking")}
@@ -4666,7 +4707,7 @@ return (
     Ranking trabajos
   </button>
 )}
-  {canAccessView(userRole, "historico") && (
+  {canView("historico") && (
   <button
     type="button"
     onClick={() => setView("historico")}
@@ -4680,7 +4721,7 @@ return (
   </button>
 )}
 
-  {userCanUseScreens && canAccessView(userRole, "operarios") && (
+  {userCanUseScreens && canView("operarios") && (
     <button
       type="button"
       onClick={() => {
@@ -4712,7 +4753,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "workshop_tv_75") && (
+  {canView("workshop_tv_75") && (
     <button
       type="button"
       onClick={() => setView("workshop_tv_75")}
@@ -4726,7 +4767,7 @@ return (
     </button>
   )}
 
-  {userCanUseScreens && canAccessView(userRole, "pantalla") && (
+  {userCanUseScreens && canView("pantalla") && (
     <button
       type="button"
       onClick={() => setView("pantalla")}
@@ -4740,7 +4781,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "ajustes") && (
+  {canView("ajustes") && (
     <button
       type="button"
       onClick={() => setView("ajustes")}
@@ -4754,7 +4795,7 @@ return (
     </button>
   )}
 
-  {canAccessView(userRole, "tecnicos") && (
+  {canView("tecnicos") && (
     <button
       type="button"
       onClick={() => setView("tecnicos")}
@@ -4768,12 +4809,28 @@ return (
     </button>
   )}
 
+  {canView("usuarios") && (
+    <button
+      type="button"
+      onClick={() => setView("usuarios")}
+      className={`rounded-2xl px-4 py-2 text-sm font-medium ${
+        view === "usuarios"
+          ? "bg-slate-900 text-white"
+          : "border border-slate-200 bg-white text-slate-700"
+      }`}
+    >
+      Usuarios
+    </button>
+  )}
+
   <button
     type="button"
     onClick={() => {
       localStorage.removeItem("sea-authenticated");
       localStorage.removeItem("sea-admin-token");
       localStorage.removeItem("sea-role");
+      localStorage.removeItem("sea-allowed-views");
+      setAllowedViews(null);
 
       setUserRole(null);
       setIsAuthenticated(false);

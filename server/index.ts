@@ -1445,21 +1445,22 @@ function requireRole(allowedRoles: UserRole[]) {
     res: express.Response,
     next: express.NextFunction
   ) => {
-    const role = getRoleFromRequest(req);
+    void (async () => {
+      const role = await getRoleFromRequestAsync(req);
 
-    if (!role) {
-      return res.status(401).json({
-        error: "No autorizado",
-      });
-    }
+      if (!role) {
+        return res.status(401).json({ error: "No autorizado" });
+      }
 
-    if (!allowedRoles.includes(role)) {
-      return res.status(403).json({
-        error: "Permisos insuficientes",
-      });
-    }
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ error: "Permisos insuficientes" });
+      }
 
-    next();
+      next();
+    })().catch((error) => {
+      console.error("requireRole error:", error);
+      res.status(500).json({ error: "Error de autorización" });
+    });
   };
 }
 
@@ -2818,7 +2819,7 @@ app.get(
   requireSupervisorRole,
   async (req, res) => {
     try {
-      const role = getRoleFromRequest(req);
+      const role = await getRoleFromRequestAsync(req);
       const includeCode = role === "admin";
 
       const result = await db.query(`
@@ -6115,6 +6116,69 @@ async function ensureMaintenanceTables() {
   `);
 }
 
+// ── Usuarios de aplicación (gestión de accesos por pantalla) ──────────────────
+type DbAppUser = {
+  id: string;
+  name: string;
+  password: string;
+  role: UserRole;
+  allowedViews: string[];
+};
+
+async function ensureAppUsersTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS app_users (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    )
+  `);
+}
+
+function normalizeDbAppUser(data: any): DbAppUser | null {
+  if (!data || typeof data !== "object") return null;
+  const id = String(data.id || "").trim();
+  const name = String(data.name || "").trim();
+  if (!id || !name) return null;
+  const role: UserRole = ["admin", "supervisor", "pantallas", "tv75"].includes(data.role)
+    ? data.role
+    : "supervisor";
+  return {
+    id,
+    name,
+    password: String(data.password || ""),
+    role,
+    allowedViews: Array.isArray(data.allowedViews) ? data.allowedViews.map(String) : [],
+  };
+}
+
+async function listDbAppUsers(): Promise<DbAppUser[]> {
+  await ensureAppUsersTable();
+  const r = await db.query(`SELECT data FROM app_users ORDER BY data->>'name'`);
+  return r.rows.map((row: any) => normalizeDbAppUser(row.data)).filter(Boolean) as DbAppUser[];
+}
+
+async function findDbUserByPassword(password: string | undefined): Promise<DbAppUser | null> {
+  if (!password) return null;
+  const users = await listDbAppUsers();
+  return users.find((u) => u.password && u.password === password) ?? null;
+}
+
+async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole | null> {
+  const sync = getRoleFromRequest(req);
+  if (sync) return sync;
+  const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
+  if (token) {
+    try {
+      const u = await findDbUserByPassword(token);
+      if (u) return u.role;
+    } catch (e) {
+      console.error("getRoleFromRequestAsync error:", e);
+    }
+  }
+  return null;
+}
+
 function normalizeMaintenanceTask(item: any): MaintenanceTask | null {
   if (!item || typeof item !== "object") return null;
 
@@ -7470,10 +7534,26 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
    AUTH
 ========================================================= */
 
-app.post("/api/login", (req, res) => {
+app.post("/api/login", async (req, res) => {
   try {
     const { password } = req.body ?? {};
 
+    // 1) Usuarios creados en BD (con pantallas personalizadas)
+    try {
+      const dbUser = await findDbUserByPassword(password);
+      if (dbUser) {
+        return res.json({
+          ok: true,
+          role: dbUser.role,
+          name: dbUser.name,
+          allowedViews: dbUser.allowedViews,
+        });
+      }
+    } catch (e) {
+      console.error("login db users error:", e);
+    }
+
+    // 2) Usuarios fijos por variable de entorno
     const user = findUserByPassword(password);
 
     if (!user) {
@@ -7489,6 +7569,79 @@ app.post("/api/login", (req, res) => {
   } catch (error) {
     console.error("POST /api/login error:", error);
     res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+/* =========================================================
+   USUARIOS (gestión de accesos)
+========================================================= */
+
+app.get("/api/users", requireAdminRole, async (_req, res) => {
+  try {
+    const users = await listDbAppUsers();
+    res.json(users.map(({ password, ...rest }) => ({ ...rest, hasPassword: Boolean(password) })));
+  } catch (error) {
+    console.error("GET /api/users error:", error);
+    res.status(500).json({ error: "Error cargando usuarios" });
+  }
+});
+
+app.post("/api/users", requireAdminRole, async (req, res) => {
+  try {
+    const { name, password, role, allowedViews } = req.body ?? {};
+    if (!name || !password) {
+      return res.status(400).json({ error: "Nombre y contraseña obligatorios" });
+    }
+    await ensureAppUsersTable();
+    const id = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const user = normalizeDbAppUser({ id, name, password, role, allowedViews });
+    await db.query(
+      `INSERT INTO app_users (id, data, "updatedAtMs") VALUES ($1, $2, $3)`,
+      [id, JSON.stringify(user), Date.now()]
+    );
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("POST /api/users error:", error);
+    res.status(500).json({ error: "Error creando usuario" });
+  }
+});
+
+app.put("/api/users/:id", requireAdminRole, async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    await ensureAppUsersTable();
+    const existing = await db.query(`SELECT data FROM app_users WHERE id = $1`, [id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+    const cur = normalizeDbAppUser(existing.rows[0].data)!;
+    const { name, password, role, allowedViews } = req.body ?? {};
+    const next = normalizeDbAppUser({
+      id,
+      name: name ?? cur.name,
+      password: password ? password : cur.password,
+      role: role ?? cur.role,
+      allowedViews: Array.isArray(allowedViews) ? allowedViews : cur.allowedViews,
+    });
+    await db.query(
+      `UPDATE app_users SET data = $2, "updatedAtMs" = $3 WHERE id = $1`,
+      [id, JSON.stringify(next), Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("PUT /api/users/:id error:", error);
+    res.status(500).json({ error: "Error actualizando usuario" });
+  }
+});
+
+app.delete("/api/users/:id", requireAdminRole, async (req, res) => {
+  try {
+    await ensureAppUsersTable();
+    await db.query(`DELETE FROM app_users WHERE id = $1`, [String(req.params.id || "").trim()]);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/users/:id error:", error);
+    res.status(500).json({ error: "Error eliminando usuario" });
   }
 });
 
