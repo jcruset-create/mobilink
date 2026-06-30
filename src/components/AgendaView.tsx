@@ -300,6 +300,13 @@ function isPastDate(date: string) {
   return date < getTodayKey();
 }
 
+// Índice de día con lunes=0 … domingo=6, a partir de "YYYY-MM-DD".
+function weekdayIndexMonFirst(dateStr: string) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const g = new Date(y, (m || 1) - 1, d || 1).getDay(); // 0=Dom … 6=Sáb
+  return (g + 6) % 7;
+}
+
 function isPastDateTime(date: string, time: string) {
   const today = getTodayKey();
 
@@ -2234,41 +2241,26 @@ appendLog(
                       Día
                     </label>
 
-                    <select
+                    <input
+                      type="date"
                       value={selectedSlot.date}
+                      min={getTodayKey()}
                       onChange={(e) => {
                         const nextDate = e.target.value;
-                        const day = days.find((d) => d.date === nextDate);
-
-                        if (!day) return;
-
-                        const validSlots = getValidSlotsForDate(
-                          nextDate,
-                          day.index
-                        );
-
-                        if (validSlots.length === 0) {
-                          alert("Este día no tiene horas disponibles.");
+                        if (!nextDate) return;
+                        if (isPastDate(nextDate)) {
+                          alert("No se puede elegir una fecha pasada.");
                           return;
                         }
-
+                        const idx = weekdayIndexMonFirst(nextDate);
+                        const validSlots = getValidSlotsForDate(nextDate, idx);
                         setSelectedSlot({
                           date: nextDate,
-                          startTime: validSlots[0],
+                          startTime: validSlots[0] ?? "08:00",
                         });
                       }}
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    >
-                      {days.map((day) => (
-                        <option
-                          key={day.date}
-                          value={day.date}
-                          disabled={isPastDate(day.date)}
-                        >
-                          {day.label}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </div>
 
                   <div>
@@ -2286,17 +2278,12 @@ appendLog(
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     >
                       {(() => {
-                        const selectedDay = days.find(
-                          (d) => d.date === selectedSlot.date
+                        const slots = getValidSlotsForDate(
+                          selectedSlot.date,
+                          weekdayIndexMonFirst(selectedSlot.date)
                         );
-                        const slots = selectedDay
-                          ? getValidSlotsForDate(
-                              selectedSlot.date,
-                              selectedDay.index
-                            )
-                          : [];
-
-                        return slots.map((slot) => (
+                        const list = slots.length > 0 ? slots : [selectedSlot.startTime];
+                        return list.map((slot) => (
                           <option key={slot} value={slot}>
                             {slot}
                           </option>
