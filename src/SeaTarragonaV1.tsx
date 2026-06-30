@@ -6493,9 +6493,16 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   for (const j of runningJobs) (j.assignedNames || []).forEach((n, i) => (i === 0 ? responsables : soportes).add(n));
   const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : "text-slate-200");
   const agendados = agenda.dueScheduledJobs ?? [];
+  const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
+  const bloqueadosCount = visibleJobs.filter((j) => j.status === "bloqueado").length;
 
   return (
-    <div className="rounded-2xl bg-slate-900 p-3 text-slate-100">
+    <div className="fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100">
+      {/* Barra superior */}
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-bold">📊 SEA Tarragona · Operativo 2</span>
+        <button type="button" onClick={() => setView("operativo")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200 hover:bg-slate-700">← Volver</button>
+      </div>
       {/* Cabecera */}
       <div className="grid gap-2 md:grid-cols-3">
         <div className="rounded-lg bg-slate-800 p-2">
@@ -6703,6 +6710,27 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
           </div>
         </div>
       </div>
+
+      {/* Pie: KPIs / Alertas / Total técnicos */}
+      <div className="mt-2 grid gap-2 md:grid-cols-3">
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="text-[10px] font-bold text-slate-400">KPIs</div>
+          <div className="mt-0.5 text-[11px] text-slate-200">
+            Libres {disponibles.length} · Resp. {responsables.size} · Refz {refuerzos.length} · <span className="text-rose-400">Urg {runningJobs.filter((j) => j.urgent).length}</span>
+          </div>
+        </div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="text-[10px] font-bold text-slate-400">Alertas</div>
+          <div className="mt-0.5 text-[11px]">
+            <span className="text-rose-400">{bloqueadosCount} bloq</span> · <span className="text-orange-300">{runningJobs.filter((j) => j.urgent).length} urg</span> · <span className="text-emerald-300">{runningJobs.length} act</span>
+          </div>
+        </div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="text-[10px] font-bold text-slate-400">Total técnicos</div>
+          <div className="mt-0.5 text-[11px] text-slate-200">{trabajando.length + disponibles.length} · trabajando {trabajando.length} · libres {disponibles.length}</div>
+        </div>
+      </div>
+
       {op2CitaOpen && (
         <AgendaView
           embeddedModalOnly
