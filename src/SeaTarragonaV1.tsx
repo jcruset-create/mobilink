@@ -6499,13 +6499,18 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   );
   for (const a of activeAssistances) if (a.assignedTechName) responsables.add(a.assignedTechName);
 
-  // TRABAJANDO: técnicos de taller ocupados + operarios de asistencias en curso
+  // Tareas de mantenimiento en curso
+  const maintActive = (maintenanceAvailability.activeMaintenanceTasks ?? []).filter((t) => t.techName && !isTestTech(t.techName));
+  const maintTechNames = new Set(maintActive.map((t) => t.techName));
+
+  // TRABAJANDO: técnicos de taller ocupados + operarios de asistencias + mantenimiento
   const trabajandoNames = Array.from(new Set([
     ...workingTechsSummary.map((t) => t.name),
     ...activeAssistances.map((a) => a.assignedTechName as string),
+    ...maintActive.map((t) => t.techName),
   ])).filter((n) => !isTestTech(n));
   const trabajando = trabajandoNames.map((name) => ({ name }));
-  const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : "text-slate-200");
+  const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : maintTechNames.has(n) ? "text-yellow-300" : "text-slate-200");
   const agendados = agenda.dueScheduledJobs ?? [];
   const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
   const bloqueadosCount = visibleJobs.filter((j) => j.status === "bloqueado").length;
@@ -6540,7 +6545,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         <div className="rounded-lg bg-slate-800 p-2">
           <div className="mb-1 text-[10px] font-bold text-sky-300">RESUMEN</div>
           <div className="flex flex-wrap gap-1 text-[11px]">
-            <span className="rounded bg-slate-700 px-1.5 py-0.5">Activos {runningJobs.length + activeAssistances.length}</span>
+            <span className="rounded bg-slate-700 px-1.5 py-0.5">Activos {runningJobs.length + activeAssistances.length + maintActive.length}</span>
             <span className="rounded bg-slate-700 px-1.5 py-0.5">Cola {waitingJobs.length}</span>
             <span className="rounded bg-slate-700 px-1.5 py-0.5">Stand by {pausedJobs.length}</span>
             <span className="rounded bg-slate-700 px-1.5 py-0.5 text-rose-400">Urgentes {runningJobs.filter((j) => j.urgent).length}</span>
@@ -6690,9 +6695,9 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
       <div className="mt-2 grid gap-2 lg:grid-cols-[1.4fr_1fr]">
         {/* Trabajos activos con asignación */}
         <div className="rounded-lg bg-slate-800 p-2">
-          <div className="mb-1.5 text-[10px] font-bold text-slate-400">TRABAJOS ACTIVOS ({runningJobs.length + activeAssistances.length})</div>
+          <div className="mb-1.5 text-[10px] font-bold text-slate-400">TRABAJOS ACTIVOS ({runningJobs.length + activeAssistances.length + maintActive.length})</div>
           <div className="space-y-1.5">
-            {runningJobs.length === 0 && activeAssistances.length === 0 && <div className="text-[11px] text-slate-500">Sin trabajos activos</div>}
+            {runningJobs.length === 0 && activeAssistances.length === 0 && maintActive.length === 0 && <div className="text-[11px] text-slate-500">Sin trabajos activos</div>}
             {true && (
               <>
               {runningJobs.map((job) => {
@@ -6744,6 +6749,15 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                   <span className="shrink-0 rounded bg-orange-500/20 px-1.5 py-0.5 text-[9px] font-bold text-orange-300">CARRETERA · {ROADSIDE_LABEL[a.status] ?? a.status}</span>
                 </div>
                 <div className="mt-0.5 text-[10px] text-orange-300">{a.assignedTechName}</div>
+              </div>
+            ))}
+            {maintActive.map((t) => (
+              <div key={`maint-${t.id}`} className="rounded-lg bg-slate-900 p-2" style={{ borderLeft: "3px solid #f0c040" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-bold">{t.taskLabel}</span>
+                  <span className="shrink-0 rounded bg-yellow-500/20 px-1.5 py-0.5 text-[9px] font-bold text-yellow-300">MANTENIMIENTO · {t.taskType === "fuera_taller" ? "fuera" : "taller"}</span>
+                </div>
+                <div className="mt-0.5 text-[10px] text-yellow-300">{t.techName}</div>
               </div>
             ))}
           </div>
@@ -6825,7 +6839,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         <div className="rounded-lg bg-slate-800 p-2">
           <div className="text-[10px] font-bold text-slate-400">Alertas</div>
           <div className="mt-0.5 text-[11px]">
-            <span className="text-rose-400">{bloqueadosCount} bloq</span> · <span className="text-orange-300">{runningJobs.filter((j) => j.urgent).length} urg</span> · <span className="text-emerald-300">{runningJobs.length + activeAssistances.length} act</span>
+            <span className="text-rose-400">{bloqueadosCount} bloq</span> · <span className="text-orange-300">{runningJobs.filter((j) => j.urgent).length} urg</span> · <span className="text-emerald-300">{runningJobs.length + activeAssistances.length + maintActive.length} act</span>
           </div>
         </div>
         <div className="rounded-lg bg-slate-800 p-2">
