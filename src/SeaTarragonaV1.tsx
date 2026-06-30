@@ -6492,8 +6492,8 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   for (const j of runningJobs) (j.assignedNames || []).forEach((n, i) => (i === 0 ? responsables : soportes).add(n));
 
   // Asistencias de carretera en curso (el operario asignado está trabajando)
-  const ROADSIDE_ACTIVE = ["asignada", "en_camino", "en_punto", "inicio_reparacion", "en_camino_base", "redirigida"];
-  const ROADSIDE_LABEL: Record<string, string> = { asignada: "Asignada", en_camino: "En camino", en_punto: "En punto", inicio_reparacion: "Reparando", en_camino_base: "Volviendo", redirigida: "Redirigida" };
+  const ROADSIDE_ACTIVE = ["asignada", "en_camino", "en_punto", "inicio_reparacion", "en_camino_base"];
+  const ROADSIDE_LABEL: Record<string, string> = { asignada: "Asignada", en_camino: "En camino", en_punto: "En punto", inicio_reparacion: "Reparando", en_camino_base: "Volviendo" };
   const activeAssistances = (roadside.visibleRoadsideAssistances ?? []).filter(
     (a) => ROADSIDE_ACTIVE.includes(a.status) && a.assignedTechName
   );
