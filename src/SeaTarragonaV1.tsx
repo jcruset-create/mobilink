@@ -6622,6 +6622,53 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         )}
       </div>
 
+      {/* Pendientes de validar (autorizar/asignar) */}
+      {validationJobs.length > 0 && (
+        <div className="mt-2 rounded-lg border border-rose-500/50 bg-rose-950/40 p-2">
+          <div className="mb-1.5 text-[10px] font-bold text-rose-300">PENDIENTES DE VALIDAR ({validationJobs.length})</div>
+          <div className="space-y-1.5">
+            {validationJobs.map((job) => {
+              const assignedNames = job.assignedNames ?? [];
+              return (
+                <div key={job.id} className="flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-900 p-2">
+                  <span className="text-[12px] font-bold">{job.plate}{job.urgent ? " ⚠️" : ""}</span>
+                  <span className="text-[11px] text-slate-400">{getOperationLabel(job)}</span>
+                  <select
+                    value=""
+                    onChange={(e) => { if (e.target.value) updateValidationResponsible(job.id, e.target.value); }}
+                    className="rounded border border-slate-600 bg-slate-800 px-1.5 py-1 text-[11px]"
+                  >
+                    <option value="">Resp: {assignedNames[0] ?? "—"}</option>
+                    {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable") || t.name === assignedNames[0]).filter((t) => t.name === assignedNames[0] || !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
+                      <option key={t.name} value={t.name}>{t.name}</option>
+                    ))}
+                  </select>
+                  {assignedNames.slice(1).map((n) => (
+                    <span key={n} className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300">
+                      {n}<button type="button" onClick={() => removeValidationSupportByName(job.id, n)} className="font-bold">✕</button>
+                    </span>
+                  ))}
+                  <select
+                    value=""
+                    onChange={(e) => { if (e.target.value) addValidationExtraSupport(job.id, e.target.value); }}
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[11px] text-amber-300"
+                  >
+                    <option value="">+ Apoyo…</option>
+                    {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => !assignedNames.includes(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
+                      <option key={t.name} value={t.name}>{t.name}</option>
+                    ))}
+                  </select>
+                  <button type="button" disabled={assignedNames.length === 0} onClick={() => { void authorizeProposedJob(job.id); }} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-40">✓ Autorizar</button>
+                  <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-300">Cola</button>
+                  <button type="button" onClick={() => { void rejectProposedJob(job.id); }} className="rounded border border-slate-500/40 bg-slate-700 px-2 py-1 text-[11px] text-slate-200">Rechazar</button>
+                  <button type="button" onClick={() => { void deleteValidationJob(job.id); }} className="rounded bg-rose-600 px-2 py-1 text-[11px] font-bold text-white">Eliminar</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Cuerpo */}
       <div className="mt-2 grid gap-2 lg:grid-cols-[1.4fr_1fr]">
         {/* Trabajos activos con asignación */}
@@ -6682,11 +6729,17 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
             </div>
             <div className="space-y-1">
               {agendados.map((s) => (
-                <div key={s.id} className="rounded bg-slate-900 px-2 py-1 text-[11px]">
-                  <span className="text-amber-300">{s.startTime}</span> · {s.plate || s.templateLabel || s.area}
+                <div key={s.id} className="flex items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1 text-[11px]">
+                  <span><span className="text-amber-300">{s.startTime}</span> · {s.plate || s.templateLabel || s.area}{s.customerName ? <span className="text-slate-400"> · {s.customerName}</span> : null}</span>
+                  <span className="flex shrink-0 gap-1">
+                    <button type="button" onClick={() => agenda.confirmScheduledArrival(s)} className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">Llegó</button>
+                    <button type="button" onClick={() => agenda.cancelScheduledJob(s.id)} className="rounded border border-rose-400/40 bg-rose-400/10 px-2 py-0.5 text-[10px] font-bold text-rose-300">Cancelar</button>
+                  </span>
                 </div>
               ))}
-              <div className="rounded border border-dashed border-slate-600 px-2 py-1.5 text-center text-[10px] text-slate-500">📅 Las citas nuevas de la agenda aparecen aquí</div>
+              {agendados.length === 0 && (
+                <div className="rounded border border-dashed border-slate-600 px-2 py-1.5 text-center text-[10px] text-slate-500">📅 Las citas nuevas de la agenda aparecen aquí</div>
+              )}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">

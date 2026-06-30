@@ -564,6 +564,7 @@ useEffect(() => {
 // Modo "solo modal" (p.ej. abierto desde Operativo 2): abre la nueva cita al montar
 // y avisa con onClose cuando el modal se cierra (cancelar o guardar).
 const embeddedOpenedRef = useRef(false);
+const embeddedWasOpenRef = useRef(false);
 useEffect(() => {
   if (!embeddedModalOnly || embeddedOpenedRef.current) return;
   embeddedOpenedRef.current = true;
@@ -571,9 +572,9 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [embeddedModalOnly]);
 useEffect(() => {
-  if (embeddedModalOnly && embeddedOpenedRef.current && !modalOpen) {
-    onClose?.();
-  }
+  if (!embeddedModalOnly) return;
+  if (modalOpen) { embeddedWasOpenRef.current = true; return; }
+  if (embeddedWasOpenRef.current) onClose?.();
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [modalOpen]);
   const [calendarMode, setCalendarMode] = useState<"week" | "day">("week");
