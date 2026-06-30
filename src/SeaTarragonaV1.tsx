@@ -492,6 +492,15 @@ const [tick, setTick] = useState(0);
 const [view, setView] = useState<AppView>(() => {
   if (initialView) return initialView;
 
+  // Usuario con accesos personalizados → hub con menú (Operativo)
+  try {
+    const rawViews = localStorage.getItem("sea-allowed-views");
+    if (rawViews) {
+      const parsed = JSON.parse(rawViews);
+      if (Array.isArray(parsed) && parsed.length > 0) return "operativo";
+    }
+  } catch { /* noop */ }
+
   const storedRole = localStorage.getItem("sea-role");
 
   if (isValidUserRole(storedRole)) {
@@ -1329,9 +1338,9 @@ setIsAuthenticated(true);
 setLoginPassword("");
 setLoginUser("");
 
-const firstView: AppView = userAllowedViews && !userAllowedViews.includes(getDefaultViewForRole(role))
-  ? (userAllowedViews[0] as AppView)
-  : getDefaultViewForRole(role);
+// Los usuarios con accesos personalizados aterrizan en el hub (Operativo),
+// donde el menú de pestañas muestra solo sus pantallas permitidas.
+const firstView: AppView = userAllowedViews ? "operativo" : getDefaultViewForRole(role);
 setView(firstView);
   } catch (error) {
     console.error("Error iniciando sesión:", error);
@@ -4861,7 +4870,7 @@ return (
 </div>
       </div>
 
-      {view === "operativo" && (
+      {view === "operativo" && canView("operativo") &&(
   <section className="rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-md">
     <div className="grid gap-2 md:grid-cols-2">
       <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2">
@@ -6449,7 +6458,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{view === "operativo" && agenda.dueScheduledJobs.length > 0 && (
+{view === "operativo" && canView("operativo") &&agenda.dueScheduledJobs.length > 0 && (
   <div className="rounded-2xl border border-amber-300 bg-amber-50 p-2 shadow-sm">
     <div className="mb-2 flex items-center justify-between gap-2">
       <div>
@@ -6630,7 +6639,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </div>
 )}
 
-{view === "operativo" && validationJobs.length > 0 && (
+{view === "operativo" && canView("operativo") &&validationJobs.length > 0 && (
   <section className="rounded-2xl border border-red-700 bg-red-600 px-4 py-3 shadow-sm">
     <div className="mb-2 flex items-center gap-2">
       <span className="text-xs font-semibold text-white uppercase tracking-wide">Pendientes de validar</span>
@@ -7113,7 +7122,13 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 })()}
 {/* ── fin Operativo 2 ── */}
 
-<div className={`grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr] ${view === "operativo2" ? "hidden" : ""}`}>
+{view === "operativo" && !canView("operativo") && (
+  <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
+    Selecciona una pantalla en el menú superior.
+  </div>
+)}
+
+<div className={`grid gap-6 xl:grid-cols-[1.1fr_1.4fr_1fr] ${(view === "operativo2" || !canView("operativo")) ? "hidden" : ""}`}>
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Técnicos</h2>
@@ -7899,7 +7914,7 @@ console.log("DEBUG tiempos trabajo activo", {
         </div>
       </div>
 
-{view === "operativo" && (
+{view === "operativo" && canView("operativo") &&(
   <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
     <div className="mb-3 flex items-center justify-between gap-3">
       <div className="text-sm font-medium text-violet-700">
@@ -7928,7 +7943,7 @@ console.log("DEBUG tiempos trabajo activo", {
   </div>
 )}
 
-{view === "operativo" && (
+{view === "operativo" && canView("operativo") &&(
 <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
   <div className="mb-3 text-sm font-medium text-slate-700">
     Alertas IA del taller
