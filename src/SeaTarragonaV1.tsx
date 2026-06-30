@@ -279,6 +279,7 @@ useEffect(() => {
   return localStorage.getItem("sea-authenticated") === "true";
 });
 
+const [loginUser, setLoginUser] = useState("");
 const [loginPassword, setLoginPassword] = useState("");
 const [loginError, setLoginError] = useState("");
 const [loginLoading, setLoginLoading] = useState(false);
@@ -1295,6 +1296,7 @@ async function handleLogin() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        name: loginUser.trim() || undefined,
         password: loginPassword,
       }),
     });
@@ -1325,6 +1327,7 @@ setAllowedViews(userAllowedViews);
 setUserRole(role);
 setIsAuthenticated(true);
 setLoginPassword("");
+setLoginUser("");
 
 const firstView: AppView = userAllowedViews && !userAllowedViews.includes(getDefaultViewForRole(role))
   ? (userAllowedViews[0] as AppView)
@@ -4461,8 +4464,22 @@ if (!isAuthenticated) {
         </div>
 
         <p className="mb-5 text-sm text-slate-500">
-          Introduce la contraseña para acceder al panel.
+          Introduce tu usuario y contraseña para acceder al panel.
         </p>
+
+        <input
+          type="text"
+          value={loginUser}
+          onChange={(e) => setLoginUser(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              handleLogin();
+            }
+          }}
+          placeholder="Usuario"
+          autoComplete="username"
+          className="mb-3 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+        />
 
         <input
           type="password"
@@ -4474,6 +4491,7 @@ if (!isAuthenticated) {
             }
           }}
           placeholder="Contraseña"
+          autoComplete="current-password"
           className="mb-3 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-slate-300"
         />
 

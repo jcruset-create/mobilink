@@ -7536,11 +7536,20 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
 
 app.post("/api/login", async (req, res) => {
   try {
-    const { password } = req.body ?? {};
+    const { password, name } = req.body ?? {};
 
     // 1) Usuarios creados en BD (con pantallas personalizadas)
     try {
-      const dbUser = await findDbUserByPassword(password);
+      let dbUser: DbAppUser | null = null;
+      const wantName = String(name || "").trim();
+      if (wantName) {
+        const users = await listDbAppUsers();
+        dbUser = users.find(
+          (u) => u.name.toLowerCase() === wantName.toLowerCase() && u.password && u.password === password
+        ) ?? null;
+      } else {
+        dbUser = await findDbUserByPassword(password);
+      }
       if (dbUser) {
         return res.json({
           ok: true,
