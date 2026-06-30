@@ -6498,6 +6498,8 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     (a) => ROADSIDE_ACTIVE.includes(a.status) && a.assignedTechName
   );
   for (const a of activeAssistances) if (a.assignedTechName) responsables.add(a.assignedTechName);
+  // Técnicos ocupados en una asistencia de carretera: no elegibles para nada.
+  const roadsideBusyTechNames = new Set(activeAssistances.map((a) => a.assignedTechName as string).filter(Boolean));
 
   // Tareas de mantenimiento en curso.
   // Si el técnico ya está ocupado en un trabajo real (responsable/apoyo) o en carretera,
@@ -6635,7 +6637,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               className="min-w-[140px] rounded border border-slate-600 bg-slate-900 px-2 py-1.5 text-[12px]"
             >
               <option value="">Técnico…</option>
-              {maintenanceTechCandidates.filter((t) => !isTestTech(t.name)).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+              {maintenanceTechCandidates.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name)).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
             </select>
             <button
               type="button"
@@ -6666,7 +6668,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                     className="rounded border border-slate-600 bg-slate-800 px-1.5 py-1 text-[11px]"
                   >
                     <option value="">Resp: {assignedNames[0] ?? "—"}</option>
-                    {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable") || t.name === assignedNames[0]).filter((t) => t.name === assignedNames[0] || !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
+                    {visibleTechs.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name)).filter((t) => canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable") || t.name === assignedNames[0]).filter((t) => t.name === assignedNames[0] || !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
                       <option key={t.name} value={t.name}>{t.name}</option>
                     ))}
                   </select>
@@ -6681,7 +6683,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                     className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[11px] text-amber-300"
                   >
                     <option value="">+ Apoyo…</option>
-                    {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => !assignedNames.includes(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
+                    {visibleTechs.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name)).filter((t) => !assignedNames.includes(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
                       <option key={t.name} value={t.name}>{t.name}</option>
                     ))}
                   </select>
@@ -6720,7 +6722,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                         className="rounded border border-slate-600 bg-slate-800 px-1.5 py-1 text-[11px]"
                       >
                         <option value="">Resp: {assignedNames[0] ?? "—"}</option>
-                        {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => AREA_META[job.area].order.includes(t.name)).filter((t) => t.name === assignedNames[0] || (!isTechBlockedByOutsideMaintenance(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable"))).map((t) => (
+                        {visibleTechs.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name)).filter((t) => AREA_META[job.area].order.includes(t.name)).filter((t) => t.name === assignedNames[0] || (!isTechBlockedByOutsideMaintenance(t.name) && canSelectTechManuallyForJob(t, job, jobs, quickTemplates, "responsable"))).map((t) => (
                           <option key={t.name} value={t.name}>{t.name}</option>
                         ))}
                       </select>
@@ -6735,7 +6737,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                         className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[11px] text-amber-300"
                       >
                         <option value="">+ Apoyo…</option>
-                        {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => !assignedNames.includes(t.name) && canAssignTechManuallyToJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
+                        {visibleTechs.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name)).filter((t) => !assignedNames.includes(t.name) && canAssignTechManuallyToJob(t, job, jobs, quickTemplates, "apoyo") && !isTechBlockedByOutsideMaintenance(t.name)).map((t) => (
                           <option key={t.name} value={t.name}>{t.name}</option>
                         ))}
                       </select>
@@ -6804,7 +6806,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                         className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[10px]"
                       >
                         <option value="">Asignar…</option>
-                        {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => !t.blocked && !isHardBlockedTechStatus(t.status) && !isManualUnavailableStatus(t.status) && !isTechBlockedByOutsideMaintenance(t.name) && canAssignTechManuallyToJob(t, j, jobs, quickTemplates, "responsable")).map((t) => {
+                        {visibleTechs.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name)).filter((t) => !t.blocked && !isHardBlockedTechStatus(t.status) && !isManualUnavailableStatus(t.status) && !isTechBlockedByOutsideMaintenance(t.name) && canAssignTechManuallyToJob(t, j, jobs, quickTemplates, "responsable")).map((t) => {
                           const busy = t.currentJobId != null || t.status === "ocupado" || t.status === "refuerzo";
                           return <option key={t.name} value={t.name}>{busy ? `${t.name} (cuando acabe)` : `${t.name} (libre)`}</option>;
                         })}
