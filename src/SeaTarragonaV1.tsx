@@ -6745,17 +6745,38 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-lg bg-slate-800 p-2">
               <div className="text-[10px] font-bold text-slate-400">COLA ({waitingJobs.length})</div>
-              <div className="mt-1 space-y-0.5 text-[11px] text-slate-300">
-                {waitingJobs.length === 0 ? <span className="text-slate-500">Vacía</span> : waitingJobs.slice(0, 6).map((j) => <div key={j.id}>{j.plate} <span className="text-slate-500">· {getOperationLabel(j)}</span></div>)}
+              <div className="mt-1 space-y-1 text-[11px] text-slate-300">
+                {waitingJobs.length === 0 ? <span className="text-slate-500">Vacía</span> : waitingJobs.slice(0, 8).map((j) => (
+                  <div key={j.id} className="rounded bg-slate-900 p-1.5">
+                    <div>{j.plate} <span className="text-slate-500">· {getOperationLabel(j)}</span></div>
+                    <div className="mt-1 flex gap-1">
+                      <select
+                        defaultValue=""
+                        onChange={(e) => { if (e.target.value) { assignOrReserveWaitingJobManually(j.id, e.target.value); e.currentTarget.value = ""; } }}
+                        className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[10px]"
+                      >
+                        <option value="">Asignar…</option>
+                        {visibleTechs.filter((t) => !isTestTech(t.name)).filter((t) => !t.blocked && !isHardBlockedTechStatus(t.status) && !isManualUnavailableStatus(t.status) && !isTechBlockedByOutsideMaintenance(t.name) && canAssignTechManuallyToJob(t, j, jobs, quickTemplates, "responsable")).map((t) => {
+                          const busy = t.currentJobId != null || t.status === "ocupado" || t.status === "refuerzo";
+                          return <option key={t.name} value={t.name}>{busy ? `${t.name} (cuando acabe)` : `${t.name} (libre)`}</option>;
+                        })}
+                      </select>
+                      <button type="button" onClick={() => deleteWaitingJob(j.id)} className="shrink-0 rounded border border-rose-400/40 bg-rose-400/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">Eliminar</button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
             <div className="rounded-lg bg-slate-800 p-2">
               <div className="text-[10px] font-bold text-slate-400">STAND BY ({pausedJobs.length})</div>
               <div className="mt-1 space-y-1 text-[11px] text-slate-300">
-                {pausedJobs.length === 0 ? <span className="text-slate-500">Sin trabajos</span> : pausedJobs.slice(0, 6).map((j) => (
-                  <div key={j.id} className="flex items-center justify-between gap-1">
-                    <span>{j.plate}</span>
-                    <button type="button" onClick={() => reactivatePausedJob(j.id)} className="rounded bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-900">▶</button>
+                {pausedJobs.length === 0 ? <span className="text-slate-500">Sin trabajos</span> : pausedJobs.slice(0, 8).map((j) => (
+                  <div key={j.id} className="rounded bg-slate-900 p-1.5">
+                    <div>{j.plate} <span className="text-slate-500">· {getOperationLabel(j)}</span></div>
+                    <div className="mt-1 flex gap-1">
+                      <button type="button" onClick={() => reactivatePausedJob(j.id)} className="rounded bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-slate-900">Reactivar</button>
+                      <button type="button" onClick={() => finishJob(j.id)} className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">Finalizar</button>
+                    </div>
                   </div>
                 ))}
               </div>
