@@ -318,6 +318,23 @@ function canView(v: AppView) {
   if (allowedViews && allowedViews.length > 0) return allowedViews.includes(v);
   return canAccessView(userRole, v);
 }
+
+// Cierra la sesión (token inválido / caducada) y vuelve al login.
+function forceLogout(reason?: string) {
+  try {
+    localStorage.removeItem("sea-authenticated");
+    localStorage.removeItem("sea-admin-token");
+    localStorage.removeItem("sea-role");
+    localStorage.removeItem("sea-allowed-views");
+    localStorage.removeItem("sea-user-name");
+  } catch { /* noop */ }
+  setAllowedViews(null);
+  setUserName(null);
+  setUserRole(null);
+  setIsAuthenticated(false);
+  setView("operativo");
+  if (reason) setLoginError(reason);
+}
 const [selectedWorkshopId, setSelectedWorkshopId] = useState<WorkshopId>(() => {
   try {
     const saved = localStorage.getItem("sea-selected-workshop");
@@ -1168,6 +1185,10 @@ useEffect(() => {
 
   void saveScheduledTechStatusesToBackend(scheduledTechStatuses).catch(
     (error) => {
+      if (String(error?.message ?? error).includes("401")) {
+        forceLogout("Tu sesión ha caducado. Vuelve a iniciar sesión.");
+        return;
+      }
       console.error("Error guardando estados técnicos en backend:", error);
       appendLog("Error guardando estados programados de técnicos.");
     }
