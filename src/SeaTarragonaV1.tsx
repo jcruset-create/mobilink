@@ -6486,11 +6486,25 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 {/* ── OPERATIVO 2: pantalla de oficina (oscura) ── */}
 {view === "operativo2" && (() => {
   const isTestTech = (name: string) => /prova|prueba|\btest\b/i.test(name);
-  const trabajando = workingTechsSummary.filter((t) => !isTestTech(t.name));
   const disponibles = availableTechsSummary.filter((t) => !isTestTech(t.name));
   const responsables = new Set<string>();
   const soportes = new Set<string>();
   for (const j of runningJobs) (j.assignedNames || []).forEach((n, i) => (i === 0 ? responsables : soportes).add(n));
+
+  // Asistencias de carretera en curso (el operario asignado está trabajando)
+  const ROADSIDE_ACTIVE = ["asignada", "en_camino", "en_punto", "inicio_reparacion", "en_camino_base", "redirigida"];
+  const ROADSIDE_LABEL: Record<string, string> = { asignada: "Asignada", en_camino: "En camino", en_punto: "En punto", inicio_reparacion: "Reparando", en_camino_base: "Volviendo", redirigida: "Redirigida" };
+  const activeAssistances = (roadside.visibleRoadsideAssistances ?? []).filter(
+    (a) => ROADSIDE_ACTIVE.includes(a.status) && a.assignedTechName
+  );
+  for (const a of activeAssistances) if (a.assignedTechName) responsables.add(a.assignedTechName);
+
+  // TRABAJANDO: técnicos de taller ocupados + operarios de asistencias en curso
+  const trabajandoNames = Array.from(new Set([
+    ...workingTechsSummary.map((t) => t.name),
+    ...activeAssistances.map((a) => a.assignedTechName as string),
+  ])).filter((n) => !isTestTech(n));
+  const trabajando = trabajandoNames.map((name) => ({ name }));
   const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : "text-slate-200");
   const agendados = agenda.dueScheduledJobs ?? [];
   const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
@@ -6523,7 +6537,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         <div className="rounded-lg bg-slate-800 p-2">
           <div className="mb-1 text-[10px] font-bold text-sky-300">RESUMEN</div>
           <div className="flex flex-wrap gap-1 text-[11px]">
-            <span className="rounded bg-slate-700 px-1.5 py-0.5">Activos {runningJobs.length}</span>
+            <span className="rounded bg-slate-700 px-1.5 py-0.5">Activos {runningJobs.length + activeAssistances.length}</span>
             <span className="rounded bg-slate-700 px-1.5 py-0.5">Cola {waitingJobs.length}</span>
             <span className="rounded bg-slate-700 px-1.5 py-0.5">Stand by {pausedJobs.length}</span>
             <span className="rounded bg-slate-700 px-1.5 py-0.5 text-rose-400">Urgentes {runningJobs.filter((j) => j.urgent).length}</span>
@@ -6673,9 +6687,11 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
       <div className="mt-2 grid gap-2 lg:grid-cols-[1.4fr_1fr]">
         {/* Trabajos activos con asignación */}
         <div className="rounded-lg bg-slate-800 p-2">
-          <div className="mb-1.5 text-[10px] font-bold text-slate-400">TRABAJOS ACTIVOS ({runningJobs.length})</div>
-          {runningJobs.length === 0 ? <div className="text-[11px] text-slate-500">Sin trabajos activos</div> : (
-            <div className="space-y-1.5">
+          <div className="mb-1.5 text-[10px] font-bold text-slate-400">TRABAJOS ACTIVOS ({runningJobs.length + activeAssistances.length})</div>
+          <div className="space-y-1.5">
+            {runningJobs.length === 0 && activeAssistances.length === 0 && <div className="text-[11px] text-slate-500">Sin trabajos activos</div>}
+            {true && (
+              <>
               {runningJobs.map((job) => {
                 const assignedNames = job.assignedNames ?? [];
                 return (
@@ -6716,8 +6732,18 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                   </div>
                 );
               })}
-            </div>
-          )}
+              </>
+            )}
+            {activeAssistances.map((a) => (
+              <div key={`asist-${a.id}`} className="rounded-lg bg-slate-900 p-2" style={{ borderLeft: "3px solid #f0843a" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-bold">{a.plate} <span className="font-normal text-slate-400">· {a.trabajosARealizar || a.descripcionAveria || "Asistencia carretera"}</span></span>
+                  <span className="shrink-0 rounded bg-orange-500/20 px-1.5 py-0.5 text-[9px] font-bold text-orange-300">CARRETERA · {ROADSIDE_LABEL[a.status] ?? a.status}</span>
+                </div>
+                <div className="mt-0.5 text-[10px] text-orange-300">{a.assignedTechName}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Derecha */}
@@ -6796,7 +6822,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         <div className="rounded-lg bg-slate-800 p-2">
           <div className="text-[10px] font-bold text-slate-400">Alertas</div>
           <div className="mt-0.5 text-[11px]">
-            <span className="text-rose-400">{bloqueadosCount} bloq</span> · <span className="text-orange-300">{runningJobs.filter((j) => j.urgent).length} urg</span> · <span className="text-emerald-300">{runningJobs.length} act</span>
+            <span className="text-rose-400">{bloqueadosCount} bloq</span> · <span className="text-orange-300">{runningJobs.filter((j) => j.urgent).length} urg</span> · <span className="text-emerald-300">{runningJobs.length + activeAssistances.length} act</span>
           </div>
         </div>
         <div className="rounded-lg bg-slate-800 p-2">
