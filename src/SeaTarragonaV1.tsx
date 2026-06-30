@@ -279,6 +279,9 @@ useEffect(() => {
   return localStorage.getItem("sea-authenticated") === "true";
 });
 
+const [userName, setUserName] = useState<string | null>(() => {
+  try { return localStorage.getItem("sea-user-name"); } catch { return null; }
+});
 const [loginUser, setLoginUser] = useState("");
 const [loginPassword, setLoginPassword] = useState("");
 const [loginError, setLoginError] = useState("");
@@ -1332,6 +1335,14 @@ if (userAllowedViews) {
   localStorage.removeItem("sea-allowed-views");
 }
 setAllowedViews(userAllowedViews);
+
+const loggedName = typeof data.name === "string" && data.name.trim() ? data.name.trim() : null;
+if (loggedName) {
+  localStorage.setItem("sea-user-name", loggedName);
+} else {
+  localStorage.removeItem("sea-user-name");
+}
+setUserName(loggedName);
 
 setUserRole(role);
 setIsAuthenticated(true);
@@ -4041,7 +4052,9 @@ if (userRole === "tv75") {
         localStorage.removeItem("sea-admin-token");
         localStorage.removeItem("sea-role");
         localStorage.removeItem("sea-allowed-views");
+        localStorage.removeItem("sea-user-name");
         setAllowedViews(null);
+        setUserName(null);
 
         setUserRole(null);
         setIsAuthenticated(false);
@@ -4147,7 +4160,9 @@ if (view === "operarios" && canView("operarios")) {
         localStorage.removeItem("sea-admin-token");
         localStorage.removeItem("sea-role");
         localStorage.removeItem("sea-allowed-views");
+        localStorage.removeItem("sea-user-name");
         setAllowedViews(null);
+        setUserName(null);
 
         setUserRole(null);
         setIsAuthenticated(false);
@@ -4179,7 +4194,9 @@ if (view === "workshop_tv_75" && canView("workshop_tv_75")) {
         localStorage.removeItem("sea-admin-token");
         localStorage.removeItem("sea-role");
         localStorage.removeItem("sea-allowed-views");
+        localStorage.removeItem("sea-user-name");
         setAllowedViews(null);
+        setUserName(null);
 
         setUserRole(null);
         setIsAuthenticated(false);
@@ -4536,6 +4553,11 @@ return (
           <div>
 <h1 className="text-base font-semibold leading-tight">
   {selectedWorkshop.name} · Panel {APP_VERSION}
+  {userName && (
+    <span className="ml-2 rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white align-middle">
+      👤 {userName}
+    </span>
+  )}
 </h1>
 <div className="text-[11px] text-slate-400">
   Sincronización automática cada 5 s
@@ -6751,7 +6773,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100">
       {/* Barra superior */}
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-bold">📊 SEA Tarragona · Operativo 2</span>
+        <span className="text-sm font-bold">📊 SEA Tarragona · Operativo 2{userName ? <span className="ml-2 rounded bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-100">👤 {userName}</span> : null}</span>
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => { setView("operarios"); void reloadMaintenanceAvailabilityFromBackend(); }} className="rounded bg-sky-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-sky-600">Técnicos</button>
           <button type="button" onClick={() => setView("entradas2")} className="rounded bg-emerald-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-emerald-600">ER</button>
