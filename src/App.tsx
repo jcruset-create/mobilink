@@ -74,6 +74,8 @@ import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
 import CoreCompetencias from "./modules/sea-core/pages/Competencias";
 import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
 
+import TyreControlApp from "./modules/tyrecontrol/TyreControlApp";
+
 type RolAlmacen = "admin" | "responsable" | "operario";
 
 function Protegida({ children }: { children: ReactNode }) {
@@ -308,6 +310,9 @@ export default function App() {
       <Route path="/sea-core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
       <Route path="/sea-core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
       <Route path="/sea-core/autorizaciones" element={<Protegida><CoreAutorizaciones /></Protegida>} />
+
+      {/* SEA TyreControl */}
+      <Route path="/tyrecontrol/*" element={<TyreControlApp />} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>
