@@ -1,5 +1,11 @@
 import { supabase } from "./supabase";
-import type { Empresa, Perfil, Rol } from "../types";
+import type { Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol } from "../types";
+
+function clean<T extends Record<string, any>>(obj: T): T {
+  const out: any = {};
+  for (const [k, v] of Object.entries(obj)) out[k] = typeof v === "string" ? (v.trim() || null) : v;
+  return out;
+}
 
 // ── Empresas ─────────────────────────────────────────────────
 export async function listarEmpresas(): Promise<Empresa[]> {
@@ -8,27 +14,47 @@ export async function listarEmpresas(): Promise<Empresa[]> {
   return (data ?? []) as Empresa[];
 }
 
-export async function crearEmpresa(input: Pick<Empresa, "nombre" | "cif" | "telefono" | "email">): Promise<void> {
-  const { error } = await supabase.from("tc_empresas").insert({
-    nombre: input.nombre.trim(),
-    cif: input.cif?.trim() || null,
-    telefono: input.telefono?.trim() || null,
-    email: input.email?.trim() || null,
-  });
+export async function obtenerEmpresa(id: string): Promise<Empresa | null> {
+  const { data, error } = await supabase.from("tc_empresas").select("*").eq("id", id).single();
+  if (error) return null;
+  return data as Empresa;
+}
+
+export async function crearEmpresa(input: EmpresaInput): Promise<Empresa> {
+  const { data, error } = await supabase.from("tc_empresas").insert(clean(input)).select("*").single();
+  if (error) throw new Error(error.message);
+  return data as Empresa;
+}
+
+export async function actualizarEmpresa(id: string, patch: Partial<EmpresaInput>): Promise<void> {
+  const { error } = await supabase.from("tc_empresas").update({ ...clean(patch), updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
-export async function actualizarEmpresa(id: string, patch: Partial<Empresa>): Promise<void> {
-  const { error } = await supabase.from("tc_empresas").update(patch).eq("id", id);
+// ── Delegaciones ─────────────────────────────────────────────
+export async function listarDelegaciones(empresaId?: string): Promise<Delegacion[]> {
+  let q = supabase.from("tc_delegaciones").select("*, empresa:tc_empresas(*)").order("nombre");
+  if (empresaId) q = q.eq("empresa_id", empresaId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Delegacion[];
+}
+
+export async function crearDelegacion(input: DelegacionInput): Promise<void> {
+  const { error } = await supabase.from("tc_delegaciones").insert(clean(input));
+  if (error) throw new Error(error.message);
+}
+
+export async function actualizarDelegacion(id: string, patch: Partial<DelegacionInput>): Promise<void> {
+  const { error } = await supabase.from("tc_delegaciones").update({ ...clean(patch), updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
 // ── Usuarios ─────────────────────────────────────────────────
-export async function listarUsuarios(): Promise<Perfil[]> {
-  const { data, error } = await supabase
-    .from("tc_usuarios")
-    .select("*, empresa:tc_empresas(*)")
-    .order("nombre");
+export async function listarUsuarios(empresaId?: string): Promise<Perfil[]> {
+  let q = supabase.from("tc_usuarios").select("*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*)").order("nombre");
+  if (empresaId) q = q.eq("empresa_id", empresaId);
+  const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as Perfil[];
 }
@@ -40,11 +66,11 @@ export type NuevoUsuario = {
   rol: Rol;
   acceso_apk: boolean;
   acceso_panel: boolean;
-  empresa_id?: string; // solo super-admin
+  empresa_id?: string;
+  delegacion_id?: string | null;
 };
 
 export async function crearUsuario(input: NuevoUsuario): Promise<void> {
-  // Alta privilegiada vía Edge Function (service_role)
   const { data, error } = await supabase.functions.invoke("crear-usuario", { body: input });
   if (error) throw new Error(error.message);
   if (data && (data as any).error) throw new Error((data as any).error);
@@ -59,6 +85,8 @@ export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Pro
       activo: patch.activo,
       acceso_apk: patch.acceso_apk,
       acceso_panel: patch.acceso_panel,
+      delegacion_id: patch.delegacion_id,
+      updated_at: new Date().toISOString(),
     })
     .eq("id", id);
   if (error) throw new Error(error.message);

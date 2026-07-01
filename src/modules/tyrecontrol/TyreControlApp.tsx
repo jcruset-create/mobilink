@@ -6,6 +6,10 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Usuarios from "./pages/Usuarios";
 import Empresas from "./pages/Empresas";
+import EmpresaDetalle from "./pages/EmpresaDetalle";
+import Delegaciones from "./pages/Delegaciones";
+import MiEmpresa from "./pages/MiEmpresa";
+import MisDelegaciones from "./pages/MisDelegaciones";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
 
@@ -19,9 +23,19 @@ export default function TyreControlApp() {
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="perfil" element={<Perfil />} />
+
+            {/* Cliente */}
+            <Route element={<RoleRoute roles={["cliente"]} />}>
+              <Route path="mi-empresa" element={<MiEmpresa />} />
+              <Route path="mis-delegaciones" element={<MisDelegaciones />} />
+            </Route>
+
+            {/* Administrador / super-admin */}
             <Route element={<RoleRoute roles={["administrador"]} />}>
-              <Route path="usuarios" element={<Usuarios />} />
               <Route path="empresas" element={<Empresas />} />
+              <Route path="empresas/:id" element={<EmpresaDetalle />} />
+              <Route path="delegaciones" element={<Delegaciones />} />
+              <Route path="usuarios" element={<Usuarios />} />
               <Route path="configuracion" element={<Configuracion />} />
             </Route>
           </Route>
