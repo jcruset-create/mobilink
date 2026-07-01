@@ -10,6 +10,17 @@ function clean<T extends Record<string, any>>(obj: T): T {
   return out;
 }
 
+// Deja solo las columnas permitidas (descarta joins anidados, id, timestamps…)
+function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const c of cols) if (c in obj) out[c] = obj[c];
+  return clean(out);
+}
+
+const COLS_EMPRESA = ["nombre", "cif", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
+const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo"] as const;
+const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo"] as const;
+
 // ── Empresas ─────────────────────────────────────────────────
 export async function listarEmpresas(): Promise<Empresa[]> {
   const { data, error } = await supabase.from("tc_empresas").select("*").order("nombre");
@@ -24,13 +35,13 @@ export async function obtenerEmpresa(id: string): Promise<Empresa | null> {
 }
 
 export async function crearEmpresa(input: EmpresaInput): Promise<Empresa> {
-  const { data, error } = await supabase.from("tc_empresas").insert(clean(input)).select("*").single();
+  const { data, error } = await supabase.from("tc_empresas").insert(pick(input, COLS_EMPRESA)).select("*").single();
   if (error) throw new Error(error.message);
   return data as Empresa;
 }
 
 export async function actualizarEmpresa(id: string, patch: Partial<EmpresaInput>): Promise<void> {
-  const { error } = await supabase.from("tc_empresas").update({ ...clean(patch), updated_at: new Date().toISOString() }).eq("id", id);
+  const { error } = await supabase.from("tc_empresas").update({ ...pick(patch, COLS_EMPRESA), updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
@@ -44,12 +55,12 @@ export async function listarDelegaciones(empresaId?: string): Promise<Delegacion
 }
 
 export async function crearDelegacion(input: DelegacionInput): Promise<void> {
-  const { error } = await supabase.from("tc_delegaciones").insert(clean(input));
+  const { error } = await supabase.from("tc_delegaciones").insert(pick(input, COLS_DELEGACION));
   if (error) throw new Error(error.message);
 }
 
 export async function actualizarDelegacion(id: string, patch: Partial<DelegacionInput>): Promise<void> {
-  const { error } = await supabase.from("tc_delegaciones").update({ ...clean(patch), updated_at: new Date().toISOString() }).eq("id", id);
+  const { error } = await supabase.from("tc_delegaciones").update({ ...pick(patch, COLS_DELEGACION), updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
@@ -113,15 +124,14 @@ export async function obtenerVehiculo(id: string): Promise<Vehiculo | null> {
 }
 
 export async function crearVehiculo(input: VehiculoInput): Promise<void> {
-  const { error } = await supabase.from("tc_vehiculos").insert(clean({
-    ...input,
-    matricula: (input.matricula ?? "").trim().toUpperCase(),
-  }));
+  const payload = pick(input, COLS_VEHICULO);
+  payload.matricula = String(input.matricula ?? "").trim().toUpperCase();
+  const { error } = await supabase.from("tc_vehiculos").insert(payload);
   if (error) throw new Error(error.message);
 }
 
 export async function actualizarVehiculo(id: string, patch: Partial<VehiculoInput>): Promise<void> {
-  const next: any = { ...clean(patch), updated_at: new Date().toISOString() };
+  const next: any = { ...pick(patch, COLS_VEHICULO), updated_at: new Date().toISOString() };
   if (patch.matricula != null) next.matricula = String(patch.matricula).trim().toUpperCase();
   const { error } = await supabase.from("tc_vehiculos").update(next).eq("id", id);
   if (error) throw new Error(error.message);
