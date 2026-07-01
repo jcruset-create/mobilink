@@ -1183,6 +1183,10 @@ useEffect(() => {
 
   if (!scheduledTechStatusesLoaded) return;
 
+  // Solo guardan en backend los roles con permiso de escritura (admin/supervisor).
+  // Los roles de solo lectura (pantallas/tv75) no deben intentar el PUT (daría 403).
+  if (!isSupervisor) return;
+
   void saveScheduledTechStatusesToBackend(scheduledTechStatuses).catch(
     (error) => {
       if (String(error?.message ?? error).includes("401")) {
