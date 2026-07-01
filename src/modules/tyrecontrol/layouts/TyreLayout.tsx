@@ -51,7 +51,7 @@ export default function TyreLayout() {
               return (
                 <NavLink
                   key={item.key}
-                  to={item.path}
+                  to={`/tyrecontrol/${item.path}`}
                   onClick={() => setOpen(false)}
                   className={({ isActive }) =>
                     `flex items-center gap-2 rounded-xl px-3 py-2 text-[13px] font-medium ${

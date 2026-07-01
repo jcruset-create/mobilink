@@ -20,7 +20,7 @@ export default function TyreControlApp() {
         <Route path="login" element={<Login />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<TyreLayout />}>
-            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route index element={<Navigate to="/tyrecontrol/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="perfil" element={<Perfil />} />
 
@@ -40,7 +40,7 @@ export default function TyreControlApp() {
             </Route>
           </Route>
         </Route>
-        <Route path="*" element={<Navigate to="dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/tyrecontrol/dashboard" replace />} />
       </Routes>
     </TyreAuthProvider>
   );
