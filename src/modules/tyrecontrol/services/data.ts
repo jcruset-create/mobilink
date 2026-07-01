@@ -1,5 +1,8 @@
 import { supabase } from "./supabase";
-import type { Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol } from "../types";
+import type {
+  Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
+  TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
+} from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
   const out: any = {};
@@ -74,6 +77,54 @@ export async function crearUsuario(input: NuevoUsuario): Promise<void> {
   const { data, error } = await supabase.functions.invoke("crear-usuario", { body: input });
   if (error) throw new Error(error.message);
   if (data && (data as any).error) throw new Error((data as any).error);
+}
+
+// ── Catálogo: tipos y posiciones ─────────────────────────────
+export async function listarTiposVehiculo(): Promise<TipoVehiculo[]> {
+  const { data, error } = await supabase.from("tc_tipos_vehiculo").select("*").eq("activo", true).order("nombre");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as TipoVehiculo[];
+}
+
+export async function listarPosiciones(tipoId: string): Promise<PosicionVehiculo[]> {
+  const { data, error } = await supabase
+    .from("tc_posiciones_vehiculo")
+    .select("*").eq("tipo_vehiculo_id", tipoId).eq("activo", true)
+    .order("orden_visual");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PosicionVehiculo[];
+}
+
+// ── Vehículos ────────────────────────────────────────────────
+const VEHICULO_SELECT = "*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*), tipo:tc_tipos_vehiculo(*)";
+
+export async function listarVehiculos(filtros?: { empresaId?: string }): Promise<Vehiculo[]> {
+  let q = supabase.from("tc_vehiculos").select(VEHICULO_SELECT).order("matricula");
+  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Vehiculo[];
+}
+
+export async function obtenerVehiculo(id: string): Promise<Vehiculo | null> {
+  const { data, error } = await supabase.from("tc_vehiculos").select(VEHICULO_SELECT).eq("id", id).maybeSingle();
+  if (error) return null;
+  return (data as unknown as Vehiculo) ?? null;
+}
+
+export async function crearVehiculo(input: VehiculoInput): Promise<void> {
+  const { error } = await supabase.from("tc_vehiculos").insert(clean({
+    ...input,
+    matricula: (input.matricula ?? "").trim().toUpperCase(),
+  }));
+  if (error) throw new Error(error.message);
+}
+
+export async function actualizarVehiculo(id: string, patch: Partial<VehiculoInput>): Promise<void> {
+  const next: any = { ...clean(patch), updated_at: new Date().toISOString() };
+  if (patch.matricula != null) next.matricula = String(patch.matricula).trim().toUpperCase();
+  const { error } = await supabase.from("tc_vehiculos").update(next).eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Promise<void> {

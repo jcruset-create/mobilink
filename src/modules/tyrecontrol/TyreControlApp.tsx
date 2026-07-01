@@ -8,8 +8,11 @@ import Usuarios from "./pages/Usuarios";
 import Empresas from "./pages/Empresas";
 import EmpresaDetalle from "./pages/EmpresaDetalle";
 import Delegaciones from "./pages/Delegaciones";
+import Vehiculos from "./pages/Vehiculos";
+import VehiculoDetalle from "./pages/VehiculoDetalle";
 import MiEmpresa from "./pages/MiEmpresa";
 import MisDelegaciones from "./pages/MisDelegaciones";
+import MisVehiculos from "./pages/MisVehiculos";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
 
@@ -28,6 +31,7 @@ export default function TyreControlApp() {
             <Route element={<RoleRoute roles={["cliente"]} />}>
               <Route path="mi-empresa" element={<MiEmpresa />} />
               <Route path="mis-delegaciones" element={<MisDelegaciones />} />
+              <Route path="mis-vehiculos" element={<MisVehiculos />} />
             </Route>
 
             {/* Administrador / super-admin */}
@@ -36,6 +40,8 @@ export default function TyreControlApp() {
               <Route path="empresas/:id" element={<EmpresaDetalle />} />
               <Route path="delegaciones" element={<Delegaciones />} />
               <Route path="usuarios" element={<Usuarios />} />
+              <Route path="vehiculos" element={<Vehiculos />} />
+              <Route path="vehiculos/:id" element={<VehiculoDetalle />} />
               <Route path="configuracion" element={<Configuracion />} />
             </Route>
           </Route>

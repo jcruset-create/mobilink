@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Settings, User, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, Settings, User, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -16,10 +16,12 @@ export const NAV: NavItem[] = [
   { key: "empresas", path: "empresas", label: "Empresas", icon: Building2, roles: ["administrador"] },
   { key: "delegaciones", path: "delegaciones", label: "Delegaciones", icon: MapPin, roles: ["administrador"] },
   { key: "usuarios", path: "usuarios", label: "Usuarios", icon: Users, roles: ["administrador"] },
+  { key: "vehiculos", path: "vehiculos", label: "Vehículos", icon: Truck, roles: ["administrador"] },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, roles: ["administrador"] },
   // Cliente
   { key: "mi-empresa", path: "mi-empresa", label: "Mi empresa", icon: Building2, roles: ["cliente"] },
   { key: "mis-delegaciones", path: "mis-delegaciones", label: "Mis delegaciones", icon: MapPin, roles: ["cliente"] },
+  { key: "mis-vehiculos", path: "mis-vehiculos", label: "Mis vehículos", icon: Truck, roles: ["cliente"] },
   // Todos
   { key: "perfil", path: "perfil", label: "Perfil", icon: User },
 ];
