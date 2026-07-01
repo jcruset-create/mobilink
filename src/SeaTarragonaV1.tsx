@@ -512,12 +512,14 @@ const [tick, setTick] = useState(0);
 const [view, setView] = useState<AppView>(() => {
   if (initialView) return initialView;
 
-  // Usuario con accesos personalizados → hub con menú (Operativo)
+  // Usuario con accesos personalizados → Operativo 2 (si lo tiene) o el hub
   try {
     const rawViews = localStorage.getItem("sea-allowed-views");
     if (rawViews) {
       const parsed = JSON.parse(rawViews);
-      if (Array.isArray(parsed) && parsed.length > 0) return "operativo";
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.includes("operativo2") ? "operativo2" : "operativo";
+      }
     }
   } catch { /* noop */ }
 
@@ -1374,9 +1376,11 @@ setIsAuthenticated(true);
 setLoginPassword("");
 setLoginUser("");
 
-// Los usuarios con accesos personalizados aterrizan en el hub (Operativo),
-// donde el menú de pestañas muestra solo sus pantallas permitidas.
-const firstView: AppView = userAllowedViews ? "operativo" : getDefaultViewForRole(role);
+// Los usuarios con accesos personalizados aterrizan en Operativo 2 si lo tienen
+// permitido; si no, en el hub (Operativo) donde ven su menú de pestañas.
+const firstView: AppView = userAllowedViews
+  ? (userAllowedViews.includes("operativo2") ? "operativo2" : "operativo")
+  : getDefaultViewForRole(role);
 setView(firstView);
   } catch (error) {
     console.error("Error iniciando sesión:", error);
