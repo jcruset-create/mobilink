@@ -15,13 +15,26 @@ type TyreAuthValue = {
 const TyreAuthContext = createContext<TyreAuthValue | null>(null);
 
 async function cargarPerfil(userId: string): Promise<Perfil | null> {
+  // Consulta simple (sin join embebido, que puede fallar) + maybeSingle (no rompe con 0 filas)
   const { data, error } = await supabase
     .from("tc_usuarios")
-    .select("*, empresa:tc_empresas(*)")
+    .select("*")
     .eq("id", userId)
-    .single();
-  if (error || !data) return null;
-  return data as unknown as Perfil;
+    .maybeSingle();
+  if (error) {
+    console.error("[TyreControl] error cargando perfil:", error.message);
+    return null;
+  }
+  if (!data) return null;
+
+  const perfil = data as unknown as Perfil;
+
+  // Carga de empresa aparte (best-effort; si falla, no bloquea el login)
+  if (perfil.empresa_id) {
+    const { data: emp } = await supabase.from("tc_empresas").select("*").eq("id", perfil.empresa_id).maybeSingle();
+    perfil.empresa = (emp as any) ?? null;
+  }
+  return perfil;
 }
 
 export function TyreAuthProvider({ children }: { children: ReactNode }) {
