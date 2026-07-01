@@ -18,35 +18,33 @@ export default function TyreLayout() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="min-h-screen bg-slate-900 text-slate-100">
       {/* Topbar */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex items-center gap-3">
-          <button className="rounded-lg p-1.5 hover:bg-slate-100 md:hidden" onClick={() => setOpen((v) => !v)}>
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
+        <div className="flex items-center gap-2">
+          <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setOpen((v) => !v)}>
             <Menu className="h-5 w-5" />
           </button>
-          <div className="flex items-center gap-2">
-            <Truck className="h-5 w-5 text-slate-700" />
-            <span className="text-sm font-black">SEA TyreControl</span>
-          </div>
+          <Truck className="h-5 w-5 text-sky-400" />
+          <span className="text-sm font-black">SEA TyreControl</span>
         </div>
-        <div className="flex items-center gap-3 text-sm">
+        <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block">
-            <div className="font-semibold leading-tight">{perfil?.nombre}</div>
-            <div className="text-[11px] text-slate-400">
+            <div className="text-[12px] font-semibold leading-tight">👤 {perfil?.nombre}</div>
+            <div className="text-[10px] text-slate-400">
               {perfil?.es_superadmin ? "Super-admin" : perfil ? ROL_LABELS[perfil.rol] : ""}
               {perfil?.empresa?.nombre ? ` · ${perfil.empresa.nombre}` : ""}
             </div>
           </div>
-          <button onClick={handleSignOut} className="flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          <button onClick={handleSignOut} className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
             <LogOut className="h-4 w-4" /> Salir
           </button>
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-[1400px]">
+      <div className="mx-auto flex max-w-[1500px]">
         {/* Sidebar */}
-        <aside className={`${open ? "block" : "hidden"} w-56 shrink-0 border-r border-slate-200 bg-white p-3 md:block`}>
+        <aside className={`${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
           <nav className="flex flex-col gap-1">
             {items.map((item) => {
               const Icon = item.icon;
@@ -56,8 +54,8 @@ export default function TyreLayout() {
                   to={item.path}
                   onClick={() => setOpen(false)}
                   className={({ isActive }) =>
-                    `flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium ${
-                      isActive ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"
+                    `flex items-center gap-2 rounded-xl px-3 py-2 text-[13px] font-medium ${
+                      isActive ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"
                     }`
                   }
                 >
@@ -69,7 +67,7 @@ export default function TyreLayout() {
         </aside>
 
         {/* Contenido */}
-        <main className="min-w-0 flex-1 p-4">
+        <main className="min-w-0 flex-1 p-3">
           <Outlet />
         </main>
       </div>

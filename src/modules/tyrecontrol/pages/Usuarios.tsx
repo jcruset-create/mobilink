@@ -39,17 +39,18 @@ export default function Usuarios() {
     } catch (e: any) { setMsg(e?.message || "Error creando usuario"); }
   }
 
-  const inp = "rounded-xl border border-slate-200 px-3 py-2 text-sm";
+  const inp = "rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500";
+  const cols = esSuper ? 6 : 5;
 
   return (
     <div>
-      <h1 className="mb-1 text-xl font-black">Usuarios</h1>
-      <p className="mb-4 text-sm text-slate-500">Gestión de usuarios y accesos {esSuper ? "(todas las empresas)" : "de tu empresa"}.</p>
-      {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-600" : "text-red-600"}`}>{msg}</div>}
+      <h1 className="mb-1 text-lg font-black">Usuarios</h1>
+      <p className="mb-3 text-sm text-slate-400">Gestión de usuarios y accesos {esSuper ? "(todas las empresas)" : "de tu empresa"}.</p>
+      {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
 
       {/* Alta */}
-      <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <div className="mb-2 text-sm font-bold">Nuevo usuario</div>
+      <div className="mb-3 rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[10px] font-bold uppercase text-slate-400">Nuevo usuario</div>
         <div className="grid gap-2 sm:grid-cols-3">
           <input className={inp} placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} />
           <input className={inp} placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
@@ -63,18 +64,18 @@ export default function Usuarios() {
               {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
             </select>
           )}
-          <div className="flex items-center gap-3 text-sm">
+          <div className="flex items-center gap-3 text-sm text-slate-300">
             <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_panel} onChange={(e) => setForm({ ...form, acceso_panel: e.target.checked })} /> Panel</label>
             <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_apk} onChange={(e) => setForm({ ...form, acceso_apk: e.target.checked })} /> APK</label>
           </div>
         </div>
-        <button onClick={crear} className="mt-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white">Crear usuario</button>
+        <button onClick={crear} className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">Crear usuario</button>
       </div>
 
       {/* Lista */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="overflow-hidden rounded-lg border border-slate-700 bg-slate-800">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
+          <thead className="bg-slate-900 text-left text-[11px] uppercase text-slate-400">
             <tr>
               <th className="px-4 py-2">Nombre</th><th className="px-4 py-2">Email</th>
               <th className="px-4 py-2">Rol</th>{esSuper && <th className="px-4 py-2">Empresa</th>}
@@ -83,21 +84,21 @@ export default function Usuarios() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td className="px-4 py-4 text-slate-400" colSpan={esSuper ? 6 : 5}>Cargando…</td></tr>
+              <tr><td className="px-4 py-4 text-slate-500" colSpan={cols}>Cargando…</td></tr>
             ) : items.length === 0 ? (
-              <tr><td className="px-4 py-4 text-slate-400" colSpan={esSuper ? 6 : 5}>Sin usuarios.</td></tr>
+              <tr><td className="px-4 py-4 text-slate-500" colSpan={cols}>Sin usuarios.</td></tr>
             ) : items.map((u) => (
-              <tr key={u.id} className="border-t border-slate-100">
+              <tr key={u.id} className="border-t border-slate-700/60">
                 <td className="px-4 py-2 font-semibold">{u.nombre}{u.es_superadmin ? " ⭐" : ""}</td>
-                <td className="px-4 py-2 text-slate-500">{u.email}</td>
+                <td className="px-4 py-2 text-slate-400">{u.email}</td>
                 <td className="px-4 py-2">{ROL_LABELS[u.rol]}</td>
-                {esSuper && <td className="px-4 py-2 text-slate-500">{u.empresa?.nombre ?? "—"}</td>}
-                <td className="px-4 py-2 text-xs text-slate-500">{u.acceso_panel ? "Panel " : ""}{u.acceso_apk ? "APK" : ""}</td>
+                {esSuper && <td className="px-4 py-2 text-slate-400">{u.empresa?.nombre ?? "—"}</td>}
+                <td className="px-4 py-2 text-[11px] text-slate-400">{u.acceso_panel ? "Panel " : ""}{u.acceso_apk ? "APK" : ""}</td>
                 <td className="px-4 py-2">
                   <button
                     disabled={u.es_superadmin}
                     onClick={async () => { await actualizarUsuario(u.id, { activo: !u.activo }); await cargar(); }}
-                    className={`rounded-full px-2 py-0.5 text-xs font-bold ${u.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"} disabled:opacity-40`}
+                    className={`rounded-full px-2 py-0.5 text-xs font-bold ${u.activo ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-700 text-slate-400"} disabled:opacity-40`}
                   >
                     {u.activo ? "Activo" : "Inactivo"}
                   </button>
