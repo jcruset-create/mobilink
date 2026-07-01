@@ -10,9 +10,13 @@ import EmpresaDetalle from "./pages/EmpresaDetalle";
 import Delegaciones from "./pages/Delegaciones";
 import Vehiculos from "./pages/Vehiculos";
 import VehiculoDetalle from "./pages/VehiculoDetalle";
+import Neumaticos from "./pages/Neumaticos";
+import NeumaticoDetalle from "./pages/NeumaticoDetalle";
+import MontajesActuales from "./pages/MontajesActuales";
 import MiEmpresa from "./pages/MiEmpresa";
 import MisDelegaciones from "./pages/MisDelegaciones";
 import MisVehiculos from "./pages/MisVehiculos";
+import MisNeumaticos from "./pages/MisNeumaticos";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
 
@@ -26,12 +30,15 @@ export default function TyreControlApp() {
             <Route index element={<Navigate to="/tyrecontrol/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="perfil" element={<Perfil />} />
+            {/* Montajes: admin y cliente (la pantalla ajusta acciones por rol) */}
+            <Route path="montajes" element={<MontajesActuales />} />
 
             {/* Cliente */}
             <Route element={<RoleRoute roles={["cliente"]} />}>
               <Route path="mi-empresa" element={<MiEmpresa />} />
               <Route path="mis-delegaciones" element={<MisDelegaciones />} />
               <Route path="mis-vehiculos" element={<MisVehiculos />} />
+              <Route path="mis-neumaticos" element={<MisNeumaticos />} />
             </Route>
 
             {/* Administrador / super-admin */}
@@ -42,6 +49,8 @@ export default function TyreControlApp() {
               <Route path="usuarios" element={<Usuarios />} />
               <Route path="vehiculos" element={<Vehiculos />} />
               <Route path="vehiculos/:id" element={<VehiculoDetalle />} />
+              <Route path="neumaticos" element={<Neumaticos />} />
+              <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
               <Route path="configuracion" element={<Configuracion />} />
             </Route>
           </Route>

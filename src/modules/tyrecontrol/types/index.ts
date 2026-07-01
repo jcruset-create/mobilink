@@ -118,3 +118,73 @@ export const ORIGEN_KM_LABELS: Record<OrigenKm, string> = {
   webfleet: "Webfleet",
   importacion_excel: "Importación Excel",
 };
+
+export type EstadoNeumatico = "almacen" | "reservado" | "montado" | "reparacion" | "descartado";
+export type MotivoDesmontaje = "desgaste" | "pinchazo" | "rotura" | "preventivo" | "rotacion" | "reparacion" | "descarte";
+export type DestinoDesmontaje = "almacen" | "reparacion" | "descartado";
+
+export const ESTADO_NEUMATICO_LABELS: Record<EstadoNeumatico, string> = {
+  almacen: "En almacén", reservado: "Reservado", montado: "Montado", reparacion: "Reparación", descartado: "Descartado",
+};
+export const MOTIVO_DESMONTAJE_LABELS: Record<MotivoDesmontaje, string> = {
+  desgaste: "Desgaste", pinchazo: "Pinchazo", rotura: "Rotura", preventivo: "Preventivo",
+  rotacion: "Rotación", reparacion: "Reparación", descarte: "Descarte",
+};
+
+export interface Neumatico {
+  id: string;
+  empresa_id: string;
+  codigo_interno?: string | null;
+  numero_serie?: string | null;
+  dot?: string | null;
+  marca?: string | null;
+  modelo?: string | null;
+  medida?: string | null;
+  indice_carga?: string | null;
+  indice_velocidad?: string | null;
+  rfid_epc?: string | null;
+  estado: EstadoNeumatico;
+  fecha_compra?: string | null;
+  coste_compra?: number | null;
+  proveedor?: string | null;
+  almacen_producto_id?: string | null;
+  almacen_lote_id?: string | null;
+  almacen_ubicacion_id?: string | null;
+  almacen_movimiento_id?: string | null;
+  referencia_almacen?: string | null;
+  sincronizado_almacen?: boolean;
+  activo: boolean;
+  created_at?: string;
+  updated_at?: string;
+  empresa?: Empresa | null;
+}
+
+export type NeumaticoInput = Omit<Neumatico, "id" | "created_at" | "updated_at" | "empresa" | "sincronizado_almacen"
+  | "almacen_producto_id" | "almacen_lote_id" | "almacen_ubicacion_id" | "almacen_movimiento_id">;
+
+export interface MontajeActual {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  neumatico_id: string;
+  posicion_id: string;
+  fecha_montaje: string;
+  km_montaje?: number | null;
+  observaciones?: string | null;
+  neumatico?: Neumatico | null;
+  posicion?: PosicionVehiculo | null;
+}
+
+export interface HistorialMontaje {
+  id: string;
+  empresa_id: string;
+  vehiculo_id?: string | null;
+  neumatico_id?: string | null;
+  posicion_id?: string | null;
+  fecha_montaje?: string | null;
+  km_montaje?: number | null;
+  fecha_desmontaje?: string | null;
+  km_desmontaje?: number | null;
+  motivo_desmontaje?: string | null;
+  observaciones?: string | null;
+}

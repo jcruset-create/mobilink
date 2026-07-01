@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
+  Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -20,6 +21,7 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 const COLS_EMPRESA = ["nombre", "cif", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
 const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo"] as const;
 const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo"] as const;
+const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo"] as const;
 
 // ── Empresas ─────────────────────────────────────────────────
 export async function listarEmpresas(): Promise<Empresa[]> {
@@ -151,4 +153,83 @@ export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Pro
     })
     .eq("id", id);
   if (error) throw new Error(error.message);
+}
+
+// ── Neumáticos ───────────────────────────────────────────────
+const NEU_SELECT = "*, empresa:tc_empresas(*)";
+
+export async function listarNeumaticos(filtros?: { empresaId?: string }): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select(NEU_SELECT).order("codigo_interno");
+  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
+}
+
+export async function obtenerNeumatico(id: string): Promise<Neumatico | null> {
+  const { data, error } = await supabase.from("tc_neumaticos").select(NEU_SELECT).eq("id", id).maybeSingle();
+  if (error) return null;
+  return (data as unknown as Neumatico) ?? null;
+}
+
+export async function crearNeumatico(input: NeumaticoInput): Promise<void> {
+  const { error } = await supabase.from("tc_neumaticos").insert(pick(input, COLS_NEUMATICO));
+  if (error) throw new Error(error.message);
+}
+
+export async function actualizarNeumatico(id: string, patch: Partial<NeumaticoInput>): Promise<void> {
+  const { error } = await supabase.from("tc_neumaticos")
+    .update({ ...pick(patch, COLS_NEUMATICO), updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// Neumáticos disponibles para montar (en almacén/reservado, activos, de una empresa)
+export async function listarNeumaticosDisponibles(empresaId: string): Promise<Neumatico[]> {
+  const { data, error } = await supabase.from("tc_neumaticos").select("*")
+    .eq("empresa_id", empresaId).eq("activo", true).in("estado", ["almacen", "reservado"]).order("codigo_interno");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
+}
+
+// ── Montajes ─────────────────────────────────────────────────
+export async function listarMontajesVehiculo(vehiculoId: string): Promise<MontajeActual[]> {
+  const { data, error } = await supabase.from("tc_montajes_actuales")
+    .select("*, neumatico:tc_neumaticos(*), posicion:tc_posiciones_vehiculo(*)")
+    .eq("vehiculo_id", vehiculoId);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as MontajeActual[];
+}
+
+export async function montarNeumatico(params: {
+  vehiculoId: string; neumaticoId: string; posicionId: string; km?: number | null; fecha?: string | null; observaciones?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.rpc("tc_montar_neumatico", {
+    p_vehiculo: params.vehiculoId, p_neumatico: params.neumaticoId, p_posicion: params.posicionId,
+    p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function desmontarNeumatico(params: {
+  montajeId: string; km?: number | null; motivo: MotivoDesmontaje; destino: DestinoDesmontaje; observaciones?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.rpc("tc_desmontar_neumatico", {
+    p_montaje: params.montajeId, p_km: params.km ?? null, p_motivo: params.motivo,
+    p_nuevo_estado: params.destino, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
+  const { data, error } = await supabase.from("tc_historial_montajes").select("*")
+    .eq("neumatico_id", neumaticoId).order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as HistorialMontaje[];
+}
+
+export async function montajeActualDeNeumatico(neumaticoId: string): Promise<MontajeActual | null> {
+  const { data, error } = await supabase.from("tc_montajes_actuales")
+    .select("*, posicion:tc_posiciones_vehiculo(*)").eq("neumatico_id", neumaticoId).maybeSingle();
+  if (error) return null;
+  return (data as unknown as MontajeActual) ?? null;
 }
