@@ -16,8 +16,8 @@ const TyreAuthContext = createContext<TyreAuthValue | null>(null);
 
 async function cargarPerfil(userId: string): Promise<Perfil | null> {
   const { data, error } = await supabase
-    .from("usuarios")
-    .select("*, empresa:empresas(*)")
+    .from("tc_usuarios")
+    .select("*, empresa:tc_empresas(*)")
     .eq("id", userId)
     .single();
   if (error || !data) return null;

@@ -30,7 +30,7 @@ Deno.serve(async (req: Request) => {
 
     // Perfil del que llama (con service role, sin RLS)
     const admin = createClient(url, service);
-    const { data: perfil } = await admin.from("usuarios").select("rol, empresa_id, es_superadmin, activo").eq("id", caller.id).single();
+    const { data: perfil } = await admin.from("tc_usuarios").select("rol, empresa_id, es_superadmin, activo").eq("id", caller.id).single();
     if (!perfil || !perfil.activo) return json({ error: "Perfil no válido" }, 403);
     const esSuper = perfil.es_superadmin === true;
     const esAdmin = perfil.rol === "administrador";
@@ -56,7 +56,7 @@ Deno.serve(async (req: Request) => {
     if (createErr || !created.user) return json({ error: createErr?.message ?? "No se pudo crear el usuario" }, 400);
 
     // 2) Crear fila de perfil
-    const { error: insErr } = await admin.from("usuarios").insert({
+    const { error: insErr } = await admin.from("tc_usuarios").insert({
       id: created.user.id,
       empresa_id: empresaId,
       nombre, email, rol,

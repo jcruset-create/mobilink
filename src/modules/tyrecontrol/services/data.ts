@@ -3,13 +3,13 @@ import type { Empresa, Perfil, Rol } from "../types";
 
 // ── Empresas ─────────────────────────────────────────────────
 export async function listarEmpresas(): Promise<Empresa[]> {
-  const { data, error } = await supabase.from("empresas").select("*").order("nombre");
+  const { data, error } = await supabase.from("tc_empresas").select("*").order("nombre");
   if (error) throw new Error(error.message);
   return (data ?? []) as Empresa[];
 }
 
 export async function crearEmpresa(input: Pick<Empresa, "nombre" | "cif" | "telefono" | "email">): Promise<void> {
-  const { error } = await supabase.from("empresas").insert({
+  const { error } = await supabase.from("tc_empresas").insert({
     nombre: input.nombre.trim(),
     cif: input.cif?.trim() || null,
     telefono: input.telefono?.trim() || null,
@@ -19,15 +19,15 @@ export async function crearEmpresa(input: Pick<Empresa, "nombre" | "cif" | "tele
 }
 
 export async function actualizarEmpresa(id: string, patch: Partial<Empresa>): Promise<void> {
-  const { error } = await supabase.from("empresas").update(patch).eq("id", id);
+  const { error } = await supabase.from("tc_empresas").update(patch).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
 // ── Usuarios ─────────────────────────────────────────────────
 export async function listarUsuarios(): Promise<Perfil[]> {
   const { data, error } = await supabase
-    .from("usuarios")
-    .select("*, empresa:empresas(*)")
+    .from("tc_usuarios")
+    .select("*, empresa:tc_empresas(*)")
     .order("nombre");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as Perfil[];
@@ -52,7 +52,7 @@ export async function crearUsuario(input: NuevoUsuario): Promise<void> {
 
 export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Promise<void> {
   const { error } = await supabase
-    .from("usuarios")
+    .from("tc_usuarios")
     .update({
       nombre: patch.nombre,
       rol: patch.rol,

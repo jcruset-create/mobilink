@@ -1,16 +1,18 @@
 -- ============================================================
--- SEA TyreControl — Fase 1: empresas, usuarios, permisos_cliente
--- Multiempresa + super-admin global + RLS
--- Pegar en Supabase (SQL Editor). Idempotente donde es posible.
+-- SEA TyreControl — Fase 1 (tablas propias con prefijo tc_)
+-- Multiempresa + super-admin global + RLS.
+-- Prefijo tc_ para NO colisionar con tablas de otros módulos
+-- (sea-core ya tiene 'empresas'/'usuarios').
+-- Pegar en Supabase (SQL Editor). Idempotente.
 -- ============================================================
 
 -- ── ENUM de roles ────────────────────────────────────────────
 do $$ begin
-  create type rol_usuario as enum ('administrador','operador','cliente');
+  create type tc_rol as enum ('administrador','operador','cliente');
 exception when duplicate_object then null; end $$;
 
 -- ── EMPRESAS (tenant) ────────────────────────────────────────
-create table if not exists empresas (
+create table if not exists tc_empresas (
   id          uuid primary key default gen_random_uuid(),
   nombre      text not null,
   cif         text unique,
@@ -21,101 +23,94 @@ create table if not exists empresas (
 );
 
 -- ── USUARIOS (perfil ligado a auth.users) ────────────────────
-create table if not exists usuarios (
+create table if not exists tc_usuarios (
   id            uuid primary key references auth.users(id) on delete cascade,
-  empresa_id    uuid not null references empresas(id) on delete restrict,
+  empresa_id    uuid not null references tc_empresas(id) on delete restrict,
   nombre        text not null,
   email         text not null,
-  rol           rol_usuario not null default 'cliente',
+  rol           tc_rol not null default 'cliente',
   activo        boolean not null default true,
   acceso_apk    boolean not null default false,
   acceso_panel  boolean not null default true,
   es_superadmin boolean not null default false,
   created_at    timestamptz not null default now()
 );
-create index if not exists idx_usuarios_empresa on usuarios (empresa_id);
+create index if not exists idx_tc_usuarios_empresa on tc_usuarios (empresa_id);
 
 -- ── PERMISOS DE CLIENTE (granular) ───────────────────────────
-create table if not exists permisos_cliente (
+create table if not exists tc_permisos_cliente (
   id             uuid primary key default gen_random_uuid(),
-  usuario_id     uuid not null references usuarios(id) on delete cascade,
+  usuario_id     uuid not null references tc_usuarios(id) on delete cascade,
   pantalla       text not null,
   puede_ver      boolean not null default false,
   puede_exportar boolean not null default false,
   created_at     timestamptz not null default now(),
   unique (usuario_id, pantalla)
 );
-create index if not exists idx_permisos_usuario on permisos_cliente (usuario_id);
+create index if not exists idx_tc_permisos_usuario on tc_permisos_cliente (usuario_id);
 
 -- ── Funciones helper (SECURITY DEFINER: no disparan RLS) ─────
-create or replace function auth_empresa_id()
+create or replace function tc_auth_empresa_id()
 returns uuid language sql stable security definer set search_path = public as $$
-  select empresa_id from usuarios where id = auth.uid()
+  select empresa_id from tc_usuarios where id = auth.uid()
 $$;
 
-create or replace function auth_rol()
-returns rol_usuario language sql stable security definer set search_path = public as $$
-  select rol from usuarios where id = auth.uid()
-$$;
-
-create or replace function is_admin()
+create or replace function tc_is_admin()
 returns boolean language sql stable security definer set search_path = public as $$
-  select coalesce((select rol = 'administrador' from usuarios where id = auth.uid()), false)
+  select coalesce((select rol = 'administrador' from tc_usuarios where id = auth.uid()), false)
 $$;
 
-create or replace function is_superadmin()
+create or replace function tc_is_superadmin()
 returns boolean language sql stable security definer set search_path = public as $$
-  select coalesce((select es_superadmin from usuarios where id = auth.uid()), false)
+  select coalesce((select es_superadmin from tc_usuarios where id = auth.uid()), false)
 $$;
 
 -- ── RLS ──────────────────────────────────────────────────────
-alter table empresas          enable row level security;
-alter table usuarios          enable row level security;
-alter table permisos_cliente  enable row level security;
+alter table tc_empresas          enable row level security;
+alter table tc_usuarios          enable row level security;
+alter table tc_permisos_cliente  enable row level security;
 
 -- EMPRESAS
-drop policy if exists empresas_select on empresas;
-create policy empresas_select on empresas for select
-  using ( is_superadmin() or id = auth_empresa_id() );
+drop policy if exists tc_empresas_select on tc_empresas;
+create policy tc_empresas_select on tc_empresas for select
+  using ( tc_is_superadmin() or id = tc_auth_empresa_id() );
 
-drop policy if exists empresas_write on empresas;
-create policy empresas_write on empresas for all
-  using      ( is_superadmin() or (is_admin() and id = auth_empresa_id()) )
-  with check ( is_superadmin() or (is_admin() and id = auth_empresa_id()) );
+drop policy if exists tc_empresas_write on tc_empresas;
+create policy tc_empresas_write on tc_empresas for all
+  using      ( tc_is_superadmin() or (tc_is_admin() and id = tc_auth_empresa_id()) )
+  with check ( tc_is_superadmin() or (tc_is_admin() and id = tc_auth_empresa_id()) );
 
 -- USUARIOS
-drop policy if exists usuarios_select on usuarios;
-create policy usuarios_select on usuarios for select
-  using ( is_superadmin() or empresa_id = auth_empresa_id() );
+drop policy if exists tc_usuarios_select on tc_usuarios;
+create policy tc_usuarios_select on tc_usuarios for select
+  using ( tc_is_superadmin() or empresa_id = tc_auth_empresa_id() );
 
-drop policy if exists usuarios_write on usuarios;
-create policy usuarios_write on usuarios for all
-  using      ( is_superadmin() or (is_admin() and empresa_id = auth_empresa_id()) )
-  with check ( is_superadmin() or (is_admin() and empresa_id = auth_empresa_id()) );
+drop policy if exists tc_usuarios_write on tc_usuarios;
+create policy tc_usuarios_write on tc_usuarios for all
+  using      ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) )
+  with check ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) );
 
 -- PERMISOS_CLIENTE
-drop policy if exists permisos_admin_all on permisos_cliente;
-create policy permisos_admin_all on permisos_cliente for all
-  using ( is_superadmin() or (is_admin() and exists (
-    select 1 from usuarios u where u.id = permisos_cliente.usuario_id and u.empresa_id = auth_empresa_id())) )
-  with check ( is_superadmin() or (is_admin() and exists (
-    select 1 from usuarios u where u.id = permisos_cliente.usuario_id and u.empresa_id = auth_empresa_id())) );
+drop policy if exists tc_permisos_admin_all on tc_permisos_cliente;
+create policy tc_permisos_admin_all on tc_permisos_cliente for all
+  using ( tc_is_superadmin() or (tc_is_admin() and exists (
+    select 1 from tc_usuarios u where u.id = tc_permisos_cliente.usuario_id and u.empresa_id = tc_auth_empresa_id())) )
+  with check ( tc_is_superadmin() or (tc_is_admin() and exists (
+    select 1 from tc_usuarios u where u.id = tc_permisos_cliente.usuario_id and u.empresa_id = tc_auth_empresa_id())) );
 
-drop policy if exists permisos_self_select on permisos_cliente;
-create policy permisos_self_select on permisos_cliente for select
+drop policy if exists tc_permisos_self_select on tc_permisos_cliente;
+create policy tc_permisos_self_select on tc_permisos_cliente for select
   using ( usuario_id = auth.uid() );
 
 -- ============================================================
--- SEMILLA INICIAL (ejecutar UNA vez, ajustando valores)
--- 1) Crea la empresa SEA y 2) marca a tu usuario como super-admin.
---    Sustituye el email por el tuyo (debe existir ya en auth.users;
---    créalo desde Authentication → Users si hace falta).
+-- SEMILLA (ejecutar UNA vez). Crea empresa SEA y te marca super-admin.
+-- Requiere que tu cuenta exista ya en Authentication → Users.
 -- ============================================================
--- insert into empresas (nombre, cif) values ('SEA Tarragona', 'B00000000')
+-- insert into tc_empresas (nombre, cif) values ('SEA Tarragona', 'B00000000')
 --   on conflict (cif) do nothing;
 --
--- insert into usuarios (id, empresa_id, nombre, email, rol, es_superadmin, acceso_panel)
--- select u.id, (select id from empresas where nombre='SEA Tarragona'),
+-- insert into tc_usuarios (id, empresa_id, nombre, email, rol, es_superadmin, acceso_panel)
+-- select u.id, (select id from tc_empresas where nombre='SEA Tarragona'),
 --        'Administrador SEA', u.email, 'administrador', true, true
 -- from auth.users u where u.email = 'jcruset@gmail.com'
--- on conflict (id) do update set es_superadmin = true, rol = 'administrador';
+-- on conflict (id) do update set es_superadmin = true, rol = 'administrador', acceso_panel = true;
