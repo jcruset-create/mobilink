@@ -16,6 +16,7 @@ import MontajesActuales from "./pages/MontajesActuales";
 import Operaciones from "./pages/Operaciones";
 import RevisionVehiculo from "./pages/RevisionVehiculo";
 import Autorizaciones from "./pages/Autorizaciones";
+import EnlaceAlmacen from "./pages/EnlaceAlmacen";
 import MiEmpresa from "./pages/MiEmpresa";
 import MisDelegaciones from "./pages/MisDelegaciones";
 import MisVehiculos from "./pages/MisVehiculos";
@@ -57,6 +58,7 @@ export default function TyreControlApp() {
               <Route path="neumaticos" element={<Neumaticos />} />
               <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
               <Route path="autorizaciones" element={<Autorizaciones />} />
+              <Route path="enlace-almacen" element={<EnlaceAlmacen />} />
               <Route path="configuracion" element={<Configuracion />} />
             </Route>
           </Route>

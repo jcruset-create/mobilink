@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -22,6 +22,7 @@ export const NAV: NavItem[] = [
   { key: "operaciones", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["administrador"] },
   { key: "revision-vehiculo", path: "revision-vehiculo", label: "Revisión de vehículo", icon: ClipboardCheck, roles: ["administrador"] },
   { key: "autorizaciones", path: "autorizaciones", label: "Autorizaciones", icon: ShieldCheck, roles: ["administrador"] },
+  { key: "enlace-almacen", path: "enlace-almacen", label: "Enlace con almacén", icon: Link2, superadminOnly: true },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, roles: ["administrador"] },
   // Cliente
   { key: "mi-empresa", path: "mi-empresa", label: "Mi empresa", icon: Building2, roles: ["cliente"] },
