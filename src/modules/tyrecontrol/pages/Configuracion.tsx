@@ -5,6 +5,7 @@ import {
   listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
   listarTiposVehiculo, actualizarConfiguracionEjes,
+  listarTiposDeMedida, fijarTiposDeMedida,
 } from "../services/data";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
@@ -101,6 +102,42 @@ function FilaModelo({ modelo, puedeEditar, onCambio }: { modelo: ModeloNeumatico
   );
 }
 
+function FilaMedidaCompatibilidad({ medida, tipos, puedeEditar }: { medida: MedidaNeumatico; tipos: TipoVehiculo[]; puedeEditar: boolean }) {
+  const [seleccionados, setSeleccionados] = useState<string[]>([]);
+  const [abierto, setAbierto] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { if (abierto) listarTiposDeMedida(medida.id).then(setSeleccionados); }, [abierto, medida.id]);
+
+  async function alternar(tipoId: string) {
+    const next = seleccionados.includes(tipoId) ? seleccionados.filter((x) => x !== tipoId) : [...seleccionados, tipoId];
+    setSeleccionados(next);
+    setSaving(true);
+    try { await fijarTiposDeMedida(medida.id, next); } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="rounded bg-slate-900 px-2 py-1.5 text-[12px]">
+      <div className="flex items-center justify-between">
+        <span className="text-slate-200">{medida.valor}</span>
+        <button onClick={() => setAbierto((v) => !v)} className="text-[10px] text-sky-300 hover:underline">
+          {abierto ? "cerrar" : "tipos de vehículo"}
+        </button>
+      </div>
+      {abierto && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {tipos.map((t) => (
+            <label key={t.id} className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] ${seleccionados.includes(t.id) ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-400"}`}>
+              <input type="checkbox" disabled={!puedeEditar || saving} checked={seleccionados.includes(t.id)} onChange={() => alternar(t.id)} />
+              {t.nombre}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehiculo; puedeEditar: boolean; onGuardado: () => void }) {
   const [valor, setValor] = useState(tipo.configuracion_ejes ?? "");
   const [saving, setSaving] = useState(false);
@@ -165,6 +202,7 @@ export default function Configuracion() {
   const [marcaSel, setMarcaSel] = useState("");
   const [nuevaMarca, setNuevaMarca] = useState("");
   const [nuevoModelo, setNuevoModelo] = useState("");
+  const [nuevaMedida, setNuevaMedida] = useState("");
   const [msg, setMsg] = useState("");
 
   async function cargar() {
@@ -235,7 +273,19 @@ export default function Configuracion() {
             </div>
           </div>
 
-          <ListaSimple titulo="Medidas" placeholder="Ej. 315/80R22.5" items={medidas.map((m) => ({ id: m.id, valor: m.valor }))} puedeEditar={puedeEditar} onCrear={async (v) => { await crearMedida(v); await cargar(); }} />
+          <div>
+            <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Medidas ({medidas.length})</div>
+            {puedeEditar && (
+              <div className="mb-2 flex gap-2">
+                <input className={inputCls} placeholder="Ej. 315/80R22.5" value={nuevaMedida} onChange={(e) => setNuevaMedida(e.target.value)} />
+                <button onClick={async () => { if (!nuevaMedida.trim()) return; await crearMedida(nuevaMedida); setNuevaMedida(""); await cargar(); }} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
+              </div>
+            )}
+            <div className="mb-1 text-[10px] text-slate-500">Click en "tipos de vehículo" para marcar con qué tipos es compatible (filtra el desplegable al montar).</div>
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {medidas.map((m) => <FilaMedidaCompatibilidad key={m.id} medida={m} tipos={tipos} puedeEditar={puedeEditar} />)}
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-3">

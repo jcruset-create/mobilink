@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico } from "../services/data";
+import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico, esErrorMedidaIncompatible } from "../services/data";
 import type { ProductoAlmacen, MotivoDesmontaje, DestinoDesmontaje } from "../types";
 import { MOTIVO_DESMONTAJE_LABELS } from "../types";
 import { Modal, Field, inputCls } from "./ui";
+import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 interface Props {
   posicionNombre: string;
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posicionId, montajeActualId, onClose, onDone }: Props) {
+  const { perfil } = useTyreAuth();
+  const esAdmin = !!(perfil?.es_superadmin || perfil?.rol === "administrador");
   const [productos, setProductos] = useState<ProductoAlmacen[]>([]);
   const [busqueda, setBusqueda] = useState("");
   const [productoId, setProductoId] = useState("");
@@ -25,11 +28,13 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
   const [destino, setDestino] = useState<DestinoDesmontaje>("almacen");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [medidaIncompatible, setMedidaIncompatible] = useState(false);
 
   useEffect(() => { listarProductosAlmacen().then(setProductos); }, []);
   useEffect(() => { const t = setTimeout(() => listarProductosAlmacen(busqueda).then(setProductos), 250); return () => clearTimeout(t); }, [busqueda]);
+  useEffect(() => { setMedidaIncompatible(false); }, [productoId]);
 
-  async function confirmar() {
+  async function confirmar(forzar = false) {
     if (!productoId) { setMsg("Selecciona un producto de almacén"); return; }
     setSaving(true); setMsg("");
     try {
@@ -38,24 +43,42 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
           montajeActualId, productoAlmacenId: productoId, controlIndividual, datos,
           motivoDesmontaje: motivo, destinoRetirado: destino,
           km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
+          forzarMedida: forzar,
         });
       } else {
         await montarDesdeAlmacen({
           vehiculoId, posicionId, productoAlmacenId: productoId, controlIndividual, datos,
           km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
+          forzarMedida: forzar,
         });
       }
       onDone();
-    } catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+    } catch (e: any) {
+      const texto = e?.message || "Error";
+      if (esErrorMedidaIncompatible(texto)) {
+        setMedidaIncompatible(true);
+        setMsg(esAdmin
+          ? "Esta medida no está homologada para este tipo de vehículo. Puedes forzar el montaje si estás seguro."
+          : "Esta medida no está homologada para este tipo de vehículo. Solo un administrador puede forzar el montaje.");
+      } else {
+        setMsg(texto);
+      }
+    } finally { setSaving(false); }
   }
 
   return (
     <Modal title={`${montajeActualId ? "Sustituir" : "Montar"} en ${posicionNombre}`} onClose={onClose}
       footer={<div className="flex justify-end gap-2">
         <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-        <button onClick={confirmar} disabled={saving || !productoId} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
-          {montajeActualId ? "Sustituir" : "Montar"}
-        </button>
+        {medidaIncompatible && esAdmin ? (
+          <button onClick={() => confirmar(true)} disabled={saving} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+            Forzar montaje (medida no homologada)
+          </button>
+        ) : (
+          <button onClick={() => confirmar(false)} disabled={saving || !productoId || (medidaIncompatible && !esAdmin)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+            {montajeActualId ? "Sustituir" : "Montar"}
+          </button>
+        )}
       </div>}>
       <div className="grid gap-2">
         {montajeActualId && (
@@ -108,7 +131,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
           <Field label="Km vehículo"><input type="number" className={inputCls} value={km} onChange={(e) => setKm(e.target.value)} /></Field>
           <Field label="Observaciones"><input className={inputCls} value={obs} onChange={(e) => setObs(e.target.value)} /></Field>
         </div>
-        {msg && <div className="text-[11px] text-red-300">{msg}</div>}
+        {msg && <div className={`text-[11px] ${medidaIncompatible ? "text-amber-300" : "text-red-300"}`}>{msg}</div>}
       </div>
     </Modal>
   );

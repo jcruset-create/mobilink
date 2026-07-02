@@ -242,12 +242,20 @@ export async function listarMontajesVehiculo(vehiculoId: string): Promise<Montaj
 
 export async function montarNeumatico(params: {
   vehiculoId: string; neumaticoId: string; posicionId: string; km?: number | null; fecha?: string | null; observaciones?: string | null;
+  forzarMedida?: boolean;
 }): Promise<void> {
   const { error } = await supabase.rpc("tc_montar_neumatico", {
     p_vehiculo: params.vehiculoId, p_neumatico: params.neumaticoId, p_posicion: params.posicionId,
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+    p_forzar_medida: params.forzarMedida ?? false,
   });
   if (error) throw new Error(error.message);
+}
+
+// Detecta el error especial "MEDIDA_INCOMPATIBLE: ..." que lanzan las RPC
+// de montaje cuando la medida no está homologada para el tipo de vehículo.
+export function esErrorMedidaIncompatible(mensaje: string): boolean {
+  return mensaje.includes("MEDIDA_INCOMPATIBLE");
 }
 
 export async function desmontarNeumatico(params: {
@@ -301,11 +309,13 @@ export async function crearFichaGenerica(input: Omit<FichaGenerica, "id">): Prom
 export async function montarDesdeAlmacen(params: {
   vehiculoId: string; posicionId: string; productoAlmacenId: string; controlIndividual: boolean;
   datos?: Record<string, string>; km?: number | null; fecha?: string | null; observaciones?: string | null;
+  forzarMedida?: boolean;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("tc_montar_desde_almacen", {
     p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_producto_almacen: params.productoAlmacenId,
     p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+    p_forzar_medida: params.forzarMedida ?? false,
   });
   if (error) throw new Error(error.message);
   return data as string;
@@ -328,12 +338,14 @@ export async function sustituirNeumatico(params: {
   montajeActualId: string; productoAlmacenId: string; controlIndividual: boolean; datos?: Record<string, string>;
   motivoDesmontaje: MotivoDesmontaje; destinoRetirado: DestinoDesmontaje;
   km?: number | null; fecha?: string | null; observaciones?: string | null;
+  forzarMedida?: boolean;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("tc_sustituir_neumatico", {
     p_montaje_actual: params.montajeActualId, p_producto_almacen: params.productoAlmacenId,
     p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
     p_motivo_desmontaje: params.motivoDesmontaje, p_destino_retirado: params.destinoRetirado,
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+    p_forzar_medida: params.forzarMedida ?? false,
   });
   if (error) throw new Error(error.message);
   return data as string;
@@ -471,6 +483,35 @@ export async function listarMedidas(): Promise<MedidaNeumatico[]> {
   const { data, error } = await supabase.from("tc_cat_medidas_neumatico").select("*").eq("activo", true).order("valor");
   if (error) throw new Error(error.message);
   return (data ?? []) as MedidaNeumatico[];
+}
+
+// Medidas homologadas para un tipo de vehículo. Si el tipo no tiene
+// ninguna configurada todavía, devuelve todas (comportamiento "abierto").
+export async function listarMedidasCompatibles(tipoVehiculoId: string | null | undefined): Promise<MedidaNeumatico[]> {
+  if (!tipoVehiculoId) return listarMedidas();
+  const { data: vinculos, error: e1 } = await supabase
+    .from("tc_medidas_tipo_vehiculo").select("medida_id").eq("tipo_vehiculo_id", tipoVehiculoId);
+  if (e1) throw new Error(e1.message);
+  if (!vinculos || vinculos.length === 0) return listarMedidas();
+  const ids = vinculos.map((v) => v.medida_id);
+  const { data, error } = await supabase.from("tc_cat_medidas_neumatico").select("*").eq("activo", true).in("id", ids).order("valor");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MedidaNeumatico[];
+}
+
+export async function listarTiposDeMedida(medidaId: string): Promise<string[]> {
+  const { data, error } = await supabase.from("tc_medidas_tipo_vehiculo").select("tipo_vehiculo_id").eq("medida_id", medidaId);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => r.tipo_vehiculo_id);
+}
+
+export async function fijarTiposDeMedida(medidaId: string, tipoVehiculoIds: string[]): Promise<void> {
+  const { error: delErr } = await supabase.from("tc_medidas_tipo_vehiculo").delete().eq("medida_id", medidaId);
+  if (delErr) throw new Error(delErr.message);
+  if (tipoVehiculoIds.length === 0) return;
+  const { error } = await supabase.from("tc_medidas_tipo_vehiculo")
+    .insert(tipoVehiculoIds.map((tipo_vehiculo_id) => ({ medida_id: medidaId, tipo_vehiculo_id })));
+  if (error) throw new Error(error.message);
 }
 export async function crearMedida(valor: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: valor.trim() });
