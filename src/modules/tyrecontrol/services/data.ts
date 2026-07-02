@@ -4,7 +4,7 @@ import type {
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
-  RevisionVehiculo, RevisionDetalle,
+  RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -391,4 +391,19 @@ export async function listarRevisiones(vehiculoId?: string): Promise<RevisionVeh
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as RevisionVehiculo[];
+}
+
+// ── Fase 8: Autorizaciones ──────────────────────────────────────
+export async function listarAutorizacionesPendientes(): Promise<AutorizacionOperacion[]> {
+  const { data, error } = await supabase.from("autorizaciones_operaciones")
+    .select("*, operacion:operaciones_neumaticos(*)").eq("estado", "pendiente").order("fecha_solicitud", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as AutorizacionOperacion[];
+}
+
+export async function resolverAutorizacion(id: string, aprobar: boolean): Promise<void> {
+  const { error } = await supabase.from("autorizaciones_operaciones")
+    .update({ estado: aprobar ? "aprobada" : "rechazada", autorizado_por: (await supabase.auth.getUser()).data.user?.id, fecha_autorizacion: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
 }

@@ -1,0 +1,220 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
+  crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones,
+} from "../services/data";
+import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
+import { inputCls, Field } from "../components/ui";
+import { useTyreAuth } from "../contexts/TyreAuthContext";
+
+type Detalle = Partial<RevisionDetalle>;
+
+export default function RevisionVehiculo() {
+  const { perfil } = useTyreAuth();
+  const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
+
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
+  const [empresaId, setEmpresaId] = useState(esCliente ? (perfil?.empresa_id ?? "") : "");
+  const [vehiculoId, setVehiculoId] = useState("");
+  const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
+  const [montajes, setMontajes] = useState<MontajeActual[]>([]);
+  const [historialRevisiones, setHistorialRevisiones] = useState<RevisionVehiculoT[]>([]);
+
+  const [revision, setRevision] = useState<RevisionVehiculoT | null>(null);
+  const [kmVehiculo, setKmVehiculo] = useState("");
+  const [detalles, setDetalles] = useState<Record<string, Detalle>>({});
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    if (!esCliente) listarEmpresas().then(setEmpresas);
+    if (esCliente && perfil?.empresa_id) cargarVehiculos(perfil.empresa_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function cargarVehiculos(emp: string) {
+    setVehiculoId(""); setPosiciones([]); setMontajes([]); setRevision(null); setDetalles({});
+    setVehiculos(emp ? await listarVehiculos({ empresaId: emp }) : []);
+  }
+
+  async function cargarVehiculo(vid: string) {
+    setVehiculoId(vid); setRevision(null); setDetalles({});
+    const veh = vehiculos.find((v) => v.id === vid);
+    if (!veh) { setPosiciones([]); setMontajes([]); return; }
+    setKmVehiculo(veh.km_actual != null ? String(veh.km_actual) : "");
+    const [pos, mon, hist] = await Promise.all([
+      veh.tipo_vehiculo_id ? listarPosiciones(veh.tipo_vehiculo_id) : Promise.resolve([]),
+      listarMontajesVehiculo(vid),
+      listarRevisiones(vid),
+    ]);
+    setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist);
+  }
+
+  const montajePorPosicion = useMemo(() => {
+    const m = new Map<string, MontajeActual>();
+    for (const x of montajes) m.set(x.posicion_id, x);
+    return m;
+  }, [montajes]);
+
+  async function iniciarRevision() {
+    if (!vehiculoId || !empresaId) return;
+    setSaving(true); setMsg("");
+    try {
+      const r = await crearRevision({ empresaId, vehiculoId, kmVehiculo: kmVehiculo ? Number(kmVehiculo) : null, tecnicoId: perfil?.id ?? null });
+      setRevision(r);
+      const inicial: Record<string, Detalle> = {};
+      posiciones.forEach((p) => {
+        inicial[p.id] = { posicion_id: p.id, neumatico_id: montajePorPosicion.get(p.id)?.neumatico_id ?? null };
+      });
+      setDetalles(inicial);
+    } catch (e: any) { setMsg(e?.message || "Error al crear la revisión"); } finally { setSaving(false); }
+  }
+
+  function set(posicionId: string, patch: Partial<Detalle>) {
+    setDetalles((prev) => ({ ...prev, [posicionId]: { ...prev[posicionId], posicion_id: posicionId, ...patch } }));
+  }
+
+  async function guardarBorrador() {
+    if (!revision) return;
+    setSaving(true); setMsg("");
+    try {
+      for (const p of posiciones) {
+        const d = detalles[p.id];
+        if (!d) continue;
+        await guardarDetalleRevision({
+          revision_id: revision.id, empresa_id: empresaId, vehiculo_id: vehiculoId, posicion_id: p.id,
+          neumatico_id: d.neumatico_id ?? null,
+          profundidad_mm: d.profundidad_mm ?? null, presion_bar: d.presion_bar ?? null, temperatura: d.temperatura ?? null,
+          metodo_profundidad: d.profundidad_mm != null ? "manual" : null, metodo_presion: d.presion_bar != null ? "manual" : null,
+          estado_visual: d.estado_visual ?? null, observaciones: d.observaciones ?? null,
+          no_accesible: !!d.no_accesible, neumatico_ausente: !!d.neumatico_ausente,
+        });
+      }
+      setMsg("✔ Borrador guardado");
+    } catch (e: any) { setMsg(e?.message || "Error al guardar"); } finally { setSaving(false); }
+  }
+
+  async function finalizar() {
+    if (!revision) return;
+    const faltan = posiciones.filter((p) => {
+      const d = detalles[p.id];
+      const ocupado = !!montajePorPosicion.get(p.id);
+      if (!ocupado || d?.no_accesible || d?.neumatico_ausente) return false;
+      return d?.profundidad_mm == null && d?.presion_bar == null;
+    });
+    if (faltan.length > 0) {
+      setMsg(`Faltan posiciones por medir: ${faltan.map((p) => p.codigo_posicion).join(", ")}. Márcalas como "no accesible" si no se pueden medir, o complétalas.`);
+      return;
+    }
+    setSaving(true); setMsg("");
+    try {
+      await guardarBorrador();
+      await completarRevision(revision.id);
+      setMsg("✔ Revisión completada");
+      const hist = await listarRevisiones(vehiculoId);
+      setHistorialRevisiones(hist);
+      setRevision(null); setDetalles({});
+    } catch (e: any) { setMsg(e?.message || "Error al finalizar"); } finally { setSaving(false); }
+  }
+
+  return (
+    <div>
+      <h1 className="mb-3 text-lg font-black">Revisión de vehículo</h1>
+      {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
+
+      <div className="mb-3 flex flex-wrap gap-2">
+        {!esCliente && (
+          <select className={`${inputCls} w-auto`} value={empresaId} onChange={(e) => { setEmpresaId(e.target.value); cargarVehiculos(e.target.value); }}>
+            <option value="">Selecciona empresa…</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+          </select>
+        )}
+        <select className={`${inputCls} w-auto`} value={vehiculoId} onChange={(e) => cargarVehiculo(e.target.value)} disabled={!empresaId}>
+          <option value="">Selecciona vehículo…</option>
+          {vehiculos.map((v) => <option key={v.id} value={v.id}>{v.matricula}</option>)}
+        </select>
+      </div>
+
+      {!vehiculoId ? (
+        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-10 text-center text-sm text-slate-500">Selecciona empresa y vehículo.</div>
+      ) : !revision ? (
+        <div className="rounded-lg bg-slate-800 p-4">
+          <Field label="Km actuales del vehículo">
+            <input type="number" className={`${inputCls} max-w-xs`} value={kmVehiculo} onChange={(e) => setKmVehiculo(e.target.value)} />
+          </Field>
+          <button onClick={iniciarRevision} disabled={saving} className="mt-3 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Iniciar revisión</button>
+
+          {historialRevisiones.length > 0 && (
+            <div className="mt-4">
+              <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Revisiones anteriores</div>
+              <div className="flex flex-col gap-1">
+                {historialRevisiones.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-[12px] text-slate-300">
+                    <span>{r.fecha_revision} · {r.km_vehiculo ?? "—"} km</span>
+                    <span className="text-slate-500">{r.estado_revision}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <div className="mb-3 flex items-center justify-between rounded-lg bg-slate-800 p-3 text-sm">
+            <span>Revisión en curso · {new Date().toLocaleDateString("es-ES")} · {kmVehiculo} km</span>
+            <div className="flex gap-2">
+              <button onClick={guardarBorrador} disabled={saving} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200 disabled:opacity-50">Guardar borrador</button>
+              <button onClick={finalizar} disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">Finalizar revisión</button>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {posiciones.map((p) => {
+              const m = montajePorPosicion.get(p.id);
+              const d = detalles[p.id] ?? {};
+              return (
+                <div key={p.id} className="rounded-lg bg-slate-800 p-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</span>
+                    {d.alerta_generada && <span className="rounded-full bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">Alerta</span>}
+                  </div>
+                  <div className="mb-2 text-[11px] text-slate-400">
+                    {m?.neumatico ? `${m.neumatico.numero_interno ?? m.neumatico.codigo_interno} · ${m.neumatico.marca ?? ""} ${m.neumatico.medida ?? ""}` : "Sin neumático montado"}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Profundidad (mm)">
+                      <input type="number" step="0.1" className={inputCls} value={d.profundidad_mm ?? ""} disabled={d.no_accesible || d.neumatico_ausente}
+                        onChange={(e) => set(p.id, { profundidad_mm: e.target.value === "" ? null : Number(e.target.value) })} />
+                    </Field>
+                    <Field label="Presión (bar)">
+                      <input type="number" step="0.1" className={inputCls} value={d.presion_bar ?? ""} disabled={d.no_accesible || d.neumatico_ausente}
+                        onChange={(e) => set(p.id, { presion_bar: e.target.value === "" ? null : Number(e.target.value) })} />
+                    </Field>
+                  </div>
+                  <Field label="Estado visual">
+                    <input className={inputCls} value={d.estado_visual ?? ""} disabled={d.no_accesible || d.neumatico_ausente}
+                      onChange={(e) => set(p.id, { estado_visual: e.target.value })} placeholder="Correcto, desgaste irregular…" />
+                  </Field>
+                  <Field label="Observaciones">
+                    <input className={inputCls} value={d.observaciones ?? ""} onChange={(e) => set(p.id, { observaciones: e.target.value })} />
+                  </Field>
+                  <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                    <label className="flex items-center gap-1">
+                      <input type="checkbox" checked={!!d.no_accesible} onChange={(e) => set(p.id, { no_accesible: e.target.checked })} />
+                      No accesible
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input type="checkbox" checked={!!d.neumatico_ausente} onChange={(e) => set(p.id, { neumatico_ausente: e.target.checked })} />
+                      Neumático ausente
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

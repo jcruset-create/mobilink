@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerNeumatico, historialNeumatico, montajeActualDeNeumatico } from "../services/data";
+import { obtenerNeumatico, historialNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd } from "../services/data";
 import type { HistorialMontaje, MontajeActual, Neumatico } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { TableWrap, tdCls, thCls } from "../components/ui";
@@ -11,12 +11,32 @@ export default function NeumaticoDetalle() {
   const [n, setN] = useState<Neumatico | null>(null);
   const [montaje, setMontaje] = useState<MontajeActual | null>(null);
   const [historial, setHistorial] = useState<HistorialMontaje[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
 
-  useEffect(() => {
-    obtenerNeumatico(id).then(setN);
-    montajeActualDeNeumatico(id).then(setMontaje);
-    historialNeumatico(id).then(setHistorial);
-  }, [id]);
+  async function cargar() {
+    setN(await obtenerNeumatico(id));
+    setMontaje(await montajeActualDeNeumatico(id));
+    setHistorial(await historialNeumatico(id));
+  }
+  useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
+
+  async function reparar() {
+    const motivo = window.prompt("Motivo de la reparación:", "reparacion");
+    if (!motivo) return;
+    setSaving(true); setMsg("");
+    try { await repararNeumatico(id, motivo); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+  }
+
+  async function descartar() {
+    if (!window.confirm("¿Confirmas el descarte definitivo de este neumático?")) return;
+    const motivo = window.prompt("Motivo del descarte:", "fin_vida");
+    if (!motivo) return;
+    setSaving(true); setMsg("");
+    try { await descartarNeumaticoStd(id, motivo); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+  }
 
   const dato = (l: string, v?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{v || "—"}</div></div>
@@ -27,9 +47,16 @@ export default function NeumaticoDetalle() {
     <div>
       <div className="mb-3 flex items-center gap-2">
         <button onClick={() => navigate("/tyrecontrol/neumaticos")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Neumáticos</button>
-        <h1 className="text-lg font-black">{n.codigo_interno ?? n.numero_serie ?? "Neumático"}</h1>
+        <h1 className="text-lg font-black">{n.numero_interno ?? n.codigo_interno ?? n.numero_serie ?? "Neumático"}</h1>
         <span className="rounded-full bg-slate-700 px-2 py-0.5 text-xs font-bold text-slate-200">{ESTADO_NEUMATICO_LABELS[n.estado]}</span>
+        {n.estado !== "montado" && n.estado !== "descartado" && (
+          <div className="ml-auto flex gap-2">
+            {n.estado !== "reparacion" && <button onClick={reparar} disabled={saving} className="rounded bg-purple-600 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50">Enviar a reparación</button>}
+            <button onClick={descartar} disabled={saving} className="rounded bg-rose-600 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50">Descartar</button>
+          </div>
+        )}
       </div>
+      {msg && <div className="mb-3 text-sm text-red-300">{msg}</div>}
 
       <div className="grid gap-3 lg:grid-cols-2">
         <div className="rounded-lg bg-slate-800 p-3">

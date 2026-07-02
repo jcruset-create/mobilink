@@ -5,6 +5,8 @@ import {
   actualizarImagenChasis, guardarCoordenadasPosicion,
 } from "../services/data";
 import { inputCls } from "./ui";
+import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
+import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
 
 interface Coords { x: number; y: number; w: number; h: number; }
 
@@ -63,6 +65,8 @@ export default function VehicleLayoutImage({
   const [disponibles, setDisponibles] = useState<Neumatico[]>([]);
   const [neumaticoElegido, setNeumaticoElegido] = useState("");
   const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
+  const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
+  const [modalFueraAlmacen, setModalFueraAlmacen] = useState(false);
   const [arrastrando, setArrastrando] = useState<string | null>(null);
   const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
 
@@ -267,6 +271,7 @@ export default function VehicleLayoutImage({
             <div className="mt-1 text-[10px] text-slate-500">Desde {montajeSeleccionado.fecha_montaje}{montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}</div>
             <div className="mt-3 flex flex-col gap-2">
               <button onClick={() => onFicha?.(montajeSeleccionado.neumatico!.id)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200">Ver ficha</button>
+              {editable && <button onClick={() => setModalFicha({ sustitucion: true })} className="rounded bg-sky-600 px-2 py-1 text-[12px] font-bold text-white">Sustituir</button>}
               {editable && <button onClick={confirmarDesmontar} disabled={saving} className="rounded bg-rose-600 px-2 py-1 text-[12px] font-bold text-white disabled:opacity-50">Desmontar</button>}
             </div>
           </div>
@@ -275,12 +280,18 @@ export default function VehicleLayoutImage({
             <div className="text-[11px] font-bold uppercase text-slate-400">{posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}</div>
             <div className="mt-1 text-xs text-slate-500">Posición libre.</div>
             {editable && (
-              <div className="mt-2">
-                <select className={`${inputCls} text-[12px]`} value={neumaticoElegido} onChange={(e) => setNeumaticoElegido(e.target.value)}>
-                  <option value="">Elegir neumático de almacén…</option>
-                  {disponibles.map((n) => <option key={n.id} value={n.id}>{n.codigo_interno ?? n.numero_serie} · {n.marca} {n.medida}</option>)}
-                </select>
-                <button onClick={confirmarMontar} disabled={saving || !neumaticoElegido} className="mt-2 w-full rounded bg-emerald-600 px-2 py-1 text-[12px] font-bold text-white disabled:opacity-50">Montar</button>
+              <div className="mt-2 flex flex-col gap-2">
+                <button onClick={() => setModalFicha({ sustitucion: false })} className="w-full rounded bg-emerald-600 px-2 py-1 text-[12px] font-bold text-white">Montar desde ficha genérica</button>
+                {disponibles.length > 0 && (
+                  <>
+                    <select className={`${inputCls} text-[12px]`} value={neumaticoElegido} onChange={(e) => setNeumaticoElegido(e.target.value)}>
+                      <option value="">…o elegir neumático ya existente</option>
+                      {disponibles.map((n) => <option key={n.id} value={n.id}>{n.numero_interno ?? n.codigo_interno ?? n.numero_serie} · {n.marca} {n.medida}</option>)}
+                    </select>
+                    <button onClick={confirmarMontar} disabled={saving || !neumaticoElegido} className="w-full rounded border border-emerald-600 px-2 py-1 text-[12px] font-bold text-emerald-300 disabled:opacity-50">Montar seleccionado</button>
+                  </>
+                )}
+                <button onClick={() => setModalFueraAlmacen(true)} className="w-full rounded border border-amber-600 px-2 py-1 text-[12px] font-bold text-amber-300">Montar fuera de almacén</button>
               </div>
             )}
           </div>
@@ -297,6 +308,26 @@ export default function VehicleLayoutImage({
             <button onClick={() => enviarA(menuContextual.codigo, "descartado")} className="block w-full px-3 py-1.5 text-left text-[12px] text-rose-300 hover:bg-slate-700">Descartar neumático</button>
           </div>
         </>
+      )}
+
+      {modalFicha && posSeleccionada && (
+        <ModalMontarDesdeFicha
+          posicionNombre={posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}
+          vehiculoId={vehiculoId}
+          posicionId={posSeleccionada.id}
+          montajeActualId={modalFicha.sustitucion ? montajeSeleccionado?.id : undefined}
+          onClose={() => setModalFicha(null)}
+          onDone={() => { setModalFicha(null); setSeleccion(null); onChanged?.(); }}
+        />
+      )}
+      {modalFueraAlmacen && posSeleccionada && (
+        <ModalMontarFueraAlmacen
+          posicionNombre={posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}
+          vehiculoId={vehiculoId}
+          posicionId={posSeleccionada.id}
+          onClose={() => setModalFueraAlmacen(false)}
+          onDone={() => { setModalFueraAlmacen(false); setSeleccion(null); onChanged?.(); }}
+        />
       )}
     </div>
   );

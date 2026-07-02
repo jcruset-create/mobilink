@@ -14,6 +14,8 @@ import Neumaticos from "./pages/Neumaticos";
 import NeumaticoDetalle from "./pages/NeumaticoDetalle";
 import MontajesActuales from "./pages/MontajesActuales";
 import Operaciones from "./pages/Operaciones";
+import RevisionVehiculo from "./pages/RevisionVehiculo";
+import Autorizaciones from "./pages/Autorizaciones";
 import MiEmpresa from "./pages/MiEmpresa";
 import MisDelegaciones from "./pages/MisDelegaciones";
 import MisVehiculos from "./pages/MisVehiculos";
@@ -34,6 +36,7 @@ export default function TyreControlApp() {
             {/* Montajes/Operaciones: admin y cliente (la pantalla ajusta acciones por rol) */}
             <Route path="montajes" element={<MontajesActuales />} />
             <Route path="operaciones" element={<Operaciones />} />
+            <Route path="revision-vehiculo" element={<RevisionVehiculo />} />
 
             {/* Cliente */}
             <Route element={<RoleRoute roles={["cliente"]} />}>
@@ -53,6 +56,7 @@ export default function TyreControlApp() {
               <Route path="vehiculos/:id" element={<VehiculoDetalle />} />
               <Route path="neumaticos" element={<Neumaticos />} />
               <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
+              <Route path="autorizaciones" element={<Autorizaciones />} />
               <Route path="configuracion" element={<Configuracion />} />
             </Route>
           </Route>

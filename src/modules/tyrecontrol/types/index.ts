@@ -335,4 +335,5 @@ export interface AutorizacionOperacion {
   estado: "pendiente" | "aprobada" | "rechazada";
   fecha_solicitud: string;
   fecha_autorizacion?: string | null;
+  operacion?: OperacionNeumatico | null;
 }
