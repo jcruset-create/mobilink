@@ -3,6 +3,7 @@ import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
+  ClienteAlmacen,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -44,6 +45,20 @@ export async function crearEmpresa(input: EmpresaInput): Promise<Empresa> {
 
 export async function actualizarEmpresa(id: string, patch: Partial<EmpresaInput>): Promise<void> {
   const { error } = await supabase.from("tc_empresas").update({ ...pick(patch, COLS_EMPRESA), updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Enlace con almacén (clientes) ───────────────────────────────
+export async function listarClientesAlmacen(q?: string): Promise<ClienteAlmacen[]> {
+  let query = supabase.from("tc_clientes_almacen").select("*").order("nombre");
+  if (q) query = query.ilike("nombre", `%${q}%`);
+  const { data, error } = await query.limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ClienteAlmacen[];
+}
+
+export async function enlazarClienteAlmacen(empresaId: string, clienteAlmacenId: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_empresas").update({ cliente_almacen_id: clienteAlmacenId, updated_at: new Date().toISOString() }).eq("id", empresaId);
   if (error) throw new Error(error.message);
 }
 

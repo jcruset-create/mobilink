@@ -12,8 +12,20 @@ export interface Empresa {
   codigo_postal?: string | null;
   pais?: string | null;
   activo: boolean;
+  cliente_almacen_id?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ClienteAlmacen {
+  id: string;
+  empresa_id_almacen: string;
+  codigo: string | null;
+  nombre: string;
+  nif: string | null;
+  telefono: string | null;
+  email: string | null;
+  activo: boolean;
 }
 
 export interface Delegacion {

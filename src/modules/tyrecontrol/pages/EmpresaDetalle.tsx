@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   obtenerEmpresa, actualizarEmpresa, listarDelegaciones, crearDelegacion, actualizarDelegacion, listarUsuarios,
+  listarClientesAlmacen, enlazarClienteAlmacen,
 } from "../services/data";
-import type { Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil } from "../types";
+import type { Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, ClienteAlmacen } from "../types";
 import { ROL_LABELS } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { EmpresaFormFields, EMPRESA_VACIA, DelegacionFormFields, delegacionVacia } from "../components/forms";
@@ -18,11 +19,19 @@ export default function EmpresaDetalle() {
   const [editEmpresa, setEditEmpresa] = useState<EmpresaInput | null>(null);
   const [modalDele, setModalDele] = useState<null | { id: string | null; draft: DelegacionInput }>(null);
   const [saving, setSaving] = useState(false);
+  const [modalAlmacen, setModalAlmacen] = useState(false);
+  const [busquedaAlmacen, setBusquedaAlmacen] = useState("");
+  const [clientesAlmacen, setClientesAlmacen] = useState<ClienteAlmacen[]>([]);
+  const [clienteEnlazado, setClienteEnlazado] = useState<ClienteAlmacen | null>(null);
 
   async function cargar() {
     try {
       const [e, d, u] = await Promise.all([obtenerEmpresa(id), listarDelegaciones(id), listarUsuarios(id)]);
       setEmpresa(e); setDeles(d); setUsuarios(u);
+      if (e?.cliente_almacen_id) {
+        const lista = await listarClientesAlmacen();
+        setClienteEnlazado(lista.find((c) => c.id === e.cliente_almacen_id) ?? null);
+      } else setClienteEnlazado(null);
     } catch (er: any) { setMsg(er?.message || "Error cargando"); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
@@ -31,6 +40,17 @@ export default function EmpresaDetalle() {
     if (!editEmpresa) return;
     setSaving(true);
     try { await actualizarEmpresa(id, editEmpresa); setEditEmpresa(null); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+  }
+  async function abrirModalAlmacen() {
+    setBusquedaAlmacen(""); setClientesAlmacen(await listarClientesAlmacen()); setModalAlmacen(true);
+  }
+  async function buscarClientesAlmacen(q: string) {
+    setBusquedaAlmacen(q); setClientesAlmacen(await listarClientesAlmacen(q));
+  }
+  async function enlazar(clienteId: string | null) {
+    setSaving(true);
+    try { await enlazarClienteAlmacen(id, clienteId); setModalAlmacen(false); await cargar(); }
     catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
   }
   async function guardarDele() {
@@ -67,6 +87,17 @@ export default function EmpresaDetalle() {
         {dato("CIF", empresa.cif)}{dato("Teléfono", empresa.telefono)}{dato("Email", empresa.email)}
         {dato("Dirección", empresa.direccion)}{dato("Ciudad", empresa.ciudad)}{dato("Provincia", empresa.provincia)}
         {dato("C. Postal", empresa.codigo_postal)}{dato("País", empresa.pais)}
+      </div>
+
+      {/* Enlace almacén */}
+      <div className="mb-3 flex items-center justify-between rounded-lg bg-slate-800 p-3">
+        <div>
+          <div className="text-[11px] font-bold uppercase text-slate-400">Cliente de almacén enlazado</div>
+          <div className="text-sm text-slate-200">{clienteEnlazado ? `${clienteEnlazado.nombre}${clienteEnlazado.codigo ? " · " + clienteEnlazado.codigo : ""}` : "Sin enlazar"}</div>
+        </div>
+        <button onClick={abrirModalAlmacen} className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200">
+          {empresa.cliente_almacen_id ? "Cambiar enlace" : "Enlazar con almacén"}
+        </button>
       </div>
 
       {/* Delegaciones */}
@@ -137,6 +168,33 @@ export default function EmpresaDetalle() {
             <button onClick={guardarDele} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Guardar</button>
           </div>}>
           <DelegacionFormFields draft={modalDele.draft} set={(p) => setModalDele({ ...modalDele, draft: { ...modalDele.draft, ...p } })} />
+        </Modal>
+      )}
+      {modalAlmacen && (
+        <Modal title="Enlazar con cliente de almacén" onClose={() => setModalAlmacen(false)}
+          footer={<div className="flex justify-between gap-2">
+            {empresa.cliente_almacen_id
+              ? <button onClick={() => enlazar(null)} disabled={saving} className="rounded-lg border border-rose-600 px-4 py-2 text-sm text-rose-300 disabled:opacity-50">Quitar enlace</button>
+              : <span />}
+            <button onClick={() => setModalAlmacen(false)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cerrar</button>
+          </div>}>
+          <input
+            className="mb-3 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            placeholder="Buscar cliente por nombre…"
+            value={busquedaAlmacen}
+            onChange={(e) => buscarClientesAlmacen(e.target.value)}
+          />
+          <div className="max-h-72 overflow-y-auto">
+            {clientesAlmacen.length === 0
+              ? <div className="p-4 text-center text-sm text-slate-500">Sin resultados.</div>
+              : clientesAlmacen.map((c) => (
+                <button key={c.id} onClick={() => enlazar(c.id)} disabled={saving}
+                  className="flex w-full items-center justify-between rounded px-2 py-2 text-left text-sm text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+                  <span>{c.nombre}{c.codigo ? ` · ${c.codigo}` : ""}</span>
+                  {empresa.cliente_almacen_id === c.id && <span className="text-[11px] font-bold text-emerald-400">Enlazado</span>}
+                </button>
+              ))}
+          </div>
         </Modal>
       )}
     </div>
