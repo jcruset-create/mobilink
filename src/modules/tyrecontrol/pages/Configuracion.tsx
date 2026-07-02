@@ -1,12 +1,105 @@
 import { useEffect, useState } from "react";
 import {
-  listarMarcas, crearMarca, listarModelos, crearModelo, listarMedidas, crearMedida,
+  listarMarcas, crearMarca, actualizarMarca, eliminarMarca, subirLogoMarca,
+  listarModelos, crearModelo, actualizarModelo, eliminarModelo,
+  listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
   listarTiposVehiculo, actualizarConfiguracionEjes,
 } from "../services/data";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+
+function FilaMarca({ marca, seleccionada, puedeEditar, onSeleccionar, onCambio }: {
+  marca: MarcaNeumatico; seleccionada: boolean; puedeEditar: boolean; onSeleccionar: () => void; onCambio: () => void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(marca.nombre);
+  const [subiendo, setSubiendo] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function guardarNombre() {
+    if (!nombre.trim() || nombre === marca.nombre) { setEditando(false); return; }
+    try { await actualizarMarca(marca.id, { nombre }); setEditando(false); onCambio(); }
+    catch (e: any) { setMsg(e?.message || "Error"); }
+  }
+
+  async function subirLogo(file: File | undefined) {
+    if (!file) return;
+    setSubiendo(true); setMsg("");
+    try { const url = await subirLogoMarca(marca.id, file); await actualizarMarca(marca.id, { logo_url: url }); onCambio(); }
+    catch (e: any) { setMsg(e?.message || "Error al subir logo"); } finally { setSubiendo(false); }
+  }
+
+  async function borrar() {
+    if (!window.confirm(`¿Eliminar la marca "${marca.nombre}"?`)) return;
+    try { await eliminarMarca(marca.id); onCambio(); }
+    catch (e: any) { setMsg(e?.message || "Error"); }
+  }
+
+  return (
+    <div className={`rounded px-2 py-1.5 text-[12px] ${seleccionada ? "bg-sky-600 text-white" : "bg-slate-900 text-slate-300"}`}>
+      <div className="flex items-center gap-2">
+        {marca.logo_url ? (
+          <img src={marca.logo_url} alt={marca.nombre} className="h-5 w-5 rounded-sm object-contain bg-white" />
+        ) : (
+          <div className="h-5 w-5 rounded-sm bg-slate-700" />
+        )}
+        {editando ? (
+          <input autoFocus className="flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[12px] text-slate-100"
+            value={nombre} onChange={(e) => setNombre(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && guardarNombre()} onBlur={guardarNombre} />
+        ) : (
+          <span className="flex-1 cursor-pointer" onClick={onSeleccionar}>{marca.nombre}</span>
+        )}
+        {puedeEditar && !editando && (
+          <div className="flex gap-1">
+            <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+              {subiendo ? "…" : "logo"}
+              <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => subirLogo(e.target.files?.[0])} />
+            </label>
+            <button onClick={() => setEditando(true)} className="text-[10px] text-slate-400 hover:underline">editar</button>
+            <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+          </div>
+        )}
+      </div>
+      {msg && <div className="mt-1 text-[10px] text-red-300">{msg}</div>}
+    </div>
+  );
+}
+
+function FilaModelo({ modelo, puedeEditar, onCambio }: { modelo: ModeloNeumatico; puedeEditar: boolean; onCambio: () => void }) {
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(modelo.nombre);
+
+  async function guardar() {
+    if (!nombre.trim() || nombre === modelo.nombre) { setEditando(false); return; }
+    await actualizarModelo(modelo.id, nombre);
+    setEditando(false); onCambio();
+  }
+  async function borrar() {
+    if (!window.confirm(`¿Eliminar el modelo "${modelo.nombre}"?`)) return;
+    await eliminarModelo(modelo.id); onCambio();
+  }
+
+  return (
+    <div className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
+      {editando ? (
+        <input autoFocus className="flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[12px] text-slate-100"
+          value={nombre} onChange={(e) => setNombre(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && guardar()} onBlur={guardar} />
+      ) : (
+        <span className="flex-1">{modelo.nombre}</span>
+      )}
+      {puedeEditar && !editando && (
+        <div className="flex gap-1">
+          <button onClick={() => setEditando(true)} className="text-[10px] text-slate-400 hover:underline">editar</button>
+          <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehiculo; puedeEditar: boolean; onGuardado: () => void }) {
   const [valor, setValor] = useState(tipo.configuracion_ejes ?? "");
@@ -116,10 +209,8 @@ export default function Configuracion() {
             )}
             <div className="max-h-64 space-y-1 overflow-y-auto">
               {marcas.map((m) => (
-                <div key={m.id} onClick={() => setMarcaSel(m.id === marcaSel ? "" : m.id)}
-                  className={`cursor-pointer rounded px-2 py-1 text-[12px] ${marcaSel === m.id ? "bg-sky-600 text-white" : "bg-slate-900 text-slate-300"}`}>
-                  {m.nombre}
-                </div>
+                <FilaMarca key={m.id} marca={m} seleccionada={marcaSel === m.id} puedeEditar={puedeEditar}
+                  onSeleccionar={() => setMarcaSel(m.id === marcaSel ? "" : m.id)} onCambio={cargar} />
               ))}
             </div>
           </div>
@@ -137,7 +228,10 @@ export default function Configuracion() {
             )}
             <div className="max-h-64 space-y-1 overflow-y-auto">
               {modelos.length === 0 ? <div className="text-[11px] text-slate-500">Sin modelos.</div>
-              : modelos.map((m) => <div key={m.id} className="rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">{m.nombre}</div>)}
+              : modelos.map((m) => (
+                <FilaModelo key={m.id} modelo={m} puedeEditar={puedeEditar}
+                  onCambio={() => listarModelos(marcaSel || undefined).then(setModelos)} />
+              ))}
             </div>
           </div>
 

@@ -426,6 +426,26 @@ export async function crearMarca(nombre: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: nombre.trim() });
   if (error) throw new Error(error.message);
 }
+export async function actualizarMarca(id: string, patch: { nombre?: string; logo_url?: string | null }): Promise<void> {
+  const payload: Record<string, any> = {};
+  if (patch.nombre != null) payload.nombre = patch.nombre.trim();
+  if (patch.logo_url !== undefined) payload.logo_url = patch.logo_url;
+  const { error } = await supabase.from("tc_cat_marcas_neumatico").update(payload).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function eliminarMarca(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_neumatico").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+const BUCKET_MARCAS = "tc-marcas";
+export async function subirLogoMarca(marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `${marcaId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from(BUCKET_MARCAS).upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from(BUCKET_MARCAS).getPublicUrl(ruta).data.publicUrl;
+}
 
 export async function listarModelos(marcaId?: string): Promise<ModeloNeumatico[]> {
   let q = supabase.from("tc_cat_modelos_neumatico").select("*").eq("activo", true).order("nombre");
@@ -436,6 +456,14 @@ export async function listarModelos(marcaId?: string): Promise<ModeloNeumatico[]
 }
 export async function crearModelo(marcaId: string | null, nombre: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_modelos_neumatico").insert({ marca_id: marcaId, nombre: nombre.trim() });
+  if (error) throw new Error(error.message);
+}
+export async function actualizarModelo(id: string, nombre: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_modelos_neumatico").update({ nombre: nombre.trim() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function eliminarModelo(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_modelos_neumatico").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 

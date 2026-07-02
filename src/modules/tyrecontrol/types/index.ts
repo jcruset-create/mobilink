@@ -340,7 +340,7 @@ export interface AutorizacionOperacion {
 }
 
 // ── Catálogos de marca / modelo / medida de neumático ──────────
-export interface MarcaNeumatico { id: string; nombre: string; activo: boolean; }
+export interface MarcaNeumatico { id: string; nombre: string; activo: boolean; logo_url?: string | null; }
 export interface ModeloNeumatico { id: string; marca_id: string | null; nombre: string; activo: boolean; }
 export interface MedidaNeumatico { id: string; valor: string; activo: boolean; }
 export interface IndiceCarga { id: string; valor: string; activo: boolean; }
