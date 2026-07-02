@@ -1,0 +1,303 @@
+import { useEffect, useRef, useState } from "react";
+import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
+import {
+  listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico,
+  actualizarImagenChasis, guardarCoordenadasPosicion,
+} from "../services/data";
+import { inputCls } from "./ui";
+
+interface Coords { x: number; y: number; w: number; h: number; }
+
+const DEFAULT_W = 9;
+const DEFAULT_H = 13;
+
+// Posición de partida en cascada para posiciones aún sin calibrar,
+// para que sean visibles y arrastrables aunque no tengan pos_x/y en BD.
+function defaultCoords(index: number): Coords {
+  const col = index % 2;
+  const row = Math.floor(index / 2);
+  return { x: col === 0 ? 8 : 83, y: 10 + row * 18, w: DEFAULT_W, h: DEFAULT_H };
+}
+
+function coordsDe(p: PosicionVehiculo, index: number): Coords {
+  if (p.pos_x != null && p.pos_y != null && p.pos_w != null && p.pos_h != null) {
+    return { x: p.pos_x, y: p.pos_y, w: p.pos_w, h: p.pos_h };
+  }
+  return defaultCoords(index);
+}
+
+interface Props {
+  tipo?: TipoVehiculo | null;
+  posiciones: PosicionVehiculo[];
+  vehiculoId: string;
+  empresaId: string;
+  montajes: MontajeActual[];
+  editable: boolean;         // puede montar/desmontar/rotar
+  puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
+  onFicha?: (neumaticoId: string) => void;
+  onChanged?: () => void;
+  onTipoChanged?: () => void;
+}
+
+export default function VehicleLayoutImage({
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, onFicha, onChanged, onTipoChanged,
+}: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<Record<string, Coords>>({});
+  const [calibrando, setCalibrando] = useState(false);
+  const [urlDraft, setUrlDraft] = useState(tipo?.imagen_chasis_url ?? "");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    const next: Record<string, Coords> = {};
+    posiciones.forEach((p, i) => { next[p.codigo_posicion] = coordsDe(p, i); });
+    setCoords(next);
+    setUrlDraft(tipo?.imagen_chasis_url ?? "");
+  }, [posiciones, tipo?.id, tipo?.imagen_chasis_url]);
+
+  const posicionPorCodigo = new Map(posiciones.map((p) => [p.codigo_posicion, p]));
+  const montajePorPosicionId = new Map(montajes.map((m) => [m.posicion_id, m]));
+
+  const [seleccion, setSeleccion] = useState<string | null>(null);
+  const [disponibles, setDisponibles] = useState<Neumatico[]>([]);
+  const [neumaticoElegido, setNeumaticoElegido] = useState("");
+  const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
+  const [arrastrando, setArrastrando] = useState<string | null>(null);
+  const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
+
+  const posSeleccionada = seleccion ? posicionPorCodigo.get(seleccion) : null;
+  const montajeSeleccionado = posSeleccionada ? montajePorPosicionId.get(posSeleccionada.id) : undefined;
+
+  useEffect(() => {
+    if (!seleccion || montajeSeleccionado || !editable || calibrando) { setDisponibles([]); return; }
+    listarNeumaticosDisponibles(empresaId).then(setDisponibles);
+  }, [seleccion, montajeSeleccionado, editable, calibrando, empresaId]);
+
+  function puntoPct(clientX: number, clientY: number) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: ((clientX - rect.left) / rect.width) * 100, y: ((clientY - rect.top) / rect.height) * 100 };
+  }
+
+  function zonaEn(x: number, y: number): string | null {
+    for (const [codigo, c] of Object.entries(coords)) {
+      if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) return codigo;
+    }
+    return null;
+  }
+
+  function onPointerDownZona(e: React.PointerEvent, codigo: string) {
+    if (calibrando) {
+      if (!puedeCalibrar) return;
+      e.stopPropagation();
+      (e.target as Element).setPointerCapture(e.pointerId);
+      setArrastrando(codigo);
+      return;
+    }
+    if (!editable) return;
+    const p = posicionPorCodigo.get(codigo);
+    if (!p || !montajePorPosicionId.get(p.id)) return; // solo se arrastran posiciones ocupadas
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    setArrastrando(codigo);
+    setSeleccion(null);
+  }
+
+  function onPointerMoveContainer(e: React.PointerEvent) {
+    if (!arrastrando) return;
+    const p = puntoPct(e.clientX, e.clientY);
+    if (calibrando) {
+      setCoords((prev) => ({ ...prev, [arrastrando]: { ...prev[arrastrando], x: Math.max(0, Math.min(100 - prev[arrastrando].w, p.x - prev[arrastrando].w / 2)), y: Math.max(0, Math.min(100 - prev[arrastrando].h, p.y - prev[arrastrando].h / 2)) } }));
+    } else {
+      const destino = zonaEn(p.x, p.y);
+      setZonaSobrevolada(destino && destino !== arrastrando ? destino : null);
+    }
+  }
+
+  async function onPointerUpContainer() {
+    if (!arrastrando) return;
+    if (calibrando) { setArrastrando(null); return; }
+    const origenCodigo = arrastrando;
+    const destinoCodigo = zonaSobrevolada;
+    setArrastrando(null); setZonaSobrevolada(null);
+    if (!origenCodigo || !destinoCodigo || origenCodigo === destinoCodigo) return;
+    const posOrigen = posicionPorCodigo.get(origenCodigo);
+    const posDestino = posicionPorCodigo.get(destinoCodigo);
+    const montajeOrigen = posOrigen ? montajePorPosicionId.get(posOrigen.id) : undefined;
+    if (!posOrigen || !posDestino || !montajeOrigen) return;
+    setSaving(true); setMsg("");
+    try { await rotarNeumatico({ montajeOrigenId: montajeOrigen.id, posicionDestinoId: posDestino.id }); onChanged?.(); }
+    catch (e: any) { setMsg(e?.message || "Error al rotar"); } finally { setSaving(false); }
+  }
+
+  async function guardarCalibracion() {
+    setSaving(true); setMsg("");
+    try {
+      if (tipo && urlDraft !== (tipo.imagen_chasis_url ?? "")) await actualizarImagenChasis(tipo.id, urlDraft || null);
+      for (const p of posiciones) {
+        const c = coords[p.codigo_posicion];
+        if (!c) continue;
+        await guardarCoordenadasPosicion(p.id, { pos_x: c.x, pos_y: c.y, pos_w: c.w, pos_h: c.h });
+      }
+      setCalibrando(false); onTipoChanged?.();
+    } catch (e: any) { setMsg(e?.message || "Error al guardar calibración"); } finally { setSaving(false); }
+  }
+
+  async function confirmarMontar() {
+    if (!posSeleccionada || !neumaticoElegido) return;
+    setSaving(true); setMsg("");
+    try {
+      await montarNeumatico({ vehiculoId, neumaticoId: neumaticoElegido, posicionId: posSeleccionada.id, km: null, fecha: new Date().toISOString().slice(0, 10), observaciones: null });
+      setSeleccion(null); setNeumaticoElegido(""); onChanged?.();
+    } catch (e: any) { setMsg(e?.message || "Error al montar"); } finally { setSaving(false); }
+  }
+
+  async function confirmarDesmontar() {
+    if (!montajeSeleccionado) return;
+    setSaving(true); setMsg("");
+    try { await desmontarNeumatico({ montajeId: montajeSeleccionado.id, km: null, motivo: "desgaste", destino: "almacen", observaciones: null }); setSeleccion(null); onChanged?.(); }
+    catch (e: any) { setMsg(e?.message || "Error al desmontar"); } finally { setSaving(false); }
+  }
+
+  async function enviarA(codigo: string, destino: "reparacion" | "descartado") {
+    const pos = posicionPorCodigo.get(codigo);
+    const m = pos ? montajePorPosicionId.get(pos.id) : undefined;
+    setMenuContextual(null);
+    if (!m) return;
+    setSaving(true); setMsg("");
+    try { await desmontarNeumatico({ montajeId: m.id, km: null, motivo: destino === "reparacion" ? "reparacion" : "descarte", destino, observaciones: null }); setSeleccion(null); onChanged?.(); }
+    catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+  }
+
+  if (!tipo?.imagen_chasis_url && !calibrando) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-8 text-center text-sm text-slate-500">
+        Este tipo de vehículo ({tipo?.nombre ?? "—"}) todavía no tiene imagen de chasis.
+        {puedeCalibrar ? (
+          <div className="mt-3">
+            <button onClick={() => setCalibrando(true)} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white">Añadir imagen y calibrar posiciones</button>
+          </div>
+        ) : (
+          <div className="mt-1 text-[11px]">Usa la vista de lista más abajo. Pide a un administrador SEA que cargue la imagen.</div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-[1fr_260px]">
+      <div>
+        {puedeCalibrar && (
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            {calibrando ? (
+              <>
+                <input className={`${inputCls} flex-1 text-[12px]`} placeholder="URL de la imagen (vista superior del chasis)…" value={urlDraft} onChange={(e) => setUrlDraft(e.target.value)} />
+                <button onClick={guardarCalibracion} disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">Guardar calibración</button>
+                <button onClick={() => setCalibrando(false)} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">Cancelar</button>
+              </>
+            ) : (
+              <button onClick={() => setCalibrando(true)} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">✎ Editar posiciones / imagen</button>
+            )}
+          </div>
+        )}
+
+        <div
+          ref={containerRef}
+          className="relative w-full select-none overflow-hidden rounded-lg bg-slate-950"
+          style={{ aspectRatio: "1 / 1.5" }}
+          onPointerMove={onPointerMoveContainer}
+          onPointerUp={onPointerUpContainer}
+        >
+          {tipo?.imagen_chasis_url ? (
+            <img src={tipo.imagen_chasis_url} alt={tipo.nombre} className="absolute inset-0 h-full w-full object-contain" draggable={false} />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">Pega la URL de la imagen arriba…</div>
+          )}
+
+          {posiciones.map((p) => {
+            const c = coords[p.codigo_posicion];
+            if (!c) return null;
+            const m = montajePorPosicionId.get(p.id);
+            const ocupado = !!m?.neumatico;
+            const esArrastre = arrastrando === p.codigo_posicion;
+            const esDestino = zonaSobrevolada === p.codigo_posicion;
+            return (
+              <div
+                key={p.id}
+                className="absolute flex flex-col items-center justify-center rounded-lg border-2 pointer-events-auto"
+                style={{
+                  left: `${c.x}%`, top: `${c.y}%`, width: `${c.w}%`, height: `${c.h}%`,
+                  borderColor: esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : ocupado ? "#22c55e" : "#64748b",
+                  borderStyle: ocupado || calibrando ? "solid" : "dashed",
+                  background: esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.55)" : "rgba(15,23,42,0.25)",
+                  opacity: esArrastre && !calibrando ? 0.35 : 1,
+                  cursor: calibrando ? "move" : (editable && ocupado) ? "grab" : "pointer",
+                }}
+                onPointerDown={(e) => onPointerDownZona(e, p.codigo_posicion)}
+                onClick={() => { if (!arrastrando && !calibrando) setSeleccion(seleccion === p.codigo_posicion ? null : p.codigo_posicion); }}
+                onDoubleClick={() => { if (m?.neumatico && !calibrando) onFicha?.(m.neumatico.id); }}
+                onContextMenu={(e) => {
+                  if (!editable || calibrando || !m?.neumatico) return;
+                  e.preventDefault();
+                  setMenuContextual({ codigo: p.codigo_posicion, x: e.clientX, y: e.clientY });
+                }}
+              >
+                <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">
+                  {calibrando ? p.codigo_posicion : ocupado ? (m!.neumatico!.codigo_interno ?? m!.neumatico!.numero_serie ?? "—") : "Libre"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-lg bg-slate-800 p-3">
+        {calibrando ? (
+          <div className="text-sm text-slate-400">
+            Arrastra cada recuadro sobre la rueda correspondiente en la imagen. El tamaño por defecto es aproximado; ajusta la imagen para que encaje o pide una imagen recortada al chasis.
+          </div>
+        ) : !posSeleccionada ? (
+          <div className="text-sm text-slate-500">Selecciona una posición del plano.</div>
+        ) : montajeSeleccionado?.neumatico ? (
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-400">{posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}</div>
+            <div className="mt-1 text-sm font-bold text-slate-100">{montajeSeleccionado.neumatico.codigo_interno ?? montajeSeleccionado.neumatico.numero_serie}</div>
+            <div className="text-xs text-slate-400">{montajeSeleccionado.neumatico.marca} {montajeSeleccionado.neumatico.medida}</div>
+            <div className="mt-1 text-[10px] text-slate-500">Desde {montajeSeleccionado.fecha_montaje}{montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}</div>
+            <div className="mt-3 flex flex-col gap-2">
+              <button onClick={() => onFicha?.(montajeSeleccionado.neumatico!.id)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200">Ver ficha</button>
+              {editable && <button onClick={confirmarDesmontar} disabled={saving} className="rounded bg-rose-600 px-2 py-1 text-[12px] font-bold text-white disabled:opacity-50">Desmontar</button>}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-400">{posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}</div>
+            <div className="mt-1 text-xs text-slate-500">Posición libre.</div>
+            {editable && (
+              <div className="mt-2">
+                <select className={`${inputCls} text-[12px]`} value={neumaticoElegido} onChange={(e) => setNeumaticoElegido(e.target.value)}>
+                  <option value="">Elegir neumático de almacén…</option>
+                  {disponibles.map((n) => <option key={n.id} value={n.id}>{n.codigo_interno ?? n.numero_serie} · {n.marca} {n.medida}</option>)}
+                </select>
+                <button onClick={confirmarMontar} disabled={saving || !neumaticoElegido} className="mt-2 w-full rounded bg-emerald-600 px-2 py-1 text-[12px] font-bold text-white disabled:opacity-50">Montar</button>
+              </div>
+            )}
+          </div>
+        )}
+        {msg && <div className="mt-2 text-[11px] text-red-300">{msg}</div>}
+      </div>
+
+      {menuContextual && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenuContextual(null)} />
+          <div className="fixed z-50 min-w-[180px] rounded-lg border border-slate-700 bg-slate-800 py-1 shadow-xl" style={{ left: menuContextual.x, top: menuContextual.y }}>
+            <button onClick={() => { const p = posicionPorCodigo.get(menuContextual.codigo); const m = p ? montajePorPosicionId.get(p.id) : undefined; setMenuContextual(null); if (m?.neumatico) onFicha?.(m.neumatico.id); }} className="block w-full px-3 py-1.5 text-left text-[12px] text-slate-200 hover:bg-slate-700">Ver ficha</button>
+            <button onClick={() => enviarA(menuContextual.codigo, "reparacion")} className="block w-full px-3 py-1.5 text-left text-[12px] text-sky-300 hover:bg-slate-700">Enviar a reparación</button>
+            <button onClick={() => enviarA(menuContextual.codigo, "descartado")} className="block w-full px-3 py-1.5 text-left text-[12px] text-rose-300 hover:bg-slate-700">Descartar neumático</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

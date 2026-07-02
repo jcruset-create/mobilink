@@ -131,6 +131,16 @@ export async function listarPosiciones(tipoId: string): Promise<PosicionVehiculo
   return (data ?? []) as PosicionVehiculo[];
 }
 
+export async function actualizarImagenChasis(tipoId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_vehiculo").update({ imagen_chasis_url: url }).eq("id", tipoId);
+  if (error) throw new Error(error.message);
+}
+
+export async function guardarCoordenadasPosicion(id: string, coords: { pos_x: number; pos_y: number; pos_w: number; pos_h: number }): Promise<void> {
+  const { error } = await supabase.from("tc_posiciones_vehiculo").update(coords).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 // ── Vehículos ────────────────────────────────────────────────
 const VEHICULO_SELECT = "*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*), tipo:tc_tipos_vehiculo(*)";
 

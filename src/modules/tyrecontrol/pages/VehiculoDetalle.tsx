@@ -4,7 +4,7 @@ import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo } from "../se
 import type { MontajeActual, PosicionVehiculo, Vehiculo } from "../types";
 import { ORIGEN_KM_LABELS } from "../types";
 import { Badge } from "../components/ui";
-import VehicleLayout from "../components/VehicleLayout";
+import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 export default function VehiculoDetalle() {
@@ -61,15 +61,17 @@ export default function VehiculoDetalle() {
       {/* Plano gráfico del vehículo */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
-        <VehicleLayout
+        <VehicleLayoutImage
           tipo={v.tipo}
           posiciones={posiciones}
           vehiculoId={v.id}
           empresaId={v.empresa_id}
           montajes={montajes}
           editable={!esCliente}
+          puedeCalibrar={!!perfil?.es_superadmin}
           onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
           onChanged={cargar}
+          onTipoChanged={cargar}
         />
       </div>
 

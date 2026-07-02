@@ -96,6 +96,7 @@ export interface TipoVehiculo {
   numero_ejes: number;
   numero_ruedas: number;
   activo: boolean;
+  imagen_chasis_url?: string | null;
 }
 
 export interface PosicionVehiculo {
@@ -108,6 +109,10 @@ export interface PosicionVehiculo {
   interior_exterior?: string | null;
   orden_visual: number;
   activo: boolean;
+  pos_x?: number | null;
+  pos_y?: number | null;
+  pos_w?: number | null;
+  pos_h?: number | null;
 }
 
 export type OrigenKm = "manual" | "webfleet" | "importacion_excel";
