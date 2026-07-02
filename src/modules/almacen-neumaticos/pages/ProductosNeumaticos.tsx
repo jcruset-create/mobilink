@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import {
   exportarCsv,
@@ -210,132 +210,134 @@ export default function ProductosNeumaticos() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-black">Productos / Neumáticos</h1>
+            <p className="text-sm text-slate-400">Alta básica de productos del almacén.</p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Productos / Neumáticos</h1>
-          <p className="text-sm text-gray-500">
-            Alta básica de productos del almacén.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarProductosCsv}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-semibold text-slate-200 disabled:opacity-50"
+              disabled={productos.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarProductosExcel}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+              disabled={productos.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarProductosCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={productos.length === 0}
+        {mensaje && <p className={`text-sm ${mensaje.startsWith("Error") ? "text-red-300" : "text-slate-300"}`}>{mensaje}</p>}
+
+        <div className="rounded-lg bg-slate-800 p-3 space-y-2">
+          <select
+            value={empresaId}
+            onChange={(e) => setEmpresaId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarProductosExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={productos.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <select
-          value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <input
-          value={marca}
-          onChange={(e) => setMarca(e.target.value)}
-          placeholder="Marca"
-          list="catalogo-marcas"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-        <datalist id="catalogo-marcas">
-          {catMarcas.map((m) => <option key={m} value={m} />)}
-        </datalist>
-
-        <input
-          value={modelo}
-          onChange={(e) => setModelo(e.target.value)}
-          placeholder="Modelo"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <input
-          value={medida}
-          onChange={(e) => setMedida(e.target.value)}
-          placeholder="Medida, ejemplo 315/70R22.5"
-          list="catalogo-medidas"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-        <datalist id="catalogo-medidas">
-          {catMedidas.map((m) => <option key={m} value={m} />)}
-        </datalist>
-
-        <input
-          value={dot}
-          onChange={(e) => setDot(e.target.value)}
-          placeholder="DOT"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <button
-          type="button"
-          onClick={crearProducto}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-        >
-          Crear producto
-        </button>
-      </div>
-
-      <div className="overflow-hidden rounded-xl border bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Medida</th>
-              <th className="p-3">Marca</th>
-              <th className="p-3">Modelo</th>
-              <th className="p-3">DOT</th>
-              <th className="p-3">Estado</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {productos.map((producto) => (
-              <tr key={producto.id} className="border-t">
-                <td className="p-3 font-medium">{producto.medida}</td>
-                <td className="p-3">{producto.marca}</td>
-                <td className="p-3">{producto.modelo || "-"}</td>
-                <td className="p-3">{producto.dot || "-"}</td>
-                <td className="p-3">{producto.activo ? "Activo" : "Baja"}</td>
-              </tr>
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
+              </option>
             ))}
+          </select>
 
-            {productos.length === 0 && (
+          <input
+            value={marca}
+            onChange={(e) => setMarca(e.target.value)}
+            placeholder="Marca"
+            list="catalogo-marcas"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
+          <datalist id="catalogo-marcas">
+            {catMarcas.map((m) => <option key={m} value={m} />)}
+          </datalist>
+
+          <input
+            value={modelo}
+            onChange={(e) => setModelo(e.target.value)}
+            placeholder="Modelo"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
+
+          <input
+            value={medida}
+            onChange={(e) => setMedida(e.target.value)}
+            placeholder="Medida, ejemplo 315/70R22.5"
+            list="catalogo-medidas"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
+          <datalist id="catalogo-medidas">
+            {catMedidas.map((m) => <option key={m} value={m} />)}
+          </datalist>
+
+          <input
+            value={dot}
+            onChange={(e) => setDot(e.target.value)}
+            placeholder="DOT"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
+
+          <button
+            type="button"
+            onClick={crearProducto}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500"
+          >
+            + Crear producto
+          </button>
+        </div>
+
+        <div className="overflow-hidden rounded-lg bg-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-left">
               <tr>
-                <td colSpan={5} className="p-6 text-center text-gray-500">
-                  No hay productos creados.
-                </td>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Medida</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Marca</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Modelo</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">DOT</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Estado</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {productos.map((producto) => (
+                <tr key={producto.id} className="border-t border-slate-700/60">
+                  <td className="p-3 font-semibold">{producto.medida}</td>
+                  <td className="p-3 text-slate-300">{producto.marca}</td>
+                  <td className="p-3 text-slate-300">{producto.modelo || "-"}</td>
+                  <td className="p-3 text-slate-300">{producto.dot || "-"}</td>
+                  <td className="p-3">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${producto.activo ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-600 text-slate-300"}`}>
+                      {producto.activo ? "Activo" : "Baja"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+
+              {productos.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="p-6 text-center text-slate-500">
+                    No hay productos creados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

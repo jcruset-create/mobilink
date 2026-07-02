@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import {
   exportarCsv,
@@ -365,307 +365,311 @@ export default function ClientesAlmacen() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-black">Clientes</h1>
+            <p className="text-sm text-slate-400">Alta, edición y contactos/conductores por cliente.</p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Clientes</h1>
-          <p className="text-sm text-gray-500">
-            Alta, edición y contactos/conductores por cliente.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarClientesCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={clientes.length === 0}
-          >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarClientesExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={clientes.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <div>
-          <h2 className="font-semibold">
-            {clienteEditandoId ? "Editar cliente" : "Crear cliente"}
-          </h2>
-
-          {clienteEditandoId && (
-            <p className="mt-1 text-sm font-semibold text-blue-700">
-              Editando: {nombre}
-            </p>
-          )}
-        </div>
-
-        <select
-          value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <input
-          value={codigo}
-          onChange={(e) => setCodigo(e.target.value)}
-          placeholder="Código cliente"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <input
-          value={nombre}
-          onChange={(e) => setNombre(e.target.value)}
-          placeholder="Nombre del cliente"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <input
-          value={nif}
-          onChange={(e) => setNif(e.target.value)}
-          placeholder="NIF / CIF"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <input
-          value={telefono}
-          onChange={(e) => setTelefono(e.target.value)}
-          placeholder="Teléfono"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={guardarCliente}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-          >
-            {clienteEditandoId ? "Guardar cambios" : "Crear cliente"}
-          </button>
-
-          {clienteEditandoId && (
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={limpiarFormularioCliente}
-              className="rounded-xl border px-4 py-2 text-sm font-semibold"
+              onClick={exportarClientesCsv}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-semibold text-slate-200 disabled:opacity-50"
+              disabled={clientes.length === 0}
             >
-              Cancelar edición
+              Exportar CSV
             </button>
-          )}
+
+            <button
+              type="button"
+              onClick={exportarClientesExcel}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+              disabled={clientes.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="overflow-hidden rounded-xl border bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Código</th>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">NIF</th>
-              <th className="p-3">Teléfono</th>
-              <th className="p-3">Email</th>
-              <th className="p-3">Contactos</th>
-              <th className="p-3">Estado</th>
-              <th className="p-3">Acciones</th>
-            </tr>
-          </thead>
+        {mensaje && <p className={`text-sm ${mensaje.startsWith("Error") ? "text-red-300" : "text-slate-300"}`}>{mensaje}</p>}
 
-          <tbody>
-            {clientes.map((cliente) => {
-              const totalContactos = contactos.filter(
-                (contacto) => contacto.cliente_id === cliente.id
-              ).length;
+        <div className="rounded-lg bg-slate-800 p-3 space-y-2">
+          <div>
+            <h2 className="text-[11px] font-bold uppercase text-slate-400">
+              {clienteEditandoId ? "Editar cliente" : "Crear cliente"}
+            </h2>
 
-              return (
-                <tr
-                  key={cliente.id}
-                  className={`border-t ${
-                    clienteSeleccionadoId === cliente.id ? "bg-blue-50" : ""
-                  }`}
-                >
-                  <td className="p-3">{cliente.codigo || "-"}</td>
-                  <td className="p-3 font-medium">{cliente.nombre}</td>
-                  <td className="p-3">{cliente.nif || "-"}</td>
-                  <td className="p-3">{cliente.telefono || "-"}</td>
-                  <td className="p-3">{cliente.email || "-"}</td>
-                  <td className="p-3">{totalContactos}</td>
-                  <td className="p-3">{cliente.activo ? "Activo" : "Baja"}</td>
-                  <td className="p-3">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setClienteSeleccionadoId(cliente.id)}
-                        className="rounded-lg border px-3 py-1 text-xs font-semibold"
-                      >
-                        Contactos
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => editarCliente(cliente)}
-                        className="rounded-lg border px-3 py-1 text-xs font-semibold"
-                      >
-                        Editar
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => cambiarEstadoCliente(cliente)}
-                        className="rounded-lg border px-3 py-1 text-xs font-semibold"
-                      >
-                        {cliente.activo ? "Dar baja" : "Reactivar"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-
-            {clientes.length === 0 && (
-              <tr>
-                <td colSpan={8} className="p-6 text-center text-gray-500">
-                  No hay clientes creados.
-                </td>
-              </tr>
+            {clienteEditandoId && (
+              <p className="mt-1 text-sm font-semibold text-sky-400">
+                Editando: {nombre}
+              </p>
             )}
-          </tbody>
-        </table>
-      </div>
+          </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Contactos / conductores del cliente</h2>
+          <select
+            value={empresaId}
+            onChange={(e) => setEmpresaId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+          >
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
+              </option>
+            ))}
+          </select>
 
-        {!clienteSeleccionado ? (
-          <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600">
-            Selecciona un cliente desde la tabla para ver o añadir contactos.
-          </p>
-        ) : (
-          <>
-            <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
-              Cliente seleccionado: <strong>{clienteSeleccionado.nombre}</strong>
-            </div>
+          <input
+            value={codigo}
+            onChange={(e) => setCodigo(e.target.value)}
+            placeholder="Código cliente"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
 
-            <div className="grid gap-3 md:grid-cols-5">
-              <input
-                value={contactoNombre}
-                onChange={(e) => setContactoNombre(e.target.value)}
-                placeholder="Nombre contacto / conductor"
-                className="rounded-lg border px-3 py-2 text-sm"
-              />
+          <input
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            placeholder="Nombre del cliente"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
 
-              <input
-                value={contactoCargo}
-                onChange={(e) => setContactoCargo(e.target.value)}
-                placeholder="Cargo / tipo"
-                className="rounded-lg border px-3 py-2 text-sm"
-              />
+          <input
+            value={nif}
+            onChange={(e) => setNif(e.target.value)}
+            placeholder="NIF / CIF"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
 
-              <input
-                value={contactoMovil}
-                onChange={(e) => setContactoMovil(e.target.value)}
-                placeholder="Móvil"
-                className="rounded-lg border px-3 py-2 text-sm"
-              />
+          <input
+            value={telefono}
+            onChange={(e) => setTelefono(e.target.value)}
+            placeholder="Teléfono"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
 
-              <input
-                value={contactoEmail}
-                onChange={(e) => setContactoEmail(e.target.value)}
-                placeholder="Email"
-                className="rounded-lg border px-3 py-2 text-sm"
-              />
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
 
-              <input
-                value={contactoObservaciones}
-                onChange={(e) => setContactoObservaciones(e.target.value)}
-                placeholder="Observaciones"
-                className="rounded-lg border px-3 py-2 text-sm"
-              />
-            </div>
-
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={crearContacto}
-              className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
+              onClick={guardarCliente}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500"
             >
-              Añadir contacto
+              {clienteEditandoId ? "Guardar cambios" : "Crear cliente"}
             </button>
 
-            <div className="overflow-hidden rounded-xl border">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-left">
-                  <tr>
-                    <th className="p-3">Nombre</th>
-                    <th className="p-3">Cargo / tipo</th>
-                    <th className="p-3">Móvil</th>
-                    <th className="p-3">Email</th>
-                    <th className="p-3">Observaciones</th>
-                    <th className="p-3">Estado</th>
-                    <th className="p-3">Acción</th>
-                  </tr>
-                </thead>
+            {clienteEditandoId && (
+              <button
+                type="button"
+                onClick={limpiarFormularioCliente}
+                className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200"
+              >
+                Cancelar edición
+              </button>
+            )}
+          </div>
+        </div>
 
-                <tbody>
-                  {contactosClienteSeleccionado.map((contacto) => (
-                    <tr key={contacto.id} className="border-t">
-                      <td className="p-3 font-medium">{contacto.nombre}</td>
-                      <td className="p-3">{contacto.cargo || "-"}</td>
-                      <td className="p-3">{contacto.movil || "-"}</td>
-                      <td className="p-3">{contacto.email || "-"}</td>
-                      <td className="p-3">{contacto.observaciones || "-"}</td>
-                      <td className="p-3">
-                        {contacto.activo ? "Activo" : "Inactivo"}
-                      </td>
-                      <td className="p-3">
+        <div className="overflow-hidden rounded-lg bg-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-left">
+              <tr>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Código</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Cliente</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">NIF</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Teléfono</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Email</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Contactos</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Estado</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Acciones</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {clientes.map((cliente) => {
+                const totalContactos = contactos.filter(
+                  (contacto) => contacto.cliente_id === cliente.id
+                ).length;
+
+                return (
+                  <tr
+                    key={cliente.id}
+                    className={`border-t border-slate-700/60 ${
+                      clienteSeleccionadoId === cliente.id ? "bg-sky-500/10" : ""
+                    }`}
+                  >
+                    <td className="p-3 text-slate-300">{cliente.codigo || "-"}</td>
+                    <td className="p-3 font-semibold">{cliente.nombre}</td>
+                    <td className="p-3 text-slate-300">{cliente.nif || "-"}</td>
+                    <td className="p-3 text-slate-300">{cliente.telefono || "-"}</td>
+                    <td className="p-3 text-slate-300">{cliente.email || "-"}</td>
+                    <td className="p-3 text-slate-300">{totalContactos}</td>
+                    <td className="p-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${cliente.activo ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-600 text-slate-300"}`}>
+                        {cliente.activo ? "Activo" : "Baja"}
+                      </span>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() => cambiarEstadoContacto(contacto)}
-                          className="rounded-lg border px-3 py-1 text-xs font-semibold"
+                          onClick={() => setClienteSeleccionadoId(cliente.id)}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold text-slate-200"
                         >
-                          {contacto.activo ? "Desactivar" : "Reactivar"}
+                          Contactos
                         </button>
-                      </td>
-                    </tr>
-                  ))}
 
-                  {contactosClienteSeleccionado.length === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => editarCliente(cliente)}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold text-slate-200"
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => cambiarEstadoCliente(cliente)}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold text-slate-200"
+                        >
+                          {cliente.activo ? "Dar baja" : "Reactivar"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {clientes.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="p-6 text-center text-slate-500">
+                    No hay clientes creados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="rounded-lg bg-slate-800 p-3 space-y-3">
+          <h2 className="text-[11px] font-bold uppercase text-slate-400">Contactos / conductores del cliente</h2>
+
+          {!clienteSeleccionado ? (
+            <p className="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">
+              Selecciona un cliente desde la tabla para ver o añadir contactos.
+            </p>
+          ) : (
+            <>
+              <div className="rounded-lg bg-sky-500/10 p-3 text-sm text-sky-300">
+                Cliente seleccionado: <strong>{clienteSeleccionado.nombre}</strong>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-5">
+                <input
+                  value={contactoNombre}
+                  onChange={(e) => setContactoNombre(e.target.value)}
+                  placeholder="Nombre contacto / conductor"
+                  className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+
+                <input
+                  value={contactoCargo}
+                  onChange={(e) => setContactoCargo(e.target.value)}
+                  placeholder="Cargo / tipo"
+                  className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+
+                <input
+                  value={contactoMovil}
+                  onChange={(e) => setContactoMovil(e.target.value)}
+                  placeholder="Móvil"
+                  className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+
+                <input
+                  value={contactoEmail}
+                  onChange={(e) => setContactoEmail(e.target.value)}
+                  placeholder="Email"
+                  className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+
+                <input
+                  value={contactoObservaciones}
+                  onChange={(e) => setContactoObservaciones(e.target.value)}
+                  placeholder="Observaciones"
+                  className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={crearContacto}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500"
+              >
+                Añadir contacto
+              </button>
+
+              <div className="overflow-hidden rounded-lg bg-slate-900">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-900 text-left">
                     <tr>
-                      <td colSpan={7} className="p-6 text-center text-gray-500">
-                        Este cliente todavía no tiene contactos.
-                      </td>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Nombre</th>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Cargo / tipo</th>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Móvil</th>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Email</th>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Observaciones</th>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Estado</th>
+                      <th className="p-3 text-[11px] uppercase text-slate-400">Acción</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
+                  </thead>
+
+                  <tbody>
+                    {contactosClienteSeleccionado.map((contacto) => (
+                      <tr key={contacto.id} className="border-t border-slate-700/60">
+                        <td className="p-3 font-semibold">{contacto.nombre}</td>
+                        <td className="p-3 text-slate-300">{contacto.cargo || "-"}</td>
+                        <td className="p-3 text-slate-300">{contacto.movil || "-"}</td>
+                        <td className="p-3 text-slate-300">{contacto.email || "-"}</td>
+                        <td className="p-3 text-slate-300">{contacto.observaciones || "-"}</td>
+                        <td className="p-3">
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${contacto.activo ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-600 text-slate-300"}`}>
+                            {contacto.activo ? "Activo" : "Inactivo"}
+                          </span>
+                        </td>
+                        <td className="p-3">
+                          <button
+                            type="button"
+                            onClick={() => cambiarEstadoContacto(contacto)}
+                            className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold text-slate-200"
+                          >
+                            {contacto.activo ? "Desactivar" : "Reactivar"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {contactosClienteSeleccionado.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-6 text-center text-slate-500">
+                          Este cliente todavía no tiene contactos.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }
