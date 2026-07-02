@@ -13,6 +13,7 @@ import VehiculoDetalle from "./pages/VehiculoDetalle";
 import Neumaticos from "./pages/Neumaticos";
 import NeumaticoDetalle from "./pages/NeumaticoDetalle";
 import MontajesActuales from "./pages/MontajesActuales";
+import Operaciones from "./pages/Operaciones";
 import MiEmpresa from "./pages/MiEmpresa";
 import MisDelegaciones from "./pages/MisDelegaciones";
 import MisVehiculos from "./pages/MisVehiculos";
@@ -30,8 +31,9 @@ export default function TyreControlApp() {
             <Route index element={<Navigate to="/tyrecontrol/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="perfil" element={<Perfil />} />
-            {/* Montajes: admin y cliente (la pantalla ajusta acciones por rol) */}
+            {/* Montajes/Operaciones: admin y cliente (la pantalla ajusta acciones por rol) */}
             <Route path="montajes" element={<MontajesActuales />} />
+            <Route path="operaciones" element={<Operaciones />} />
 
             {/* Cliente */}
             <Route element={<RoleRoute roles={["cliente"]} />}>

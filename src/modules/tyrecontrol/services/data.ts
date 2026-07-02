@@ -3,7 +3,8 @@ import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
-  ClienteAlmacen, ProductoAlmacen,
+  ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
+  RevisionVehiculo, RevisionDetalle,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -272,4 +273,122 @@ export async function montajeActualDeNeumatico(neumaticoId: string): Promise<Mon
     .select("*, posicion:tc_posiciones_vehiculo(*)").eq("neumatico_id", neumaticoId).maybeSingle();
   if (error) return null;
   return (data as unknown as MontajeActual) ?? null;
+}
+
+// ── Fase 8: Fichas genéricas de almacén ────────────────────────
+export async function listarFichasGenericas(q?: string): Promise<FichaGenerica[]> {
+  let query = supabase.from("tc_fichas_genericas_neumaticos").select("*").eq("activo", true).order("marca");
+  if (q) query = query.or(`marca.ilike.%${q}%,medida.ilike.%${q}%,modelo.ilike.%${q}%`);
+  const { data, error } = await query.limit(100);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as FichaGenerica[];
+}
+
+export async function crearFichaGenerica(input: Omit<FichaGenerica, "id">): Promise<void> {
+  const { error } = await supabase.from("tc_fichas_genericas_neumaticos").insert(input);
+  if (error) throw new Error(error.message);
+}
+
+// ── Fase 8: Montaje desde almacén (genérico/individual) y fuera de almacén ─
+export async function montarDesdeAlmacen(params: {
+  vehiculoId: string; posicionId: string; fichaGenericaId: string; controlIndividual: boolean;
+  datos?: Record<string, string>; km?: number | null; fecha?: string | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_montar_desde_almacen", {
+    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_ficha_generica: params.fichaGenericaId,
+    p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
+    p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function montarFueraAlmacen(params: {
+  vehiculoId: string; posicionId: string; controlIndividual: boolean; datos?: Record<string, string>;
+  motivo: string; km?: number | null; fecha?: string | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_montar_fuera_almacen", {
+    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_control_individual: params.controlIndividual,
+    p_datos: params.datos ?? {}, p_motivo: params.motivo, p_km: params.km ?? null,
+    p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function sustituirNeumatico(params: {
+  montajeActualId: string; fichaGenericaId: string; controlIndividual: boolean; datos?: Record<string, string>;
+  motivoDesmontaje: MotivoDesmontaje; destinoRetirado: DestinoDesmontaje;
+  km?: number | null; fecha?: string | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_sustituir_neumatico", {
+    p_montaje_actual: params.montajeActualId, p_ficha_generica: params.fichaGenericaId,
+    p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
+    p_motivo_desmontaje: params.motivoDesmontaje, p_destino_retirado: params.destinoRetirado,
+    p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function repararNeumatico(neumaticoId: string, motivo: string, observaciones?: string | null): Promise<void> {
+  const { error } = await supabase.rpc("tc_reparar_neumatico", { p_neumatico: neumaticoId, p_motivo: motivo, p_obs: observaciones ?? null });
+  if (error) throw new Error(error.message);
+}
+
+export async function descartarNeumaticoStd(neumaticoId: string, motivo: string, observaciones?: string | null): Promise<void> {
+  const { error } = await supabase.rpc("tc_descartar_neumatico", { p_neumatico: neumaticoId, p_motivo: motivo, p_obs: observaciones ?? null });
+  if (error) throw new Error(error.message);
+}
+
+// ── Fase 8: Operaciones (listado/filtros) ──────────────────────
+const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), neumatico:tc_neumaticos(*), posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(*), posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(*)";
+
+export async function listarOperaciones(filtros?: {
+  empresaId?: string; vehiculoId?: string; tipo?: TipoOperacion; desde?: string; hasta?: string;
+}): Promise<OperacionNeumatico[]> {
+  let q = supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200);
+  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
+  if (filtros?.tipo) q = q.eq("tipo_operacion", filtros.tipo);
+  if (filtros?.desde) q = q.gte("fecha_operacion", filtros.desde);
+  if (filtros?.hasta) q = q.lte("fecha_operacion", filtros.hasta);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as OperacionNeumatico[];
+}
+
+// ── Fase 8: Revisión de vehículo ────────────────────────────────
+export async function crearRevision(input: { empresaId: string; vehiculoId: string; kmVehiculo?: number | null; tecnicoId?: string | null }): Promise<RevisionVehiculo> {
+  const { data, error } = await supabase.from("revisiones_vehiculo").insert({
+    empresa_id: input.empresaId, vehiculo_id: input.vehiculoId, km_vehiculo: input.kmVehiculo ?? null, tecnico_id: input.tecnicoId ?? null,
+  }).select("*").single();
+  if (error) throw new Error(error.message);
+  return data as RevisionVehiculo;
+}
+
+export async function guardarDetalleRevision(input: Partial<RevisionDetalle> & { revision_id: string; empresa_id: string; vehiculo_id: string; posicion_id: string }): Promise<void> {
+  const { error } = await supabase.from("revisiones_neumaticos_detalle")
+    .upsert(input, { onConflict: "revision_id,posicion_id" });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarDetalleRevision(revisionId: string): Promise<RevisionDetalle[]> {
+  const { data, error } = await supabase.from("revisiones_neumaticos_detalle")
+    .select("*, neumatico:tc_neumaticos(*), posicion:tc_posiciones_vehiculo(*)").eq("revision_id", revisionId);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as RevisionDetalle[];
+}
+
+export async function completarRevision(revisionId: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_completar_revision", { p_revision: revisionId });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarRevisiones(vehiculoId?: string): Promise<RevisionVehiculo[]> {
+  let q = supabase.from("revisiones_vehiculo").select("*, vehiculo:tc_vehiculos(*)").order("fecha_revision", { ascending: false });
+  if (vehiculoId) q = q.eq("vehiculo_id", vehiculoId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as RevisionVehiculo[];
 }

@@ -161,6 +161,13 @@ export const MOTIVO_DESMONTAJE_LABELS: Record<MotivoDesmontaje, string> = {
 export interface Neumatico {
   id: string;
   empresa_id: string;
+  numero_interno?: string | null;
+  control_individual?: boolean;
+  creado_automaticamente?: boolean;
+  origen?: string | null;
+  ficha_generica_id?: string | null;
+  vehiculo_id?: string | null;
+  posicion_id?: string | null;
   codigo_interno?: string | null;
   numero_serie?: string | null;
   dot?: string | null;
@@ -214,4 +221,118 @@ export interface HistorialMontaje {
   km_desmontaje?: number | null;
   motivo_desmontaje?: string | null;
   observaciones?: string | null;
+}
+
+// ── Fase 8: Operaciones de neumáticos ──────────────────────────
+export type TipoOperacion =
+  | "montaje" | "desmontaje" | "sustitucion" | "rotacion" | "reparacion"
+  | "descarte" | "entrada_almacen" | "salida_almacen" | "revision_vehiculo";
+
+export type MotivoOperacion =
+  | "desgaste" | "pinchazo" | "rotura" | "preventivo" | "desgaste_irregular"
+  | "cambio_estacional" | "reparacion" | "fin_vida" | "error_montaje" | "otro";
+
+export type DestinoOperacion = "vehiculo" | "almacen" | "reparacion" | "descarte";
+
+export const TIPO_OPERACION_LABELS: Record<TipoOperacion, string> = {
+  montaje: "Montaje", desmontaje: "Desmontaje", sustitucion: "Sustitución", rotacion: "Rotación",
+  reparacion: "Reparación", descarte: "Descarte", entrada_almacen: "Entrada a almacén",
+  salida_almacen: "Salida de almacén", revision_vehiculo: "Revisión de vehículo",
+};
+
+export const MOTIVO_OPERACION_LABELS: Record<MotivoOperacion, string> = {
+  desgaste: "Desgaste", pinchazo: "Pinchazo", rotura: "Rotura", preventivo: "Preventivo",
+  desgaste_irregular: "Desgaste irregular", cambio_estacional: "Cambio estacional",
+  reparacion: "Reparación", fin_vida: "Fin de vida", error_montaje: "Error de montaje", otro: "Otro",
+};
+
+export interface OperacionNeumatico {
+  id: string;
+  empresa_id: string;
+  vehiculo_id?: string | null;
+  neumatico_id?: string | null;
+  tipo_operacion: TipoOperacion;
+  posicion_origen_id?: string | null;
+  posicion_destino_id?: string | null;
+  montaje_origen_id?: string | null;
+  montaje_destino_id?: string | null;
+  km_vehiculo?: number | null;
+  fecha_operacion: string;
+  motivo?: MotivoOperacion | null;
+  estado_anterior?: string | null;
+  estado_nuevo?: string | null;
+  destino?: DestinoOperacion | null;
+  almacen_movimiento_id?: string | null;
+  tecnico_id?: string | null;
+  observaciones?: string | null;
+  created_at?: string;
+  empresa?: Empresa | null;
+  vehiculo?: Vehiculo | null;
+  neumatico?: Neumatico | null;
+  tecnico?: Perfil | null;
+  posicion_origen?: PosicionVehiculo | null;
+  posicion_destino?: PosicionVehiculo | null;
+}
+
+export interface FichaGenerica {
+  id: string;
+  almacen_producto_id?: string | null;
+  referencia_almacen?: string | null;
+  marca: string;
+  modelo?: string | null;
+  medida: string;
+  indice_carga?: string | null;
+  codigo_velocidad?: string | null;
+  descripcion?: string | null;
+  activo: boolean;
+}
+
+export type EstadoRevision = "borrador" | "completada" | "enviada" | "anulada";
+
+export interface RevisionVehiculo {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  km_vehiculo?: number | null;
+  origen_km?: string | null;
+  fecha_revision: string;
+  tecnico_id?: string | null;
+  estado_revision: EstadoRevision;
+  observaciones?: string | null;
+  vehiculo?: Vehiculo | null;
+}
+
+export interface RevisionDetalle {
+  id: string;
+  revision_id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  neumatico_id?: string | null;
+  posicion_id: string;
+  profundidad_mm?: number | null;
+  presion_bar?: number | null;
+  temperatura?: number | null;
+  metodo_profundidad?: "manual" | "bluetooth" | "importacion_excel" | null;
+  metodo_presion?: "manual" | "bluetooth" | "importacion_excel" | null;
+  estado_visual?: string | null;
+  observaciones?: string | null;
+  foto_url?: string | null;
+  no_accesible: boolean;
+  neumatico_ausente: boolean;
+  alerta_generada: boolean;
+  neumatico?: Neumatico | null;
+  posicion?: PosicionVehiculo | null;
+}
+
+export interface AutorizacionOperacion {
+  id: string;
+  empresa_id: string;
+  operacion_id?: string | null;
+  tipo_autorizacion: "montaje_fuera_almacen" | "montaje_sin_dot" | "montaje_sin_rfid" | "correccion_manual" | "anulacion_operacion";
+  solicitado_por: string;
+  autorizado_por?: string | null;
+  motivo: string;
+  estado: "pendiente" | "aprobada" | "rechazada";
+  fecha_solicitud: string;
+  fecha_autorizacion?: string | null;
 }
