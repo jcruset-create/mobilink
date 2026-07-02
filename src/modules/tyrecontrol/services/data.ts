@@ -124,6 +124,11 @@ export async function listarTiposVehiculo(): Promise<TipoVehiculo[]> {
   return (data ?? []) as TipoVehiculo[];
 }
 
+export async function actualizarConfiguracionEjes(tipoId: string, configuracionEjes: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_vehiculo").update({ configuracion_ejes: configuracionEjes }).eq("id", tipoId);
+  if (error) throw new Error(error.message);
+}
+
 export async function listarPosiciones(tipoId: string): Promise<PosicionVehiculo[]> {
   const { data, error } = await supabase
     .from("tc_posiciones_vehiculo")

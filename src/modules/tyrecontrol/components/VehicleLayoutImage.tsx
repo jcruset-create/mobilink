@@ -62,6 +62,7 @@ export default function VehicleLayoutImage({
   const [saving, setSaving] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [msg, setMsg] = useState("");
+  const [aspecto, setAspecto] = useState(16 / 9);
 
   async function onArchivoSeleccionado(file: File | undefined) {
     if (!file || !tipo) return;
@@ -234,13 +235,22 @@ export default function VehicleLayoutImage({
 
         <div
           ref={containerRef}
-          className="relative w-full select-none overflow-hidden rounded-lg bg-slate-950"
-          style={{ aspectRatio: "1 / 1.5" }}
+          className="relative mx-auto w-full max-w-3xl select-none overflow-hidden rounded-lg bg-slate-950"
+          style={{ aspectRatio: String(aspecto) }}
           onPointerMove={onPointerMoveContainer}
           onPointerUp={onPointerUpContainer}
         >
           {(calibrando ? urlDraft : tipo?.imagen_chasis_url) ? (
-            <img src={calibrando ? urlDraft : tipo!.imagen_chasis_url!} alt={tipo?.nombre} className="absolute inset-0 h-full w-full object-contain" draggable={false} />
+            <img
+              src={calibrando ? urlDraft : tipo!.imagen_chasis_url!}
+              alt={tipo?.nombre}
+              className="absolute inset-0 h-full w-full object-contain"
+              draggable={false}
+              onLoad={(e) => {
+                const { naturalWidth, naturalHeight } = e.currentTarget;
+                if (naturalWidth && naturalHeight) setAspecto(naturalWidth / naturalHeight);
+              }}
+            />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">Sube o pega la URL de la imagen arriba…</div>
           )}

@@ -97,6 +97,7 @@ export interface TipoVehiculo {
   numero_ruedas: number;
   activo: boolean;
   imagen_chasis_url?: string | null;
+  configuracion_ejes?: string | null;
 }
 
 export interface PosicionVehiculo {
