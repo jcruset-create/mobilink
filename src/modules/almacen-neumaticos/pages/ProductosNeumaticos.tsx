@@ -21,6 +21,8 @@ type Producto = {
 export default function ProductosNeumaticos() {
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [productos, setProductos] = useState<Producto[]>([]);
+  const [catMarcas, setCatMarcas] = useState<string[]>([]);
+  const [catMedidas, setCatMedidas] = useState<string[]>([]);
 
   const [empresaId, setEmpresaId] = useState("");
   const [marca, setMarca] = useState("");
@@ -31,7 +33,31 @@ export default function ProductosNeumaticos() {
 
   useEffect(() => {
     cargarDatos();
+    cargarCatalogosCompartidos();
   }, []);
+
+  // Catálogo compartido con TyreControl (tc_cat_marcas_neumatico / tc_cat_medidas_neumatico)
+  // — solo lectura aquí, para sugerir valores ya usados y no duplicar nombres distintos
+  // para lo mismo (ej. "Michelin" vs "MICHELIN").
+  async function cargarCatalogosCompartidos() {
+    const [{ data: marcasData }, { data: medidasData }] = await Promise.all([
+      supabase.from("tc_cat_marcas_neumatico").select("nombre").eq("activo", true).order("nombre"),
+      supabase.from("tc_cat_medidas_neumatico").select("valor").eq("activo", true).order("valor"),
+    ]);
+    setCatMarcas(((marcasData || []) as { nombre: string }[]).map((m) => m.nombre));
+    setCatMedidas(((medidasData || []) as { valor: string }[]).map((m) => m.valor));
+  }
+
+  // Añade la marca/medida al catálogo compartido si es nueva (best-effort:
+  // si falla por permisos no bloquea la creación del producto).
+  async function sincronizarCatalogoCompartido(marcaValor: string, medidaValor: string) {
+    try {
+      if (marcaValor) await supabase.from("tc_cat_marcas_neumatico").upsert({ nombre: marcaValor }, { onConflict: "nombre" });
+      if (medidaValor) await supabase.from("tc_cat_medidas_neumatico").upsert({ valor: medidaValor }, { onConflict: "valor" });
+    } catch {
+      // silencioso: es solo una sugerencia para el desplegable de TyreControl
+    }
+  }
 
   function normalizarMedida(valor: string) {
     return valor
@@ -138,12 +164,15 @@ export default function ProductosNeumaticos() {
       return;
     }
 
+    await sincronizarCatalogoCompartido(marca.trim(), normalizarMedida(medida));
+
     setMensaje("Producto creado correctamente. Puedes volver a Entradas y leer de nuevo el OCR.");
     setMarca("");
     setModelo("");
     setMedida("");
     setDot("");
     cargarDatos();
+    cargarCatalogosCompartidos();
   }
 
   function filasExportacionProductos(): FilaExportacion[] {
@@ -233,8 +262,12 @@ export default function ProductosNeumaticos() {
           value={marca}
           onChange={(e) => setMarca(e.target.value)}
           placeholder="Marca"
+          list="catalogo-marcas"
           className="w-full rounded-lg border px-3 py-2 text-sm"
         />
+        <datalist id="catalogo-marcas">
+          {catMarcas.map((m) => <option key={m} value={m} />)}
+        </datalist>
 
         <input
           value={modelo}
@@ -247,8 +280,12 @@ export default function ProductosNeumaticos() {
           value={medida}
           onChange={(e) => setMedida(e.target.value)}
           placeholder="Medida, ejemplo 315/70R22.5"
+          list="catalogo-medidas"
           className="w-full rounded-lg border px-3 py-2 text-sm"
         />
+        <datalist id="catalogo-medidas">
+          {catMedidas.map((m) => <option key={m} value={m} />)}
+        </datalist>
 
         <input
           value={dot}

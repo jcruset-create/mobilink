@@ -295,13 +295,15 @@ export async function crearFichaGenerica(input: Omit<FichaGenerica, "id">): Prom
   if (error) throw new Error(error.message);
 }
 
-// ── Fase 8: Montaje desde almacén (genérico/individual) y fuera de almacén ─
+// ── Fase 8/12: Montaje desde almacén (genérico/individual) y fuera de almacén ─
+// Lee directamente el catálogo real del almacén (productos_neumaticos, via
+// tc_productos_almacen) — sin tabla intermedia de "ficha genérica".
 export async function montarDesdeAlmacen(params: {
-  vehiculoId: string; posicionId: string; fichaGenericaId: string; controlIndividual: boolean;
+  vehiculoId: string; posicionId: string; productoAlmacenId: string; controlIndividual: boolean;
   datos?: Record<string, string>; km?: number | null; fecha?: string | null; observaciones?: string | null;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("tc_montar_desde_almacen", {
-    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_ficha_generica: params.fichaGenericaId,
+    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_producto_almacen: params.productoAlmacenId,
     p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
   });
@@ -323,12 +325,12 @@ export async function montarFueraAlmacen(params: {
 }
 
 export async function sustituirNeumatico(params: {
-  montajeActualId: string; fichaGenericaId: string; controlIndividual: boolean; datos?: Record<string, string>;
+  montajeActualId: string; productoAlmacenId: string; controlIndividual: boolean; datos?: Record<string, string>;
   motivoDesmontaje: MotivoDesmontaje; destinoRetirado: DestinoDesmontaje;
   km?: number | null; fecha?: string | null; observaciones?: string | null;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("tc_sustituir_neumatico", {
-    p_montaje_actual: params.montajeActualId, p_ficha_generica: params.fichaGenericaId,
+    p_montaje_actual: params.montajeActualId, p_producto_almacen: params.productoAlmacenId,
     p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
     p_motivo_desmontaje: params.motivoDesmontaje, p_destino_retirado: params.destinoRetirado,
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
