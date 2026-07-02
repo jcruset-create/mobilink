@@ -243,6 +243,13 @@ export async function desmontarNeumatico(params: {
   if (error) throw new Error(error.message);
 }
 
+export async function rotarNeumatico(params: { montajeOrigenId: string; posicionDestinoId: string }): Promise<void> {
+  const { error } = await supabase.rpc("tc_rotar_neumatico", {
+    p_montaje_origen: params.montajeOrigenId, p_posicion_destino: params.posicionDestinoId,
+  });
+  if (error) throw new Error(error.message);
+}
+
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
   const { data, error } = await supabase.from("tc_historial_montajes").select("*")
     .eq("neumatico_id", neumaticoId).order("created_at", { ascending: false });

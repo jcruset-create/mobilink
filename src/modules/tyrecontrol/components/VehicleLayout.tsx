@@ -3,8 +3,21 @@ import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from ".
 import type { ZoneRect } from "../vehicle-layouts/zones";
 import { categoriaDeTipo, firmaDePosiciones, resolverLayout } from "../vehicle-layouts/manifest";
 import TirePosition, { COLOR_ESTADO_VISUAL } from "./TirePosition";
-import { listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico } from "../services/data";
+import { listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico } from "../services/data";
 import { inputCls } from "./ui";
+
+function puntoSvg(svg: SVGSVGElement, clientX: number, clientY: number): { x: number; y: number } {
+  const pt = svg.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+function zonaEn(zones: ZoneRect[], x: number, y: number): ZoneRect | null {
+  return zones.find((z) => x >= z.x && x <= z.x + z.width && y >= z.y && y <= z.y + z.height) ?? null;
+}
 
 interface VehicleLayoutProps {
   tipo?: TipoVehiculo | null;
@@ -27,6 +40,12 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
   const [zones, setZones] = useState<ZoneRect[]>([]);
   const [noDisponible, setNoDisponible] = useState(false);
   const chassisRef = useRef<SVGSVGElement>(null);
+  const overlayRef = useRef<SVGSVGElement>(null);
+
+  const [arrastrando, setArrastrando] = useState<string | null>(null); // codigo_posicion de origen
+  const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
+  const [rotando, setRotando] = useState(false);
+  const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
 
   const categoria = categoriaDeTipo(tipo);
   const signature = firmaDePosiciones(posiciones);
@@ -97,6 +116,52 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
     } catch (e: any) { setMsg(e?.message || "Error al desmontar"); } finally { setSaving(false); }
   }
 
+  async function enviarA(codigo: string, destino: "reparacion" | "descartado") {
+    const pos = posicionPorCodigo.get(codigo);
+    const m = pos ? montajePorPosicionId.get(pos.id) : undefined;
+    setMenuContextual(null);
+    if (!m) return;
+    setSaving(true); setMsg("");
+    try {
+      await desmontarNeumatico({ montajeId: m.id, km: null, motivo: destino === "reparacion" ? "reparacion" : "descarte", destino, observaciones: null });
+      setSeleccion(null); onChanged?.();
+    } catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+  }
+
+  // ── Drag & drop: rotar / intercambiar sobre el propio plano ──
+  function iniciarArrastre(e: React.PointerEvent, codigo: string) {
+    if (!editable) return;
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    setArrastrando(codigo);
+    setSeleccion(null);
+  }
+
+  function moverArrastre(e: React.PointerEvent) {
+    if (!arrastrando || !overlayRef.current) return;
+    const p = puntoSvg(overlayRef.current, e.clientX, e.clientY);
+    const z = zonaEn(zones, p.x, p.y);
+    setZonaSobrevolada(z && z.id !== arrastrando ? z.id : null);
+  }
+
+  async function soltarArrastre() {
+    const origenCodigo = arrastrando;
+    const destinoCodigo = zonaSobrevolada;
+    setArrastrando(null); setZonaSobrevolada(null);
+    if (!origenCodigo || !destinoCodigo || origenCodigo === destinoCodigo) return;
+
+    const posOrigen = posicionPorCodigo.get(origenCodigo);
+    const posDestino = posicionPorCodigo.get(destinoCodigo);
+    const montajeOrigen = posOrigen ? montajePorPosicionId.get(posOrigen.id) : undefined;
+    if (!posOrigen || !posDestino || !montajeOrigen) return;
+
+    setRotando(true); setMsg("");
+    try {
+      await rotarNeumatico({ montajeOrigenId: montajeOrigen.id, posicionDestinoId: posDestino.id });
+      onChanged?.();
+    } catch (e: any) { setMsg(e?.message || "Error al rotar"); } finally { setRotando(false); }
+  }
+
   if (noDisponible) {
     return (
       <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-8 text-center text-sm text-slate-500">
@@ -111,21 +176,39 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
     <div className="grid gap-3 lg:grid-cols-[1fr_260px]">
       <div className="relative w-full overflow-hidden rounded-lg bg-slate-950">
         <svg ref={chassisRef} viewBox={viewBox} className="absolute inset-0 h-full w-full text-slate-500" dangerouslySetInnerHTML={{ __html: markup }} />
-        <svg viewBox={viewBox} className="relative h-full w-full" style={{ aspectRatio: "1000 / 760" }}>
+        <svg
+          ref={overlayRef}
+          viewBox={viewBox}
+          className="relative h-full w-full"
+          style={{ aspectRatio: "1000 / 760" }}
+          onPointerMove={moverArrastre}
+          onPointerUp={soltarArrastre}
+        >
           {zones.map((z) => (
             <TirePosition
               key={z.id}
               zone={z}
               montaje={montajePorPosicionId.get(posicionPorCodigo.get(z.id)?.id ?? "")}
               seleccionado={seleccion === z.id}
-              onClick={() => setSeleccion(seleccion === z.id ? null : z.id)}
+              draggable={editable}
+              dragging={arrastrando === z.id}
+              dragOver={zonaSobrevolada === z.id}
+              onClick={() => { if (!arrastrando) setSeleccion(seleccion === z.id ? null : z.id); }}
               onDoubleClick={() => {
                 const m = montajePorPosicionId.get(posicionPorCodigo.get(z.id)?.id ?? "");
                 if (m?.neumatico) onFicha?.(m.neumatico.id);
               }}
+              onContextMenu={(e) => {
+                const m = montajePorPosicionId.get(posicionPorCodigo.get(z.id)?.id ?? "");
+                if (!editable || !m?.neumatico) return;
+                e.preventDefault();
+                setMenuContextual({ codigo: z.id, x: e.clientX, y: e.clientY });
+              }}
+              onPointerDown={(e) => iniciarArrastre(e, z.id)}
             />
           ))}
         </svg>
+        {rotando && <div className="absolute inset-0 flex items-center justify-center bg-slate-950/50 text-xs font-bold text-slate-200">Rotando…</div>}
       </div>
 
       <div className="rounded-lg bg-slate-800 p-3">
@@ -164,6 +247,27 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
         )}
         {msg && <div className="mt-2 text-[11px] text-red-300">{msg}</div>}
       </div>
+
+      {menuContextual && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenuContextual(null)} />
+          <div
+            className="fixed z-50 min-w-[180px] rounded-lg border border-slate-700 bg-slate-800 py-1 shadow-xl"
+            style={{ left: menuContextual.x, top: menuContextual.y }}
+          >
+            <button
+              onClick={() => {
+                const m = montajePorPosicionId.get(posicionPorCodigo.get(menuContextual.codigo)?.id ?? "");
+                setMenuContextual(null);
+                if (m?.neumatico) onFicha?.(m.neumatico.id);
+              }}
+              className="block w-full px-3 py-1.5 text-left text-[12px] text-slate-200 hover:bg-slate-700"
+            >Ver ficha</button>
+            <button onClick={() => enviarA(menuContextual.codigo, "reparacion")} className="block w-full px-3 py-1.5 text-left text-[12px] text-sky-300 hover:bg-slate-700">Enviar a reparación</button>
+            <button onClick={() => enviarA(menuContextual.codigo, "descartado")} className="block w-full px-3 py-1.5 text-left text-[12px] text-rose-300 hover:bg-slate-700">Descartar neumático</button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

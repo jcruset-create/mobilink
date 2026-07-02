@@ -26,15 +26,20 @@ interface TirePositionProps {
   montaje?: MontajeActual;
   seleccionado?: boolean;
   showDetails?: boolean;
+  draggable?: boolean;
+  dragOver?: boolean;
+  dragging?: boolean;
   onClick?: () => void;
   onDoubleClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
+  onPointerDown?: (e: React.PointerEvent) => void;
 }
 
 export default function TirePosition({
-  zone, montaje, seleccionado, showDetails = true, onClick, onDoubleClick, onContextMenu, onMouseEnter, onMouseLeave,
+  zone, montaje, seleccionado, showDetails = true, draggable, dragOver, dragging,
+  onClick, onDoubleClick, onContextMenu, onMouseEnter, onMouseLeave, onPointerDown,
 }: TirePositionProps) {
   const estado = getEstadoVisual(montaje);
   const color = COLOR_ESTADO_VISUAL[estado];
@@ -43,20 +48,22 @@ export default function TirePosition({
   return (
     <g
       transform={`translate(${zone.x},${zone.y})`}
-      className="cursor-pointer pointer-events-auto"
+      className="pointer-events-auto"
+      style={{ cursor: draggable && ocupado ? "grab" : "pointer", opacity: dragging ? 0.35 : 1 }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onPointerDown={draggable && ocupado ? onPointerDown : undefined}
     >
       <rect
         width={zone.width}
         height={zone.height}
         rx={10}
-        fill={ocupado ? "rgba(15,23,42,0.9)" : "rgba(15,23,42,0.35)"}
-        stroke={color}
-        strokeWidth={seleccionado ? 4 : 2}
+        fill={dragOver ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.9)" : "rgba(15,23,42,0.35)"}
+        stroke={dragOver ? "#38bdf8" : color}
+        strokeWidth={seleccionado || dragOver ? 4 : 2}
         strokeDasharray={ocupado ? undefined : "6 4"}
       />
       {ocupado && (
