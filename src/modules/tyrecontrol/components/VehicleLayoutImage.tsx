@@ -7,6 +7,17 @@ import {
 import { inputCls } from "./ui";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
+import { supabase } from "../services/supabase";
+
+const BUCKET_CHASIS = "tc-chasis";
+
+async function subirImagenChasis(tipoId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `${tipoId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from(BUCKET_CHASIS).upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from(BUCKET_CHASIS).getPublicUrl(ruta).data.publicUrl;
+}
 
 interface Coords { x: number; y: number; w: number; h: number; }
 
@@ -49,7 +60,17 @@ export default function VehicleLayoutImage({
   const [calibrando, setCalibrando] = useState(false);
   const [urlDraft, setUrlDraft] = useState(tipo?.imagen_chasis_url ?? "");
   const [saving, setSaving] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
   const [msg, setMsg] = useState("");
+
+  async function onArchivoSeleccionado(file: File | undefined) {
+    if (!file || !tipo) return;
+    setSubiendo(true); setMsg("");
+    try {
+      const url = await subirImagenChasis(tipo.id, file);
+      setUrlDraft(url);
+    } catch (e: any) { setMsg(e?.message || "Error al subir la imagen"); } finally { setSubiendo(false); }
+  }
 
   useEffect(() => {
     const next: Record<string, Coords> = {};
@@ -196,8 +217,13 @@ export default function VehicleLayoutImage({
           <div className="mb-2 flex flex-wrap items-center gap-2">
             {calibrando ? (
               <>
-                <input className={`${inputCls} flex-1 text-[12px]`} placeholder="URL de la imagen (vista superior del chasis)…" value={urlDraft} onChange={(e) => setUrlDraft(e.target.value)} />
-                <button onClick={guardarCalibracion} disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">Guardar calibración</button>
+                <label className="rounded border border-sky-600 px-3 py-1.5 text-[12px] font-bold text-sky-300 cursor-pointer">
+                  {subiendo ? "Subiendo…" : "📁 Subir imagen desde el ordenador"}
+                  <input type="file" accept="image/*" className="hidden" disabled={subiendo}
+                    onChange={(e) => onArchivoSeleccionado(e.target.files?.[0])} />
+                </label>
+                <input className={`${inputCls} flex-1 text-[12px]`} placeholder="…o pega la URL de la imagen" value={urlDraft} onChange={(e) => setUrlDraft(e.target.value)} />
+                <button onClick={guardarCalibracion} disabled={saving || subiendo} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">Guardar calibración</button>
                 <button onClick={() => setCalibrando(false)} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">Cancelar</button>
               </>
             ) : (
@@ -213,10 +239,10 @@ export default function VehicleLayoutImage({
           onPointerMove={onPointerMoveContainer}
           onPointerUp={onPointerUpContainer}
         >
-          {tipo?.imagen_chasis_url ? (
-            <img src={tipo.imagen_chasis_url} alt={tipo.nombre} className="absolute inset-0 h-full w-full object-contain" draggable={false} />
+          {(calibrando ? urlDraft : tipo?.imagen_chasis_url) ? (
+            <img src={calibrando ? urlDraft : tipo!.imagen_chasis_url!} alt={tipo?.nombre} className="absolute inset-0 h-full w-full object-contain" draggable={false} />
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">Pega la URL de la imagen arriba…</div>
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">Sube o pega la URL de la imagen arriba…</div>
           )}
 
           {posiciones.map((p) => {
