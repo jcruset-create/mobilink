@@ -28,6 +28,16 @@ export interface ClienteAlmacen {
   activo: boolean;
 }
 
+export interface ProductoAlmacen {
+  id: string;
+  empresa_id_almacen: string;
+  marca: string;
+  modelo: string | null;
+  medida: string;
+  dot: string | null;
+  activo: boolean;
+}
+
 export interface Delegacion {
   id: string;
   empresa_id: string;
@@ -172,7 +182,7 @@ export interface Neumatico {
 }
 
 export type NeumaticoInput = Omit<Neumatico, "id" | "created_at" | "updated_at" | "empresa" | "sincronizado_almacen"
-  | "almacen_producto_id" | "almacen_lote_id" | "almacen_ubicacion_id" | "almacen_movimiento_id">;
+  | "almacen_lote_id" | "almacen_ubicacion_id" | "almacen_movimiento_id">;
 
 export interface MontajeActual {
   id: string;

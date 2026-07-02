@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas } from "../services/data";
-import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico } from "../types";
+import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen } from "../services/data";
+import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
@@ -9,6 +9,7 @@ const VACIO: NeumaticoInput = {
   empresa_id: "", codigo_interno: "", numero_serie: "", dot: "", marca: "", modelo: "", medida: "",
   indice_carga: "", indice_velocidad: "", rfid_epc: "", estado: "almacen",
   fecha_compra: null, coste_compra: null, proveedor: "", referencia_almacen: "", activo: true,
+  almacen_producto_id: null,
 };
 
 const ESTADO_COLOR: Record<EstadoNeumatico, string> = {
@@ -29,6 +30,9 @@ export default function Neumaticos() {
   const [fMedida, setFMedida] = useState("");
   const [modal, setModal] = useState<null | { id: string | null; draft: NeumaticoInput }>(null);
   const [saving, setSaving] = useState(false);
+  const [productos, setProductos] = useState<ProductoAlmacen[]>([]);
+
+  useEffect(() => { if (modal) listarProductosAlmacen().then(setProductos); }, [modal]);
 
   async function cargar() {
     setLoading(true);
@@ -144,6 +148,17 @@ export default function Neumaticos() {
             <TextField label="Número de serie" value={modal.draft.numero_serie ?? ""} onChange={(v) => set({ numero_serie: v })} />
             <TextField label="DOT (4 dígitos)" value={modal.draft.dot ?? ""} onChange={(v) => set({ dot: v })} />
             <TextField label="RFID EPC" value={modal.draft.rfid_epc ?? ""} onChange={(v) => set({ rfid_epc: v })} />
+            <div className="sm:col-span-2">
+              <Field label="Producto de almacén (catálogo)">
+                <select className={inputCls} value={modal.draft.almacen_producto_id ?? ""} onChange={(e) => {
+                  const p = productos.find((x) => x.id === e.target.value);
+                  set({ almacen_producto_id: e.target.value || null, ...(p ? { marca: p.marca, modelo: p.modelo ?? "", medida: p.medida } : {}) });
+                }}>
+                  <option value="">Sin enlazar (rellenar a mano)</option>
+                  {productos.map((p) => <option key={p.id} value={p.id}>{p.marca} {p.modelo ?? ""} · {p.medida}</option>)}
+                </select>
+              </Field>
+            </div>
             <TextField label="Marca" value={modal.draft.marca ?? ""} onChange={(v) => set({ marca: v })} />
             <TextField label="Modelo" value={modal.draft.modelo ?? ""} onChange={(v) => set({ modelo: v })} />
             <TextField label="Medida" value={modal.draft.medida ?? ""} onChange={(v) => set({ medida: v })} />

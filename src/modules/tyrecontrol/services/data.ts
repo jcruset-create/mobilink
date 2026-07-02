@@ -3,7 +3,7 @@ import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
-  ClienteAlmacen,
+  ClienteAlmacen, ProductoAlmacen,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -22,7 +22,7 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 const COLS_EMPRESA = ["nombre", "cif", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
 const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo"] as const;
 const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo"] as const;
-const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo"] as const;
+const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
 // ── Empresas ─────────────────────────────────────────────────
 export async function listarEmpresas(): Promise<Empresa[]> {
@@ -60,6 +60,14 @@ export async function listarClientesAlmacen(q?: string): Promise<ClienteAlmacen[
 export async function enlazarClienteAlmacen(empresaId: string, clienteAlmacenId: string | null): Promise<void> {
   const { error } = await supabase.from("tc_empresas").update({ cliente_almacen_id: clienteAlmacenId, updated_at: new Date().toISOString() }).eq("id", empresaId);
   if (error) throw new Error(error.message);
+}
+
+export async function listarProductosAlmacen(q?: string): Promise<ProductoAlmacen[]> {
+  let query = supabase.from("tc_productos_almacen").select("*").order("medida");
+  if (q) query = query.or(`marca.ilike.%${q}%,medida.ilike.%${q}%,modelo.ilike.%${q}%`);
+  const { data, error } = await query.limit(100);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ProductoAlmacen[];
 }
 
 // ── Delegaciones ─────────────────────────────────────────────
