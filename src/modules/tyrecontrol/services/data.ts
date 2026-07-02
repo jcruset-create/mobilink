@@ -5,6 +5,7 @@ import type {
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
+  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -405,5 +406,38 @@ export async function resolverAutorizacion(id: string, aprobar: boolean): Promis
   const { error } = await supabase.from("autorizaciones_operaciones")
     .update({ estado: aprobar ? "aprobada" : "rechazada", autorizado_por: (await supabase.auth.getUser()).data.user?.id, fecha_autorizacion: new Date().toISOString() })
     .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Fase 9: Catálogos de marca / modelo / medida ────────────────
+export async function listarMarcas(): Promise<MarcaNeumatico[]> {
+  const { data, error } = await supabase.from("tc_cat_marcas_neumatico").select("*").eq("activo", true).order("nombre");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MarcaNeumatico[];
+}
+export async function crearMarca(nombre: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: nombre.trim() });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarModelos(marcaId?: string): Promise<ModeloNeumatico[]> {
+  let q = supabase.from("tc_cat_modelos_neumatico").select("*").eq("activo", true).order("nombre");
+  if (marcaId) q = q.eq("marca_id", marcaId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ModeloNeumatico[];
+}
+export async function crearModelo(marcaId: string | null, nombre: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_modelos_neumatico").insert({ marca_id: marcaId, nombre: nombre.trim() });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarMedidas(): Promise<MedidaNeumatico[]> {
+  const { data, error } = await supabase.from("tc_cat_medidas_neumatico").select("*").eq("activo", true).order("valor");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MedidaNeumatico[];
+}
+export async function crearMedida(valor: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: valor.trim() });
   if (error) throw new Error(error.message);
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen } from "../services/data";
-import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen } from "../types";
+import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas } from "../services/data";
+import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
@@ -31,8 +31,22 @@ export default function Neumaticos() {
   const [modal, setModal] = useState<null | { id: string | null; draft: NeumaticoInput }>(null);
   const [saving, setSaving] = useState(false);
   const [productos, setProductos] = useState<ProductoAlmacen[]>([]);
+  const [catMarcas, setCatMarcas] = useState<MarcaNeumatico[]>([]);
+  const [catModelos, setCatModelos] = useState<ModeloNeumatico[]>([]);
+  const [catMedidas, setCatMedidas] = useState<MedidaNeumatico[]>([]);
 
-  useEffect(() => { if (modal) listarProductosAlmacen().then(setProductos); }, [modal]);
+  useEffect(() => {
+    if (!modal) return;
+    listarProductosAlmacen().then(setProductos);
+    listarMarcas().then(setCatMarcas);
+    listarMedidas().then(setCatMedidas);
+  }, [modal]);
+
+  useEffect(() => {
+    const marcaId = catMarcas.find((m) => m.nombre === modal?.draft.marca)?.id;
+    listarModelos(marcaId).then(setCatModelos);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal?.draft.marca, catMarcas]);
 
   async function cargar() {
     setLoading(true);
@@ -159,9 +173,27 @@ export default function Neumaticos() {
                 </select>
               </Field>
             </div>
-            <TextField label="Marca" value={modal.draft.marca ?? ""} onChange={(v) => set({ marca: v })} />
-            <TextField label="Modelo" value={modal.draft.modelo ?? ""} onChange={(v) => set({ modelo: v })} />
-            <TextField label="Medida" value={modal.draft.medida ?? ""} onChange={(v) => set({ medida: v })} />
+            <Field label="Marca">
+              <select className={inputCls} value={modal.draft.marca ?? ""} onChange={(e) => set({ marca: e.target.value, modelo: "" })}>
+                <option value="">Selecciona…</option>
+                {modal.draft.marca && !catMarcas.some((m) => m.nombre === modal.draft.marca) && <option value={modal.draft.marca}>{modal.draft.marca}</option>}
+                {catMarcas.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
+              </select>
+            </Field>
+            <Field label="Modelo">
+              <select className={inputCls} value={modal.draft.modelo ?? ""} onChange={(e) => set({ modelo: e.target.value })}>
+                <option value="">Selecciona…</option>
+                {modal.draft.modelo && !catModelos.some((m) => m.nombre === modal.draft.modelo) && <option value={modal.draft.modelo}>{modal.draft.modelo}</option>}
+                {catModelos.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
+              </select>
+            </Field>
+            <Field label="Medida">
+              <select className={inputCls} value={modal.draft.medida ?? ""} onChange={(e) => set({ medida: e.target.value })}>
+                <option value="">Selecciona…</option>
+                {modal.draft.medida && !catMedidas.some((m) => m.valor === modal.draft.medida) && <option value={modal.draft.medida}>{modal.draft.medida}</option>}
+                {catMedidas.map((m) => <option key={m.id} value={m.valor}>{m.valor}</option>)}
+              </select>
+            </Field>
             <TextField label="Índice carga" value={modal.draft.indice_carga ?? ""} onChange={(v) => set({ indice_carga: v })} />
             <TextField label="Índice velocidad" value={modal.draft.indice_velocidad ?? ""} onChange={(v) => set({ indice_velocidad: v })} />
             <TextField label="Proveedor" value={modal.draft.proveedor ?? ""} onChange={(v) => set({ proveedor: v })} />
