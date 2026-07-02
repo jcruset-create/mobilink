@@ -1,0 +1,57 @@
+<svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg">
+  <g id="chassis-root" fill="none" stroke="currentColor" stroke-width="3" opacity="0.55">
+    <!-- cabina -->
+    <rect x="380" y="30" width="240" height="150" rx="16" />
+    <line x1="380" y1="90" x2="620" y2="90" />
+    <!-- largueros del chasis -->
+    <line x1="430" y1="180" x2="430" y2="680" />
+    <line x1="570" y1="180" x2="570" y2="680" />
+    <!-- travesaños -->
+    <line x1="430" y1="230" x2="570" y2="230" />
+    <line x1="430" y1="400" x2="570" y2="400" />
+    <line x1="430" y1="560" x2="570" y2="560" />
+    <!-- depósito de combustible -->
+    <rect x="440" y="260" width="50" height="110" rx="10" opacity="0.5" />
+    <rect x="510" y="260" width="50" height="110" rx="10" opacity="0.5" />
+    <!-- quinto punto -->
+    <circle cx="500" cy="470" r="34" stroke-dasharray="4 4" />
+  </g>
+
+  <text x="500" y="500" text-anchor="middle" font-size="13" fill="currentColor" opacity="0.6">QUINTO PUNTO</text>
+
+  <!-- Eje 1 (dirección, simple) -->
+  <g id="E1_IZQ" data-position="E1_IZQ" data-axle="1" data-side="izq" data-io="">
+    <rect x="180" y="175" width="90" height="140" rx="10" />
+  </g>
+  <g id="E1_DER" data-position="E1_DER" data-axle="1" data-side="der" data-io="">
+    <rect x="730" y="175" width="90" height="140" rx="10" />
+  </g>
+
+  <!-- Eje 2 (tracción, doble) -->
+  <g id="E2_IZQ_EXT" data-position="E2_IZQ_EXT" data-axle="2" data-side="izq" data-io="ext">
+    <rect x="140" y="345" width="80" height="130" rx="10" />
+  </g>
+  <g id="E2_IZQ_INT" data-position="E2_IZQ_INT" data-axle="2" data-side="izq" data-io="int">
+    <rect x="230" y="345" width="80" height="130" rx="10" />
+  </g>
+  <g id="E2_DER_INT" data-position="E2_DER_INT" data-axle="2" data-side="der" data-io="int">
+    <rect x="690" y="345" width="80" height="130" rx="10" />
+  </g>
+  <g id="E2_DER_EXT" data-position="E2_DER_EXT" data-axle="2" data-side="der" data-io="ext">
+    <rect x="780" y="345" width="80" height="130" rx="10" />
+  </g>
+
+  <!-- Eje 3 (tándem, doble) -->
+  <g id="E3_IZQ_EXT" data-position="E3_IZQ_EXT" data-axle="3" data-side="izq" data-io="ext">
+    <rect x="140" y="560" width="80" height="130" rx="10" />
+  </g>
+  <g id="E3_IZQ_INT" data-position="E3_IZQ_INT" data-axle="3" data-side="izq" data-io="int">
+    <rect x="230" y="560" width="80" height="130" rx="10" />
+  </g>
+  <g id="E3_DER_INT" data-position="E3_DER_INT" data-axle="3" data-side="der" data-io="int">
+    <rect x="690" y="560" width="80" height="130" rx="10" />
+  </g>
+  <g id="E3_DER_EXT" data-position="E3_DER_EXT" data-axle="3" data-side="der" data-io="ext">
+    <rect x="780" y="560" width="80" height="130" rx="10" />
+  </g>
+</svg>

@@ -1,22 +1,28 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones } from "../services/data";
-import type { PosicionVehiculo, Vehiculo } from "../types";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo } from "../services/data";
+import type { MontajeActual, PosicionVehiculo, Vehiculo } from "../types";
 import { ORIGEN_KM_LABELS } from "../types";
 import { Badge } from "../components/ui";
+import VehicleLayout from "../components/VehicleLayout";
+import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 export default function VehiculoDetalle() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const { perfil } = useTyreAuth();
+  const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
   const [v, setV] = useState<Vehiculo | null>(null);
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
+  const [montajes, setMontajes] = useState<MontajeActual[]>([]);
 
-  useEffect(() => {
-    obtenerVehiculo(id).then(async (veh) => {
-      setV(veh);
-      if (veh?.tipo_vehiculo_id) setPosiciones(await listarPosiciones(veh.tipo_vehiculo_id));
-    });
-  }, [id]);
+  async function cargar() {
+    const veh = await obtenerVehiculo(id);
+    setV(veh);
+    if (veh?.tipo_vehiculo_id) setPosiciones(await listarPosiciones(veh.tipo_vehiculo_id));
+    setMontajes(await listarMontajesVehiculo(id));
+  }
+  useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
 
   const dato = (l: string, val?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{val || "—"}</div></div>
@@ -50,6 +56,21 @@ export default function VehiculoDetalle() {
           <div className="text-3xl font-black">{Number(v.km_actual).toLocaleString("es-ES")} <span className="text-sm font-normal text-slate-400">km</span></div>
           <div className="mt-1 text-xs text-slate-500">Origen: {ORIGEN_KM_LABELS[v.origen_km]}</div>
         </div>
+      </div>
+
+      {/* Plano gráfico del vehículo */}
+      <div className="mt-3 rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
+        <VehicleLayout
+          tipo={v.tipo}
+          posiciones={posiciones}
+          vehiculoId={v.id}
+          empresaId={v.empresa_id}
+          montajes={montajes}
+          editable={!esCliente}
+          onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
+          onChanged={cargar}
+        />
       </div>
 
       {/* Estructura de posiciones */}

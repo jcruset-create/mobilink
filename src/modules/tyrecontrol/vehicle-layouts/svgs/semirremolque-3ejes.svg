@@ -1,0 +1,42 @@
+<svg viewBox="0 0 1000 760" xmlns="http://www.w3.org/2000/svg">
+  <g id="chassis-root" fill="none" stroke="currentColor" stroke-width="3" opacity="0.55">
+    <!-- estructura de chasis tipo escalera -->
+    <line x1="430" y1="60" x2="430" y2="700" />
+    <line x1="570" y1="60" x2="570" y2="700" />
+    <line x1="430" y1="150" x2="570" y2="150" />
+    <line x1="430" y1="330" x2="570" y2="330" />
+    <line x1="430" y1="510" x2="570" y2="510" />
+    <!-- travesaños diagonales (estilo góndola) -->
+    <line x1="430" y1="150" x2="570" y2="330" opacity="0.4" />
+    <line x1="570" y1="150" x2="430" y2="330" opacity="0.4" />
+    <line x1="430" y1="330" x2="570" y2="510" opacity="0.4" />
+    <line x1="570" y1="330" x2="430" y2="510" opacity="0.4" />
+    <!-- parte delantera -->
+    <rect x="380" y="30" width="240" height="40" rx="6" />
+  </g>
+  <text x="500" y="55" text-anchor="middle" font-size="13" fill="currentColor" opacity="0.6">DELANTERO</text>
+
+  <!-- Eje 1 -->
+  <g id="E1_IZQ" data-position="E1_IZQ" data-axle="1" data-side="izq" data-io="">
+    <rect x="180" y="175" width="90" height="130" rx="10" />
+  </g>
+  <g id="E1_DER" data-position="E1_DER" data-axle="1" data-side="der" data-io="">
+    <rect x="730" y="175" width="90" height="130" rx="10" />
+  </g>
+
+  <!-- Eje 2 -->
+  <g id="E2_IZQ" data-position="E2_IZQ" data-axle="2" data-side="izq" data-io="">
+    <rect x="180" y="355" width="90" height="130" rx="10" />
+  </g>
+  <g id="E2_DER" data-position="E2_DER" data-axle="2" data-side="der" data-io="">
+    <rect x="730" y="355" width="90" height="130" rx="10" />
+  </g>
+
+  <!-- Eje 3 -->
+  <g id="E3_IZQ" data-position="E3_IZQ" data-axle="3" data-side="izq" data-io="">
+    <rect x="180" y="535" width="90" height="130" rx="10" />
+  </g>
+  <g id="E3_DER" data-position="E3_DER" data-axle="3" data-side="der" data-io="">
+    <rect x="730" y="535" width="90" height="130" rx="10" />
+  </g>
+</svg>
