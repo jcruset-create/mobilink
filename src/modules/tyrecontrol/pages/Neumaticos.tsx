@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas } from "../services/data";
-import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico } from "../types";
+import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas, listarIndicesCarga, listarIndicesVelocidad } from "../services/data";
+import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
@@ -34,12 +34,16 @@ export default function Neumaticos() {
   const [catMarcas, setCatMarcas] = useState<MarcaNeumatico[]>([]);
   const [catModelos, setCatModelos] = useState<ModeloNeumatico[]>([]);
   const [catMedidas, setCatMedidas] = useState<MedidaNeumatico[]>([]);
+  const [catIndicesCarga, setCatIndicesCarga] = useState<IndiceCarga[]>([]);
+  const [catIndicesVelocidad, setCatIndicesVelocidad] = useState<IndiceVelocidad[]>([]);
 
   useEffect(() => {
     if (!modal) return;
     listarProductosAlmacen().then(setProductos);
     listarMarcas().then(setCatMarcas);
     listarMedidas().then(setCatMedidas);
+    listarIndicesCarga().then(setCatIndicesCarga);
+    listarIndicesVelocidad().then(setCatIndicesVelocidad);
   }, [modal]);
 
   useEffect(() => {
@@ -194,8 +198,20 @@ export default function Neumaticos() {
                 {catMedidas.map((m) => <option key={m.id} value={m.valor}>{m.valor}</option>)}
               </select>
             </Field>
-            <TextField label="Índice carga" value={modal.draft.indice_carga ?? ""} onChange={(v) => set({ indice_carga: v })} />
-            <TextField label="Índice velocidad" value={modal.draft.indice_velocidad ?? ""} onChange={(v) => set({ indice_velocidad: v })} />
+            <Field label="Índice carga">
+              <select className={inputCls} value={modal.draft.indice_carga ?? ""} onChange={(e) => set({ indice_carga: e.target.value })}>
+                <option value="">Selecciona…</option>
+                {modal.draft.indice_carga && !catIndicesCarga.some((x) => x.valor === modal.draft.indice_carga) && <option value={modal.draft.indice_carga}>{modal.draft.indice_carga}</option>}
+                {catIndicesCarga.map((x) => <option key={x.id} value={x.valor}>{x.valor}</option>)}
+              </select>
+            </Field>
+            <Field label="Índice velocidad">
+              <select className={inputCls} value={modal.draft.indice_velocidad ?? ""} onChange={(e) => set({ indice_velocidad: e.target.value })}>
+                <option value="">Selecciona…</option>
+                {modal.draft.indice_velocidad && !catIndicesVelocidad.some((x) => x.valor === modal.draft.indice_velocidad) && <option value={modal.draft.indice_velocidad}>{modal.draft.indice_velocidad}</option>}
+                {catIndicesVelocidad.map((x) => <option key={x.id} value={x.valor}>{x.valor}</option>)}
+              </select>
+            </Field>
             <TextField label="Proveedor" value={modal.draft.proveedor ?? ""} onChange={(v) => set({ proveedor: v })} />
             <Field label="Fecha compra">
               <input type="date" className={inputCls} value={modal.draft.fecha_compra ?? ""} onChange={(e) => set({ fecha_compra: e.target.value || null })} />

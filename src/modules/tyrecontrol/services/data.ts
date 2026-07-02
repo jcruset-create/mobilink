@@ -5,7 +5,7 @@ import type {
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
-  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico,
+  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -439,5 +439,25 @@ export async function listarMedidas(): Promise<MedidaNeumatico[]> {
 }
 export async function crearMedida(valor: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: valor.trim() });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarIndicesCarga(): Promise<IndiceCarga[]> {
+  const { data, error } = await supabase.from("tc_cat_indices_carga").select("*").eq("activo", true).order("valor");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as IndiceCarga[];
+}
+export async function crearIndiceCarga(valor: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_indices_carga").insert({ valor: valor.trim() });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarIndicesVelocidad(): Promise<IndiceVelocidad[]> {
+  const { data, error } = await supabase.from("tc_cat_indices_velocidad").select("*").eq("activo", true).order("valor");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as IndiceVelocidad[];
+}
+export async function crearIndiceVelocidad(valor: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_indices_velocidad").insert({ valor: valor.trim() });
   if (error) throw new Error(error.message);
 }
