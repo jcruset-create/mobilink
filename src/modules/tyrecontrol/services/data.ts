@@ -6,6 +6,7 @@ import type {
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad,
+  Fabricante, MarcaContadores,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -438,15 +439,48 @@ export async function crearMarca(nombre: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: nombre.trim() });
   if (error) throw new Error(error.message);
 }
-export async function actualizarMarca(id: string, patch: { nombre?: string; logo_url?: string | null }): Promise<void> {
+export async function actualizarMarca(id: string, patch: {
+  nombre?: string; logo_url?: string | null; fabricante_id?: string | null;
+  pais_origen?: string | null; segmento?: string | null; tipo_principal?: string | null; observaciones?: string | null;
+}): Promise<void> {
   const payload: Record<string, any> = {};
   if (patch.nombre != null) payload.nombre = patch.nombre.trim();
   if (patch.logo_url !== undefined) payload.logo_url = patch.logo_url;
+  if (patch.fabricante_id !== undefined) payload.fabricante_id = patch.fabricante_id;
+  if (patch.pais_origen !== undefined) payload.pais_origen = patch.pais_origen;
+  if (patch.segmento !== undefined) payload.segmento = patch.segmento;
+  if (patch.tipo_principal !== undefined) payload.tipo_principal = patch.tipo_principal;
+  if (patch.observaciones !== undefined) payload.observaciones = patch.observaciones;
   const { error } = await supabase.from("tc_cat_marcas_neumatico").update(payload).eq("id", id);
   if (error) throw new Error(error.message);
 }
 export async function eliminarMarca(id: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_marcas_neumatico").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function listarContadoresMarcas(): Promise<MarcaContadores[]> {
+  const { data, error } = await supabase.from("tc_marcas_contadores").select("*");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MarcaContadores[];
+}
+
+// ── Fabricantes ──────────────────────────────────────────────
+export async function listarFabricantes(): Promise<Fabricante[]> {
+  const { data, error } = await supabase.from("tc_cat_fabricantes").select("*").eq("activo", true).order("nombre");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Fabricante[];
+}
+export async function crearFabricante(nombre: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_fabricantes").insert({ nombre: nombre.trim() });
+  if (error) throw new Error(error.message);
+}
+export async function actualizarFabricante(id: string, patch: Partial<Omit<Fabricante, "id">>): Promise<void> {
+  const { error } = await supabase.from("tc_cat_fabricantes").update(patch).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function eliminarFabricante(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_fabricantes").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 

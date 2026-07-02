@@ -340,7 +340,28 @@ export interface AutorizacionOperacion {
 }
 
 // ── Catálogos de marca / modelo / medida de neumático ──────────
-export interface MarcaNeumatico { id: string; nombre: string; activo: boolean; logo_url?: string | null; }
+export interface Fabricante {
+  id: string; nombre: string; activo: boolean;
+  pais_origen?: string | null; anio_fundacion?: number | null; web?: string | null;
+  logo_url?: string | null; descripcion?: string | null; grupo_empresarial?: string | null;
+  observaciones?: string | null;
+}
+
+export type SegmentoMarca = "premium" | "quality" | "budget" | "industrial" | "otr" | "agricola" | "carretillas_elevadoras";
+export type TipoPrincipalMarca = "camion" | "autobus" | "turismo" | "furgoneta" | "agricola" | "otr" | "industrial" | "carretillas_elevadoras" | "multisegmento";
+
+export const SEGMENTO_LABELS: Record<SegmentoMarca, string> = {
+  premium: "Premium", quality: "Quality", budget: "Budget", industrial: "Industrial",
+  otr: "OTR", agricola: "Agrícola", carretillas_elevadoras: "Carretillas elevadoras",
+};
+
+export interface MarcaNeumatico {
+  id: string; nombre: string; activo: boolean; logo_url?: string | null;
+  fabricante_id?: string | null; pais_origen?: string | null;
+  segmento?: SegmentoMarca | null; tipo_principal?: TipoPrincipalMarca | null; observaciones?: string | null;
+}
+
+export interface MarcaContadores { id: string; num_modelos: number; num_neumaticos: number; num_vehiculos: number; }
 export interface ModeloNeumatico { id: string; marca_id: string | null; nombre: string; activo: boolean; }
 export interface MedidaNeumatico {
   id: string; valor: string; activo: boolean;
