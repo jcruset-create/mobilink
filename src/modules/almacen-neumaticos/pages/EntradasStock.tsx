@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import {
@@ -606,11 +606,11 @@ export default function EntradasStock() {
   }
 
   function claseEstadoOCR(estado: EntradaOCR["estado"]) {
-    if (estado === "listo") return "bg-green-100 text-green-800";
-    if (estado === "duplicado") return "bg-red-100 text-red-800";
-    if (estado === "confirmado") return "bg-blue-100 text-blue-800";
-    if (estado === "error") return "bg-red-100 text-red-800";
-    return "bg-yellow-100 text-yellow-800";
+    if (estado === "listo") return "bg-emerald-500/20 text-emerald-300";
+    if (estado === "duplicado") return "bg-red-500/20 text-red-300";
+    if (estado === "confirmado") return "bg-sky-500/20 text-sky-300";
+    if (estado === "error") return "bg-red-500/20 text-red-300";
+    return "bg-amber-500/20 text-amber-300";
   }
 
   const clientesVisibles = permisos.esAdmin
@@ -714,24 +714,21 @@ export default function EntradasStock() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
+      <AlmacenLayoutOscuro>
+        <div className="rounded-lg bg-slate-800 p-6 text-sm text-slate-400">
           Cargando permisos del usuario conectado...
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
+    <AlmacenLayoutOscuro>
+      <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Entradas de stock</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-lg font-black">Entradas de stock</h1>
+          <p className="text-sm text-slate-400">
             Registra entradas manuales de neumáticos con permisos del usuario
             conectado y documento PDF adjunto.
           </p>
@@ -741,7 +738,7 @@ export default function EntradasStock() {
           <button
             type="button"
             onClick={exportarEntradasCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
+            className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 disabled:opacity-50"
             disabled={filasExportacionEntradas().length === 0}
           >
             Exportar CSV
@@ -750,7 +747,7 @@ export default function EntradasStock() {
           <button
             type="button"
             onClick={exportarEntradasExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             disabled={filasExportacionEntradas().length === 0}
           >
             Exportar Excel
@@ -758,7 +755,7 @@ export default function EntradasStock() {
         </div>
       </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
+      <div className="rounded-lg bg-slate-800 p-4 space-y-4">
         <h2 className="font-semibold">Filtros</h2>
 
         <div className="grid gap-3 md:grid-cols-4">
@@ -766,51 +763,51 @@ export default function EntradasStock() {
             value={filtroCliente}
             onChange={(e) => setFiltroCliente(e.target.value)}
             placeholder="Filtrar cliente"
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           />
 
           <input
             value={filtroProducto}
             onChange={(e) => setFiltroProducto(e.target.value)}
             placeholder="Producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           />
 
           <input
             value={filtroUbicacion}
             onChange={(e) => setFiltroUbicacion(e.target.value)}
             placeholder="Filtrar ubicación"
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           />
 
           <input
             value={filtroTexto}
             onChange={(e) => setFiltroTexto(e.target.value)}
             placeholder="Buscar..."
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           />
         </div>
 
         <button
           type="button"
           onClick={limpiarFiltros}
-          className="rounded-xl border px-4 py-2 text-sm font-semibold"
+          className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200"
         >
           Limpiar filtros
         </button>
       </div>
 
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
+      <div className="rounded-lg bg-slate-800 p-3 text-sm text-slate-400">
         Clientes visibles: <strong>{clientesFiltrados.length}</strong> ·
         Productos visibles: <strong>{productosFiltrados.length}</strong> ·
         Ubicaciones visibles: <strong>{ubicacionesFiltradas.length}</strong>
       </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
+      <div className="rounded-lg bg-slate-800 p-4 space-y-4">
         <h2 className="font-semibold">Registrar entrada</h2>
 
         {!usuarioPuedeCrearEntrada() && (
-          <p className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
+          <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
             Solo un usuario admin o responsable puede registrar entradas
             manuales.
           </p>
@@ -819,7 +816,7 @@ export default function EntradasStock() {
         <select
           value={empresaId}
           onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         >
           <option value="">Empresa...</option>
@@ -833,7 +830,7 @@ export default function EntradasStock() {
         <select
           value={clienteId}
           onChange={(e) => setClienteId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         >
           <option value="">Cliente...</option>
@@ -849,7 +846,7 @@ export default function EntradasStock() {
         <select
           value={productoId}
           onChange={(e) => setProductoId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         >
           <option value="">Producto / neumático...</option>
@@ -866,14 +863,14 @@ export default function EntradasStock() {
           type="number"
           min="1"
           placeholder="Cantidad"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         />
 
         <select
           value={ubicacion}
           onChange={(e) => setUbicacion(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         >
           <option value="">Ubicación...</option>
@@ -884,7 +881,7 @@ export default function EntradasStock() {
           ))}
         </select>
 
-        <div className="rounded-lg border bg-gray-50 p-3 space-y-3">
+        <div className="rounded-lg border border-slate-600 bg-slate-900 p-3 space-y-3">
           <label className="block text-sm font-semibold">
             Adjuntar albarán PDF
           </label>
@@ -894,16 +891,16 @@ export default function EntradasStock() {
             type="file"
             accept="application/pdf"
             onChange={(e) => seleccionarArchivoPdf(e.target.files?.[0] || null)}
-            className="w-full rounded-lg border bg-white px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100"
             disabled={!usuarioPuedeCrearEntrada() || guardando || leyendoOCR}
           />
 
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-slate-500">
             Solo PDF. Tamaño máximo recomendado: 10 MB.
           </p>
 
           {archivoPdf && (
-            <p className="text-sm text-gray-700">
+            <p className="text-sm text-slate-300">
               Documento seleccionado: <strong>{archivoPdf.name}</strong>
             </p>
           )}
@@ -911,7 +908,7 @@ export default function EntradasStock() {
           <button
             type="button"
             onClick={importarPdfEntradaOCR}
-            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             disabled={
               !usuarioPuedeCrearEntrada() ||
               guardando ||
@@ -927,27 +924,27 @@ export default function EntradasStock() {
           value={observaciones}
           onChange={(e) => setObservaciones(e.target.value)}
           placeholder="Observaciones"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         />
 
         <button
           type="button"
           onClick={crearEntrada}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           disabled={!usuarioPuedeCrearEntrada() || guardando}
         >
           {guardando ? "Guardando entrada..." : "Registrar entrada"}
         </button>
 
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
+        {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
       </div>
 
       {entradasOCR.length > 0 && (
-        <div className="rounded-xl border bg-white p-4 space-y-4">
+        <div className="rounded-lg bg-slate-800 p-4 space-y-4">
           <div>
             <h2 className="font-semibold">Entradas detectadas por OCR</h2>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-slate-400">
               Si falta cliente o producto, créalo/valídalo en su pantalla y
               vuelve a pulsar “Leer entrada con OCR”.
             </p>
@@ -956,7 +953,7 @@ export default function EntradasStock() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="border-b bg-gray-50 text-left">
+                <tr className="border-b border-slate-700 bg-slate-900 text-left">
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Pág.</th>
                   <th className="px-3 py-2">Albarán</th>
@@ -972,7 +969,7 @@ export default function EntradasStock() {
 
               <tbody>
                 {entradasOCR.map((entrada, index) => (
-                  <tr key={`${entrada.pagina}-${index}`} className="border-b">
+                  <tr key={`${entrada.pagina}-${index}`} className="border-b border-slate-700/60">
                     <td className="px-3 py-2">
                       <span
                         className={`rounded-full px-2 py-1 text-xs font-semibold ${claseEstadoOCR(
@@ -993,20 +990,20 @@ export default function EntradasStock() {
                     <td className="px-3 py-2">
                       <div>{entrada.cliente || "-"}</div>
                       {entrada.direccionCliente && (
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-slate-500">
                           {entrada.direccionCliente}
                         </div>
                       )}
 
                       {entrada.clienteIdDetectado ? (
-                        <div className="text-xs text-green-700">
+                        <div className="text-xs text-emerald-400">
                           Cliente encontrado
                         </div>
                       ) : (
                         <button
                           type="button"
                           onClick={() => abrirClienteOCR(entrada)}
-                          className="mt-1 rounded-lg border px-2 py-1 text-xs font-semibold text-yellow-800"
+                          className="mt-1 rounded-lg border border-amber-600 px-2 py-1 text-xs font-semibold text-amber-300"
                         >
                           Crear / validar cliente
                         </button>
@@ -1017,14 +1014,14 @@ export default function EntradasStock() {
                       <div>{entrada.producto || "-"}</div>
 
                       {entrada.productoIdDetectado ? (
-                        <div className="text-xs text-green-700">
+                        <div className="text-xs text-emerald-400">
                           Producto encontrado
                         </div>
                       ) : (
                         <button
                           type="button"
                           onClick={() => abrirProductoOCR(entrada)}
-                          className="mt-1 rounded-lg border px-2 py-1 text-xs font-semibold text-yellow-800"
+                          className="mt-1 rounded-lg border border-amber-600 px-2 py-1 text-xs font-semibold text-amber-300"
                         >
                           Crear / validar producto
                         </button>
@@ -1044,7 +1041,7 @@ export default function EntradasStock() {
                         <button
                           type="button"
                           onClick={() => cargarEntradaOCRAlFormulario(entrada)}
-                          className="rounded-lg bg-black px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                          className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
                           disabled={
                             entrada.estado === "duplicado" ||
                             !entrada.clienteIdDetectado ||
@@ -1057,7 +1054,7 @@ export default function EntradasStock() {
                         <button
                           type="button"
                           onClick={() => quitarEntradaOCR(index)}
-                          className="rounded-lg border px-3 py-1 text-xs font-semibold"
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold text-slate-200"
                         >
                           Quitar
                         </button>
@@ -1070,6 +1067,7 @@ export default function EntradasStock() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </AlmacenLayoutOscuro>
   );
 }
