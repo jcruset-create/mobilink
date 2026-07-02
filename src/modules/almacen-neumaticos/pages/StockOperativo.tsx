@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import {
@@ -80,7 +80,7 @@ function etiquetaEstado(ubicacion: string) {
 
   if (estado === "en_camino") {
     return (
-      <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
+      <span className="rounded-full bg-amber-500/20 px-2 py-1 text-xs font-semibold text-amber-300">
         En tránsito
       </span>
     );
@@ -88,7 +88,7 @@ function etiquetaEstado(ubicacion: string) {
 
   if (estado === "no_disponible") {
     return (
-      <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">
+      <span className="rounded-full bg-red-500/20 px-2 py-1 text-xs font-semibold text-red-300">
         No disponible
       </span>
     );
@@ -96,7 +96,7 @@ function etiquetaEstado(ubicacion: string) {
 
   if (estado === "montado") {
     return (
-      <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">
+      <span className="rounded-full bg-sky-500/20 px-2 py-1 text-xs font-semibold text-sky-300">
         Montado
       </span>
     );
@@ -104,14 +104,14 @@ function etiquetaEstado(ubicacion: string) {
 
   if (estado === "baja") {
     return (
-      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-800">
+      <span className="rounded-full bg-slate-600 px-2 py-1 text-xs font-semibold text-slate-300">
         Baja
       </span>
     );
   }
 
   return (
-    <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">
+    <span className="rounded-full bg-emerald-500/20 px-2 py-1 text-xs font-semibold text-emerald-300">
       Disponible
     </span>
   );
@@ -379,24 +379,21 @@ export default function StockOperativo() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
+      <AlmacenLayoutOscuro>
+        <div className="rounded-lg bg-slate-800 p-6 text-sm text-slate-400">
           Cargando permisos del usuario conectado...
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
+    <AlmacenLayoutOscuro>
+      <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Stock operativo</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-lg font-black">Stock operativo</h1>
+          <p className="text-sm text-slate-400">
             Stock calculado a partir de movimientos, filtrado automáticamente por
             permisos del usuario conectado.
           </p>
@@ -406,7 +403,7 @@ export default function StockOperativo() {
           <button
             type="button"
             onClick={cargarStock}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
+            className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200"
           >
             Actualizar stock
           </button>
@@ -414,7 +411,7 @@ export default function StockOperativo() {
           <button
             type="button"
             onClick={exportarStockCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
+            className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 disabled:opacity-50"
             disabled={stockFiltrado.length === 0}
           >
             Exportar CSV
@@ -423,7 +420,7 @@ export default function StockOperativo() {
           <button
             type="button"
             onClick={exportarStockExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             disabled={stockFiltrado.length === 0}
           >
             Exportar Excel
@@ -431,16 +428,16 @@ export default function StockOperativo() {
         </div>
       </div>
 
-      {mensaje && <p className="text-sm text-red-600">{mensaje}</p>}
+      {mensaje && <p className="text-sm text-red-300">{mensaje}</p>}
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
+      <div className="rounded-lg bg-slate-800 p-4 space-y-4">
         <h2 className="font-semibold">Filtros</h2>
 
         <div className="grid gap-3 md:grid-cols-4">
           <select
             value={filtroCliente}
             onChange={(e) => setFiltroCliente(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             disabled={!permisos.perfil}
           >
             <option value="">Todos los clientes visibles</option>
@@ -454,7 +451,7 @@ export default function StockOperativo() {
           <select
             value={filtroUbicacion}
             onChange={(e) => setFiltroUbicacion(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             disabled={!permisos.perfil}
           >
             <option value="">Todas las ubicaciones visibles</option>
@@ -468,7 +465,7 @@ export default function StockOperativo() {
           <select
             value={filtroEstado}
             onChange={(e) => setFiltroEstado(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             disabled={!permisos.perfil}
           >
             <option value="">Todos los estados</option>
@@ -483,7 +480,7 @@ export default function StockOperativo() {
             value={filtroProducto}
             onChange={(e) => setFiltroProducto(e.target.value)}
             placeholder="Producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
             disabled={!permisos.perfil}
           />
 
@@ -491,11 +488,11 @@ export default function StockOperativo() {
             value={filtroTexto}
             onChange={(e) => setFiltroTexto(e.target.value)}
             placeholder="Buscar cliente, producto, ubicación..."
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 md:col-span-2"
             disabled={!permisos.perfil}
           />
 
-          <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+          <label className="flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100">
             <input
               type="checkbox"
               checked={soloStockBajo}
@@ -505,7 +502,7 @@ export default function StockOperativo() {
             Solo stock bajo (&lt;5)
           </label>
 
-          <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+          <label className="flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100">
             <input
               type="checkbox"
               checked={soloStockPositivo}
@@ -519,61 +516,61 @@ export default function StockOperativo() {
         <button
           type="button"
           onClick={limpiarFiltros}
-          className="rounded-xl border px-4 py-2 text-sm font-semibold"
+          className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200"
         >
           Limpiar filtros
         </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-6">
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Total filtrado</p>
+        <div className="rounded-lg bg-slate-800 p-4">
+          <p className="text-sm text-slate-400">Total filtrado</p>
           <p className="text-2xl font-bold">{totalFiltrado}</p>
         </div>
 
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Disponible</p>
+        <div className="rounded-lg bg-slate-800 p-4">
+          <p className="text-sm text-slate-400">Disponible</p>
           <p className="text-2xl font-bold">{totalDisponible}</p>
         </div>
 
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">En camino</p>
+        <div className="rounded-lg bg-slate-800 p-4">
+          <p className="text-sm text-slate-400">En camino</p>
           <p className="text-2xl font-bold">{totalEnCamino}</p>
         </div>
 
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">No disponible</p>
+        <div className="rounded-lg bg-slate-800 p-4">
+          <p className="text-sm text-slate-400">No disponible</p>
           <p className="text-2xl font-bold">{totalNoDisponible}</p>
         </div>
 
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Montado</p>
+        <div className="rounded-lg bg-slate-800 p-4">
+          <p className="text-sm text-slate-400">Montado</p>
           <p className="text-2xl font-bold">{totalMontado}</p>
         </div>
 
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Baja</p>
+        <div className="rounded-lg bg-slate-800 p-4">
+          <p className="text-sm text-slate-400">Baja</p>
           <p className="text-2xl font-bold">{totalBaja}</p>
         </div>
       </div>
 
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
+      <div className="rounded-lg bg-slate-800 p-3 text-sm text-slate-400">
         Mostrando <strong>{stockFiltrado.length}</strong> líneas de stock de{" "}
         <strong>{stockPorPermisos.length}</strong> visibles.
       </div>
 
-      <div className="overflow-auto rounded-xl border bg-white">
+      <div className="overflow-auto rounded-lg bg-slate-800">
         <table className="w-full min-w-[1000px] text-sm">
-          <thead className="bg-gray-50 text-left">
+          <thead className="bg-slate-900 text-left">
             <tr>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Medida</th>
-              <th className="p-3">Marca</th>
-              <th className="p-3">Modelo</th>
-              <th className="p-3">DOT</th>
-              <th className="p-3">Ubicación</th>
-              <th className="p-3">Estado</th>
-              <th className="p-3 text-right">Stock</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">Cliente</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">Medida</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">Marca</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">Modelo</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">DOT</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">Ubicación</th>
+              <th className="p-3 text-[11px] uppercase text-slate-400">Estado</th>
+              <th className="p-3 text-right text-[11px] uppercase text-slate-400">Stock</th>
             </tr>
           </thead>
 
@@ -581,16 +578,16 @@ export default function StockOperativo() {
             {stockFiltrado.map((linea) => (
               <tr
                 key={linea.clave}
-                className={`border-t ${
-                  linea.cantidad < 5 ? "bg-red-50" : ""
+                className={`border-t border-slate-700/60 ${
+                  linea.cantidad < 5 ? "bg-red-500/10" : ""
                 }`}
               >
-                <td className="p-3 font-medium">{linea.cliente}</td>
-                <td className="p-3">{linea.medida}</td>
-                <td className="p-3">{linea.marca}</td>
-                <td className="p-3">{linea.modelo}</td>
-                <td className="p-3">{linea.dot}</td>
-                <td className="p-3">{linea.ubicacion}</td>
+                <td className="p-3 font-semibold">{linea.cliente}</td>
+                <td className="p-3 text-slate-300">{linea.medida}</td>
+                <td className="p-3 text-slate-300">{linea.marca}</td>
+                <td className="p-3 text-slate-300">{linea.modelo}</td>
+                <td className="p-3 text-slate-300">{linea.dot}</td>
+                <td className="p-3 text-slate-300">{linea.ubicacion}</td>
                 <td className="p-3">{etiquetaEstado(linea.ubicacion)}</td>
                 <td className="p-3 text-right font-bold">
                   {linea.cantidad}
@@ -600,7 +597,7 @@ export default function StockOperativo() {
 
             {stockFiltrado.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-gray-500">
+                <td colSpan={8} className="p-6 text-center text-slate-500">
                   No hay stock visible con los filtros actuales.
                 </td>
               </tr>
@@ -608,6 +605,7 @@ export default function StockOperativo() {
           </tbody>
         </table>
       </div>
-    </div>
+      </div>
+    </AlmacenLayoutOscuro>
   );
 }

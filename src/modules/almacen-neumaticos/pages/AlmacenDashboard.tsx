@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 
@@ -170,10 +170,10 @@ function TarjetaKpi({
   texto?: string;
 }) {
   return (
-    <div className="rounded-xl border bg-white p-4">
-      <p className="text-sm text-gray-500">{titulo}</p>
+    <div className="rounded-lg bg-slate-800 p-4">
+      <p className="text-sm text-slate-400">{titulo}</p>
       <p className="text-3xl font-bold">{valor}</p>
-      {texto && <p className="mt-1 text-xs text-gray-500">{texto}</p>}
+      {texto && <p className="mt-1 text-xs text-slate-500">{texto}</p>}
     </div>
   );
 }
@@ -561,24 +561,21 @@ export default function AlmacenDashboard() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
+      <AlmacenLayoutOscuro>
+        <div className="rounded-lg bg-slate-800 p-6 text-sm text-slate-400">
           Cargando permisos del usuario conectado...
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
+    <AlmacenLayoutOscuro>
+      <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard almacén neumáticos</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-lg font-black">Dashboard almacén neumáticos</h1>
+          <p className="text-sm text-slate-400">
             Vista operativa de stock, traspasos, reposiciones, inventarios e
             incidencias según los permisos del usuario conectado.
           </p>
@@ -587,22 +584,22 @@ export default function AlmacenDashboard() {
         <button
           type="button"
           onClick={cargarDashboard}
-          className="rounded-xl border px-4 py-2 text-sm font-semibold"
+          className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200"
         >
           {cargando ? "Actualizando..." : "Actualizar dashboard"}
         </button>
       </div>
 
       {errorPermisos && (
-        <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+        <p className="rounded-lg bg-red-500/10 p-3 text-sm text-red-300">
           {errorPermisos}
         </p>
       )}
 
-      {mensaje && <p className="text-sm text-red-600">{mensaje}</p>}
+      {mensaje && <p className="text-sm text-red-300">{mensaje}</p>}
 
       {permisos.perfil && (
-        <div className="rounded-xl border bg-white p-4 text-sm text-gray-700">
+        <div className="rounded-lg bg-slate-800 p-4 text-sm text-slate-300">
           Usuario: <strong>{permisos.perfil.nombre || "-"}</strong> · Rol:{" "}
           <strong>{permisos.perfil.rol || "-"}</strong> · Ubicación:{" "}
           <strong>{permisos.ubicacion || "-"}</strong> · Clientes:{" "}
@@ -618,7 +615,7 @@ export default function AlmacenDashboard() {
           <button
             type="button"
             onClick={recargarPermisos}
-            className="ml-3 rounded-lg border px-3 py-1 text-xs font-semibold"
+            className="ml-3 rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold text-slate-200"
           >
             Recargar permisos
           </button>
@@ -740,16 +737,16 @@ export default function AlmacenDashboard() {
         />
       </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
+      <div className="rounded-lg bg-slate-800 p-4 space-y-4">
         <div>
           <h2 className="font-semibold">Alertas operativas avanzadas</h2>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-400">
             Elementos que requieren acción del equipo.
           </p>
         </div>
 
         {alertas.length === 0 ? (
-          <div className="rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
+          <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400">
             No hay alertas operativas pendientes.
           </div>
         ) : (
@@ -758,15 +755,15 @@ export default function AlmacenDashboard() {
               <a
                 key={alerta.titulo}
                 href={alerta.url}
-                className="rounded-xl border p-4 hover:bg-gray-50"
+                className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-semibold">{alerta.titulo}</p>
-                    <p className="text-sm text-gray-500">{alerta.texto}</p>
+                    <p className="text-sm text-slate-400">{alerta.texto}</p>
                   </div>
 
-                  <span className="rounded-full bg-red-100 px-3 py-1 text-sm font-bold text-red-800">
+                  <span className="rounded-full bg-red-500/20 px-3 py-1 text-sm font-bold text-red-300">
                     {alerta.valor}
                   </span>
                 </div>
@@ -776,23 +773,23 @@ export default function AlmacenDashboard() {
         )}
       </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
+      <div className="rounded-lg bg-slate-800 p-4 space-y-4">
         <div>
           <h2 className="font-semibold">Top 5 clientes por stock</h2>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-400">
             Resumen total agrupado por cliente y almacén. Los datos ya vienen
             filtrados por RLS.
           </p>
         </div>
 
         {stockPorCliente.length === 0 ? (
-          <div className="rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
+          <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400">
             No hay stock visible por cliente.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border">
+          <div className="overflow-hidden rounded-lg bg-slate-800">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left">
+              <thead className="bg-slate-900 text-left">
                 <tr>
                   <th className="p-3">Cliente</th>
                   <th className="p-3 text-right">Total</th>
@@ -802,7 +799,7 @@ export default function AlmacenDashboard() {
 
               <tbody>
                 {stockPorCliente.slice(0, 5).map((cliente) => (
-                  <tr key={cliente.clienteId} className="border-t align-top">
+                  <tr key={cliente.clienteId} className="border-t border-slate-700/60 align-top">
                     <td className="p-3 font-semibold">{cliente.cliente}</td>
 
                     <td className="p-3 text-right text-lg font-bold">
@@ -814,7 +811,7 @@ export default function AlmacenDashboard() {
                         {cliente.ubicaciones.map((ubicacionItem) => (
                           <span
                             key={ubicacionItem.ubicacion}
-                            className="rounded-full border bg-gray-50 px-3 py-1 text-xs"
+                            className="rounded-full bg-slate-900 px-3 py-1 text-xs text-slate-300"
                           >
                             {ubicacionItem.ubicacion}:{" "}
                             <strong>{ubicacionItem.cantidad}</strong>
@@ -830,22 +827,22 @@ export default function AlmacenDashboard() {
         )}
       </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
+      <div className="rounded-lg bg-slate-800 p-4 space-y-4">
         <div>
           <h2 className="font-semibold">Últimos movimientos visibles</h2>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-400">
             Últimos movimientos de stock accesibles según permisos.
           </p>
         </div>
 
         {ultimosMovimientos.length === 0 ? (
-          <div className="rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
+          <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400">
             No hay movimientos visibles.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border">
+          <div className="overflow-hidden rounded-lg bg-slate-800">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left">
+              <thead className="bg-slate-900 text-left">
                 <tr>
                   <th className="p-3">Fecha</th>
                   <th className="p-3">Tipo</th>
@@ -864,7 +861,7 @@ export default function AlmacenDashboard() {
                   );
 
                   return (
-                    <tr key={movimiento.id} className="border-t">
+                    <tr key={movimiento.id} className="border-t border-slate-700/60">
                       <td className="p-3">
                         {formatearFecha(movimiento.created_at)}
                       </td>
@@ -887,64 +884,64 @@ export default function AlmacenDashboard() {
       <div className="grid gap-4 md:grid-cols-4">
         <a
           href="/almacen-neumaticos/stock"
-          className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+          className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
         >
           <p className="font-semibold">Stock operativo</p>
-          <p className="text-sm text-gray-500">Ver stock por ubicación.</p>
+          <p className="text-sm text-slate-400">Ver stock por ubicación.</p>
         </a>
 
         <a
           href="/almacen-neumaticos/mobile"
-          className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+          className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
         >
           <p className="font-semibold">Mobile</p>
-          <p className="text-sm text-gray-500">Vista móvil de traspasos.</p>
+          <p className="text-sm text-slate-400">Vista móvil de traspasos.</p>
         </a>
 
         <a
           href="/almacen-neumaticos/traspasos"
-          className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+          className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
         >
           <p className="font-semibold">Traspasos</p>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-400">
             Autorizar salidas y recepciones.
           </p>
         </a>
 
         <a
           href="/almacen-neumaticos/inventarios"
-          className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+          className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
         >
           <p className="font-semibold">Inventarios</p>
-          <p className="text-sm text-gray-500">Conteo y revisión de stock.</p>
+          <p className="text-sm text-slate-400">Conteo y revisión de stock.</p>
         </a>
 
         <a
           href="/almacen-neumaticos/incidencias"
-          className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+          className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
         >
           <p className="font-semibold">Incidencias</p>
-          <p className="text-sm text-gray-500">Resolver incidencias abiertas.</p>
+          <p className="text-sm text-slate-400">Resolver incidencias abiertas.</p>
         </a>
 
         {puedeGestionar && (
           <>
             <a
               href="/almacen-neumaticos/entradas"
-              className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+              className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
             >
               <p className="font-semibold">Entradas</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-slate-400">
                 Registrar entradas manuales.
               </p>
             </a>
 
             <a
               href="/almacen-neumaticos/reposiciones"
-              className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+              className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
             >
               <p className="font-semibold">Reposiciones</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-slate-400">
                 Gestionar mínimos y solicitudes.
               </p>
             </a>
@@ -955,34 +952,35 @@ export default function AlmacenDashboard() {
           <>
             <a
               href="/almacen-neumaticos/usuarios"
-              className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+              className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
             >
               <p className="font-semibold">Usuarios</p>
-              <p className="text-sm text-gray-500">Gestionar roles y accesos.</p>
+              <p className="text-sm text-slate-400">Gestionar roles y accesos.</p>
             </a>
 
             <a
               href="/almacen-neumaticos/auditoria"
-              className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+              className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
             >
               <p className="font-semibold">Auditoría</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-slate-400">
                 Ver acciones críticas registradas.
               </p>
             </a>
 
             <a
               href="/almacen-neumaticos/auditoria-traspasos"
-              className="rounded-xl border bg-white p-4 hover:bg-gray-50"
+              className="rounded-lg bg-slate-800 p-4 hover:bg-slate-700"
             >
               <p className="font-semibold">Auditoría traspasos</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-slate-400">
                 Ver recogidas y recepciones móviles.
               </p>
             </a>
           </>
         )}
       </div>
-    </div>
+      </div>
+    </AlmacenLayoutOscuro>
   );
 }
