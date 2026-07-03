@@ -35,9 +35,9 @@ export async function listarEmpresas(): Promise<Empresa[]> {
 }
 
 export async function obtenerEmpresa(id: string): Promise<Empresa | null> {
-  const { data, error } = await supabase.from("tc_empresas").select("*").eq("id", id).single();
-  if (error) return null;
-  return data as Empresa;
+  const { data, error } = await supabase.from("tc_empresas").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as Empresa) ?? null;
 }
 
 export async function crearEmpresa(input: EmpresaInput): Promise<Empresa> {

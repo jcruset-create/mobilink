@@ -23,6 +23,7 @@ export default function EmpresaDetalle() {
   const [busquedaAlmacen, setBusquedaAlmacen] = useState("");
   const [clientesAlmacen, setClientesAlmacen] = useState<ClienteAlmacen[]>([]);
   const [clienteEnlazado, setClienteEnlazado] = useState<ClienteAlmacen | null>(null);
+  const [cargado, setCargado] = useState(false);
 
   async function cargar() {
     try {
@@ -32,7 +33,7 @@ export default function EmpresaDetalle() {
         const lista = await listarClientesAlmacen();
         setClienteEnlazado(lista.find((c) => c.id === e.cliente_almacen_id) ?? null);
       } else setClienteEnlazado(null);
-    } catch (er: any) { setMsg(er?.message || "Error cargando"); }
+    } catch (er: any) { setMsg(er?.message || "Error cargando"); } finally { setCargado(true); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
 
@@ -64,7 +65,17 @@ export default function EmpresaDetalle() {
     } catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
   }
 
-  if (!empresa) return <div className="text-slate-400">Cargando ficha…</div>;
+  if (!empresa) {
+    if (!cargado) return <div className="text-slate-400">Cargando ficha…</div>;
+    return (
+      <div>
+        <button onClick={() => navigate("/tyrecontrol/empresas")} className="mb-3 rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Empresas</button>
+        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-6 text-center text-sm text-red-300">
+          {msg || "No se ha encontrado esta empresa."}
+        </div>
+      </div>
+    );
+  }
 
   const dato = (l: string, v?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{v || "—"}</div></div>
