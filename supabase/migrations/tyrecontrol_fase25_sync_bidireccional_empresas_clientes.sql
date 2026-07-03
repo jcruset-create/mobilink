@@ -28,13 +28,25 @@ begin
   return new;
 end $$;
 
+-- Postgres no permite comparar OLD en el WHEN de un trigger que
+-- también dispare por INSERT (OLD no existe en un INSERT), así que
+-- se separa en dos triggers: uno para INSERT (sin condición de
+-- cambio, solo la de profundidad) y otro para UPDATE.
 drop trigger if exists trg_sync_empresa_desde_cliente on clientes;
-create trigger trg_sync_empresa_desde_cliente
-  after insert or update on clientes
+drop trigger if exists trg_sync_empresa_desde_cliente_ins on clientes;
+drop trigger if exists trg_sync_empresa_desde_cliente_upd on clientes;
+
+create trigger trg_sync_empresa_desde_cliente_ins
+  after insert on clientes
+  for each row
+  when (pg_trigger_depth() < 2)
+  execute function tc_sincronizar_empresa_desde_cliente();
+
+create trigger trg_sync_empresa_desde_cliente_upd
+  after update on clientes
   for each row
   when (
     pg_trigger_depth() < 2 and (
-      old is null or
       new.nombre is distinct from old.nombre or
       new.nif is distinct from old.nif or
       new.telefono is distinct from old.telefono or
@@ -83,12 +95,20 @@ begin
 end $$;
 
 drop trigger if exists trg_sync_cliente_desde_empresa on tc_empresas;
-create trigger trg_sync_cliente_desde_empresa
-  after insert or update on tc_empresas
+drop trigger if exists trg_sync_cliente_desde_empresa_ins on tc_empresas;
+drop trigger if exists trg_sync_cliente_desde_empresa_upd on tc_empresas;
+
+create trigger trg_sync_cliente_desde_empresa_ins
+  after insert on tc_empresas
+  for each row
+  when (pg_trigger_depth() < 2)
+  execute function tc_sincronizar_cliente_desde_empresa();
+
+create trigger trg_sync_cliente_desde_empresa_upd
+  after update on tc_empresas
   for each row
   when (
     pg_trigger_depth() < 2 and (
-      old is null or
       new.nombre is distinct from old.nombre or
       new.cif is distinct from old.cif or
       new.telefono is distinct from old.telefono or
@@ -111,7 +131,7 @@ where not exists (select 1 from tc_empresas e where e.cliente_almacen_id = c.id)
 -- backfill puntual: si no, cada cliente recién creado aquí dispararía
 -- a su vez una empresa duplicada (la empresa original ya existe, solo
 -- le falta el enlace).
-alter table clientes disable trigger trg_sync_empresa_desde_cliente;
+alter table clientes disable trigger trg_sync_empresa_desde_cliente_ins;
 
 do $$
 declare v_empresa_principal uuid; v_empresa record; v_cliente_id uuid;
@@ -128,4 +148,4 @@ begin
   end if;
 end $$;
 
-alter table clientes enable trigger trg_sync_empresa_desde_cliente;
+alter table clientes enable trigger trg_sync_empresa_desde_cliente_ins;
