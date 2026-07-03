@@ -377,7 +377,22 @@ export interface TyreSize {
   activo: boolean;
 }
 export type TyreSizeInput = Omit<TyreSize, "id" | "referencia_completa" | "medida_id" | "medida">;
-export interface ModeloNeumatico { id: string; marca_id: string | null; nombre: string; activo: boolean; }
+export type EjeRecomendado = "direccion" | "traccion" | "remolque" | "mixto";
+
+export interface ModeloNeumatico {
+  id: string; marca_id: string | null; nombre: string; activo: boolean;
+  gama?: string | null; eje_recomendado?: EjeRecomendado | null; aplicacion?: string | null;
+  tipo_vehiculo?: string | null; m_s?: boolean | null; tres_pmsf?: boolean | null;
+  reesculturable?: boolean | null; recauchutable?: boolean | null; foto_modelo_url?: string | null;
+}
+
+export interface ReferenciaNeumatico {
+  id: string; modelo_id: string; tyre_size_id: string; referencia_completa: string; activo: boolean;
+  profundidad_dibujo_mm?: number | null; llanta_recomendada?: string | null; diametro_exterior_mm?: number | null;
+  revoluciones_km?: number | null; carga_maxima_kg?: number | null; presion_maxima_bar?: number | null; peso_kg?: number | null;
+  modelo?: ModeloNeumatico & { marca?: MarcaNeumatico | null } | null;
+  tyre_size?: TyreSize | null;
+}
 export interface MedidaNeumatico {
   id: string; valor: string; activo: boolean;
   ancho?: number | null; perfil?: number | null; diametro?: number | null;

@@ -6,7 +6,7 @@ import type {
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad,
-  Fabricante, MarcaContadores, TyreSize, TyreSizeInput,
+  Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -619,4 +619,54 @@ export async function crearTyreSize(input: TyreSizeInput): Promise<void> {
 export async function eliminarTyreSize(id: string): Promise<void> {
   const { error } = await supabase.from("tyre_sizes").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
+}
+
+// ── Fase 17: ficha técnica de modelo + referencia comercial ────
+export async function actualizarModeloTecnico(id: string, patch: Partial<Omit<ModeloNeumatico, "id" | "marca_id" | "nombre" | "activo">>): Promise<void> {
+  const { error } = await supabase.from("tc_cat_modelos_neumatico").update(patch).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+const BUCKET_MODELOS = "tc-modelos-neumatico";
+export async function subirFotoModelo(modeloId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "webp";
+  const ruta = `${modeloId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from(BUCKET_MODELOS).upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from(BUCKET_MODELOS).getPublicUrl(ruta).data.publicUrl;
+}
+export async function eliminarFotoModelo(modeloId: string): Promise<void> {
+  await actualizarModeloTecnico(modeloId, { foto_modelo_url: null });
+}
+
+const REFERENCIA_SELECT = "*, modelo:tc_cat_modelos_neumatico(*, marca:tc_cat_marcas_neumatico(*)), tyre_size:tyre_sizes(*)";
+
+export async function listarReferenciasNeumatico(filtros?: {
+  q?: string; marcaId?: string; modeloId?: string; eje?: string; aplicacion?: string; ms?: boolean; tresPmsf?: boolean;
+}): Promise<ReferenciaNeumatico[]> {
+  let query = supabase.from("tc_referencias_neumatico").select(REFERENCIA_SELECT).eq("activo", true).order("referencia_completa");
+  if (filtros?.modeloId) query = query.eq("modelo_id", filtros.modeloId);
+  if (filtros?.q) query = query.ilike("referencia_completa", `%${filtros.q}%`);
+  const { data, error } = await query.limit(500);
+  if (error) throw new Error(error.message);
+  let items = (data ?? []) as unknown as ReferenciaNeumatico[];
+  if (filtros?.marcaId) items = items.filter((r) => r.modelo?.marca_id === filtros.marcaId);
+  if (filtros?.eje) items = items.filter((r) => r.modelo?.eje_recomendado === filtros.eje);
+  if (filtros?.aplicacion) items = items.filter((r) => r.modelo?.aplicacion === filtros.aplicacion);
+  if (filtros?.ms !== undefined) items = items.filter((r) => !!r.modelo?.m_s === filtros.ms);
+  if (filtros?.tresPmsf !== undefined) items = items.filter((r) => !!r.modelo?.tres_pmsf === filtros.tresPmsf);
+  return items;
+}
+
+export async function obtenerReferenciaNeumatico(id: string): Promise<ReferenciaNeumatico | null> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico").select(REFERENCIA_SELECT).eq("id", id).maybeSingle();
+  if (error) return null;
+  return (data as unknown as ReferenciaNeumatico) ?? null;
+}
+
+export async function listarReferenciasDeModelo(modeloId: string): Promise<ReferenciaNeumatico[]> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico").select(REFERENCIA_SELECT)
+    .eq("modelo_id", modeloId).eq("activo", true).order("referencia_completa");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as ReferenciaNeumatico[];
 }

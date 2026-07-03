@@ -18,6 +18,7 @@ import RevisionVehiculo from "./pages/RevisionVehiculo";
 import Autorizaciones from "./pages/Autorizaciones";
 import EnlaceAlmacen from "./pages/EnlaceAlmacen";
 import MedidasNeumaticos from "./pages/MedidasNeumaticos";
+import CatalogoNeumaticos from "./pages/CatalogoNeumaticos";
 import MiEmpresa from "./pages/MiEmpresa";
 import MisDelegaciones from "./pages/MisDelegaciones";
 import MisVehiculos from "./pages/MisVehiculos";
@@ -61,6 +62,7 @@ export default function TyreControlApp() {
               <Route path="autorizaciones" element={<Autorizaciones />} />
               <Route path="enlace-almacen" element={<EnlaceAlmacen />} />
               <Route path="medidas-neumaticos" element={<MedidasNeumaticos />} />
+              <Route path="catalogo-neumaticos" element={<CatalogoNeumaticos />} />
               <Route path="configuracion" element={<Configuracion />} />
             </Route>
           </Route>
