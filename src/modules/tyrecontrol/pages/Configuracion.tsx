@@ -8,11 +8,45 @@ import {
   listarTiposDeMedida, fijarTiposDeMedida,
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
+  listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
 } from "../services/data";
-import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca } from "../types";
+import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+
+function FilaMotivo({ motivo, puedeEditar, onCambio }: { motivo: MotivoFueraAlmacen; puedeEditar: boolean; onCambio: () => void }) {
+  const [editando, setEditando] = useState(false);
+  const [texto, setTexto] = useState(motivo.motivo);
+
+  async function guardar() {
+    if (!texto.trim() || texto === motivo.motivo) { setEditando(false); return; }
+    await actualizarMotivoFueraAlmacen(motivo.id, texto.trim());
+    setEditando(false); onCambio();
+  }
+  async function borrar() {
+    if (!window.confirm(`¿Eliminar el motivo "${motivo.motivo}"?`)) return;
+    await eliminarMotivoFueraAlmacen(motivo.id); onCambio();
+  }
+
+  return (
+    <div className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
+      {editando ? (
+        <input autoFocus className="flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[12px] text-slate-100"
+          value={texto} onChange={(e) => setTexto(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && guardar()} onBlur={guardar} />
+      ) : (
+        <span className="flex-1">{motivo.motivo}</span>
+      )}
+      {puedeEditar && !editando && (
+        <div className="flex gap-1">
+          <button onClick={() => setEditando(true)} className="text-[10px] text-slate-400 hover:underline">editar</button>
+          <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function FilaFabricante({ fabricante, puedeEditar, onCambio }: { fabricante: Fabricante; puedeEditar: boolean; onCambio: () => void }) {
   const [editando, setEditando] = useState(false);
@@ -272,6 +306,8 @@ export default function Configuracion() {
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
   const [fabricantes, setFabricantes] = useState<Fabricante[]>([]);
   const [contadores, setContadores] = useState<MarcaContadores[]>([]);
+  const [motivosFueraAlmacen, setMotivosFueraAlmacen] = useState<MotivoFueraAlmacen[]>([]);
+  const [nuevoMotivo, setNuevoMotivo] = useState("");
   const [marcaSel, setMarcaSel] = useState("");
   const [nuevaMarca, setNuevaMarca] = useState("");
   const [nuevoModelo, setNuevoModelo] = useState("");
@@ -280,11 +316,15 @@ export default function Configuracion() {
   const [msg, setMsg] = useState("");
 
   async function cargar() {
-    const [m, med, ic, iv, t, f, c] = await Promise.all([
+    const [m, med, ic, iv, t, f, c, mf] = await Promise.all([
       listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
-      listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(),
+      listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
     ]);
-    setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c);
+    setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
+  }
+  async function guardarMotivo() {
+    if (!nuevoMotivo.trim()) return;
+    await crearMotivoFueraAlmacen(nuevoMotivo); setNuevoMotivo(""); await cargar();
   }
   useEffect(() => { void cargar(); }, []);
   useEffect(() => { listarModelos(marcaSel || undefined).then(setModelos); }, [marcaSel]);
@@ -389,6 +429,18 @@ export default function Configuracion() {
         <div className="mt-4 grid gap-4 lg:grid-cols-3">
           <ListaSimple titulo="Índice de carga" placeholder="Ej. 156" items={indicesCarga.map((x) => ({ id: x.id, valor: x.valor }))} puedeEditar={puedeEditar} onCrear={async (v) => { await crearIndiceCarga(v); await cargar(); }} />
           <ListaSimple titulo="Código de velocidad" placeholder="Ej. L" items={indicesVelocidad.map((x) => ({ id: x.id, valor: x.valor }))} puedeEditar={puedeEditar} onCrear={async (v) => { await crearIndiceVelocidad(v); await cargar(); }} />
+          <div>
+            <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Motivos de montaje fuera de almacén ({motivosFueraAlmacen.length})</div>
+            {puedeEditar && (
+              <div className="mb-2 flex gap-2">
+                <input className={inputCls} placeholder="Nuevo motivo…" value={nuevoMotivo} onChange={(e) => setNuevoMotivo(e.target.value)} />
+                <button onClick={guardarMotivo} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
+              </div>
+            )}
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {motivosFueraAlmacen.map((m) => <FilaMotivo key={m.id} motivo={m} puedeEditar={puedeEditar} onCambio={cargar} />)}
+            </div>
+          </div>
         </div>
       </div>
 

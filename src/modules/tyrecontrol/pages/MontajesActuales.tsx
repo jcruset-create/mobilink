@@ -3,11 +3,11 @@ import { useNavigate } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, montarFueraAlmacen,
-  listarMarcas, listarModelos, listarReferenciasDeModelo,
+  listarMarcas, listarModelos, listarReferenciasDeModelo, listarMotivosFueraAlmacen,
 } from "../services/data";
 import type {
   Empresa, Vehiculo, PosicionVehiculo, MontajeActual, Neumatico, MotivoDesmontaje, DestinoDesmontaje,
-  MarcaNeumatico, ModeloNeumatico, ReferenciaNeumatico,
+  MarcaNeumatico, ModeloNeumatico, ReferenciaNeumatico, MotivoFueraAlmacen,
 } from "../types";
 import { MOTIVO_DESMONTAJE_LABELS } from "../types";
 import { Modal, inputCls, Field } from "../components/ui";
@@ -37,6 +37,7 @@ export default function MontajesActuales() {
   const [catMarcas, setCatMarcas] = useState<MarcaNeumatico[]>([]);
   const [catModelos, setCatModelos] = useState<ModeloNeumatico[]>([]);
   const [catReferencias, setCatReferencias] = useState<ReferenciaNeumatico[]>([]);
+  const [catMotivos, setCatMotivos] = useState<MotivoFueraAlmacen[]>([]);
   const [fMarcaId, setFMarcaId] = useState("");
   const [fModeloId, setFModeloId] = useState("");
   const [fReferenciaId, setFReferenciaId] = useState("");
@@ -76,8 +77,8 @@ export default function MontajesActuales() {
     setFForm({ marca: "", modelo: "", medida: "", indiceCarga: "", indiceVelocidad: "", profundidadActual: "", motivo: "" });
     setFMarcaId(""); setFModeloId(""); setFReferenciaId(""); setCatModelos([]); setCatReferencias([]);
     setOrigenMontaje("almacen");
-    const [disp, marcas] = await Promise.all([listarNeumaticosDisponibles(empresaId), listarMarcas()]);
-    setDisponibles(disp); setCatMarcas(marcas);
+    const [disp, marcas, motivos] = await Promise.all([listarNeumaticosDisponibles(empresaId), listarMarcas(), listarMotivosFueraAlmacen()]);
+    setDisponibles(disp); setCatMarcas(marcas); setCatMotivos(motivos);
     setMontarModal({ posicion });
   }
 
@@ -262,7 +263,13 @@ export default function MontajesActuales() {
                 <Field label="Profundidad actual (mm)">
                   <input type="number" step="0.1" className={inputCls} value={fForm.profundidadActual} onChange={(e) => setFForm({ ...fForm, profundidadActual: e.target.value })} />
                 </Field>
-                <Field label="Motivo *"><input className={inputCls} placeholder="Ej. neumático ya instalado antes de usar el sistema" value={fForm.motivo} onChange={(e) => setFForm({ ...fForm, motivo: e.target.value })} /></Field>
+                <Field label="Motivo *">
+                  <select className={inputCls} value={fForm.motivo} onChange={(e) => setFForm({ ...fForm, motivo: e.target.value })}>
+                    <option value="">Selecciona…</option>
+                    {catMotivos.map((m) => <option key={m.id} value={m.motivo}>{m.motivo}</option>)}
+                  </select>
+                  {catMotivos.length === 0 && <div className="mt-1 text-[11px] text-amber-300">No hay motivos configurados. Añádelos en Configuración.</div>}
+                </Field>
               </div>
             )}
 

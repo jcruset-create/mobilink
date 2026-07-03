@@ -5,7 +5,7 @@ import type {
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
-  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad,
+  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
 } from "../types";
 
@@ -569,6 +569,24 @@ export async function listarIndicesVelocidad(): Promise<IndiceVelocidad[]> {
 }
 export async function crearIndiceVelocidad(valor: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_indices_velocidad").insert({ valor: valor.trim() });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarMotivosFueraAlmacen(): Promise<MotivoFueraAlmacen[]> {
+  const { data, error } = await supabase.from("tc_cat_motivos_fuera_almacen").select("*").eq("activo", true).order("motivo");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MotivoFueraAlmacen[];
+}
+export async function crearMotivoFueraAlmacen(motivo: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_motivos_fuera_almacen").insert({ motivo: motivo.trim() });
+  if (error) throw new Error(error.message);
+}
+export async function actualizarMotivoFueraAlmacen(id: string, motivo: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_motivos_fuera_almacen").update({ motivo: motivo.trim() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function eliminarMotivoFueraAlmacen(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_motivos_fuera_almacen").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 

@@ -404,3 +404,4 @@ export interface MedidaNeumatico {
 }
 export interface IndiceCarga { id: string; valor: string; activo: boolean; }
 export interface IndiceVelocidad { id: string; valor: string; activo: boolean; }
+export interface MotivoFueraAlmacen { id: string; motivo: string; activo: boolean; }
