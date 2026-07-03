@@ -34,7 +34,7 @@ create trigger trg_sync_empresa_desde_cliente
   for each row
   when (
     pg_trigger_depth() < 2 and (
-      tg_op = 'INSERT' or
+      old is null or
       new.nombre is distinct from old.nombre or
       new.nif is distinct from old.nif or
       new.telefono is distinct from old.telefono or
@@ -88,7 +88,7 @@ create trigger trg_sync_cliente_desde_empresa
   for each row
   when (
     pg_trigger_depth() < 2 and (
-      tg_op = 'INSERT' or
+      old is null or
       new.nombre is distinct from old.nombre or
       new.cif is distinct from old.cif or
       new.telefono is distinct from old.telefono or
