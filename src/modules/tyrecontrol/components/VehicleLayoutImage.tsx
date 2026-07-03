@@ -268,9 +268,10 @@ export default function VehicleLayoutImage({
                 className="absolute flex flex-col items-center justify-center rounded-lg border-2 pointer-events-auto"
                 style={{
                   left: `${c.x}%`, top: `${c.y}%`, width: `${c.w}%`, height: `${c.h}%`,
+                  minWidth: ocupado && !calibrando ? "84px" : undefined, minHeight: ocupado && !calibrando ? "64px" : undefined,
                   borderColor: esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : ocupado ? "#22c55e" : "#64748b",
                   borderStyle: ocupado || calibrando ? "solid" : "dashed",
-                  background: esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.55)" : "rgba(15,23,42,0.25)",
+                  background: esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
                   opacity: esArrastre && !calibrando ? 0.35 : 1,
                   cursor: calibrando ? "move" : (editable && ocupado) ? "grab" : "pointer",
                 }}
@@ -283,9 +284,21 @@ export default function VehicleLayoutImage({
                   setMenuContextual({ codigo: p.codigo_posicion, x: e.clientX, y: e.clientY });
                 }}
               >
-                <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">
-                  {calibrando ? p.codigo_posicion : ocupado ? (m!.neumatico!.codigo_interno ?? m!.neumatico!.numero_serie ?? "—") : "Libre"}
-                </span>
+                {calibrando ? (
+                  <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">{p.codigo_posicion}</span>
+                ) : ocupado ? (
+                  <span className="pointer-events-none px-1 text-center text-[9px] leading-tight text-slate-100">
+                    <div className="font-bold">{m!.neumatico!.marca ?? "—"}</div>
+                    <div>{m!.neumatico!.medida ?? "—"}</div>
+                    <div className="text-slate-300">
+                      {m!.neumatico!.profundidad_actual_mm != null ? `${m!.neumatico!.profundidad_actual_mm}mm` : "— mm"}
+                      {" · "}
+                      {m!.neumatico!.producto_almacen?.referencia?.presion_maxima_bar != null ? `${m!.neumatico!.producto_almacen.referencia.presion_maxima_bar}bar` : "— bar"}
+                    </div>
+                  </span>
+                ) : (
+                  <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">Libre</span>
+                )}
               </div>
             );
           })}

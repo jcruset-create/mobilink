@@ -235,7 +235,7 @@ export async function listarNeumaticosDisponibles(empresaId: string): Promise<Ne
 // ── Montajes ─────────────────────────────────────────────────
 export async function listarMontajesVehiculo(vehiculoId: string): Promise<MontajeActual[]> {
   const { data, error } = await supabase.from("tc_montajes_actuales")
-    .select("*, neumatico:tc_neumaticos(*), posicion:tc_posiciones_vehiculo(*)")
+    .select("*, neumatico:tc_neumaticos(*, producto_almacen:productos_neumaticos(referencia:tc_referencias_neumatico(presion_maxima_bar))), posicion:tc_posiciones_vehiculo(*)")
     .eq("vehiculo_id", vehiculoId);
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as MontajeActual[];

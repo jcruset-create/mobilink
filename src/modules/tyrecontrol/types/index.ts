@@ -183,6 +183,7 @@ export interface Neumatico {
   fecha_compra?: string | null;
   coste_compra?: number | null;
   proveedor?: string | null;
+  profundidad_actual_mm?: number | null;
   almacen_producto_id?: string | null;
   almacen_lote_id?: string | null;
   almacen_ubicacion_id?: string | null;
@@ -193,6 +194,7 @@ export interface Neumatico {
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
+  producto_almacen?: { referencia?: { presion_maxima_bar?: number | null } | null } | null;
 }
 
 export type NeumaticoInput = Omit<Neumatico, "id" | "created_at" | "updated_at" | "empresa" | "sincronizado_almacen"
