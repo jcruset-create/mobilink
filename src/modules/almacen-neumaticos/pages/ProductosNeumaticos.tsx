@@ -17,6 +17,18 @@ type Producto = {
   dot: string | null;
   activo: boolean;
   referencia_neumatico_id: string | null;
+  referencia?: {
+    modelo: {
+      eje_recomendado: string | null;
+      aplicacion: string | null;
+      m_s: boolean | null;
+      tres_pmsf: boolean | null;
+    } | null;
+  } | null;
+};
+
+const EJE_LABELS: Record<string, string> = {
+  direccion: "Dirección", traccion: "Tracción", remolque: "Remolque", mixto: "Mixto",
 };
 
 type CatMarca = { id: string; nombre: string };
@@ -165,13 +177,13 @@ export default function ProductosNeumaticos() {
 
     const { data: productosData } = await supabase
       .from("productos_neumaticos")
-      .select("id,marca,modelo,medida,dot,activo,referencia_neumatico_id")
+      .select("id,marca,modelo,medida,dot,activo,referencia_neumatico_id,referencia:tc_referencias_neumatico(modelo:tc_cat_modelos_neumatico(eje_recomendado,aplicacion,m_s,tres_pmsf))")
       .order("medida");
 
     const empresasFinales = (empresasData || []) as Empresa[];
 
     setEmpresas(empresasFinales);
-    setProductos((productosData || []) as Producto[]);
+    setProductos((productosData || []) as unknown as Producto[]);
 
     if (!empresaId && empresasFinales.length > 0) {
       setEmpresaId(empresasFinales[0].id);
@@ -356,44 +368,47 @@ export default function ProductosNeumaticos() {
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-left">
               <tr>
-                <th className="p-3 text-[11px] uppercase text-slate-400">Medida</th>
                 <th className="p-3 text-[11px] uppercase text-slate-400">Marca</th>
                 <th className="p-3 text-[11px] uppercase text-slate-400">Modelo</th>
-                <th className="p-3 text-[11px] uppercase text-slate-400">DOT</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Medida completa</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Eje</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">Aplicación</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">M+S</th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">3PMSF</th>
                 <th className="p-3 text-[11px] uppercase text-slate-400">Estado</th>
-                <th className="p-3 text-[11px] uppercase text-slate-400"></th>
+                <th className="p-3 text-[11px] uppercase text-slate-400">DOT</th>
               </tr>
             </thead>
 
             <tbody>
-              {productos.map((producto) => (
-                <tr key={producto.id} className="border-t border-slate-700/60">
-                  <td className="p-3 font-semibold">{producto.medida}</td>
-                  <td className="p-3 text-slate-300">{producto.marca}</td>
-                  <td className="p-3 text-slate-300">{producto.modelo || "-"}</td>
-                  <td className="p-3 text-slate-300">{producto.dot || "-"}</td>
-                  <td className="p-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${producto.activo ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-600 text-slate-300"}`}>
-                      {producto.activo ? "Activo" : "Baja"}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    {producto.referencia_neumatico_id && (
-                      <button
-                        type="button"
-                        onClick={() => verFicha(producto.referencia_neumatico_id)}
-                        className="rounded border border-sky-600 px-2 py-1 text-[11px] font-semibold text-sky-300 hover:bg-sky-600/10"
-                      >
-                        Ficha
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {productos.map((producto) => {
+                const modeloRef = producto.referencia?.modelo;
+                return (
+                  <tr
+                    key={producto.id}
+                    onClick={() => verFicha(producto.referencia_neumatico_id)}
+                    className={`border-t border-slate-700/60 ${producto.referencia_neumatico_id ? "cursor-pointer hover:bg-slate-700/40" : ""}`}
+                  >
+                    <td className="p-3 font-semibold">{producto.marca}</td>
+                    <td className="p-3 text-slate-300">{producto.modelo || "-"}</td>
+                    <td className="p-3 text-slate-400">{producto.medida}</td>
+                    <td className="p-3 text-slate-400">{modeloRef?.eje_recomendado ? (EJE_LABELS[modeloRef.eje_recomendado] ?? modeloRef.eje_recomendado) : "—"}</td>
+                    <td className="p-3 text-slate-400">{modeloRef?.aplicacion || "—"}</td>
+                    <td className="p-3">{modeloRef?.m_s ? <span className="text-emerald-400">Sí</span> : <span className="text-slate-500">—</span>}</td>
+                    <td className="p-3">{modeloRef?.tres_pmsf ? <span className="text-emerald-400">Sí</span> : <span className="text-slate-500">—</span>}</td>
+                    <td className="p-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${producto.activo ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-600 text-slate-300"}`}>
+                        {producto.activo ? "Activo" : "Baja"}
+                      </span>
+                    </td>
+                    <td className="p-3 text-slate-300">{producto.dot || "-"}</td>
+                  </tr>
+                );
+              })}
 
               {productos.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-6 text-center text-slate-500">
+                  <td colSpan={9} className="p-6 text-center text-slate-500">
                     No hay productos creados.
                   </td>
                 </tr>
