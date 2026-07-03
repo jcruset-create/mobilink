@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
-  listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico,
+  listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, montarFueraAlmacen,
 } from "../services/data";
 import type {
   Empresa, Vehiculo, PosicionVehiculo, MontajeActual, Neumatico, MotivoDesmontaje, DestinoDesmontaje,
@@ -28,6 +28,10 @@ export default function MontajesActuales() {
 
   const [montarModal, setMontarModal] = useState<null | { posicion: PosicionVehiculo }>(null);
   const [mForm, setMForm] = useState({ neumaticoId: "", km: "", fecha: "", obs: "" });
+  const [origenMontaje, setOrigenMontaje] = useState<"almacen" | "fuera">("almacen");
+  const [fForm, setFForm] = useState({
+    marca: "", modelo: "", medida: "", indiceCarga: "", indiceVelocidad: "", profundidadActual: "", motivo: "",
+  });
   const [desmontarModal, setDesmontarModal] = useState<null | { montaje: MontajeActual }>(null);
   const [dForm, setDForm] = useState({ km: "", motivo: "desgaste" as MotivoDesmontaje, destino: "almacen" as DestinoDesmontaje, obs: "" });
 
@@ -61,12 +65,32 @@ export default function MontajesActuales() {
 
   async function abrirMontar(posicion: PosicionVehiculo) {
     setMsg(""); setMForm({ neumaticoId: "", km: "", fecha: new Date().toISOString().slice(0, 10), obs: "" });
+    setFForm({ marca: "", modelo: "", medida: "", indiceCarga: "", indiceVelocidad: "", profundidadActual: "", motivo: "" });
+    setOrigenMontaje("almacen");
     setDisponibles(await listarNeumaticosDisponibles(empresaId));
     setMontarModal({ posicion });
   }
 
   async function confirmarMontar() {
     if (!montarModal) return;
+    if (origenMontaje === "fuera") {
+      if (!fForm.medida.trim()) { setMsg("Indica al menos la medida del neumático"); return; }
+      if (!fForm.motivo.trim()) { setMsg("Indica el motivo (por qué se monta sin pasar por almacén)"); return; }
+      setSaving(true);
+      try {
+        await montarFueraAlmacen({
+          vehiculoId, posicionId: montarModal.posicion.id, controlIndividual: false,
+          datos: {
+            marca: fForm.marca, modelo: fForm.modelo, medida: fForm.medida,
+            indice_carga: fForm.indiceCarga, indice_velocidad: fForm.indiceVelocidad,
+            profundidad_actual_mm: fForm.profundidadActual,
+          },
+          motivo: fForm.motivo, km: mForm.km ? Number(mForm.km) : null, fecha: mForm.fecha || null, observaciones: mForm.obs || null,
+        });
+        setMontarModal(null); setMsg("✔ Montado"); await cargarVehiculo(vehiculoId);
+      } catch (e: any) { setMsg(e?.message || "Error al montar"); } finally { setSaving(false); }
+      return;
+    }
     if (!mForm.neumaticoId) { setMsg("Selecciona un neumático"); return; }
     setSaving(true);
     try {
@@ -155,13 +179,46 @@ export default function MontajesActuales() {
             <button onClick={confirmarMontar} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Montar</button>
           </div>}>
           <div className="grid gap-2">
-            <Field label="Neumático disponible (almacén)">
-              <select className={inputCls} value={mForm.neumaticoId} onChange={(e) => setMForm({ ...mForm, neumaticoId: e.target.value })}>
-                <option value="">Selecciona…</option>
-                {disponibles.map((n) => <option key={n.id} value={n.id}>{(n.codigo_interno ?? n.numero_serie ?? n.id)} · {n.marca ?? ""} {n.medida ?? ""}</option>)}
-              </select>
-              {disponibles.length === 0 && <div className="mt-1 text-[11px] text-amber-300">No hay neumáticos en almacén para esta empresa.</div>}
-            </Field>
+            <div className="flex gap-2 rounded-lg bg-slate-900 p-1 text-[11px] font-bold">
+              <button type="button" onClick={() => setOrigenMontaje("almacen")}
+                className={`flex-1 rounded px-2 py-1.5 ${origenMontaje === "almacen" ? "bg-sky-600 text-white" : "text-slate-400"}`}>
+                Desde almacén
+              </button>
+              <button type="button" onClick={() => setOrigenMontaje("fuera")}
+                className={`flex-1 rounded px-2 py-1.5 ${origenMontaje === "fuera" ? "bg-amber-600 text-white" : "text-slate-400"}`}>
+                Ya montado (sin almacén)
+              </button>
+            </div>
+
+            {origenMontaje === "almacen" ? (
+              <Field label="Neumático disponible (almacén)">
+                <select className={inputCls} value={mForm.neumaticoId} onChange={(e) => setMForm({ ...mForm, neumaticoId: e.target.value })}>
+                  <option value="">Selecciona…</option>
+                  {disponibles.map((n) => <option key={n.id} value={n.id}>{(n.codigo_interno ?? n.numero_serie ?? n.id)} · {n.marca ?? ""} {n.medida ?? ""}</option>)}
+                </select>
+                {disponibles.length === 0 && <div className="mt-1 text-[11px] text-amber-300">No hay neumáticos en almacén para esta empresa.</div>}
+              </Field>
+            ) : (
+              <div className="grid gap-2 rounded-lg bg-slate-900 p-2">
+                <div className="text-[11px] text-slate-400">
+                  Para dar de alta el neumático que ya lleva montado el vehículo, sin descontarlo del almacén.
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Marca"><input className={inputCls} value={fForm.marca} onChange={(e) => setFForm({ ...fForm, marca: e.target.value })} /></Field>
+                  <Field label="Modelo"><input className={inputCls} value={fForm.modelo} onChange={(e) => setFForm({ ...fForm, modelo: e.target.value })} /></Field>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Field label="Medida *"><input className={inputCls} value={fForm.medida} onChange={(e) => setFForm({ ...fForm, medida: e.target.value })} /></Field>
+                  <Field label="Índice carga"><input className={inputCls} value={fForm.indiceCarga} onChange={(e) => setFForm({ ...fForm, indiceCarga: e.target.value })} /></Field>
+                  <Field label="Cód. velocidad"><input className={inputCls} value={fForm.indiceVelocidad} onChange={(e) => setFForm({ ...fForm, indiceVelocidad: e.target.value })} /></Field>
+                </div>
+                <Field label="Profundidad actual (mm)">
+                  <input type="number" step="0.1" className={inputCls} value={fForm.profundidadActual} onChange={(e) => setFForm({ ...fForm, profundidadActual: e.target.value })} />
+                </Field>
+                <Field label="Motivo *"><input className={inputCls} placeholder="Ej. neumático ya instalado antes de usar el sistema" value={fForm.motivo} onChange={(e) => setFForm({ ...fForm, motivo: e.target.value })} /></Field>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2">
               <Field label="Km montaje"><input type="number" className={inputCls} value={mForm.km} onChange={(e) => setMForm({ ...mForm, km: e.target.value })} /></Field>
               <Field label="Fecha montaje"><input type="date" className={inputCls} value={mForm.fecha} onChange={(e) => setMForm({ ...mForm, fecha: e.target.value })} /></Field>
