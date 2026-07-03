@@ -362,6 +362,21 @@ export interface MarcaNeumatico {
 }
 
 export interface MarcaContadores { id: string; num_modelos: number; num_neumaticos: number; num_vehiculos: number; }
+
+export interface TyreSize {
+  id: string;
+  medida_id?: string | null;
+  referencia_completa: string;
+  medida: string;
+  ancho: number;
+  perfil?: number | null;
+  diametro_llanta: number;
+  indice_carga_simple: string;
+  indice_carga_doble?: string | null;
+  codigo_velocidad: string;
+  activo: boolean;
+}
+export type TyreSizeInput = Omit<TyreSize, "id" | "referencia_completa" | "medida_id" | "medida">;
 export interface ModeloNeumatico { id: string; marca_id: string | null; nombre: string; activo: boolean; }
 export interface MedidaNeumatico {
   id: string; valor: string; activo: boolean;

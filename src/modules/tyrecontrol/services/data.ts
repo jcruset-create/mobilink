@@ -6,7 +6,7 @@ import type {
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad,
-  Fabricante, MarcaContadores,
+  Fabricante, MarcaContadores, TyreSize, TyreSizeInput,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -569,5 +569,54 @@ export async function listarIndicesVelocidad(): Promise<IndiceVelocidad[]> {
 }
 export async function crearIndiceVelocidad(valor: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_indices_velocidad").insert({ valor: valor.trim() });
+  if (error) throw new Error(error.message);
+}
+
+// ── Fase 16: tyre_sizes (referencia completa: medida + carga + velocidad) ─
+function construirMedidaTs(ancho: number, perfil: number | null | undefined, diametro: number): string {
+  return perfil != null ? `${ancho}/${perfil} R${diametro}` : `${ancho} R${diametro}`;
+}
+function construirReferenciaTs(medida: string, cargaSimple: string, cargaDoble: string | null | undefined, codigoVelocidad: string): string {
+  const cargas = cargaDoble ? `${cargaSimple}/${cargaDoble}` : cargaSimple;
+  return `${medida} ${cargas}${codigoVelocidad}`;
+}
+
+export async function listarTyreSizes(filtros?: {
+  q?: string; diametro?: number; indiceCarga?: string; codigoVelocidad?: string;
+}): Promise<TyreSize[]> {
+  let query = supabase.from("tyre_sizes").select("*").eq("activo", true).order("medida").order("indice_carga_simple");
+  if (filtros?.diametro) query = query.eq("diametro_llanta", filtros.diametro);
+  if (filtros?.indiceCarga) query = query.or(`indice_carga_simple.eq.${filtros.indiceCarga},indice_carga_doble.eq.${filtros.indiceCarga}`);
+  if (filtros?.codigoVelocidad) query = query.eq("codigo_velocidad", filtros.codigoVelocidad);
+  if (filtros?.q) query = query.ilike("referencia_completa", `%${filtros.q}%`);
+  const { data, error } = await query.limit(500);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as TyreSize[];
+}
+
+async function resolverMedidaId(medida: string): Promise<string> {
+  const valorCanonico = medida.replace(/\s+/g, "");
+  const { data: existente } = await supabase.from("tc_cat_medidas_neumatico").select("id").eq("valor", valorCanonico).maybeSingle();
+  if (existente) return existente.id;
+  const { data: creada, error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: valorCanonico }).select("id").single();
+  if (error) throw new Error(error.message);
+  return creada.id;
+}
+
+export async function crearTyreSize(input: TyreSizeInput): Promise<void> {
+  const medida = construirMedidaTs(input.ancho, input.perfil, input.diametro_llanta);
+  const referencia_completa = construirReferenciaTs(medida, input.indice_carga_simple, input.indice_carga_doble, input.codigo_velocidad);
+  const medida_id = await resolverMedidaId(medida);
+  const { error } = await supabase.from("tyre_sizes").insert({
+    medida, referencia_completa, medida_id,
+    ancho: input.ancho, perfil: input.perfil ?? null, diametro_llanta: input.diametro_llanta,
+    indice_carga_simple: input.indice_carga_simple, indice_carga_doble: input.indice_carga_doble ?? null,
+    codigo_velocidad: input.codigo_velocidad, activo: input.activo,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarTyreSize(id: string): Promise<void> {
+  const { error } = await supabase.from("tyre_sizes").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
 }
