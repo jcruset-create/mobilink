@@ -18,45 +18,53 @@ type Producto = {
   activo: boolean;
 };
 
+type CatMarca = { id: string; nombre: string };
+type CatModelo = { id: string; nombre: string; marca_id: string };
+type CatMedida = { valor: string };
+
 export default function ProductosNeumaticos() {
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [productos, setProductos] = useState<Producto[]>([]);
-  const [catMarcas, setCatMarcas] = useState<string[]>([]);
-  const [catMedidas, setCatMedidas] = useState<string[]>([]);
+  const [catMarcas, setCatMarcas] = useState<CatMarca[]>([]);
+  const [catModelos, setCatModelos] = useState<CatModelo[]>([]);
+  const [catMedidas, setCatMedidas] = useState<CatMedida[]>([]);
 
   const [empresaId, setEmpresaId] = useState("");
-  const [marca, setMarca] = useState("");
-  const [modelo, setModelo] = useState("");
+  const [marcaId, setMarcaId] = useState("");
+  const [modeloId, setModeloId] = useState("");
   const [medida, setMedida] = useState("");
   const [dot, setDot] = useState("");
   const [mensaje, setMensaje] = useState("");
 
   useEffect(() => {
-    cargarDatos();
-    cargarCatalogosCompartidos();
+    void inicializar();
   }, []);
 
-  // Catálogo compartido con TyreControl (tc_cat_marcas_neumatico / tc_cat_medidas_neumatico)
-  // — solo lectura aquí, para sugerir valores ya usados y no duplicar nombres distintos
-  // para lo mismo (ej. "Michelin" vs "MICHELIN").
-  async function cargarCatalogosCompartidos() {
-    const [{ data: marcasData }, { data: medidasData }] = await Promise.all([
-      supabase.from("tc_cat_marcas_neumatico").select("nombre").eq("activo", true).order("nombre"),
-      supabase.from("tc_cat_medidas_neumatico").select("valor").eq("activo", true).order("valor"),
+  async function inicializar() {
+    const [{ marcas, medidas }, empresasFinales] = await Promise.all([
+      cargarCatalogosCompartidos(),
+      cargarDatos(),
     ]);
-    setCatMarcas(((marcasData || []) as { nombre: string }[]).map((m) => m.nombre));
-    setCatMedidas(((medidasData || []) as { valor: string }[]).map((m) => m.valor));
+    aplicarParametrosOCR(empresasFinales, marcas, medidas);
   }
 
-  // Añade la marca/medida al catálogo compartido si es nueva (best-effort:
-  // si falla por permisos no bloquea la creación del producto).
-  async function sincronizarCatalogoCompartido(marcaValor: string, medidaValor: string) {
-    try {
-      if (marcaValor) await supabase.from("tc_cat_marcas_neumatico").upsert({ nombre: marcaValor }, { onConflict: "nombre" });
-      if (medidaValor) await supabase.from("tc_cat_medidas_neumatico").upsert({ valor: medidaValor }, { onConflict: "valor" });
-    } catch {
-      // silencioso: es solo una sugerencia para el desplegable de TyreControl
-    }
+  // Catálogo compartido con TyreControl (tc_cat_marcas_neumatico / tc_cat_modelos_neumatico /
+  // tc_cat_medidas_neumatico) — la marca/modelo/medida de un producto de almacén se eligen
+  // SIEMPRE de aquí, para que los dos módulos hablen de los mismos neumáticos exactos y no
+  // haya formatos distintos para lo mismo (ej. "295/80R22-5" vs "295/80 R22.5").
+  async function cargarCatalogosCompartidos() {
+    const [{ data: marcasData }, { data: modelosData }, { data: medidasData }] = await Promise.all([
+      supabase.from("tc_cat_marcas_neumatico").select("id,nombre").eq("activo", true).order("nombre"),
+      supabase.from("tc_cat_modelos_neumatico").select("id,nombre,marca_id").eq("activo", true).order("nombre"),
+      supabase.from("tc_cat_medidas_neumatico").select("valor").eq("activo", true).order("valor"),
+    ]);
+    const marcas = (marcasData || []) as CatMarca[];
+    const modelos = (modelosData || []) as CatModelo[];
+    const medidas = (medidasData || []) as CatMedida[];
+    setCatMarcas(marcas);
+    setCatModelos(modelos);
+    setCatMedidas(medidas);
+    return { marcas, modelos, medidas };
   }
 
   function normalizarMedida(valor: string) {
@@ -83,11 +91,14 @@ export default function ProductosNeumaticos() {
     return {
       medida: medidaDetectada || "",
       marca: partes[0] || "",
-      modelo: partes.slice(1).join(" ") || "",
     };
   }
 
-  function aplicarParametrosOCR(empresasDisponibles: Empresa[]) {
+  // Intenta preseleccionar marca/medida del catálogo a partir del texto leído por
+  // OCR. Si no encuentra una coincidencia exacta, avisa en vez de dejar pasar un
+  // valor libre: la marca/medida del catálogo debe existir antes de poder usarse
+  // aquí (añádela en TyreControl → Configuración si es nueva).
+  function aplicarParametrosOCR(empresasDisponibles: Empresa[], marcas: CatMarca[], medidas: CatMedida[]) {
     const params = new URLSearchParams(window.location.search);
 
     if (params.get("nuevo") !== "1") {
@@ -104,13 +115,20 @@ export default function ProductosNeumaticos() {
       setEmpresaId(empresasDisponibles[0].id);
     }
 
-    setMedida(datos.medida);
-    setMarca(datos.marca);
-    setModelo(datos.modelo);
+    const marcaEncontrada = marcas.find((m) => m.nombre.toLowerCase() === datos.marca.toLowerCase());
+    const medidaEncontrada = medidas.find((m) => m.valor.toUpperCase() === datos.medida.toUpperCase());
+    setMarcaId(marcaEncontrada?.id || "");
+    setModeloId("");
+    setMedida(medidaEncontrada?.valor || "");
     setDot("");
 
+    const faltantes = [!marcaEncontrada && datos.marca && `marca "${datos.marca}"`, !medidaEncontrada && datos.medida && `medida "${datos.medida}"`]
+      .filter(Boolean).join(" y ");
+
     setMensaje(
-      `Producto importado desde OCR: ${productoParam}. Revisa los datos y pulsa Crear producto.`
+      faltantes
+        ? `Producto importado desde OCR: ${productoParam}. No se encontró en el catálogo la ${faltantes}; añádela en TyreControl → Configuración y vuelve a leer el OCR, o selecciónala manualmente si ya existe con otro nombre.`
+        : `Producto importado desde OCR: ${productoParam}. Revisa los datos y pulsa Crear producto.`
     );
 
     window.scrollTo({
@@ -139,22 +157,24 @@ export default function ProductosNeumaticos() {
       setEmpresaId(empresasFinales[0].id);
     }
 
-    aplicarParametrosOCR(empresasFinales);
+    return empresasFinales;
   }
 
   async function crearProducto() {
     setMensaje("");
 
-    if (!empresaId || !marca.trim() || !medida.trim()) {
-      setMensaje("Empresa, marca y medida son obligatorios.");
+    const marcaSel = catMarcas.find((m) => m.id === marcaId);
+    if (!empresaId || !marcaSel || !medida.trim()) {
+      setMensaje("Empresa, marca y medida son obligatorios (elígelas del catálogo).");
       return;
     }
+    const modeloSel = modeloId ? catModelos.find((m) => m.id === modeloId) : null;
 
     const { error } = await supabase.from("productos_neumaticos").insert({
       empresa_id: empresaId,
-      marca: marca.trim(),
-      modelo: modelo.trim() || null,
-      medida: normalizarMedida(medida),
+      marca: marcaSel.nombre,
+      modelo: modeloSel?.nombre || null,
+      medida,
       dot: dot.trim() || null,
       activo: true,
     });
@@ -164,15 +184,12 @@ export default function ProductosNeumaticos() {
       return;
     }
 
-    await sincronizarCatalogoCompartido(marca.trim(), normalizarMedida(medida));
-
     setMensaje("Producto creado correctamente. Puedes volver a Entradas y leer de nuevo el OCR.");
-    setMarca("");
-    setModelo("");
+    setMarcaId("");
+    setModeloId("");
     setMedida("");
     setDot("");
     cargarDatos();
-    cargarCatalogosCompartidos();
   }
 
   function filasExportacionProductos(): FilaExportacion[] {
@@ -255,34 +272,39 @@ export default function ProductosNeumaticos() {
             ))}
           </select>
 
-          <input
-            value={marca}
-            onChange={(e) => setMarca(e.target.value)}
-            placeholder="Marca"
-            list="catalogo-marcas"
-            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
-          />
-          <datalist id="catalogo-marcas">
-            {catMarcas.map((m) => <option key={m} value={m} />)}
-          </datalist>
+          <select
+            value={marcaId}
+            onChange={(e) => { setMarcaId(e.target.value); setModeloId(""); }}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+          >
+            <option value="">Marca del catálogo...</option>
+            {catMarcas.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+          </select>
+          {catMarcas.length === 0 && (
+            <p className="text-[11px] text-amber-300">No hay marcas en el catálogo. Añádelas en TyreControl → Configuración.</p>
+          )}
 
-          <input
-            value={modelo}
-            onChange={(e) => setModelo(e.target.value)}
-            placeholder="Modelo"
-            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
-          />
+          <select
+            value={modeloId}
+            onChange={(e) => setModeloId(e.target.value)}
+            disabled={!marcaId}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 disabled:opacity-50"
+          >
+            <option value="">Modelo (opcional)...</option>
+            {catModelos.filter((m) => m.marca_id === marcaId).map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+          </select>
 
-          <input
+          <select
             value={medida}
             onChange={(e) => setMedida(e.target.value)}
-            placeholder="Medida, ejemplo 315/70R22.5"
-            list="catalogo-medidas"
-            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
-          />
-          <datalist id="catalogo-medidas">
-            {catMedidas.map((m) => <option key={m} value={m} />)}
-          </datalist>
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+          >
+            <option value="">Medida del catálogo...</option>
+            {catMedidas.map((m) => <option key={m.valor} value={m.valor}>{m.valor}</option>)}
+          </select>
+          {catMedidas.length === 0 && (
+            <p className="text-[11px] text-amber-300">No hay medidas en el catálogo. Añádelas en TyreControl → Medidas de neumáticos.</p>
+          )}
 
           <input
             value={dot}
