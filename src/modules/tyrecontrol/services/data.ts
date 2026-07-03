@@ -633,7 +633,9 @@ export async function subirFotoModelo(modeloId: string, file: File): Promise<str
   const ruta = `${modeloId}/${Date.now()}.${extension}`;
   const { error } = await supabase.storage.from(BUCKET_MODELOS).upload(ruta, file, { upsert: true });
   if (error) throw new Error(error.message);
-  return supabase.storage.from(BUCKET_MODELOS).getPublicUrl(ruta).data.publicUrl;
+  const url = supabase.storage.from(BUCKET_MODELOS).getPublicUrl(ruta).data.publicUrl;
+  await actualizarModeloTecnico(modeloId, { foto_modelo_url: url });
+  return url;
 }
 export async function eliminarFotoModelo(modeloId: string): Promise<void> {
   await actualizarModeloTecnico(modeloId, { foto_modelo_url: null });
