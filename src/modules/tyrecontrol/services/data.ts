@@ -94,7 +94,7 @@ export async function actualizarDelegacion(id: string, patch: Partial<Delegacion
 
 // ── Usuarios ─────────────────────────────────────────────────
 export async function listarUsuarios(empresaId?: string): Promise<Perfil[]> {
-  let q = supabase.from("tc_usuarios").select("*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*)").order("nombre");
+  let q = supabase.from("tc_usuarios").select("*, empresa:tc_empresas!tc_usuarios_empresa_id_fkey(*), delegacion:tc_delegaciones(*)").order("nombre");
   if (empresaId) q = q.eq("empresa_id", empresaId);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
