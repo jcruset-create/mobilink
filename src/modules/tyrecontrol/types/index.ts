@@ -4,6 +4,7 @@ export interface Empresa {
   id: string;
   nombre: string;
   cif?: string | null;
+  codigo_cliente?: string | null;
   telefono?: string | null;
   email?: string | null;
   direccion?: string | null;

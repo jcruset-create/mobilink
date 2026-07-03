@@ -5,6 +5,7 @@ export function EmpresaFormFields({ draft, set }: { draft: EmpresaInput; set: (p
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       <TextField label="Nombre *" value={draft.nombre ?? ""} onChange={(v) => set({ nombre: v })} />
+      <TextField label="Número de cliente" value={draft.codigo_cliente ?? ""} onChange={(v) => set({ codigo_cliente: v })} />
       <TextField label="CIF" value={draft.cif ?? ""} onChange={(v) => set({ cif: v })} />
       <TextField label="Teléfono" value={draft.telefono ?? ""} onChange={(v) => set({ telefono: v })} />
       <TextField label="Email" value={draft.email ?? ""} onChange={(v) => set({ email: v })} />
@@ -46,7 +47,7 @@ export function DelegacionFormFields({ draft, set }: { draft: DelegacionInput; s
 }
 
 export const EMPRESA_VACIA: EmpresaInput = {
-  nombre: "", cif: "", telefono: "", email: "", direccion: "",
+  nombre: "", cif: "", codigo_cliente: "", telefono: "", email: "", direccion: "",
   ciudad: "", provincia: "", codigo_postal: "", pais: "", activo: true,
 };
 

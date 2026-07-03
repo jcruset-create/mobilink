@@ -95,7 +95,7 @@ export default function EmpresaDetalle() {
 
       {/* Datos */}
       <div className="mb-3 grid gap-2 rounded-lg bg-slate-800 p-3 sm:grid-cols-3">
-        {dato("CIF", empresa.cif)}{dato("Teléfono", empresa.telefono)}{dato("Email", empresa.email)}
+        {dato("Número de cliente", empresa.codigo_cliente)}{dato("CIF", empresa.cif)}{dato("Teléfono", empresa.telefono)}{dato("Email", empresa.email)}
         {dato("Dirección", empresa.direccion)}{dato("Ciudad", empresa.ciudad)}{dato("Provincia", empresa.provincia)}
         {dato("C. Postal", empresa.codigo_postal)}{dato("País", empresa.pais)}
       </div>
