@@ -67,6 +67,9 @@ export default function EnlaceAlmacen() {
           <div className="text-[11px] font-bold uppercase text-slate-400">Empresas ↔ clientes del almacén</div>
           <input className={`${inputCls} w-auto`} placeholder="Buscar empresa…" value={busquedaEmpresa} onChange={(e) => setBusquedaEmpresa(e.target.value)} />
         </div>
+        <div className="mb-2 text-[11px] text-slate-500">
+          Cada cliente nuevo que se crea en el almacén genera automáticamente su empresa aquí (mismo nombre, CIF, teléfono y email), y se mantiene sincronizado si luego se edita en el almacén. Este selector solo hace falta para enlazar a mano empresas creadas antes de este cambio o con nombres distintos.
+        </div>
         <TableWrap>
           <thead className="bg-slate-900"><tr>
             <th className={thCls}>Empresa (TyreControl)</th><th className={thCls}>Cliente enlazado (Almacén)</th>
