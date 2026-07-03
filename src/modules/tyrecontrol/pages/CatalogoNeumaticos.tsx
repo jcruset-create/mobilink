@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { listarReferenciasNeumatico } from "../services/data";
+import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "../components/ui";
+import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 const EJE_LABELS: Record<EjeRecomendado, string> = {
   direccion: "Dirección", traccion: "Tracción", remolque: "Remolque", mixto: "Mixto",
 };
 
 export default function CatalogoNeumaticos() {
+  const { perfil } = useTyreAuth();
+  const puedeEditar = !!perfil?.es_superadmin;
   const [items, setItems] = useState<ReferenciaNeumatico[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -16,12 +19,34 @@ export default function CatalogoNeumaticos() {
   const [fMs, setFMs] = useState("");
   const [fPmsf, setFPmsf] = useState("");
   const [ficha, setFicha] = useState<ReferenciaNeumatico | null>(null);
+  const [subiendo, setSubiendo] = useState(false);
+  const [msgFoto, setMsgFoto] = useState("");
 
   async function cargar() {
     setLoading(true);
     try { setItems(await listarReferenciasNeumatico()); } finally { setLoading(false); }
   }
   useEffect(() => { void cargar(); }, []);
+
+  async function subirFoto(file: File | undefined) {
+    if (!file || !ficha?.modelo) return;
+    setSubiendo(true); setMsgFoto("");
+    try {
+      const url = await subirFotoModelo(ficha.modelo.id, file);
+      setFicha({ ...ficha, modelo: { ...ficha.modelo, foto_modelo_url: url } });
+      await cargar();
+    } catch (e: any) { setMsgFoto(e?.message || "Error al subir la imagen"); } finally { setSubiendo(false); }
+  }
+
+  async function quitarFoto() {
+    if (!ficha?.modelo) return;
+    setMsgFoto("");
+    try {
+      await eliminarFotoModelo(ficha.modelo.id);
+      setFicha({ ...ficha, modelo: { ...ficha.modelo, foto_modelo_url: null } });
+      await cargar();
+    } catch (e: any) { setMsgFoto(e?.message || "Error"); }
+  }
 
   const marcas = useMemo(() => Array.from(new Set(items.map((r) => r.modelo?.marca?.nombre).filter(Boolean))) as string[], [items]);
 
@@ -87,11 +112,25 @@ export default function CatalogoNeumaticos() {
       {ficha && (
         <Modal title={ficha.referencia_completa} onClose={() => setFicha(null)}>
           <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
-            {ficha.modelo?.foto_modelo_url ? (
-              <img src={ficha.modelo.foto_modelo_url} alt={ficha.modelo.nombre} className="h-32 w-32 rounded-lg bg-white object-contain" />
-            ) : (
-              <div className="flex h-32 w-32 items-center justify-center rounded-lg bg-slate-900 text-center text-[10px] text-slate-500">Imagen no disponible</div>
-            )}
+            <div>
+              {ficha.modelo?.foto_modelo_url ? (
+                <img src={ficha.modelo.foto_modelo_url} alt={ficha.modelo.nombre} className="h-32 w-32 rounded-lg bg-white object-contain" />
+              ) : (
+                <div className="flex h-32 w-32 items-center justify-center rounded-lg bg-slate-900 text-center text-[10px] text-slate-500">Imagen no disponible</div>
+              )}
+              {puedeEditar && (
+                <div className="mt-2 flex flex-col gap-1">
+                  <label className="cursor-pointer rounded border border-slate-600 px-2 py-1 text-center text-[10px] text-sky-300 hover:underline">
+                    {subiendo ? "Subiendo…" : ficha.modelo?.foto_modelo_url ? "Cambiar foto" : "Subir foto"}
+                    <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => subirFoto(e.target.files?.[0])} />
+                  </label>
+                  {ficha.modelo?.foto_modelo_url && (
+                    <button onClick={quitarFoto} className="rounded border border-rose-600 px-2 py-1 text-[10px] text-rose-300 hover:underline">Quitar foto</button>
+                  )}
+                  {msgFoto && <div className="text-[10px] text-red-300">{msgFoto}</div>}
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <Dato label="Marca" v={ficha.modelo?.marca?.nombre} />
               <Dato label="Modelo" v={ficha.modelo?.nombre} />

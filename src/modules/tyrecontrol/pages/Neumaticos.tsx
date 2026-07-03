@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas, listarIndicesCarga, listarIndicesVelocidad } from "../services/data";
-import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad } from "../types";
+import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas, listarIndicesCarga, listarIndicesVelocidad, listarReferenciasDeModelo } from "../services/data";
+import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, ReferenciaNeumatico } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
@@ -36,6 +36,8 @@ export default function Neumaticos() {
   const [catMedidas, setCatMedidas] = useState<MedidaNeumatico[]>([]);
   const [catIndicesCarga, setCatIndicesCarga] = useState<IndiceCarga[]>([]);
   const [catIndicesVelocidad, setCatIndicesVelocidad] = useState<IndiceVelocidad[]>([]);
+  const [catReferencias, setCatReferencias] = useState<ReferenciaNeumatico[]>([]);
+  const [referenciaSel, setReferenciaSel] = useState("");
 
   useEffect(() => {
     if (!modal) return;
@@ -51,6 +53,25 @@ export default function Neumaticos() {
     listarModelos(marcaId).then(setCatModelos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modal?.draft.marca, catMarcas]);
+
+  useEffect(() => {
+    setReferenciaSel("");
+    const modeloId = catModelos.find((m) => m.nombre === modal?.draft.modelo)?.id;
+    if (!modeloId) { setCatReferencias([]); return; }
+    listarReferenciasDeModelo(modeloId).then(setCatReferencias);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal?.draft.modelo, catModelos]);
+
+  function elegirReferencia(refId: string) {
+    setReferenciaSel(refId);
+    const ref = catReferencias.find((r) => r.id === refId);
+    if (!ref?.tyre_size) return;
+    set({
+      medida: ref.tyre_size.medida,
+      indice_carga: ref.tyre_size.indice_carga_doble ? `${ref.tyre_size.indice_carga_simple}/${ref.tyre_size.indice_carga_doble}` : ref.tyre_size.indice_carga_simple,
+      indice_velocidad: ref.tyre_size.codigo_velocidad,
+    });
+  }
 
   async function cargar() {
     setLoading(true);
@@ -191,6 +212,16 @@ export default function Neumaticos() {
                 {catModelos.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
               </select>
             </Field>
+            {catReferencias.length > 0 && (
+              <div className="sm:col-span-2">
+                <Field label="Referencia comercial del catálogo (opcional — autorrellena medida/carga/velocidad)">
+                  <select className={inputCls} value={referenciaSel} onChange={(e) => elegirReferencia(e.target.value)}>
+                    <option value="">Rellenar a mano…</option>
+                    {catReferencias.map((r) => <option key={r.id} value={r.id}>{r.tyre_size?.referencia_completa}</option>)}
+                  </select>
+                </Field>
+              </div>
+            )}
             <Field label="Medida">
               <select className={inputCls} value={modal.draft.medida ?? ""} onChange={(e) => set({ medida: e.target.value })}>
                 <option value="">Selecciona…</option>
