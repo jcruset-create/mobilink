@@ -4,7 +4,8 @@ import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
-type CamposTecnicos = "profundidad_dibujo_mm" | "llanta_recomendada" | "diametro_exterior_mm" | "revoluciones_km" | "carga_maxima_kg" | "presion_maxima_bar" | "peso_kg";
+type CamposTecnicos = "profundidad_dibujo_mm" | "llanta_recomendada" | "diametro_exterior_mm" | "revoluciones_km" | "carga_maxima_kg" | "presion_maxima_bar" | "peso_kg"
+  | "ply" | "ancho_seccion_mm" | "anchura_rodadura_mm" | "radio_carga_mm" | "etiqueta_rr" | "etiqueta_grip_humedo" | "etiqueta_ruido_db" | "etiqueta_ruido_clase";
 
 const EJE_LABELS: Record<EjeRecomendado, string> = {
   direccion: "Dirección", traccion: "Tracción", remolque: "Remolque", mixto: "Mixto",
@@ -26,6 +27,7 @@ export default function CatalogoNeumaticos() {
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState<Record<CamposTecnicos, string>>({
     profundidad_dibujo_mm: "", llanta_recomendada: "", diametro_exterior_mm: "", revoluciones_km: "", carga_maxima_kg: "", presion_maxima_bar: "", peso_kg: "",
+    ply: "", ancho_seccion_mm: "", anchura_rodadura_mm: "", radio_carga_mm: "", etiqueta_rr: "", etiqueta_grip_humedo: "", etiqueta_ruido_db: "", etiqueta_ruido_clase: "",
   });
   const [guardando, setGuardando] = useState(false);
   const [msgEdit, setMsgEdit] = useState("");
@@ -41,6 +43,14 @@ export default function CatalogoNeumaticos() {
       carga_maxima_kg: r.carga_maxima_kg != null ? String(r.carga_maxima_kg) : "",
       presion_maxima_bar: r.presion_maxima_bar != null ? String(r.presion_maxima_bar) : "",
       peso_kg: r.peso_kg != null ? String(r.peso_kg) : "",
+      ply: r.ply != null ? String(r.ply) : "",
+      ancho_seccion_mm: r.ancho_seccion_mm != null ? String(r.ancho_seccion_mm) : "",
+      anchura_rodadura_mm: r.anchura_rodadura_mm != null ? String(r.anchura_rodadura_mm) : "",
+      radio_carga_mm: r.radio_carga_mm != null ? String(r.radio_carga_mm) : "",
+      etiqueta_rr: r.etiqueta_rr ?? "",
+      etiqueta_grip_humedo: r.etiqueta_grip_humedo ?? "",
+      etiqueta_ruido_db: r.etiqueta_ruido_db != null ? String(r.etiqueta_ruido_db) : "",
+      etiqueta_ruido_clase: r.etiqueta_ruido_clase ?? "",
     });
     setMsgEdit("");
     setEditando(true);
@@ -59,6 +69,14 @@ export default function CatalogoNeumaticos() {
         carga_maxima_kg: num(form.carga_maxima_kg),
         presion_maxima_bar: num(form.presion_maxima_bar),
         peso_kg: num(form.peso_kg),
+        ply: num(form.ply),
+        ancho_seccion_mm: num(form.ancho_seccion_mm),
+        anchura_rodadura_mm: num(form.anchura_rodadura_mm),
+        radio_carga_mm: num(form.radio_carga_mm),
+        etiqueta_rr: form.etiqueta_rr.trim() === "" ? null : form.etiqueta_rr.trim().toUpperCase(),
+        etiqueta_grip_humedo: form.etiqueta_grip_humedo.trim() === "" ? null : form.etiqueta_grip_humedo.trim().toUpperCase(),
+        etiqueta_ruido_db: num(form.etiqueta_ruido_db),
+        etiqueta_ruido_clase: form.etiqueta_ruido_clase.trim() === "" ? null : form.etiqueta_ruido_clase.trim().toUpperCase(),
       };
       await actualizarReferenciaNeumatico(ficha.id, cambios);
       setFicha({ ...ficha, ...cambios });
@@ -208,6 +226,14 @@ export default function CatalogoNeumaticos() {
               <Dato label="Carga máxima" v={ficha.carga_maxima_kg != null ? `${ficha.carga_maxima_kg} kg` : null} />
               <Dato label="Presión máxima" v={ficha.presion_maxima_bar != null ? `${ficha.presion_maxima_bar} bar` : null} />
               <Dato label="Peso" v={ficha.peso_kg != null ? `${ficha.peso_kg} kg` : null} />
+              <Dato label="Ply" v={ficha.ply} />
+              <Dato label="Ancho sección" v={ficha.ancho_seccion_mm != null ? `${ficha.ancho_seccion_mm} mm` : null} />
+              <Dato label="Anchura rodadura" v={ficha.anchura_rodadura_mm != null ? `${ficha.anchura_rodadura_mm} mm` : null} />
+              <Dato label="Radio de carga" v={ficha.radio_carga_mm != null ? `${ficha.radio_carga_mm} mm` : null} />
+              <Dato label="Resistencia rodadura (UE)" v={ficha.etiqueta_rr} />
+              <Dato label="Agarre en mojado (UE)" v={ficha.etiqueta_grip_humedo} />
+              <Dato label="Ruido exterior (UE)" v={ficha.etiqueta_ruido_db != null ? `${ficha.etiqueta_ruido_db} dB` : null} />
+              <Dato label="Clase de ruido (UE)" v={ficha.etiqueta_ruido_clase} />
             </div>
           </div>
 
@@ -239,6 +265,14 @@ export default function CatalogoNeumaticos() {
                 <Campo label="Carga máxima (kg)" value={form.carga_maxima_kg} onChange={(v) => setForm({ ...form, carga_maxima_kg: v })} />
                 <Campo label="Presión máxima (bar)" value={form.presion_maxima_bar} onChange={(v) => setForm({ ...form, presion_maxima_bar: v })} />
                 <Campo label="Peso (kg)" value={form.peso_kg} onChange={(v) => setForm({ ...form, peso_kg: v })} />
+                <Campo label="Ply" value={form.ply} onChange={(v) => setForm({ ...form, ply: v })} />
+                <Campo label="Ancho sección (mm)" value={form.ancho_seccion_mm} onChange={(v) => setForm({ ...form, ancho_seccion_mm: v })} />
+                <Campo label="Anchura rodadura (mm)" value={form.anchura_rodadura_mm} onChange={(v) => setForm({ ...form, anchura_rodadura_mm: v })} />
+                <Campo label="Radio de carga (mm)" value={form.radio_carga_mm} onChange={(v) => setForm({ ...form, radio_carga_mm: v })} />
+                <Campo label="Resistencia rodadura UE (A-G)" value={form.etiqueta_rr} onChange={(v) => setForm({ ...form, etiqueta_rr: v })} tipo="text" />
+                <Campo label="Agarre mojado UE (A-G)" value={form.etiqueta_grip_humedo} onChange={(v) => setForm({ ...form, etiqueta_grip_humedo: v })} tipo="text" />
+                <Campo label="Ruido exterior UE (dB)" value={form.etiqueta_ruido_db} onChange={(v) => setForm({ ...form, etiqueta_ruido_db: v })} />
+                <Campo label="Clase de ruido UE" value={form.etiqueta_ruido_clase} onChange={(v) => setForm({ ...form, etiqueta_ruido_clase: v })} tipo="text" />
               </div>
               {msgEdit && <div className="mt-2 text-xs text-red-300">{msgEdit}</div>}
               <div className="mt-3 flex justify-end gap-2">

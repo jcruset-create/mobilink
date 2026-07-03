@@ -672,7 +672,8 @@ export async function listarReferenciasDeModelo(modeloId: string): Promise<Refer
 }
 
 export async function actualizarReferenciaNeumatico(id: string, cambios: Partial<Pick<ReferenciaNeumatico,
-  "profundidad_dibujo_mm" | "llanta_recomendada" | "diametro_exterior_mm" | "revoluciones_km" | "carga_maxima_kg" | "presion_maxima_bar" | "peso_kg"
+  "profundidad_dibujo_mm" | "llanta_recomendada" | "diametro_exterior_mm" | "revoluciones_km" | "carga_maxima_kg" | "presion_maxima_bar" | "peso_kg" |
+  "ply" | "ancho_seccion_mm" | "anchura_rodadura_mm" | "radio_carga_mm" | "etiqueta_rr" | "etiqueta_grip_humedo" | "etiqueta_ruido_db" | "etiqueta_ruido_clase"
 >>): Promise<void> {
   const { error } = await supabase.from("tc_referencias_neumatico").update(cambios).eq("id", id);
   if (error) throw new Error(error.message);

@@ -390,6 +390,8 @@ export interface ReferenciaNeumatico {
   id: string; modelo_id: string; tyre_size_id: string; referencia_completa: string; activo: boolean;
   profundidad_dibujo_mm?: number | null; llanta_recomendada?: string | null; diametro_exterior_mm?: number | null;
   revoluciones_km?: number | null; carga_maxima_kg?: number | null; presion_maxima_bar?: number | null; peso_kg?: number | null;
+  ply?: number | null; ancho_seccion_mm?: number | null; anchura_rodadura_mm?: number | null; radio_carga_mm?: number | null;
+  etiqueta_rr?: string | null; etiqueta_grip_humedo?: string | null; etiqueta_ruido_db?: number | null; etiqueta_ruido_clase?: string | null;
   modelo?: ModeloNeumatico & { marca?: MarcaNeumatico | null } | null;
   tyre_size?: TyreSize | null;
 }
