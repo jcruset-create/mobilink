@@ -24,6 +24,7 @@ export default function CatalogoNeumaticos() {
   const [ficha, setFicha] = useState<ReferenciaNeumatico | null>(null);
   const [subiendo, setSubiendo] = useState(false);
   const [msgFoto, setMsgFoto] = useState("");
+  const [fotoAmpliada, setFotoAmpliada] = useState<string | null>(null);
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState<Record<CamposTecnicos, string>>({
     profundidad_dibujo_mm: "", llanta_recomendada: "", diametro_exterior_mm: "", revoluciones_km: "", carga_maxima_kg: "", presion_maxima_bar: "", peso_kg: "",
@@ -188,7 +189,12 @@ export default function CatalogoNeumaticos() {
           <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
             <div>
               {ficha.modelo?.foto_modelo_url ? (
-                <img src={ficha.modelo.foto_modelo_url} alt={ficha.modelo.nombre} className="h-32 w-32 rounded-lg bg-white object-contain" />
+                <img
+                  src={ficha.modelo.foto_modelo_url}
+                  alt={ficha.modelo.nombre}
+                  onClick={() => setFotoAmpliada(ficha.modelo!.foto_modelo_url!)}
+                  className="h-32 w-32 cursor-zoom-in rounded-lg bg-white object-contain"
+                />
               ) : (
                 <div className="flex h-32 w-32 items-center justify-center rounded-lg bg-slate-900 text-center text-[10px] text-slate-500">Imagen no disponible</div>
               )}
@@ -284,6 +290,15 @@ export default function CatalogoNeumaticos() {
             </div>
           )}
         </Modal>
+      )}
+
+      {fotoAmpliada && (
+        <div
+          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/80 p-6"
+          onClick={() => setFotoAmpliada(null)}
+        >
+          <img src={fotoAmpliada} alt="" className="max-h-full max-w-full rounded-lg bg-white object-contain" />
+        </div>
       )}
     </div>
   );
