@@ -3,9 +3,11 @@ import { useNavigate } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, montarFueraAlmacen,
+  listarMarcas, listarModelos, listarReferenciasDeModelo,
 } from "../services/data";
 import type {
   Empresa, Vehiculo, PosicionVehiculo, MontajeActual, Neumatico, MotivoDesmontaje, DestinoDesmontaje,
+  MarcaNeumatico, ModeloNeumatico, ReferenciaNeumatico,
 } from "../types";
 import { MOTIVO_DESMONTAJE_LABELS } from "../types";
 import { Modal, inputCls, Field } from "../components/ui";
@@ -32,6 +34,12 @@ export default function MontajesActuales() {
   const [fForm, setFForm] = useState({
     marca: "", modelo: "", medida: "", indiceCarga: "", indiceVelocidad: "", profundidadActual: "", motivo: "",
   });
+  const [catMarcas, setCatMarcas] = useState<MarcaNeumatico[]>([]);
+  const [catModelos, setCatModelos] = useState<ModeloNeumatico[]>([]);
+  const [catReferencias, setCatReferencias] = useState<ReferenciaNeumatico[]>([]);
+  const [fMarcaId, setFMarcaId] = useState("");
+  const [fModeloId, setFModeloId] = useState("");
+  const [fReferenciaId, setFReferenciaId] = useState("");
   const [desmontarModal, setDesmontarModal] = useState<null | { montaje: MontajeActual }>(null);
   const [dForm, setDForm] = useState({ km: "", motivo: "desgaste" as MotivoDesmontaje, destino: "almacen" as DestinoDesmontaje, obs: "" });
 
@@ -66,9 +74,36 @@ export default function MontajesActuales() {
   async function abrirMontar(posicion: PosicionVehiculo) {
     setMsg(""); setMForm({ neumaticoId: "", km: "", fecha: new Date().toISOString().slice(0, 10), obs: "" });
     setFForm({ marca: "", modelo: "", medida: "", indiceCarga: "", indiceVelocidad: "", profundidadActual: "", motivo: "" });
+    setFMarcaId(""); setFModeloId(""); setFReferenciaId(""); setCatModelos([]); setCatReferencias([]);
     setOrigenMontaje("almacen");
-    setDisponibles(await listarNeumaticosDisponibles(empresaId));
+    const [disp, marcas] = await Promise.all([listarNeumaticosDisponibles(empresaId), listarMarcas()]);
+    setDisponibles(disp); setCatMarcas(marcas);
     setMontarModal({ posicion });
+  }
+
+  async function elegirMarcaFueraAlmacen(marcaId: string) {
+    setFMarcaId(marcaId); setFModeloId(""); setFReferenciaId(""); setCatReferencias([]);
+    setCatModelos(marcaId ? await listarModelos(marcaId) : []);
+  }
+
+  async function elegirModeloFueraAlmacen(modeloId: string) {
+    setFModeloId(modeloId); setFReferenciaId("");
+    setCatReferencias(modeloId ? await listarReferenciasDeModelo(modeloId) : []);
+  }
+
+  function elegirReferenciaFueraAlmacen(referenciaId: string) {
+    setFReferenciaId(referenciaId);
+    const ref = catReferencias.find((r) => r.id === referenciaId);
+    const marca = catMarcas.find((m) => m.id === fMarcaId);
+    const modelo = catModelos.find((m) => m.id === fModeloId);
+    if (!ref) return;
+    setFForm({
+      ...fForm,
+      marca: marca?.nombre || "", modelo: modelo?.nombre || "",
+      medida: ref.tyre_size?.medida || "", indiceCarga: ref.tyre_size?.indice_carga_doble
+        ? `${ref.tyre_size.indice_carga_simple}/${ref.tyre_size.indice_carga_doble}` : (ref.tyre_size?.indice_carga_simple || ""),
+      indiceVelocidad: ref.tyre_size?.codigo_velocidad || "",
+    });
   }
 
   async function confirmarMontar() {
@@ -204,14 +239,26 @@ export default function MontajesActuales() {
                   Para dar de alta el neumático que ya lleva montado el vehículo, sin descontarlo del almacén.
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <Field label="Marca"><input className={inputCls} value={fForm.marca} onChange={(e) => setFForm({ ...fForm, marca: e.target.value })} /></Field>
-                  <Field label="Modelo"><input className={inputCls} value={fForm.modelo} onChange={(e) => setFForm({ ...fForm, modelo: e.target.value })} /></Field>
+                  <Field label="Marca (catálogo)">
+                    <select className={inputCls} value={fMarcaId} onChange={(e) => elegirMarcaFueraAlmacen(e.target.value)}>
+                      <option value="">Selecciona…</option>
+                      {catMarcas.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Modelo (catálogo)">
+                    <select className={inputCls} value={fModeloId} onChange={(e) => elegirModeloFueraAlmacen(e.target.value)} disabled={!fMarcaId}>
+                      <option value="">Selecciona…</option>
+                      {catModelos.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+                    </select>
+                  </Field>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <Field label="Medida *"><input className={inputCls} value={fForm.medida} onChange={(e) => setFForm({ ...fForm, medida: e.target.value })} /></Field>
-                  <Field label="Índice carga"><input className={inputCls} value={fForm.indiceCarga} onChange={(e) => setFForm({ ...fForm, indiceCarga: e.target.value })} /></Field>
-                  <Field label="Cód. velocidad"><input className={inputCls} value={fForm.indiceVelocidad} onChange={(e) => setFForm({ ...fForm, indiceVelocidad: e.target.value })} /></Field>
-                </div>
+                <Field label="Medida (catálogo) *">
+                  <select className={inputCls} value={fReferenciaId} onChange={(e) => elegirReferenciaFueraAlmacen(e.target.value)} disabled={!fModeloId}>
+                    <option value="">Selecciona…</option>
+                    {catReferencias.map((r) => <option key={r.id} value={r.id}>{r.tyre_size?.referencia_completa || r.referencia_completa}</option>)}
+                  </select>
+                  {fModeloId && catReferencias.length === 0 && <div className="mt-1 text-[11px] text-amber-300">Este modelo no tiene medidas en el catálogo.</div>}
+                </Field>
                 <Field label="Profundidad actual (mm)">
                   <input type="number" step="0.1" className={inputCls} value={fForm.profundidadActual} onChange={(e) => setFForm({ ...fForm, profundidadActual: e.target.value })} />
                 </Field>
