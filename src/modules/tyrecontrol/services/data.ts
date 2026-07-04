@@ -442,6 +442,11 @@ export async function guardarDetalleRevision(input: Partial<RevisionDetalle> & {
   if (error) throw new Error(error.message);
 }
 
+export async function eliminarRevision(id: string): Promise<void> {
+  const { error } = await supabase.from("revisiones_vehiculo").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 export async function listarDetalleRevision(revisionId: string): Promise<RevisionDetalle[]> {
   const { data, error } = await supabase.from("revisiones_neumaticos_detalle")
     .select("*, neumatico:tc_neumaticos(*), posicion:tc_posiciones_vehiculo(*)").eq("revision_id", revisionId);

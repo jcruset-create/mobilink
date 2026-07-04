@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
-  listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
+  listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
 } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
 import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
@@ -53,6 +53,26 @@ export default function RevisionVehiculo() {
   async function verFichaRevision(r: RevisionVehiculoT) {
     setFichaRevision(r); setCargandoFicha(true);
     try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
+  }
+
+  async function editarBorrador(r: RevisionVehiculoT) {
+    setMsg("");
+    const det = await listarDetalleRevision(r.id);
+    const mapa: Record<string, Detalle> = {};
+    for (const d of det) mapa[d.posicion_id] = d;
+    setDetalles(mapa);
+    setKmVehiculo(r.km_vehiculo != null ? String(r.km_vehiculo) : "");
+    setRevision(r);
+  }
+
+  async function borrarBorrador(r: RevisionVehiculoT) {
+    if (!window.confirm(`¿Eliminar el borrador de revisión del ${r.fecha_revision}? Esta acción no se puede deshacer.`)) return;
+    setSaving(true); setMsg("");
+    try {
+      await eliminarRevision(r.id);
+      setHistorialRevisiones(await listarRevisiones(vehiculoId));
+      setMsg("✔ Borrador eliminado");
+    } catch (e: any) { setMsg(e?.message || "Error al eliminar"); } finally { setSaving(false); }
   }
 
   useEffect(() => {
@@ -221,6 +241,12 @@ export default function RevisionVehiculo() {
                     <div className="flex items-center gap-3">
                       <span className="text-slate-500">{r.estado_revision}</span>
                       <button onClick={() => verFichaRevision(r)} className="text-sky-300 hover:underline">Ver ficha</button>
+                      {r.estado_revision === "borrador" && (
+                        <>
+                          <button onClick={() => editarBorrador(r)} className="text-amber-300 hover:underline">Editar</button>
+                          <button onClick={() => borrarBorrador(r)} disabled={saving} className="text-rose-400 hover:underline disabled:opacity-50">Eliminar</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
