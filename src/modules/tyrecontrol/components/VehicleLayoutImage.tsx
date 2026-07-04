@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico,
-  actualizarImagenChasis, guardarCoordenadasPosicion, listarUltimasMedicionesVehiculo,
+  actualizarImagenChasis, guardarCoordenadasPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
 } from "../services/data";
 import { inputCls } from "./ui";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
@@ -64,11 +64,16 @@ export default function VehicleLayoutImage({
   const [msg, setMsg] = useState("");
   const [aspecto, setAspecto] = useState(16 / 9);
   const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
+  const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!vehiculoId) return;
     listarUltimasMedicionesVehiculo(vehiculoId).then(setMedicionesActuales).catch(() => setMedicionesActuales({}));
   }, [vehiculoId, montajes]);
+
+  useEffect(() => {
+    listarPresionesCatalogoPorModelo().then(setPresionesCatalogo).catch(() => setPresionesCatalogo({}));
+  }, []);
 
   async function onArchivoSeleccionado(file: File | undefined) {
     if (!file || !tipo) return;
@@ -296,7 +301,8 @@ export default function VehicleLayoutImage({
                   const neu = m!.neumatico!;
                   const medicion = medicionesActuales[neu.id];
                   const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
-                  const presion = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? null;
+                  const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
+                  const presion = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
                   const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("");
                   return (
                     <span className="pointer-events-none px-1 text-center text-[9px] leading-tight text-slate-100">

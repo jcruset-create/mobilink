@@ -246,7 +246,8 @@ export async function listarMontajesVehiculo(vehiculoId: string): Promise<Montaj
 // dato de alta, que solo vale como referencia inicial).
 export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promise<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>> {
   const { data: revs, error: e1 } = await supabase.from("revisiones_vehiculo")
-    .select("id").eq("vehiculo_id", vehiculoId).eq("estado_revision", "completada").order("fecha_revision", { ascending: false });
+    .select("id").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
+    .order("fecha_revision", { ascending: false }).order("created_at", { ascending: false });
   if (e1) throw new Error(e1.message);
   const ids = (revs ?? []).map((r) => r.id);
   if (ids.length === 0) return {};
@@ -265,6 +266,25 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
     if (actual.profundidad_mm == null && d.profundidad_mm != null) actual.profundidad_mm = d.profundidad_mm;
     if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
     mapa[d.neumatico_id] = actual;
+  }
+  return mapa;
+}
+
+// Presión recomendada del catálogo por marca+modelo+medida, para neumáticos
+// que no están enlazados a un producto de almacén (ej. dados de alta como
+// stock manual o "fuera de almacén") pero sí corresponden a un modelo del
+// catálogo de TyreControl.
+export async function listarPresionesCatalogoPorModelo(): Promise<Record<string, number>> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico")
+    .select("presion_maxima_bar, modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)")
+    .eq("activo", true).not("presion_maxima_bar", "is", null);
+  if (error) throw new Error(error.message);
+  const mapa: Record<string, number> = {};
+  for (const r of ((data ?? []) as any[])) {
+    const marca = r.modelo?.marca?.nombre; const modelo = r.modelo?.nombre; const medida = r.tyre_size?.medida;
+    if (!marca || !modelo || !medida || r.presion_maxima_bar == null) continue;
+    const clave = `${marca}|${modelo}|${medida}`.toLowerCase().replace(/\s+/g, "");
+    if (mapa[clave] == null) mapa[clave] = r.presion_maxima_bar;
   }
   return mapa;
 }
