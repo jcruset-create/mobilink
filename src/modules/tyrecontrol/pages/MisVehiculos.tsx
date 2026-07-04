@@ -17,24 +17,25 @@ export default function MisVehiculos() {
 
   const visibles = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return items.filter((v) => !s || v.matricula.toLowerCase().includes(s));
+    return items.filter((v) => !s || v.matricula.toLowerCase().includes(s) || (v.numero_unidad ?? "").toLowerCase().includes(s));
   }, [items, q]);
 
   return (
     <div>
       <h1 className="mb-3 text-lg font-black">Mis vehículos</h1>
-      <input className={`${inputCls} mb-3 max-w-xs`} placeholder="Buscar matrícula…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input className={`${inputCls} mb-3 max-w-xs`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Matrícula</th><th className={thCls}>Delegación</th><th className={thCls}>Marca</th>
+          <th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Delegación</th><th className={thCls}>Marca</th>
           <th className={thCls}>Modelo</th><th className={thCls}>Tipo</th><th className={thCls}>Km</th><th className={thCls}>Estado</th>
         </tr></thead>
         <tbody>
-          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Cargando…</td></tr>
-          : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Sin vehículos.</td></tr>
+          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Cargando…</td></tr>
+          : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Sin vehículos.</td></tr>
           : visibles.map((v) => (
             <tr key={v.id} className="border-t border-slate-700/60">
               <td className={tdCls + " font-bold"}>{v.matricula}</td>
+              <td className={tdCls + " text-slate-400"}>{v.numero_unidad ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.delegacion?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.marca ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.modelo ?? "—"}</td>

@@ -8,7 +8,7 @@ import { ORIGEN_KM_LABELS } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
 const VACIO: VehiculoInput = {
-  empresa_id: "", delegacion_id: null, tipo_vehiculo_id: null, matricula: "",
+  empresa_id: "", delegacion_id: null, tipo_vehiculo_id: null, matricula: "", numero_unidad: "",
   marca: "", modelo: "", bastidor: "", fecha_matriculacion: null, webfleet_vehicle_id: "",
   km_actual: 0, origen_km: "manual", activo: true,
 };
@@ -50,7 +50,7 @@ export default function Vehiculos() {
       if (fTipo && v.tipo_vehiculo_id !== fTipo) return false;
       if (fEstado === "activos" && !v.activo) return false;
       if (fEstado === "inactivos" && v.activo) return false;
-      if (s && !v.matricula.toLowerCase().includes(s)) return false;
+      if (s && !v.matricula.toLowerCase().includes(s) && !(v.numero_unidad ?? "").toLowerCase().includes(s)) return false;
       return true;
     });
   }, [items, q, fEmpresa, fDele, fTipo, fEstado]);
@@ -87,7 +87,7 @@ export default function Vehiculos() {
 
       {/* Filtros */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input className={`${inputCls} max-w-[200px]`} placeholder="Buscar matrícula…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className={`${inputCls} max-w-[200px]`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
         <select className={`${inputCls} w-auto`} value={fEmpresa} onChange={(e) => { setFEmpresa(e.target.value); setFDele(""); }}>
           <option value="">Todas las empresas</option>
           {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
@@ -108,16 +108,17 @@ export default function Vehiculos() {
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Matrícula</th><th className={thCls}>Empresa</th><th className={thCls}>Delegación</th>
+          <th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Empresa</th><th className={thCls}>Delegación</th>
           <th className={thCls}>Marca</th><th className={thCls}>Modelo</th><th className={thCls}>Tipo</th>
           <th className={thCls}>Km</th><th className={thCls}>Origen km</th><th className={thCls}>Estado</th><th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
-          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Cargando…</td></tr>
-          : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Sin vehículos.</td></tr>
+          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
+          : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin vehículos.</td></tr>
           : visibles.map((v) => (
             <tr key={v.id} className="border-t border-slate-700/60">
               <td className={tdCls + " font-bold"}>{v.matricula}</td>
+              <td className={tdCls + " text-slate-400"}>{v.numero_unidad ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.empresa?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.delegacion?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.marca ?? "—"}</td>
@@ -158,6 +159,7 @@ export default function Vehiculos() {
               </select>
             </Field>
             <TextField label="Matrícula *" value={modal.draft.matricula ?? ""} onChange={(v) => set({ matricula: v })} />
+            <TextField label="Nº de unidad (flota)" value={modal.draft.numero_unidad ?? ""} onChange={(v) => set({ numero_unidad: v })} />
             <Field label="Tipo de vehículo">
               <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => set({ tipo_vehiculo_id: e.target.value || null })}>
                 <option value="">—</option>

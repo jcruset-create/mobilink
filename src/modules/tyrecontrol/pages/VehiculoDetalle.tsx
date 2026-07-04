@@ -34,7 +34,7 @@ export default function VehiculoDetalle() {
     <div>
       <div className="mb-3 flex items-center gap-2">
         <button onClick={() => navigate("/tyrecontrol/vehiculos")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Vehículos</button>
-        <h1 className="text-lg font-black">{v.matricula}</h1>
+        <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
       </div>
 
@@ -44,6 +44,7 @@ export default function VehiculoDetalle() {
           <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
           <div className="grid gap-2 sm:grid-cols-2">
             {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
+            {dato("Nº de unidad", v.numero_unidad)}
             {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
             {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
             {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}

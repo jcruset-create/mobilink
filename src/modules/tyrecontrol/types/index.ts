@@ -125,6 +125,7 @@ export interface Vehiculo {
   delegacion_id?: string | null;
   tipo_vehiculo_id?: string | null;
   matricula: string;
+  numero_unidad?: string | null;
   marca?: string | null;
   modelo?: string | null;
   bastidor?: string | null;
