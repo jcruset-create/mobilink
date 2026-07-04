@@ -274,7 +274,7 @@ export default function VehicleLayoutImage({
                 className="absolute flex flex-col items-center justify-center rounded-lg border-2 pointer-events-auto"
                 style={{
                   left: `${c.x}%`, top: `${c.y}%`, width: `${c.w}%`, height: `${c.h}%`,
-                  minWidth: ocupado && !calibrando ? "84px" : undefined, minHeight: ocupado && !calibrando ? "64px" : undefined,
+                  minWidth: ocupado && !calibrando ? "108px" : undefined, minHeight: ocupado && !calibrando ? "84px" : undefined,
                   borderColor: esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : ocupado ? "#22c55e" : "#64748b",
                   borderStyle: ocupado || calibrando ? "solid" : "dashed",
                   background: esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
@@ -297,10 +297,12 @@ export default function VehicleLayoutImage({
                   const medicion = medicionesActuales[neu.id];
                   const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
                   const presion = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? null;
+                  const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("");
                   return (
                     <span className="pointer-events-none px-1 text-center text-[9px] leading-tight text-slate-100">
                       <div className="font-bold">{neu.marca ?? "—"}</div>
-                      <div>{neu.medida ?? "—"}</div>
+                      <div>{neu.modelo ?? "—"}</div>
+                      <div>{neu.medida ?? "—"}{indices ? ` ${indices}` : ""}</div>
                       <div className="text-slate-300">
                         {profundidad != null ? `${profundidad}mm` : "— mm"}
                         {" · "}
