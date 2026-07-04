@@ -241,6 +241,34 @@ export async function listarMontajesVehiculo(vehiculoId: string): Promise<Montaj
   return (data ?? []) as unknown as MontajeActual[];
 }
 
+// Última medición de profundidad/presión registrada en una revisión completada
+// para cada neumático de este vehículo (para mostrarla en el plano en vez del
+// dato de alta, que solo vale como referencia inicial).
+export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promise<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>> {
+  const { data: revs, error: e1 } = await supabase.from("revisiones_vehiculo")
+    .select("id").eq("vehiculo_id", vehiculoId).eq("estado_revision", "completada").order("fecha_revision", { ascending: false });
+  if (e1) throw new Error(e1.message);
+  const ids = (revs ?? []).map((r) => r.id);
+  if (ids.length === 0) return {};
+
+  const { data: dets, error: e2 } = await supabase.from("revisiones_neumaticos_detalle")
+    .select("neumatico_id, profundidad_mm, presion_bar, revision_id").in("revision_id", ids).not("neumatico_id", "is", null);
+  if (e2) throw new Error(e2.message);
+
+  const ordenRevision = new Map(ids.map((id, i) => [id, i]));
+  const detsOrdenados = [...(dets ?? [])].sort((a, b) => (ordenRevision.get(a.revision_id) ?? 0) - (ordenRevision.get(b.revision_id) ?? 0));
+
+  const mapa: Record<string, { profundidad_mm: number | null; presion_bar: number | null }> = {};
+  for (const d of detsOrdenados) {
+    if (!d.neumatico_id) continue;
+    const actual = mapa[d.neumatico_id] ?? { profundidad_mm: null, presion_bar: null };
+    if (actual.profundidad_mm == null && d.profundidad_mm != null) actual.profundidad_mm = d.profundidad_mm;
+    if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
+    mapa[d.neumatico_id] = actual;
+  }
+  return mapa;
+}
+
 export async function montarNeumatico(params: {
   vehiculoId: string; neumaticoId: string; posicionId: string; km?: number | null; fecha?: string | null; observaciones?: string | null;
   forzarMedida?: boolean;

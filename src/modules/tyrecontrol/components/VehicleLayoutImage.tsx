@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico,
-  actualizarImagenChasis, guardarCoordenadasPosicion,
+  actualizarImagenChasis, guardarCoordenadasPosicion, listarUltimasMedicionesVehiculo,
 } from "../services/data";
 import { inputCls } from "./ui";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
@@ -63,6 +63,12 @@ export default function VehicleLayoutImage({
   const [subiendo, setSubiendo] = useState(false);
   const [msg, setMsg] = useState("");
   const [aspecto, setAspecto] = useState(16 / 9);
+  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
+
+  useEffect(() => {
+    if (!vehiculoId) return;
+    listarUltimasMedicionesVehiculo(vehiculoId).then(setMedicionesActuales).catch(() => setMedicionesActuales({}));
+  }, [vehiculoId, montajes]);
 
   async function onArchivoSeleccionado(file: File | undefined) {
     if (!file || !tipo) return;
@@ -286,17 +292,23 @@ export default function VehicleLayoutImage({
               >
                 {calibrando ? (
                   <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">{p.codigo_posicion}</span>
-                ) : ocupado ? (
-                  <span className="pointer-events-none px-1 text-center text-[9px] leading-tight text-slate-100">
-                    <div className="font-bold">{m!.neumatico!.marca ?? "—"}</div>
-                    <div>{m!.neumatico!.medida ?? "—"}</div>
-                    <div className="text-slate-300">
-                      {m!.neumatico!.profundidad_actual_mm != null ? `${m!.neumatico!.profundidad_actual_mm}mm` : "— mm"}
-                      {" · "}
-                      {m!.neumatico!.producto_almacen?.referencia?.presion_maxima_bar != null ? `${m!.neumatico!.producto_almacen.referencia.presion_maxima_bar}bar` : "— bar"}
-                    </div>
-                  </span>
-                ) : (
+                ) : ocupado ? (() => {
+                  const neu = m!.neumatico!;
+                  const medicion = medicionesActuales[neu.id];
+                  const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
+                  const presion = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? null;
+                  return (
+                    <span className="pointer-events-none px-1 text-center text-[9px] leading-tight text-slate-100">
+                      <div className="font-bold">{neu.marca ?? "—"}</div>
+                      <div>{neu.medida ?? "—"}</div>
+                      <div className="text-slate-300">
+                        {profundidad != null ? `${profundidad}mm` : "— mm"}
+                        {" · "}
+                        {presion != null ? `${presion}bar` : "— bar"}
+                      </div>
+                    </span>
+                  );
+                })() : (
                   <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">Libre</span>
                 )}
               </div>
