@@ -15,6 +15,8 @@ export default function RevisionVehiculo() {
 
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
+  const [todosVehiculos, setTodosVehiculos] = useState<Vehiculo[]>([]);
+  const [busqueda, setBusqueda] = useState("");
   const [empresaId, setEmpresaId] = useState(esCliente ? (perfil?.empresa_id ?? "") : "");
   const [vehiculoId, setVehiculoId] = useState("");
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
@@ -28,19 +30,33 @@ export default function RevisionVehiculo() {
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    if (!esCliente) listarEmpresas().then(setEmpresas);
+    if (!esCliente) { listarEmpresas().then(setEmpresas); listarVehiculos().then(setTodosVehiculos); }
     if (esCliente && perfil?.empresa_id) cargarVehiculos(perfil.empresa_id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const coincidencias = useMemo(() => {
+    const s = busqueda.trim().toLowerCase();
+    if (!s) return [];
+    return todosVehiculos.filter((v) => v.matricula.toLowerCase().includes(s) || (v.numero_unidad ?? "").toLowerCase().includes(s)).slice(0, 8);
+  }, [busqueda, todosVehiculos]);
+
+  async function elegirDesdeBusqueda(v: Vehiculo) {
+    setBusqueda("");
+    setEmpresaId(v.empresa_id);
+    setVehiculoId(""); setPosiciones([]); setMontajes([]); setRevision(null); setDetalles({});
+    setVehiculos(await listarVehiculos({ empresaId: v.empresa_id }));
+    await cargarVehiculo(v.id, v);
+  }
 
   async function cargarVehiculos(emp: string) {
     setVehiculoId(""); setPosiciones([]); setMontajes([]); setRevision(null); setDetalles({});
     setVehiculos(emp ? await listarVehiculos({ empresaId: emp }) : []);
   }
 
-  async function cargarVehiculo(vid: string) {
+  async function cargarVehiculo(vid: string, vehOverride?: Vehiculo) {
     setVehiculoId(vid); setRevision(null); setDetalles({});
-    const veh = vehiculos.find((v) => v.id === vid);
+    const veh = vehOverride ?? vehiculos.find((v) => v.id === vid);
     if (!veh) { setPosiciones([]); setMontajes([]); return; }
     setKmVehiculo(veh.km_actual != null ? String(veh.km_actual) : "");
     const [pos, mon, hist] = await Promise.all([
@@ -123,7 +139,31 @@ export default function RevisionVehiculo() {
       <h1 className="mb-3 text-lg font-black">Revisión de vehículo</h1>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
 
-      <div className="mb-3 flex flex-wrap gap-2">
+      <div className="mb-3 flex flex-wrap items-start gap-2">
+        {!esCliente && (
+          <div className="relative">
+            <input
+              className={`${inputCls} w-56`}
+              placeholder="Buscar matrícula o nº unidad…"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+            />
+            {coincidencias.length > 0 && (
+              <div className="absolute z-10 mt-1 w-64 rounded-lg border border-slate-700 bg-slate-800 shadow-lg">
+                {coincidencias.map((v) => (
+                  <button
+                    key={v.id}
+                    onClick={() => elegirDesdeBusqueda(v)}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-[12px] text-slate-200 hover:bg-slate-700"
+                  >
+                    <span className="font-bold">{v.matricula}</span>
+                    <span className="text-slate-400">{v.numero_unidad ? `Unidad ${v.numero_unidad}` : ""} · {v.empresa?.nombre ?? ""}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {!esCliente && (
           <select className={`${inputCls} w-auto`} value={empresaId} onChange={(e) => { setEmpresaId(e.target.value); cargarVehiculos(e.target.value); }}>
             <option value="">Selecciona empresa…</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
@@ -131,7 +171,7 @@ export default function RevisionVehiculo() {
         )}
         <select className={`${inputCls} w-auto`} value={vehiculoId} onChange={(e) => cargarVehiculo(e.target.value)} disabled={!empresaId}>
           <option value="">Selecciona vehículo…</option>
-          {vehiculos.map((v) => <option key={v.id} value={v.id}>{v.matricula}</option>)}
+          {vehiculos.map((v) => <option key={v.id} value={v.id}>{v.matricula}{v.numero_unidad ? ` · ${v.numero_unidad}` : ""}</option>)}
         </select>
       </div>
 
