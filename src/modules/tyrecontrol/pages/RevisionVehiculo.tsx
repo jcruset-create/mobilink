@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
-  crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones,
+  crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
 } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
-import { inputCls, Field } from "../components/ui";
+import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 type Detalle = Partial<RevisionDetalle>;
@@ -28,6 +28,14 @@ export default function RevisionVehiculo() {
   const [detalles, setDetalles] = useState<Record<string, Detalle>>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [fichaRevision, setFichaRevision] = useState<RevisionVehiculoT | null>(null);
+  const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
+  const [cargandoFicha, setCargandoFicha] = useState(false);
+
+  async function verFichaRevision(r: RevisionVehiculoT) {
+    setFichaRevision(r); setCargandoFicha(true);
+    try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
+  }
 
   useEffect(() => {
     if (!esCliente) { listarEmpresas().then(setEmpresas); listarVehiculos().then(setTodosVehiculos); }
@@ -191,7 +199,10 @@ export default function RevisionVehiculo() {
                 {historialRevisiones.map((r) => (
                   <div key={r.id} className="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-[12px] text-slate-300">
                     <span>{r.fecha_revision} · {r.km_vehiculo ?? "—"} km</span>
-                    <span className="text-slate-500">{r.estado_revision}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-500">{r.estado_revision}</span>
+                      <button onClick={() => verFichaRevision(r)} className="text-sky-300 hover:underline">Ver ficha</button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -254,6 +265,35 @@ export default function RevisionVehiculo() {
             })}
           </div>
         </div>
+      )}
+
+      {fichaRevision && (
+        <Modal title={`Revisión del ${fichaRevision.fecha_revision}`} onClose={() => setFichaRevision(null)}>
+          <div className="mb-2 text-[12px] text-slate-400">
+            {fichaRevision.km_vehiculo ?? "—"} km · Estado: {fichaRevision.estado_revision}
+            {fichaRevision.observaciones ? ` · ${fichaRevision.observaciones}` : ""}
+          </div>
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th><th className={thCls}>Profundidad</th>
+              <th className={thCls}>Presión</th><th className={thCls}>Estado visual</th><th className={thCls}>Observaciones</th>
+            </tr></thead>
+            <tbody>
+              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Cargando…</td></tr>
+              : fichaDetalle.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos.</td></tr>
+              : fichaDetalle.map((d) => (
+                <tr key={d.id} className="border-t border-slate-700/60">
+                  <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${d.presion_bar} bar` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Modal>
       )}
     </div>
   );
