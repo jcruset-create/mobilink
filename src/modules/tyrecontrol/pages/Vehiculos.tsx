@@ -108,7 +108,7 @@ export default function Vehiculos() {
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Empresa</th><th className={thCls}>Delegación</th>
+          <th className={thCls}>Empresa</th><th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Delegación</th>
           <th className={thCls}>Marca</th><th className={thCls}>Modelo</th><th className={thCls}>Tipo</th>
           <th className={thCls}>Km</th><th className={thCls}>Origen km</th><th className={thCls}>Estado</th><th className={thCls}>Acciones</th>
         </tr></thead>
@@ -117,9 +117,9 @@ export default function Vehiculos() {
           : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin vehículos.</td></tr>
           : visibles.map((v) => (
             <tr key={v.id} className="border-t border-slate-700/60">
+              <td className={tdCls + " text-slate-400"}>{v.empresa?.nombre ?? "—"}</td>
               <td className={tdCls + " font-bold"}>{v.matricula}</td>
               <td className={tdCls + " text-slate-400"}>{v.numero_unidad ?? "—"}</td>
-              <td className={tdCls + " text-slate-400"}>{v.empresa?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.delegacion?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.marca ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.modelo ?? "—"}</td>
