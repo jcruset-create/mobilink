@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
+  listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
 } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
 import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
@@ -31,6 +32,23 @@ export default function RevisionVehiculo() {
   const [fichaRevision, setFichaRevision] = useState<RevisionVehiculoT | null>(null);
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
+  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
+  const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    listarPresionesCatalogoPorModelo().then(setPresionesCatalogo).catch(() => setPresionesCatalogo({}));
+  }, []);
+
+  function referenciasDePosicion(posicionId: string) {
+    const m = montajePorPosicion.get(posicionId);
+    const neu = m?.neumatico;
+    if (!neu) return { ultimaProfundidad: null as number | null, presionRecomendada: null as number | null };
+    const medicion = medicionesActuales[neu.id];
+    const ultimaProfundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
+    const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
+    const presionRecomendada = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
+    return { ultimaProfundidad, presionRecomendada };
+  }
 
   async function verFichaRevision(r: RevisionVehiculoT) {
     setFichaRevision(r); setCargandoFicha(true);
@@ -67,12 +85,13 @@ export default function RevisionVehiculo() {
     const veh = vehOverride ?? vehiculos.find((v) => v.id === vid);
     if (!veh) { setPosiciones([]); setMontajes([]); return; }
     setKmVehiculo(veh.km_actual != null ? String(veh.km_actual) : "");
-    const [pos, mon, hist] = await Promise.all([
+    const [pos, mon, hist, medic] = await Promise.all([
       veh.tipo_vehiculo_id ? listarPosiciones(veh.tipo_vehiculo_id) : Promise.resolve([]),
       listarMontajesVehiculo(vid),
       listarRevisiones(vid),
+      listarUltimasMedicionesVehiculo(vid),
     ]);
-    setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist);
+    setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist); setMedicionesActuales(medic);
   }
 
   const montajePorPosicion = useMemo(() => {
@@ -223,15 +242,21 @@ export default function RevisionVehiculo() {
             {posiciones.map((p) => {
               const m = montajePorPosicion.get(p.id);
               const d = detalles[p.id] ?? {};
+              const { ultimaProfundidad, presionRecomendada } = referenciasDePosicion(p.id);
               return (
                 <div key={p.id} className="rounded-lg bg-slate-800 p-3">
                   <div className="mb-1 flex items-center justify-between">
                     <span className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</span>
                     {d.alerta_generada && <span className="rounded-full bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">Alerta</span>}
                   </div>
-                  <div className="mb-2 text-[11px] text-slate-400">
+                  <div className="mb-1 text-[11px] text-slate-400">
                     {m?.neumatico ? `${m.neumatico.numero_interno ?? m.neumatico.codigo_interno} · ${m.neumatico.marca ?? ""} ${m.neumatico.medida ?? ""}` : "Sin neumático montado"}
                   </div>
+                  {m?.neumatico && (
+                    <div className="mb-2 text-[10px] text-slate-500">
+                      Última medición: {ultimaProfundidad != null ? `${ultimaProfundidad} mm` : "—"} · Presión recomendada: {presionRecomendada != null ? `${presionRecomendada} bar` : "—"}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-2">
                     <Field label="Profundidad (mm)">
