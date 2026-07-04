@@ -1,0 +1,37 @@
+name: tyrecontrol_app
+description: "SEA TyreControl — revision de neumaticos en campo"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  supabase_flutter: ^2.8.0
+  http: ^1.2.1
+  shared_preferences: ^2.2.3
+  connectivity_plus: ^6.0.5
+  package_info_plus: ^8.0.0
+
+  image_picker: ^1.1.2
+  flutter_image_compress: ^2.3.0
+  path_provider: ^2.1.0
+
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logo.png
+    - assets/logo_transparent.png

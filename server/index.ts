@@ -10679,6 +10679,169 @@ app.post(
   }
 );
 
+// ── App móvil TyreControl (tyrecontrol_app, Flutter) ────────────
+// A diferencia del resto de TyreControl (que habla directo con
+// Supabase desde el cliente, con RLS), el reconocimiento de matrícula
+// necesita la clave de OpenAI y por eso pasa por este servidor. La
+// autenticación es el propio JWT de Supabase Auth del técnico (la app
+// ya inició sesión contra Supabase, no un usuario/código aparte).
+function requireTyreControlUser(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const authHeader = String(req.headers["authorization"] ?? "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "No autenticado" });
+
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("id, acceso_apk, activo")
+      .eq("id", data.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.acceso_apk || !perfil.activo) {
+      return res.status(403).json({ error: "Sin acceso a la app de revisiones" });
+    }
+
+    (req as any).tyreControlUserId = data.user.id;
+    next();
+  })().catch((error) => {
+    console.error("requireTyreControlUser error:", error);
+    res.status(500).json({ error: "Error de autenticación" });
+  });
+}
+
+// Login unificado: el técnico usa el MISMO nombre + PIN que en la app
+// de asistencias (tabla techs / roadsideOperatorCode). Este endpoint
+// valida ese PIN y crea/sincroniza por detrás el usuario de Supabase
+// Auth + tc_usuarios que TyreControl necesita para que funcione la RLS.
+// Devuelve el email sintético con el que la app hace signInWithPassword.
+app.post("/api/tyrecontrol/login-operario", async (req, res) => {
+  try {
+    const techName = String(req.body?.techName || "").trim();
+    const code = String(req.body?.code || "").trim();
+    const expectedCode = await getExpectedRoadsideOperatorCode(techName);
+
+    if (!techName || !code || !expectedCode || code !== expectedCode) {
+      return res.status(401).json({ error: "Operario o código incorrecto" });
+    }
+
+    const slug = techName
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const email = `apk-${slug}@seatyrecheck.app`;
+
+    // ¿Ya existe el usuario? (tc_usuarios.id == auth.users.id)
+    const { data: existente } = await supabase
+      .from("tc_usuarios")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
+
+    let userId: string;
+    if (existente) {
+      userId = existente.id;
+      // Mantener la contraseña de Supabase sincronizada con el PIN actual
+      await supabase.auth.admin.updateUserById(userId, { password: code });
+      await supabase
+        .from("tc_usuarios")
+        .update({ acceso_apk: true, activo: true, nombre: techName })
+        .eq("id", userId);
+    } else {
+      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        email,
+        password: code,
+        email_confirm: true,
+      });
+      if (createErr || !created.user) {
+        throw new Error(createErr?.message || "No se pudo crear el usuario");
+      }
+      userId = created.user.id;
+
+      // Empresa de referencia: SEA Tarragona (o la más antigua si no existe)
+      const { data: empresa } = await supabase
+        .from("tc_empresas")
+        .select("id")
+        .eq("nombre", "SEA Tarragona")
+        .maybeSingle();
+      let empresaId = empresa?.id;
+      if (!empresaId) {
+        const { data: primera } = await supabase
+          .from("tc_empresas")
+          .select("id")
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        empresaId = primera?.id;
+      }
+      if (!empresaId) throw new Error("No hay empresas en TyreControl");
+
+      const { error: insertErr } = await supabase.from("tc_usuarios").insert({
+        id: userId,
+        empresa_id: empresaId,
+        nombre: techName,
+        email,
+        rol: "operador",
+        acceso_apk: true,
+        acceso_panel: false,
+        activo: true,
+      });
+      if (insertErr) throw new Error(insertErr.message);
+    }
+
+    // El técnico de SEA atiende a todas las flotas: asignar todas las
+    // empresas activas (la RLS de operador solo muestra las asignadas).
+    const { data: empresas } = await supabase
+      .from("tc_empresas")
+      .select("id")
+      .eq("activo", true);
+    if (empresas && empresas.length > 0) {
+      await supabase.from("tc_operador_empresas").upsert(
+        empresas.map((e: { id: string }) => ({ usuario_id: userId, empresa_id: e.id })),
+        { onConflict: "usuario_id,empresa_id" }
+      );
+    }
+
+    res.json({ ok: true, email, techName });
+  } catch (error: any) {
+    console.error("POST /api/tyrecontrol/login-operario error:", error);
+    res.status(500).json({ error: error?.message || "Error iniciando sesión" });
+  }
+});
+
+app.post(
+  "/api/tyrecontrol/scan-plate",
+  requireTyreControlUser,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const userId = (req as any).tyreControlUserId as string;
+      if (!req.file) return res.status(400).json({ error: "No se recibió imagen" });
+
+      const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as Record<string, string>)[req.file.mimetype] ?? "jpg";
+      const storagePath = `scan/${userId}/${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("tc-revisiones-fotos")
+        .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+      if (upErr) throw new Error(upErr.message);
+      const { data: pub } = supabase.storage.from("tc-revisiones-fotos").getPublicUrl(storagePath);
+
+      const plate = await detectPlateFromImage(pub.publicUrl);
+      return res.json({ plate });
+    } catch (e: any) {
+      console.error("POST /api/tyrecontrol/scan-plate error:", e);
+      res.status(500).json({ error: e?.message || "Error escaneando matrícula" });
+    }
+  }
+);
+
 // KPIs / Dashboard de dirección
 app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
   try {
