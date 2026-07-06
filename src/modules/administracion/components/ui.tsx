@@ -98,12 +98,17 @@ export function Card({ title, value, hint, accent }: { title: string; value: str
   );
 }
 
-export function Modal({ title, onClose, children, footer, wide }: {
-  title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean;
+export function Modal({ title, onClose, children, footer, wide, full }: {
+  title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; full?: boolean;
 }) {
+  const sizeCls = full
+    ? "h-[96vh] max-w-[98vw]"
+    : wide
+      ? "max-h-[90vh] max-w-4xl"
+      : "max-h-[90vh] max-w-2xl";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className={`flex max-h-[90vh] w-full ${wide ? "max-w-4xl" : "max-w-2xl"} flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100`}>
+      <div className={`flex w-full ${sizeCls} flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100`}>
         <div className="flex shrink-0 items-center justify-between border-b border-slate-700 px-4 py-3">
           <h3 className="text-sm font-bold">{title}</h3>
           <button onClick={onClose} className="rounded-lg p-1 hover:bg-slate-700"><X className="h-4 w-4" /></button>

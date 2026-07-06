@@ -517,7 +517,7 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
   }
 
   return (
-    <Modal title={`Recobro — ${cliente?.name ?? "Cliente"}`} onClose={onClose} wide
+    <Modal title={`Recobro — ${cliente?.name ?? "Cliente"}`} onClose={onClose} full
       footer={
         <div className="flex flex-wrap justify-between gap-2">
           <div className="flex flex-wrap gap-2">
