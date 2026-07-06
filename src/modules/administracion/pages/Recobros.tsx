@@ -5,9 +5,10 @@ import {
   listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
   addRecoveryAction, cambiarEstadoRecovery, cambiarPrioridadRecovery, updateRecovery,
   registrarPagoVinculado, crearRecobroDirecto, editarDatosRecobro,
+  getRecoveryCase, listUsuariosActivos,
 } from "../services/data";
 import {
-  Card, Modal, TableWrap, thCls, tdCls, TextField, SelectField, TextAreaField, Field,
+  Card, Modal, TableWrap, thCls, tdCls, TextField, SelectField, TextAreaField, Field, CheckField,
   btnPrimary, btnSecondary, inputCls, Pill, EmptyRow, ErrorBox,
 } from "../components/ui";
 import {
@@ -135,7 +136,7 @@ export default function Recobros() {
           formas={formas}
           puedeGestionar={puedeGestionar}
           userId={perfil?.id ?? null}
-          onClose={() => setDetalle(null)}
+          onClose={() => { setDetalle(null); void cargar(); }}
           onChanged={() => { setDetalle(null); void cargar(); }}
         />
       )}
@@ -421,7 +422,7 @@ function parseNumES(v: string): number {
   return isNaN(n) ? 0 : n;
 }
 
-function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose, onChanged }: {
+function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, onClose, onChanged }: {
   caso: RecoveryCase;
   formas: PaymentMethod[];
   puedeGestionar: boolean;
@@ -429,6 +430,9 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
   onClose: () => void;
   onChanged: () => void;
 }) {
+  // Copia local del expediente para refrescarlo tras cada gestión sin cerrar el detalle
+  const [c, setC] = useState(inicial);
+  const [nuevaGestion, setNuevaGestion] = useState(false);
   const [editandoDatos, setEditandoDatos] = useState(false);
   const [historial, setHistorial] = useState<RecoveryAction[]>([]);
   const [nota, setNota] = useState("");
@@ -593,6 +597,9 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
           <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Gestionar</div>
           {puedeGestionar ? (
             <div className="flex flex-col gap-2">
+              <button onClick={() => setNuevaGestion(true)} className={`${btnPrimary} py-3`}>
+                <span className="flex items-center justify-center gap-1 text-base"><Plus className="h-5 w-5" /> Nueva gestión</span>
+              </button>
               <div className="grid grid-cols-2 gap-2">
                 <SelectField label="Estado" value={c.status} onChange={(v) => void accion(async () => {
                   await cambiarEstadoRecovery(c.id, v as RecoveryStatus, userId);
@@ -695,6 +702,249 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
           onClose={() => setEditandoDatos(false)}
           onSaved={() => { setEditandoDatos(false); onChanged(); }}
         />
+      )}
+
+      {nuevaGestion && (
+        <ModalNuevaGestion
+          caso={c}
+          formas={formas}
+          userIdActual={userId}
+          onClose={() => setNuevaGestion(false)}
+          onSaved={async () => {
+            setNuevaGestion(false);
+            await cargarHistorial();
+            try {
+              const fresh = await getRecoveryCase(c.id);
+              if (fresh) setC(fresh);
+            } catch { /* refresco best-effort: el historial ya está actualizado */ }
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// ── Nueva gestión guiada ─────────────────────────────────────
+type TipoGestion = "llamada" | "whatsapp" | "email" | "compromiso" | "nota" | "pago";
+
+const TIPOS_GESTION: { key: TipoGestion; label: string; icon: typeof Phone }[] = [
+  { key: "llamada", label: "Llamada", icon: Phone },
+  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { key: "email", label: "Email / aviso", icon: Mail },
+  { key: "compromiso", label: "Compromiso de pago", icon: Handshake },
+  { key: "nota", label: "Nota interna", icon: StickyNote },
+  { key: "pago", label: "Pago recibido", icon: Euro },
+];
+
+const RESULTADOS_GESTION: { key: string; label: string }[] = [
+  { key: "promete_pago", label: "Contactado — promete pago" },
+  { key: "disputa", label: "Contactado — disputa la factura" },
+  { key: "pide_tiempo", label: "Contactado — pide más tiempo" },
+  { key: "no_contesta", label: "No contesta" },
+  { key: "contacto_erroneo", label: "Teléfono/email erróneo" },
+  { key: "otro", label: "Otro" },
+];
+
+function ModalNuevaGestion({ caso: c, formas, userIdActual, onClose, onSaved }: {
+  caso: RecoveryCase;
+  formas: PaymentMethod[];
+  userIdActual: string | null;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [tipo, setTipo] = useState<TipoGestion>("llamada");
+  const [subtipoEmail, setSubtipoEmail] = useState<"primer_aviso" | "segundo_aviso" | "recordatorio_email">("primer_aviso");
+  const [resultado, setResultado] = useState("");
+  const [comentario, setComentario] = useState("");
+  const [fechaCompromiso, setFechaCompromiso] = useState("");
+  const [proximaAccion, setProximaAccion] = useState("");
+  const [importe, setImporte] = useState("");
+  const [pagoTotal, setPagoTotal] = useState(false);
+  const [formaPago, setFormaPago] = useState(formas[0]?.name ?? "Transferencia");
+  const [usuarios, setUsuarios] = useState<{ id: string; nombre: string }[]>([]);
+  const [gestionadoPor, setGestionadoPor] = useState(userIdActual ?? "");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+
+  const cliente = c.customer;
+  const esContacto = tipo === "llamada" || tipo === "whatsapp" || tipo === "email";
+  const pideCompromiso = tipo === "compromiso" || (esContacto && resultado === "promete_pago");
+  const doc = c.invoice?.invoice_number ? `la factura ${c.invoice.invoice_number}` : "el importe pendiente";
+
+  useEffect(() => {
+    listUsuariosActivos()
+      .then((u) => {
+        setUsuarios(u);
+        if (!userIdActual && u.length) setGestionadoPor(u[0].id);
+      })
+      .catch(() => { /* si la lista falla, queda el usuario actual */ });
+  }, [userIdActual]);
+
+  async function guardar() {
+    if (!gestionadoPor) { setError("Indica quién ha realizado la gestión."); return; }
+    if (pideCompromiso && !fechaCompromiso) { setError("Indica la fecha comprometida de pago."); return; }
+    const amount = pagoTotal ? Number(c.pending_amount) : parseNumES(importe);
+    if (tipo === "pago" && (!amount || amount <= 0)) { setError("Introduce el importe del pago."); return; }
+
+    setGuardando(true);
+    setError("");
+    try {
+      const resultadoLabel = RESULTADOS_GESTION.find((r) => r.key === resultado)?.label;
+      const notas = `${esContacto && resultadoLabel ? `[${resultadoLabel}] ` : ""}${comentario.trim()}`.trim();
+      const nextAction = fechaCompromiso || proximaAccion || undefined;
+
+      if (tipo === "pago") {
+        await registrarPagoVinculado({
+          customerId: c.customer_id,
+          workOrderId: c.work_order_id,
+          invoiceId: c.invoice_id,
+          amount,
+          paymentMethod: formaPago,
+          center: (c.work_order?.center as Centro) ?? "tarragona",
+          userId: gestionadoPor,
+          notes: `Pago ${pagoTotal ? "total" : "parcial"} desde recobro`,
+        });
+        await addRecoveryAction(c.id, pagoTotal ? "pago_total" : "pago_parcial", gestionadoPor,
+          notas || `${fmtEur(amount)} (${formaPago})`);
+      } else {
+        const actionType = tipo === "email" ? subtipoEmail : tipo === "compromiso" ? "compromiso_pago" : tipo;
+        await addRecoveryAction(c.id, actionType, gestionadoPor, notas || undefined, nextAction);
+
+        // El estado se deduce de la gestión
+        let nuevoEstado: RecoveryStatus | null = null;
+        if (pideCompromiso) nuevoEstado = "compromiso_pago";
+        else if (tipo === "llamada") nuevoEstado = "llamada_realizada";
+        else if (tipo === "email" && subtipoEmail === "primer_aviso") nuevoEstado = "primer_aviso";
+        else if (tipo === "email" && subtipoEmail === "segundo_aviso") nuevoEstado = "segundo_aviso";
+        if (nuevoEstado && nuevoEstado !== c.status) {
+          await updateRecovery(c.id, { status: nuevoEstado });
+        }
+
+        // Abrir el canal con la plantilla precargada
+        if (tipo === "whatsapp") {
+          const tel = (cliente?.admin_phone || cliente?.phone || "").replace(/[^\d]/g, "");
+          if (tel) {
+            const texto = encodeURIComponent(
+              `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""}, le recordamos que ${doc} ` +
+              `con vencimiento ${fmtFecha(c.due_date)} tiene un importe pendiente de ${fmtEur(c.pending_amount)}. ` +
+              `Le agradecemos que regularice el pago. — Administración SEA`
+            );
+            window.open(`https://wa.me/${tel.startsWith("34") ? tel : "34" + tel}?text=${texto}`, "_blank");
+          }
+        }
+        if (tipo === "email") {
+          const email = cliente?.admin_email || cliente?.email;
+          if (email) {
+            const asunto = encodeURIComponent(
+              subtipoEmail === "segundo_aviso"
+                ? `Segundo aviso — pago pendiente de ${doc}`
+                : subtipoEmail === "primer_aviso"
+                  ? `Aviso de pago pendiente — ${doc}`
+                  : `Recordatorio de pago — ${doc}`
+            );
+            const cuerpo = encodeURIComponent(
+              `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""},\n\n` +
+              `Le recordamos que ${doc}, con vencimiento ${fmtFecha(c.due_date)}, tiene un importe pendiente de ${fmtEur(c.pending_amount)}.\n\n` +
+              `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración SEA`
+            );
+            window.open(`mailto:${email}?subject=${asunto}&body=${cuerpo}`);
+          }
+        }
+      }
+
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error guardando la gestión");
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Modal title={`Nueva gestión — ${cliente?.name ?? "Cliente"}`} onClose={onClose} wide
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className={btnSecondary}>Cancelar</button>
+          <button onClick={guardar} disabled={guardando} className={btnPrimary}>
+            {guardando ? "Guardando…" : "Guardar gestión"}
+          </button>
+        </div>
+      }
+    >
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {/* Tipo de gestión */}
+      <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">Tipo de gestión</div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {TIPOS_GESTION.map((t) => {
+          const Icon = t.icon;
+          const activo = tipo === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTipo(t.key)}
+              className={`flex flex-col items-center gap-1 rounded-xl border p-3 text-[12px] font-semibold ${
+                activo ? "border-sky-400 bg-sky-600/20 text-sky-200" : "border-slate-600 bg-slate-900 text-slate-300 hover:bg-slate-700/50"
+              }`}
+            >
+              <Icon className={`h-5 w-5 ${activo ? "text-sky-300" : "text-slate-400"}`} />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {tipo === "email" && (
+          <SelectField label="Tipo de aviso" value={subtipoEmail} onChange={(v) => setSubtipoEmail(v as typeof subtipoEmail)}>
+            <option value="primer_aviso">Primer aviso</option>
+            <option value="segundo_aviso">Segundo aviso</option>
+            <option value="recordatorio_email">Recordatorio</option>
+          </SelectField>
+        )}
+        {esContacto && (
+          <SelectField label="Resultado" value={resultado} onChange={setResultado}>
+            <option value="">—</option>
+            {RESULTADOS_GESTION.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+          </SelectField>
+        )}
+        {pideCompromiso && (
+          <Field label="Fecha comprometida de pago">
+            <input type="date" value={fechaCompromiso} onChange={(e) => setFechaCompromiso(e.target.value)} className={inputCls} />
+          </Field>
+        )}
+        {tipo === "pago" && (
+          <>
+            <TextField label="Importe (€)" value={importe} onChange={setImporte} placeholder="0,00" />
+            <SelectField label="Forma de pago" value={formaPago} onChange={setFormaPago}>
+              {formas.map((f) => <option key={f.id} value={f.name}>{f.name}</option>)}
+            </SelectField>
+            <CheckField label={`Pago total (${fmtEur(c.pending_amount)} pendientes)`} checked={pagoTotal} onChange={setPagoTotal} />
+          </>
+        )}
+      </div>
+
+      <div className="mt-3">
+        <TextAreaField label="Comentario" value={comentario} onChange={setComentario} rows={2}
+          placeholder="Ej.: he hablado con él, dice que paga en dos días…" />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {!pideCompromiso && tipo !== "pago" && (
+          <Field label="Próxima acción (fecha, opcional)">
+            <input type="date" value={proximaAccion} onChange={(e) => setProximaAccion(e.target.value)} className={inputCls} />
+          </Field>
+        )}
+        <SelectField label="Gestionado por" value={gestionadoPor} onChange={setGestionadoPor}>
+          {usuarios.length === 0 && gestionadoPor && <option value={gestionadoPor}>Yo</option>}
+          {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+        </SelectField>
+      </div>
+
+      {(tipo === "whatsapp" || tipo === "email") && (
+        <p className="mt-3 text-[12px] text-slate-500">
+          Al guardar se abrirá {tipo === "whatsapp" ? "WhatsApp" : "el email"} con el mensaje preparado para enviarlo.
+        </p>
       )}
     </Modal>
   );

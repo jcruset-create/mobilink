@@ -271,7 +271,26 @@ export async function supabaseRecobrosDelCliente(customerId: string): Promise<Re
   return (data ?? []) as RecoveryCase[];
 }
 
+// ── Usuarios del módulo (para "Gestionado por") ──────────────
+export async function listUsuariosActivos(): Promise<{ id: string; nombre: string }[]> {
+  const { data, error } = await supabase.from("adm_usuarios")
+    .select("id, nombre")
+    .eq("activo", true)
+    .order("nombre");
+  if (error) fail(error.message, "usuarios del módulo");
+  return (data ?? []) as { id: string; nombre: string }[];
+}
+
 // ── Recobros ─────────────────────────────────────────────────
+export async function getRecoveryCase(id: string): Promise<RecoveryCase | null> {
+  const { data, error } = await supabase.from("adm_recovery_cases")
+    .select("*, customer:adm_customers(*), invoice:adm_invoices(*), work_order:adm_work_orders(*), responsible:adm_usuarios(nombre)")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) fail(error.message, "expediente de recobro");
+  return (data as RecoveryCase | null) ?? null;
+}
+
 export async function listRecoveryCases(incluirCerrados = false): Promise<RecoveryCase[]> {
   let q = supabase.from("adm_recovery_cases")
     .select("*, customer:adm_customers(*), invoice:adm_invoices(*), work_order:adm_work_orders(*), responsible:adm_usuarios(nombre)")
