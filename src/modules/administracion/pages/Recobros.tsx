@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine } from "lucide-react";
+import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import {
   listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
   addRecoveryAction, cambiarEstadoRecovery, cambiarPrioridadRecovery, updateRecovery,
-  registrarPagoVinculado, crearRecobroDirecto,
+  registrarPagoVinculado, crearRecobroDirecto, editarDatosRecobro,
 } from "../services/data";
 import {
   Card, Modal, TableWrap, thCls, tdCls, TextField, SelectField, TextAreaField, Field,
@@ -411,6 +411,12 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
 }
 
 // ── Detalle de expediente ────────────────────────────────────
+// Convierte "1.997,32" o "1997.32" a número
+function parseNumES(v: string): number {
+  const n = parseFloat(v.replace(/\./g, "").replace(",", "."));
+  return isNaN(n) ? 0 : n;
+}
+
 function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose, onChanged }: {
   caso: RecoveryCase;
   formas: PaymentMethod[];
@@ -419,6 +425,7 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const [editandoDatos, setEditandoDatos] = useState(false);
   const [historial, setHistorial] = useState<RecoveryAction[]>([]);
   const [nota, setNota] = useState("");
   const [proximaAccion, setProximaAccion] = useState("");
@@ -545,7 +552,14 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
       <div className="grid gap-3 lg:grid-cols-3">
         {/* Datos */}
         <div className="rounded-lg border border-slate-700 bg-slate-900 p-3">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Datos</div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Datos</span>
+            {puedeGestionar && (
+              <button onClick={() => setEditandoDatos(true)} className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600">
+                <Pencil className="h-3 w-3" /> Editar datos
+              </button>
+            )}
+          </div>
           <Dato label="Cliente" valor={cliente?.name} />
           <Dato label="CIF/NIF" valor={cliente?.tax_id} />
           <Dato label="Contacto" valor={cliente?.payment_contact_name} />
@@ -672,6 +686,106 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
           <div className="text-sm text-slate-300">{c.internal_notes}</div>
         </div>
       )}
+
+      {editandoDatos && (
+        <ModalEditarDatos
+          caso={c}
+          onClose={() => setEditandoDatos(false)}
+          onSaved={() => { setEditandoDatos(false); onChanged(); }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// ── Editar datos generales del expediente ────────────────────
+function ModalEditarDatos({ caso: c, onClose, onSaved }: {
+  caso: RecoveryCase;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const fmtNum = (n: number | null | undefined) =>
+    n != null ? String(n).replace(".", ",") : "";
+
+  const [numero, setNumero] = useState(c.invoice?.invoice_number ?? "");
+  const [fechaFactura, setFechaFactura] = useState(c.invoice?.invoice_date ?? "");
+  const [fechaConta, setFechaConta] = useState(c.accounting_date ?? "");
+  const [vencimiento, setVencimiento] = useState(c.due_date ?? "");
+  const [numVto, setNumVto] = useState(c.installment_number ?? "");
+  const [nominal, setNominal] = useState(fmtNum(c.nominal_amount));
+  const [gastos, setGastos] = useState(fmtNum(c.return_expenses));
+  const [total, setTotal] = useState(fmtNum(c.initial_amount));
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+
+  function cambiarNominal(v: string) {
+    setNominal(v);
+    const t = parseNumES(v) + parseNumES(gastos);
+    if (t > 0) setTotal(String(Math.round(t * 100) / 100).replace(".", ","));
+  }
+  function cambiarGastos(v: string) {
+    setGastos(v);
+    const t = parseNumES(nominal) + parseNumES(v);
+    if (t > 0) setTotal(String(Math.round(t * 100) / 100).replace(".", ","));
+  }
+
+  async function guardar() {
+    const totalNum = parseNumES(total);
+    if (!totalNum || totalNum <= 0) { setError("Introduce el total del recibo devuelto."); return; }
+    setGuardando(true);
+    setError("");
+    try {
+      await editarDatosRecobro({
+        caso: c,
+        invoiceNumber: numero.trim() || null,
+        invoiceDate: fechaFactura || null,
+        dueDate: vencimiento || null,
+        accountingDate: fechaConta || null,
+        installment: numVto.trim() || null,
+        nominal: parseNumES(nominal) || null,
+        gastos: parseNumES(gastos) || null,
+        total: totalNum,
+      });
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error guardando los datos");
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Modal title="Editar datos del expediente" onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className={btnSecondary}>Cancelar</button>
+          <button onClick={guardar} disabled={guardando} className={btnPrimary}>{guardando ? "Guardando…" : "Guardar cambios"}</button>
+        </div>
+      }
+    >
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField label="Nº factura" value={numero} onChange={setNumero} />
+        <TextField label="Nº vencimiento (si hay varios)" value={numVto} onChange={setNumVto} placeholder="Ej. 2/3" />
+        <Field label="Fecha factura"><input type="date" value={fechaFactura} onChange={(e) => setFechaFactura(e.target.value)} className={inputCls} /></Field>
+        <Field label="Fecha contabilización"><input type="date" value={fechaConta} onChange={(e) => setFechaConta(e.target.value)} className={inputCls} /></Field>
+        <Field label="Vencimiento impagado"><input type="date" value={vencimiento} onChange={(e) => setVencimiento(e.target.value)} className={inputCls} /></Field>
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <TextField label="Nominal (€)" value={nominal} onChange={cambiarNominal} placeholder="0,00" />
+        <TextField label="Gastos devolución (€)" value={gastos} onChange={cambiarGastos} placeholder="0,00" />
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-1.5">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-amber-300">Total recibo devuelto (€)</span>
+          <input
+            value={total}
+            onChange={(e) => setTotal(e.target.value)}
+            placeholder="0,00"
+            className="w-full bg-transparent text-lg font-black text-amber-300 outline-none placeholder:text-amber-300/40"
+          />
+        </div>
+      </div>
+      <p className="mt-3 text-[12px] text-slate-500">
+        El importe pendiente se recalcula automáticamente respetando los pagos ya registrados.
+      </p>
     </Modal>
   );
 }

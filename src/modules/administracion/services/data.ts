@@ -408,6 +408,49 @@ export async function crearRecobroDirecto(opts: {
   });
 }
 
+// ── Editar datos generales de un expediente de recobro ───────
+// Corrige factura, fechas y desglose; recalcula pendientes respetando
+// los pagos ya registrados.
+export async function editarDatosRecobro(opts: {
+  caso: RecoveryCase;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  accountingDate: string | null;
+  installment: string | null;
+  nominal: number | null;
+  gastos: number | null;
+  total: number;
+}): Promise<void> {
+  const pagado = Math.max(Number(opts.caso.initial_amount) - Number(opts.caso.pending_amount), 0);
+  const nuevoPendiente = Math.max(opts.total - pagado, 0);
+
+  if (opts.caso.invoice_id) {
+    const inv = opts.caso.invoice;
+    const pagadoFactura = inv ? Math.max(Number(inv.total_amount) - Number(inv.pending_amount), 0) : pagado;
+    const patch: Record<string, unknown> = {
+      due_date: opts.dueDate,
+      total_amount: opts.total,
+      pending_amount: Math.max(opts.total - pagadoFactura, 0),
+    };
+    if (opts.invoiceNumber) patch.invoice_number = opts.invoiceNumber;
+    if (opts.invoiceDate) patch.invoice_date = opts.invoiceDate;
+    const { error } = await supabase.from("adm_invoices").update(patch).eq("id", opts.caso.invoice_id);
+    if (error) fail(error.message, "actualizar factura");
+  }
+
+  const { error } = await supabase.from("adm_recovery_cases").update({
+    due_date: opts.dueDate,
+    accounting_date: opts.accountingDate,
+    installment_number: opts.installment,
+    nominal_amount: opts.nominal,
+    return_expenses: opts.gastos,
+    initial_amount: opts.total,
+    pending_amount: nuevoPendiente,
+  }).eq("id", opts.caso.id);
+  if (error) fail(error.message, "actualizar recobro");
+}
+
 // ── Registrar pago desde seguimiento/recobro ─────────────────
 // Crea el cobro (los triggers de BD recalculan pendientes y cierran si llega a 0).
 export async function registrarPagoVinculado(opts: {
