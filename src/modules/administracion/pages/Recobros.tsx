@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil } from "lucide-react";
+import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil, CalendarClock, X } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import {
   listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
   addRecoveryAction, cambiarEstadoRecovery, cambiarPrioridadRecovery, updateRecovery,
   registrarPagoVinculado, crearRecobroDirecto, editarDatosRecobro,
   getRecoveryCase, listUsuariosActivos,
+  programarNotificacion, listNotificacionesCaso, cancelarNotificacion, type Notificacion,
 } from "../services/data";
 import {
   Card, Modal, TableWrap, thCls, tdCls, TextField, SelectField, TextAreaField, Field, CheckField,
@@ -433,6 +434,7 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
   // Copia local del expediente para refrescarlo tras cada gestión sin cerrar el detalle
   const [c, setC] = useState(inicial);
   const [nuevaGestion, setNuevaGestion] = useState(false);
+  const [programando, setProgramando] = useState(false);
   const [editandoDatos, setEditandoDatos] = useState(false);
   const [historial, setHistorial] = useState<RecoveryAction[]>([]);
   const [nota, setNota] = useState("");
@@ -600,6 +602,9 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
               <button onClick={() => setNuevaGestion(true)} className={`${btnPrimary} py-3`}>
                 <span className="flex items-center justify-center gap-1 text-base"><Plus className="h-5 w-5" /> Nueva gestión</span>
               </button>
+              <button onClick={() => setProgramando(true)} className={btnSecondary}>
+                <span className="flex items-center justify-center gap-1"><CalendarClock className="h-4 w-4" /> Programar envío automático</span>
+              </button>
               <div className="grid grid-cols-2 gap-2">
                 <SelectField label="Estado" value={c.status} onChange={(v) => void accion(async () => {
                   await cambiarEstadoRecovery(c.id, v as RecoveryStatus, userId);
@@ -704,6 +709,14 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
         />
       )}
 
+      {programando && (
+        <ModalProgramarEnvio
+          caso={c}
+          userId={userId}
+          onClose={() => setProgramando(false)}
+        />
+      )}
+
       {nuevaGestion && (
         <ModalNuevaGestion
           caso={c}
@@ -719,6 +732,130 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
             } catch { /* refresco best-effort: el historial ya está actualizado */ }
           }}
         />
+      )}
+    </Modal>
+  );
+}
+
+// ── Programar envío automático (WhatsApp/email al deudor) ────
+const CANAL_LABELS: Record<string, string> = {
+  whatsapp_deudor: "WhatsApp al cliente",
+  email_deudor: "Email al cliente",
+  whatsapp_interno: "WhatsApp interno",
+  resumen_interno: "Resumen interno",
+};
+
+function ModalProgramarEnvio({ caso: c, userId, onClose }: {
+  caso: RecoveryCase;
+  userId: string | null;
+  onClose: () => void;
+}) {
+  const [whats, setWhats] = useState(true);
+  const [email, setEmail] = useState(false);
+  const [fecha, setFecha] = useState(hoyISO());
+  const [mensaje, setMensaje] = useState("");
+  const [pendientes, setPendientes] = useState<Notificacion[]>([]);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+  const [ok, setOk] = useState("");
+
+  const cargarPendientes = useCallback(async () => {
+    try { setPendientes(await listNotificacionesCaso(c.id)); } catch { /* listado best-effort */ }
+  }, [c.id]);
+  useEffect(() => { void cargarPendientes(); }, [cargarPendientes]);
+
+  async function programar() {
+    const canales: ("whatsapp_deudor" | "email_deudor")[] = [];
+    if (whats) canales.push("whatsapp_deudor");
+    if (email) canales.push("email_deudor");
+    if (!canales.length) { setError("Selecciona al menos un canal."); return; }
+    if (!fecha) { setError("Indica la fecha de envío."); return; }
+    if (whats && !(c.customer?.admin_phone || c.customer?.phone)) {
+      setError("El cliente no tiene teléfono en su ficha."); return;
+    }
+    if (email && !(c.customer?.admin_email || c.customer?.email)) {
+      setError("El cliente no tiene email en su ficha."); return;
+    }
+    setGuardando(true);
+    setError("");
+    setOk("");
+    try {
+      await programarNotificacion({ caseId: c.id, canales, fecha, mensaje: mensaje.trim() || null, userId });
+      setOk(`Envío programado para el ${fmtFecha(fecha)}. El servidor lo enviará automáticamente esa mañana.`);
+      setMensaje("");
+      await cargarPendientes();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error programando el envío");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Modal title={`Programar envío — ${c.customer?.name ?? "Cliente"}`} onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className={btnSecondary}>Cerrar</button>
+          <button onClick={programar} disabled={guardando} className={btnPrimary}>
+            {guardando ? "Programando…" : "Programar envío"}
+          </button>
+        </div>
+      }
+    >
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {ok && <div className="mb-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{ok}</div>}
+
+      <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">Canales</div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <CheckField label={`WhatsApp al cliente (${c.customer?.admin_phone || c.customer?.phone || "sin teléfono"})`} checked={whats} onChange={setWhats} />
+        <CheckField label={`Email al cliente (${c.customer?.admin_email || c.customer?.email || "sin email"})`} checked={email} onChange={setEmail} />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="Fecha de envío">
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+        </Field>
+      </div>
+      <div className="mt-3">
+        <TextAreaField label="Mensaje adicional (opcional, se añade a la plantilla del email)" value={mensaje} onChange={setMensaje} rows={2} />
+      </div>
+      <p className="mt-2 text-[12px] text-slate-500">
+        El recordatorio usa la plantilla estándar con la factura, el importe pendiente y el vencimiento. Los destinatarios internos configurados reciben copia del aviso.
+      </p>
+
+      {pendientes.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">Envíos de este expediente</div>
+          <ul className="flex flex-col gap-1.5">
+            {pendientes.map((n) => (
+              <li key={n.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-2.5 py-1.5">
+                <div>
+                  <span className="text-[12px] font-semibold text-slate-200">{CANAL_LABELS[n.canal] ?? n.canal}</span>
+                  <span className="ml-2 text-[11px] text-slate-500">{fmtFecha(n.fecha_programada)}</span>
+                  {n.estado === "error" && <span className="ml-2 text-[11px] text-rose-300" title={n.error_text ?? ""}>error</span>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Pill className={
+                    n.estado === "enviado" ? "bg-emerald-500/20 text-emerald-300"
+                    : n.estado === "pendiente" ? "bg-amber-500/20 text-amber-300"
+                    : n.estado === "error" ? "bg-rose-500/20 text-rose-300"
+                    : "bg-slate-700 text-slate-400"
+                  }>{n.estado}</Pill>
+                  {n.estado === "pendiente" && (
+                    <button
+                      onClick={async () => {
+                        try { await cancelarNotificacion(n.id); await cargarPendientes(); }
+                        catch (e) { setError(e instanceof Error ? e.message : "Error"); }
+                      }}
+                      className="rounded p-0.5 text-slate-500 hover:bg-slate-700 hover:text-slate-200"
+                      title="Cancelar envío"
+                    ><X className="h-3.5 w-3.5" /></button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </Modal>
   );

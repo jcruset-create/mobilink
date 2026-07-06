@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Euro, ClipboardList, AlertTriangle, Users, CreditCard, BarChart3, Wrench,
+  LayoutDashboard, Euro, ClipboardList, AlertTriangle, Users, Settings, BarChart3, Wrench,
   type LucideIcon,
 } from "lucide-react";
 import type { Rol } from "../types";
@@ -18,7 +18,7 @@ export const NAV: NavItem[] = [
   { key: "seguimiento", path: "seguimiento", label: "Seguimiento de pagos", icon: ClipboardList, roles: ["administracion", "supervisor"] },
   { key: "recobros", path: "recobros", label: "Recobros", icon: AlertTriangle, roles: ["administracion", "supervisor"] },
   { key: "clientes", path: "clientes", label: "Clientes con seguimiento", icon: Users, roles: ["administracion", "supervisor"] },
-  { key: "formas-pago", path: "formas-pago", label: "Formas de pago", icon: CreditCard, roles: ["administracion"] },
+  { key: "formas-pago", path: "formas-pago", label: "Configuración", icon: Settings, roles: ["administracion"] },
   { key: "informes", path: "informes", label: "Informes", icon: BarChart3, roles: ["administracion", "supervisor"] },
   { key: "estado-ots", path: "estado-ots", label: "Estado de OTs", icon: Wrench, roles: ["tecnico", "supervisor"] },
 ];

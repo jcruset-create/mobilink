@@ -271,6 +271,77 @@ export async function supabaseRecobrosDelCliente(customerId: string): Promise<Re
   return (data ?? []) as RecoveryCase[];
 }
 
+// ── Destinatarios internos de avisos WhatsApp ────────────────
+export type Destinatario = { id: string; nombre: string; telefono: string; activo: boolean };
+
+export async function listDestinatarios(): Promise<Destinatario[]> {
+  const { data, error } = await supabase.from("adm_notificacion_destinatarios")
+    .select("*").order("nombre");
+  if (error) fail(error.message, "destinatarios de avisos");
+  return (data ?? []) as Destinatario[];
+}
+
+export async function saveDestinatario(d: Partial<Destinatario> & { nombre: string; telefono: string }): Promise<void> {
+  const payload = { nombre: d.nombre, telefono: d.telefono, activo: d.activo ?? true };
+  const { error } = d.id
+    ? await supabase.from("adm_notificacion_destinatarios").update(payload).eq("id", d.id)
+    : await supabase.from("adm_notificacion_destinatarios").insert(payload);
+  if (error) fail(error.message, "guardar destinatario");
+}
+
+export async function deleteDestinatario(id: string): Promise<void> {
+  const { error } = await supabase.from("adm_notificacion_destinatarios").delete().eq("id", id);
+  if (error) fail(error.message, "eliminar destinatario");
+}
+
+// ── Notificaciones programadas (recobros) ────────────────────
+export type Notificacion = {
+  id: string;
+  recovery_case_id: string | null;
+  canal: "whatsapp_deudor" | "email_deudor" | "whatsapp_interno" | "resumen_interno";
+  destinatario: string | null;
+  mensaje: string | null;
+  fecha_programada: string;
+  estado: "pendiente" | "enviado" | "error" | "cancelado";
+  enviado_at: string | null;
+  error_text: string | null;
+};
+
+export async function listNotificacionesCaso(caseId: string): Promise<Notificacion[]> {
+  const { data, error } = await supabase.from("adm_notificaciones")
+    .select("*")
+    .eq("recovery_case_id", caseId)
+    .order("fecha_programada", { ascending: true });
+  if (error) fail(error.message, "notificaciones del expediente");
+  return (data ?? []) as Notificacion[];
+}
+
+export async function programarNotificacion(opts: {
+  caseId: string;
+  canales: ("whatsapp_deudor" | "email_deudor")[];
+  fecha: string;
+  mensaje: string | null;
+  userId: string | null;
+}): Promise<void> {
+  const filas = opts.canales.map((canal) => ({
+    recovery_case_id: opts.caseId,
+    canal,
+    fecha_programada: opts.fecha,
+    mensaje: opts.mensaje,
+    created_by: opts.userId,
+  }));
+  const { error } = await supabase.from("adm_notificaciones").insert(filas);
+  if (error) fail(error.message, "programar envío");
+}
+
+export async function cancelarNotificacion(id: string): Promise<void> {
+  const { error } = await supabase.from("adm_notificaciones")
+    .update({ estado: "cancelado" })
+    .eq("id", id)
+    .eq("estado", "pendiente");
+  if (error) fail(error.message, "cancelar envío");
+}
+
 // ── Usuarios del módulo (para "Gestionado por") ──────────────
 export async function listUsuariosActivos(): Promise<{ id: string; nombre: string }[]> {
   const { data, error } = await supabase.from("adm_usuarios")

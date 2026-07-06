@@ -72,6 +72,28 @@ Desde la fase 3, la tabla maestra de clientes de toda la aplicación es **`clien
 - Crear o editar un cliente desde **Administración** escribe en la maestra vía la función `adm_guardar_cliente` (nombre, nº cliente, NIF, teléfono, email) y guarda aparte las condiciones económicas.
 - Las migraciones se aplican en orden: `administracion_fase1.sql` → `administracion_fase3_unificar_clientes.sql` (la fase 3 ya incluye la fase 2).
 
+## Envíos automáticos (fase 8)
+
+El servidor procesa cada mañana (a partir de `RECOBROS_NOTIFY_HOUR`, por defecto 08:00) los envíos de recobros:
+
+- **Programados**: desde el expediente → "Programar envío automático" (WhatsApp y/o email al cliente en la fecha elegida). Se pueden cancelar mientras estén pendientes.
+- **Automáticos**: recordatorio por WhatsApp al cliente cuyo **compromiso de pago vence hoy**, y **resumen interno** por WhatsApp a los teléfonos configurados en Configuración → "Avisos WhatsApp internos".
+- Todo queda en el historial del expediente y en la tabla `adm_notificaciones`.
+
+Configuración necesaria (variables en Render):
+
+| Variable | Qué es |
+|---|---|
+| `TWILIO_RECOBROS_CONTENT_SID` | Plantilla aprobada de recordatorio al deudor (4 variables: nombre, factura, importe, vencimiento) |
+| `TWILIO_RECOBROS_RESUMEN_SID` | Plantilla aprobada del resumen interno (2 variables: fecha, resumen) |
+| `RECOBROS_NOTIFY_HOUR` | Hora de envío diario, formato HH:MM (por defecto 08:00) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | Cuenta Gmail de empresa para los emails (smtp.gmail.com:587 + contraseña de aplicación) |
+
+Textos sugeridos para las plantillas de Twilio (Content Template Builder → tipo *Text*):
+
+- **Recordatorio deudor**: `Hola {{1}}, le recordamos que la factura {{2}} tiene un importe pendiente de {{3}} con vencimiento {{4}}. Si ya ha realizado el pago, ignore este mensaje. Gracias. — Administración SEA`
+- **Resumen interno**: `Resumen de recobros {{1}}: {{2}}`
+
 ## Tablas (prefijo `adm_`)
 
 `adm_usuarios`, `adm_customers`, `adm_work_orders`, `adm_invoices`, `adm_payment_methods`, `adm_payments`, `adm_payment_tracking`, `adm_payment_tracking_actions`, `adm_recovery_cases`, `adm_recovery_actions` + vista `adm_ot_estado`.

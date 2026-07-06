@@ -11147,6 +11147,243 @@ Reglas:
 );
 
 /* =========================================================
+   SEA ADMINISTRACIÓN — envíos automáticos de recobros
+   (WhatsApp/email programados + avisos diarios).
+   Requiere plantillas de WhatsApp aprobadas en Twilio:
+   TWILIO_RECOBROS_CONTENT_SID (deudor) y
+   TWILIO_RECOBROS_RESUMEN_SID (resumen interno).
+========================================================= */
+
+const RECOBROS_NOTIFY_HOUR = process.env.RECOBROS_NOTIFY_HOUR || "08:00";
+const RECOBROS_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+function normalizarTelefonoWhatsApp(raw: string | null | undefined): string | null {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return null;
+  return digits.length === 9 ? `34${digits}` : digits;
+}
+
+function fmtEurServer(n: number): string {
+  return Number(n).toLocaleString("es-ES", { style: "currency", currency: "EUR" });
+}
+
+function fmtFechaServer(iso: string | null): string {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+async function enviarWhatsAppRecobro(
+  telefono: string,
+  variables: Record<string, string>,
+  contentSidEnv: "TWILIO_RECOBROS_CONTENT_SID" | "TWILIO_RECOBROS_RESUMEN_SID"
+) {
+  const contentSid = String(process.env[contentSidEnv] || "").trim();
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) throw new Error("Twilio no configurado");
+  if (!contentSid) throw new Error(`Falta la plantilla ${contentSidEnv}`);
+  await twilioClient.messages.create({
+    from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
+    to: `whatsapp:+${telefono}`,
+    contentSid,
+    contentVariables: JSON.stringify(variables),
+  });
+}
+
+async function enviarEmailRecobro(destino: string, asunto: string, cuerpo: string) {
+  const transport = getMailTransport();
+  if (!transport) throw new Error("SMTP no configurado");
+  await transport.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to: destino,
+    subject: asunto,
+    text: cuerpo,
+  });
+}
+
+async function procesarNotificacionesProgramadasRecobros(hoy: string) {
+  const { rows } = await db.query(
+    `SELECT n.id, n.recovery_case_id, n.canal, n.mensaje,
+            cu.name AS cliente_nombre, cu.payment_contact_name AS contacto,
+            COALESCE(cu.admin_phone, cu.phone) AS telefono,
+            COALESCE(cu.admin_email, cu.email) AS email,
+            inv.invoice_number AS factura, r.due_date::text AS vencimiento, r.pending_amount AS pendiente
+     FROM adm_notificaciones n
+     LEFT JOIN adm_recovery_cases r ON r.id = n.recovery_case_id
+     LEFT JOIN adm_customers cu ON cu.id = r.customer_id
+     LEFT JOIN adm_invoices inv ON inv.id = r.invoice_id
+     WHERE n.estado = 'pendiente' AND n.fecha_programada <= $1
+       AND n.canal IN ('whatsapp_deudor','email_deudor')`,
+    [hoy]
+  );
+
+  for (const n of rows) {
+    try {
+      if (Number(n.pendiente ?? 0) <= 0) {
+        await db.query(
+          `UPDATE adm_notificaciones SET estado='cancelado', error_text='Sin importe pendiente' WHERE id=$1`,
+          [n.id]
+        );
+        continue;
+      }
+      const doc = n.factura ? `la factura ${n.factura}` : "el importe pendiente";
+      if (n.canal === "whatsapp_deudor") {
+        const tel = normalizarTelefonoWhatsApp(n.telefono);
+        if (!tel) throw new Error("Cliente sin teléfono");
+        await enviarWhatsAppRecobro(tel, {
+          "1": n.contacto || n.cliente_nombre || "cliente",
+          "2": n.factura || "pendiente",
+          "3": fmtEurServer(Number(n.pendiente ?? 0)),
+          "4": fmtFechaServer(n.vencimiento),
+        }, "TWILIO_RECOBROS_CONTENT_SID");
+      } else {
+        if (!n.email) throw new Error("Cliente sin email");
+        const cuerpo =
+          `Hola${n.contacto ? " " + n.contacto : ""},\n\n` +
+          `Le recordamos que ${doc}, con vencimiento ${fmtFechaServer(n.vencimiento)}, ` +
+          `tiene un importe pendiente de ${fmtEurServer(Number(n.pendiente ?? 0))}.\n\n` +
+          (n.mensaje ? `${n.mensaje}\n\n` : "") +
+          `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración SEA`;
+        await enviarEmailRecobro(n.email, `Recordatorio de pago — ${doc}`, cuerpo);
+      }
+      await db.query(`UPDATE adm_notificaciones SET estado='enviado', enviado_at=now() WHERE id=$1`, [n.id]);
+      if (n.recovery_case_id) {
+        await db.query(
+          `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
+           VALUES ($1, $2, $3)`,
+          [
+            n.recovery_case_id,
+            n.canal === "whatsapp_deudor" ? "whatsapp" : "recordatorio_email",
+            `Envío automático programado (${n.canal === "whatsapp_deudor" ? "WhatsApp" : "email"})`,
+          ]
+        );
+      }
+      console.log(`[Recobros] enviado ${n.canal} · notificación ${n.id}`);
+    } catch (e: any) {
+      console.error(`[Recobros] error en notificación ${n.id}:`, e?.message);
+      await db.query(
+        `UPDATE adm_notificaciones SET estado='error', error_text=$2 WHERE id=$1`,
+        [n.id, String(e?.message ?? e)]
+      ).catch(() => {});
+    }
+  }
+}
+
+async function procesarAvisosDiariosRecobros(hoy: string) {
+  // Deduplicación: si ya hay marcador de resumen para hoy, el trabajo diario ya corrió
+  const marker = await db.query(
+    `SELECT 1 FROM adm_notificaciones
+     WHERE canal='resumen_interno' AND fecha_programada=$1 AND estado IN ('enviado','error') LIMIT 1`,
+    [hoy]
+  );
+  if (marker.rows.length) return;
+
+  // 1) WhatsApp al deudor cuando hoy vence su compromiso de pago
+  const compromisos = await db.query(
+    `SELECT r.id, r.pending_amount, r.due_date::text AS vencimiento,
+            cu.name AS cliente_nombre, cu.payment_contact_name AS contacto,
+            COALESCE(cu.admin_phone, cu.phone) AS telefono,
+            inv.invoice_number AS factura
+     FROM adm_recovery_cases r
+     JOIN adm_customers cu ON cu.id = r.customer_id
+     LEFT JOIN adm_invoices inv ON inv.id = r.invoice_id
+     WHERE r.closed_at IS NULL AND r.status = 'compromiso_pago' AND r.next_action_date = $1`,
+    [hoy]
+  );
+  for (const r of compromisos.rows) {
+    try {
+      const tel = normalizarTelefonoWhatsApp(r.telefono);
+      if (!tel) continue;
+      await enviarWhatsAppRecobro(tel, {
+        "1": r.contacto || r.cliente_nombre || "cliente",
+        "2": r.factura || "pendiente",
+        "3": fmtEurServer(Number(r.pending_amount ?? 0)),
+        "4": fmtFechaServer(r.vencimiento),
+      }, "TWILIO_RECOBROS_CONTENT_SID");
+      await db.query(
+        `INSERT INTO adm_notificaciones (recovery_case_id, canal, destinatario, fecha_programada, estado, enviado_at)
+         VALUES ($1,'whatsapp_deudor',$2,$3,'enviado',now())`,
+        [r.id, tel, hoy]
+      );
+      await db.query(
+        `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
+         VALUES ($1,'whatsapp','Recordatorio automático: hoy vence su compromiso de pago')`,
+        [r.id]
+      );
+      console.log(`[Recobros] recordatorio de compromiso enviado · expediente ${r.id}`);
+    } catch (e: any) {
+      console.error(`[Recobros] error en compromiso ${r.id}:`, e?.message);
+    }
+  }
+
+  // 2) Resumen interno por WhatsApp a los destinatarios configurados
+  const resumen = await db.query(
+    `SELECT
+       (SELECT count(*) FROM adm_recovery_cases WHERE closed_at IS NULL AND status='compromiso_pago' AND next_action_date=$1) AS compromisos_hoy,
+       (SELECT count(*) FROM adm_recovery_cases WHERE closed_at IS NULL AND next_action_date < $1) AS acciones_vencidas,
+       (SELECT COALESCE(sum(pending_amount),0) FROM adm_recovery_cases WHERE closed_at IS NULL) AS total_pendiente,
+       (SELECT count(*) FROM adm_payment_tracking WHERE closed_at IS NULL AND expected_payment_date=$1) AS pagos_previstos`,
+    [hoy]
+  );
+  const s = resumen.rows[0];
+  const texto =
+    `Compromisos que vencen hoy: ${s.compromisos_hoy} · ` +
+    `Acciones vencidas: ${s.acciones_vencidas} · ` +
+    `Pagos previstos hoy: ${s.pagos_previstos} · ` +
+    `Total pendiente en recobro: ${fmtEurServer(Number(s.total_pendiente))}`;
+
+  const dest = await db.query(
+    `SELECT nombre, telefono FROM adm_notificacion_destinatarios WHERE activo = true`
+  );
+  let enviados = 0;
+  let errorTxt: string | null = null;
+  for (const d of dest.rows) {
+    try {
+      const tel = normalizarTelefonoWhatsApp(d.telefono);
+      if (!tel) continue;
+      await enviarWhatsAppRecobro(tel, { "1": fmtFechaServer(hoy), "2": texto }, "TWILIO_RECOBROS_RESUMEN_SID");
+      enviados++;
+    } catch (e: any) {
+      errorTxt = String(e?.message ?? e);
+      console.error(`[Recobros] error enviando resumen a ${d.nombre}:`, e?.message);
+    }
+  }
+  await db.query(
+    `INSERT INTO adm_notificaciones (canal, destinatario, mensaje, fecha_programada, estado, enviado_at, error_text)
+     VALUES ('resumen_interno',$1,$2,$3,$4,now(),$5)`,
+    [
+      `${enviados} destinatario(s)`,
+      texto,
+      hoy,
+      enviados > 0 || dest.rows.length === 0 ? "enviado" : "error",
+      errorTxt,
+    ]
+  );
+  console.log(`[Recobros] resumen interno ${hoy}: ${texto} → ${enviados} enviado(s)`);
+}
+
+let recobrosNotifierRunning = false;
+async function checkRecobrosNotifications() {
+  if (recobrosNotifierRunning) return;
+  recobrosNotifierRunning = true;
+  try {
+    const zoned = getZonedDateTimeParts(new Date(), AGENDA_TIME_ZONE);
+    const [h, m] = RECOBROS_NOTIFY_HOUR.split(":").map(Number);
+    if (zoned.minutesOfDay < h * 60 + (m || 0)) return;
+    await procesarNotificacionesProgramadasRecobros(zoned.dateKey);
+    await procesarAvisosDiariosRecobros(zoned.dateKey);
+  } catch (e) {
+    console.error("checkRecobrosNotifications error:", e);
+  } finally {
+    recobrosNotifierRunning = false;
+  }
+}
+
+function startRecobrosNotifierChecker() {
+  console.log(`Envíos automáticos de recobros activos (a partir de las ${RECOBROS_NOTIFY_HOUR}).`);
+  void checkRecobrosNotifications();
+  setInterval(() => { void checkRecobrosNotifications(); }, RECOBROS_CHECK_INTERVAL_MS);
+}
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
@@ -11181,6 +11418,7 @@ initDb()
       console.log(`Servidor backend en puerto ${PORT}`);
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
+      startRecobrosNotifierChecker();
     });
   })
   .catch((error) => {
