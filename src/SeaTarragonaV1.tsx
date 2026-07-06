@@ -4772,6 +4772,16 @@ return (
 >
   Cobros
 </button>
+
+<button
+  type="button"
+  onClick={() => {
+    window.location.href = "/administracion";
+  }}
+  className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100"
+>
+  Administración
+</button>
 {canView("ranking") && (
   <button
     type="button"
@@ -6806,6 +6816,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => { setView("operarios"); void reloadMaintenanceAvailabilityFromBackend(); }} className="rounded bg-sky-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-sky-600">Técnicos</button>
           <button type="button" onClick={() => setView("entradas2")} className="rounded bg-emerald-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-emerald-600">ER</button>
+          <button type="button" onClick={() => { window.location.href = "/administracion"; }} className="rounded bg-indigo-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-indigo-600">Administración</button>
           <button type="button" onClick={() => setView("operativo")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200 hover:bg-slate-700">← Volver</button>
         </div>
       </div>
