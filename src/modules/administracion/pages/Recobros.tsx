@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2 } from "lucide-react";
+import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import {
-  listRecoveryCases, listRecoveryActions, listPaymentMethods,
+  listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
   addRecoveryAction, cambiarEstadoRecovery, cambiarPrioridadRecovery, updateRecovery,
-  registrarPagoVinculado,
+  registrarPagoVinculado, crearRecobroDirecto,
 } from "../services/data";
 import {
   Card, Modal, TableWrap, thCls, tdCls, TextField, SelectField, TextAreaField, Field,
@@ -14,7 +14,7 @@ import {
   fmtEur, fmtFecha, fmtFechaHora, hoyISO, diasVencidos,
   RECOVERY_STATUS_LABELS, RECOVERY_STATUS_COLORS, PRIORITY_LABELS, PRIORITY_COLORS, ACTION_TYPE_LABELS,
   type RecoveryCase, type RecoveryStatus, type RecoveryPriority, type RecoveryAction,
-  type PaymentMethod, type Centro,
+  type PaymentMethod, type Centro, type Customer, type Invoice,
 } from "../types";
 
 export default function Recobros() {
@@ -27,6 +27,7 @@ export default function Recobros() {
   const [error, setError] = useState("");
   const [detalle, setDetalle] = useState<RecoveryCase | null>(null);
   const [filtroPrioridad, setFiltroPrioridad] = useState<RecoveryPriority | "">("");
+  const [creando, setCreando] = useState(false);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -58,11 +59,18 @@ export default function Recobros() {
           <h1 className="text-lg font-black">Recobros</h1>
           <p className="text-sm text-slate-400">Facturas vencidas o retrasadas.</p>
         </div>
-        <div className="w-44">
-          <SelectField label="Prioridad" value={filtroPrioridad} onChange={(v) => setFiltroPrioridad(v as RecoveryPriority | "")}>
-            <option value="">Todas</option>
-            {(Object.keys(PRIORITY_LABELS) as RecoveryPriority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>)}
-          </SelectField>
+        <div className="flex items-end gap-2">
+          <div className="w-44">
+            <SelectField label="Prioridad" value={filtroPrioridad} onChange={(v) => setFiltroPrioridad(v as RecoveryPriority | "")}>
+              <option value="">Todas</option>
+              {(Object.keys(PRIORITY_LABELS) as RecoveryPriority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>)}
+            </SelectField>
+          </div>
+          {puedeGestionar && (
+            <button onClick={() => setCreando(true)} className={btnPrimary}>
+              <span className="flex items-center gap-1"><Plus className="h-4 w-4" /> Nuevo recobro</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -127,7 +135,134 @@ export default function Recobros() {
           onChanged={() => { setDetalle(null); void cargar(); }}
         />
       )}
+
+      {creando && (
+        <ModalNuevoRecobro
+          userId={perfil?.id ?? null}
+          onClose={() => setCreando(false)}
+          onSaved={() => { setCreando(false); void cargar(); }}
+        />
+      )}
     </div>
+  );
+}
+
+// ── Nuevo recobro directo (impagado) ─────────────────────────
+function ModalNuevoRecobro({ userId, onClose, onSaved }: {
+  userId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [clientes, setClientes] = useState<Customer[]>([]);
+  const [facturas, setFacturas] = useState<Invoice[]>([]);
+  const [customerId, setCustomerId] = useState("");
+  const [invoiceId, setInvoiceId] = useState("");
+  const [numero, setNumero] = useState("");
+  const [fechaFactura, setFechaFactura] = useState(hoyISO());
+  const [vencimiento, setVencimiento] = useState("");
+  const [importe, setImporte] = useState("");
+  const [prioridad, setPrioridad] = useState<RecoveryPriority>("normal");
+  const [notas, setNotas] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    listCustomers().then(setClientes).catch(() => setError("No se pudieron cargar los clientes"));
+  }, []);
+
+  useEffect(() => {
+    if (!customerId) { setFacturas([]); setInvoiceId(""); return; }
+    listInvoices(customerId)
+      .then((f) => setFacturas(f.filter((x) => Number(x.pending_amount) > 0 && x.status !== "anulada")))
+      .catch(() => { /* opcional */ });
+  }, [customerId]);
+
+  const usaExistente = invoiceId !== "";
+
+  async function guardar() {
+    if (!customerId) { setError("Selecciona un cliente."); return; }
+    let nuevaFactura = null;
+    if (!usaExistente) {
+      const total = parseFloat(importe.replace(",", "."));
+      if (!numero.trim()) { setError("Introduce el número de factura."); return; }
+      if (!total || total <= 0) { setError("Introduce un importe válido."); return; }
+      if (!vencimiento) { setError("Indica la fecha de vencimiento."); return; }
+      nuevaFactura = {
+        invoice_number: numero.trim(),
+        invoice_date: fechaFactura,
+        due_date: vencimiento,
+        total_amount: total,
+      };
+    }
+    setGuardando(true);
+    setError("");
+    try {
+      await crearRecobroDirecto({
+        customerId,
+        invoiceId: usaExistente ? invoiceId : null,
+        nuevaFactura,
+        dueDate: vencimiento || null,
+        priority: prioridad,
+        notes: notas.trim() || null,
+        userId,
+      });
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error creando el recobro");
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Modal title="Nuevo recobro" onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className={btnSecondary}>Cancelar</button>
+          <button onClick={guardar} disabled={guardando} className={btnPrimary}>{guardando ? "Creando…" : "Crear expediente"}</button>
+        </div>
+      }
+    >
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <SelectField label="Cliente" value={customerId} onChange={(v) => { setCustomerId(v); setInvoiceId(""); }}>
+          <option value="">— Selecciona —</option>
+          {clientes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </SelectField>
+        <SelectField label="Factura existente (opcional)" value={invoiceId} onChange={setInvoiceId}>
+          <option value="">— Crear factura nueva —</option>
+          {facturas.map((f) => <option key={f.id} value={f.id}>{f.invoice_number} · pendiente {fmtEur(f.pending_amount)}</option>)}
+        </SelectField>
+      </div>
+
+      {!usaExistente && (
+        <>
+          <div className="my-3 border-t border-slate-700 pt-3 text-[10px] font-bold uppercase tracking-wide text-slate-400">Datos de la factura impagada</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <TextField label="Nº factura" value={numero} onChange={setNumero} placeholder="F-2025-0123" />
+            <TextField label="Importe pendiente (€)" value={importe} onChange={setImporte} placeholder="0,00" />
+            <Field label="Fecha factura"><input type="date" value={fechaFactura} onChange={(e) => setFechaFactura(e.target.value)} className={inputCls} /></Field>
+            <Field label="Vencimiento"><input type="date" value={vencimiento} onChange={(e) => setVencimiento(e.target.value)} className={inputCls} /></Field>
+          </div>
+        </>
+      )}
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <SelectField label="Prioridad" value={prioridad} onChange={(v) => setPrioridad(v as RecoveryPriority)}>
+          {(Object.keys(PRIORITY_LABELS) as RecoveryPriority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>)}
+        </SelectField>
+        {usaExistente && (
+          <Field label="Vencimiento (opcional, si difiere)">
+            <input type="date" value={vencimiento} onChange={(e) => setVencimiento(e.target.value)} className={inputCls} />
+          </Field>
+        )}
+      </div>
+      <div className="mt-3">
+        <TextAreaField label="Observaciones internas" value={notas} onChange={setNotas} rows={2} />
+      </div>
+      <p className="mt-3 text-[12px] text-slate-500">
+        El expediente se crea directamente en Recobros. Si existía un seguimiento abierto de esa factura, se marca como "Pasado a recobro" para no duplicar gestiones.
+      </p>
+    </Modal>
   );
 }
 

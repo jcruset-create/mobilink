@@ -322,6 +322,77 @@ export async function listRecoveryActions(caseId: string): Promise<RecoveryActio
   return (data ?? []) as RecoveryAction[];
 }
 
+// ── Crear recobro directo (impagado sin pasar por seguimiento) ──
+// Si se indica factura existente se enlaza; si no, se crea la factura.
+// El trigger de facturas puede generar un seguimiento automático: se cierra
+// como 'pasado_a_recobro' para que no haya gestión duplicada.
+export async function crearRecobroDirecto(opts: {
+  customerId: string;
+  invoiceId: string | null;
+  nuevaFactura: { invoice_number: string; invoice_date: string; due_date: string | null; total_amount: number } | null;
+  dueDate: string | null;
+  priority: RecoveryPriority;
+  notes: string | null;
+  userId: string | null;
+}): Promise<void> {
+  let invoiceId = opts.invoiceId;
+  let pendiente = 0;
+  let dueDate = opts.dueDate;
+
+  if (invoiceId) {
+    // Factura existente: comprobar que no tenga ya un recobro abierto
+    const { data: caso } = await supabase.from("adm_recovery_cases")
+      .select("id").eq("invoice_id", invoiceId).is("closed_at", null).maybeSingle();
+    if (caso) throw new Error("Esta factura ya tiene un expediente de recobro abierto.");
+    const { data: inv, error: invErr } = await supabase.from("adm_invoices")
+      .select("pending_amount, due_date").eq("id", invoiceId).single();
+    if (invErr) fail(invErr.message, "cargar factura");
+    pendiente = Number((inv as { pending_amount: number }).pending_amount);
+    if (pendiente <= 0) throw new Error("Esta factura no tiene importe pendiente.");
+    dueDate = dueDate ?? (inv as { due_date: string | null }).due_date;
+  } else if (opts.nuevaFactura) {
+    const { data: inv, error: invErr } = await supabase.from("adm_invoices").insert({
+      customer_id: opts.customerId,
+      invoice_number: opts.nuevaFactura.invoice_number,
+      invoice_date: opts.nuevaFactura.invoice_date,
+      due_date: opts.nuevaFactura.due_date,
+      total_amount: opts.nuevaFactura.total_amount,
+      pending_amount: opts.nuevaFactura.total_amount,
+    }).select("id").single();
+    if (invErr) fail(invErr.message, "crear factura");
+    invoiceId = (inv as { id: string }).id;
+    pendiente = opts.nuevaFactura.total_amount;
+    dueDate = dueDate ?? opts.nuevaFactura.due_date;
+  } else {
+    throw new Error("Indica una factura existente o los datos de la nueva.");
+  }
+
+  // Cerrar el seguimiento automático (si el trigger lo creó o ya existía)
+  await supabase.from("adm_payment_tracking")
+    .update({ status: "pasado_a_recobro", closed_at: new Date().toISOString() })
+    .eq("invoice_id", invoiceId)
+    .is("closed_at", null);
+
+  const { data: nuevo, error } = await supabase.from("adm_recovery_cases").insert({
+    customer_id: opts.customerId,
+    invoice_id: invoiceId,
+    due_date: dueDate,
+    initial_amount: pendiente,
+    pending_amount: pendiente,
+    status: "pendiente",
+    priority: opts.priority,
+    internal_notes: opts.notes,
+  }).select("id").single();
+  if (error) fail(error.message, "crear recobro");
+
+  await supabase.from("adm_recovery_actions").insert({
+    recovery_case_id: (nuevo as { id: string }).id,
+    action_type: "nota",
+    user_id: opts.userId,
+    notes: "Expediente creado manualmente desde Recobros",
+  });
+}
+
 // ── Registrar pago desde seguimiento/recobro ─────────────────
 // Crea el cobro (los triggers de BD recalculan pendientes y cierran si llega a 0).
 export async function registrarPagoVinculado(opts: {
