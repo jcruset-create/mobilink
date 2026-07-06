@@ -64,6 +64,14 @@ Nada nuevo que configurar: el módulo forma parte del build existente (`npm run 
 
 Las políticas se aplican en la base de datos (RLS), no solo en la interfaz.
 
+## Clientes unificados (fase 3)
+
+Desde la fase 3, la tabla maestra de clientes de toda la aplicación es **`clientes`** (la misma que usa el almacén). `adm_customers` es su ficha económica 1:1 (mismo id):
+
+- Los clientes creados o editados en el **almacén** aparecen automáticamente en Administración (trigger `adm_sync_cliente`), con seguimiento activado y 30 días de pago por defecto.
+- Crear o editar un cliente desde **Administración** escribe en la maestra vía la función `adm_guardar_cliente` (nombre, nº cliente, NIF, teléfono, email) y guarda aparte las condiciones económicas.
+- Las migraciones se aplican en orden: `administracion_fase1.sql` → `administracion_fase3_unificar_clientes.sql` (la fase 3 ya incluye la fase 2).
+
 ## Tablas (prefijo `adm_`)
 
 `adm_usuarios`, `adm_customers`, `adm_work_orders`, `adm_invoices`, `adm_payment_methods`, `adm_payments`, `adm_payment_tracking`, `adm_payment_tracking_actions`, `adm_recovery_cases`, `adm_recovery_actions` + vista `adm_ot_estado`.

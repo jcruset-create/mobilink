@@ -40,31 +40,28 @@ export async function getCustomer(id: string): Promise<Customer | null> {
   return (data as Customer | null) ?? null;
 }
 
+// Guarda vía RPC: la identidad va a la tabla maestra 'clientes' (compartida
+// con toda la aplicación) y los campos económicos a adm_customers.
 export async function saveCustomer(c: Partial<Customer> & { name: string }): Promise<string> {
-  const payload = {
-    name: c.name,
-    customer_code: c.customer_code ?? null,
-    tax_id: c.tax_id ?? null,
-    phone: c.phone ?? null,
-    email: c.email ?? null,
-    payment_method: c.payment_method ?? null,
-    has_direct_debit: c.has_direct_debit ?? false,
-    requires_payment_tracking: c.requires_payment_tracking ?? true,
-    expected_payment_days: c.expected_payment_days ?? 30,
-    admin_email: c.admin_email ?? null,
-    admin_phone: c.admin_phone ?? null,
-    payment_contact_name: c.payment_contact_name ?? null,
-    internal_credit_limit: c.internal_credit_limit ?? null,
-    economic_notes: c.economic_notes ?? null,
-  };
-  if (c.id) {
-    const { error } = await supabase.from("adm_customers").update(payload).eq("id", c.id);
-    if (error) fail(error.message, "actualizar cliente");
-    return c.id;
-  }
-  const { data, error } = await supabase.from("adm_customers").insert(payload).select("id").single();
-  if (error) fail(error.message, "crear cliente");
-  return (data as { id: string }).id;
+  const { data, error } = await supabase.rpc("adm_guardar_cliente", {
+    p_id: c.id ?? null,
+    p_nombre: c.name,
+    p_codigo: c.customer_code ?? null,
+    p_nif: c.tax_id ?? null,
+    p_telefono: c.phone ?? null,
+    p_email: c.email ?? null,
+    p_payment_method: c.payment_method ?? null,
+    p_has_direct_debit: c.has_direct_debit ?? false,
+    p_requires_tracking: c.requires_payment_tracking ?? true,
+    p_expected_days: c.expected_payment_days ?? 30,
+    p_admin_email: c.admin_email ?? null,
+    p_admin_phone: c.admin_phone ?? null,
+    p_payment_contact: c.payment_contact_name ?? null,
+    p_credit_limit: c.internal_credit_limit ?? null,
+    p_notes: c.economic_notes ?? null,
+  });
+  if (error) fail(error.message, "guardar cliente");
+  return data as string;
 }
 
 // ── OTs y facturas ───────────────────────────────────────────
