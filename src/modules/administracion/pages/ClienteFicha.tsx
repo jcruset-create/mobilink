@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Pencil, Plus, Lock } from "lucide-react";
+import { ArrowLeft, Pencil, Plus, Lock, ScanLine } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import {
   getCustomer, saveCustomer, listPaymentMethods, listWorkOrders, listInvoices,
@@ -276,10 +276,49 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
   const [notas, setNotas] = useState(cliente?.economic_notes ?? "");
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+  const [analizando, setAnalizando] = useState(false);
+  const [avisoImport, setAvisoImport] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listPaymentMethods().then(setFormas).catch(() => { /* opcional */ });
   }, []);
+
+  async function analizarImagen(file: File) {
+    setAnalizando(true);
+    setError("");
+    setAvisoImport("");
+    try {
+      const fd = new FormData();
+      fd.append("imagen", file);
+      const res = await fetch("/api/administracion/analizar-cliente", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
+      const d = data.datos as {
+        codigo: string | null; nombre: string | null; nif: string | null;
+        telefono: string | null; email: string | null; contacto: string | null;
+        formaPago: string | null; confianza: string;
+      };
+
+      if (d.nombre) setNombre(d.nombre);
+      if (d.codigo) setCodigo(d.codigo);
+      if (d.nif) setCif(d.nif);
+      if (d.telefono) setTelefono(d.telefono);
+      if (d.email) setEmail(d.email);
+      if (d.contacto) setContacto(d.contacto);
+      if (d.formaPago) {
+        const coincide = formas.find((f) => f.name.toLowerCase() === d.formaPago?.toLowerCase());
+        if (coincide) setFormaPago(coincide.name);
+      }
+
+      setAvisoImport(`Datos importados (confianza ${d.confianza}). Revisa los campos y completa las condiciones económicas antes de guardar.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error analizando la imagen");
+    } finally {
+      setAnalizando(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
 
   async function guardar() {
     if (!nombre.trim()) { setError("El nombre es obligatorio."); return; }
@@ -320,6 +359,42 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
       }
     >
       {error && <ErrorBox>{error}</ErrorBox>}
+      {avisoImport && (
+        <div className="mb-3 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm text-sky-300">{avisoImport}</div>
+      )}
+
+      {/* Importar desde captura del ERP (GENES) */}
+      <div
+        onPaste={(e) => {
+          const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+          const f = item?.getAsFile();
+          if (f) { e.preventDefault(); void analizarImagen(f); }
+        }}
+        className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-slate-600 bg-slate-900 px-3 py-2.5"
+      >
+        <button
+          type="button"
+          disabled={analizando}
+          onClick={() => fileRef.current?.click()}
+          className={btnSecondary}
+        >
+          <span className="flex items-center gap-1">
+            <ScanLine className="h-4 w-4" />
+            {analizando ? "Analizando imagen…" : "Importar desde imagen"}
+          </span>
+        </button>
+        <span className="text-[12px] text-slate-500">
+          Sube o pega (Ctrl+V) la captura de la ficha del cliente en GENES. Nombre, nº cliente, NIF, teléfono y email se rellenan solos.
+        </span>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void analizarImagen(f); }}
+        />
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField label="Nombre / Razón social" value={nombre} onChange={setNombre} />
         <TextField label="Nº cliente" value={codigo} onChange={setCodigo} placeholder="100506" />

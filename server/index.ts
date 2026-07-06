@@ -11065,6 +11065,83 @@ Reglas:
 );
 
 /* =========================================================
+   SEA ADMINISTRACIÓN — analizar captura de ficha de cliente
+   (ERP GENES u otro) y extraer datos para el alta de cliente
+========================================================= */
+app.post(
+  "/api/administracion/analizar-cliente",
+  upload.single("imagen"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: "No se recibió ninguna imagen." });
+      }
+      if (!req.file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ success: false, message: "El archivo debe ser una imagen." });
+      }
+
+      const base64 = req.file.buffer.toString("base64");
+      const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
+
+      const systemPrompt = `Eres un extractor de datos de administración de un taller.
+Recibirás la captura de una ficha de cliente de un ERP (normalmente CEINOR GENES,
+con campos como "Código Cliente", "Nombre Comercial", "Nombre Fiscal", "Nº Documento" (NIF/CIF),
+"Email Envio Docs", teléfonos, delegaciones con dirección y contactos).
+
+Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
+{
+  "codigo": string | null,           // Código Cliente (ej. "100506")
+  "nombre": string | null,           // Nombre fiscal o comercial (ej. "DENIS EXPRESS CARGO, S.L.")
+  "nif": string | null,              // Nº Documento / NIF / CIF (ej. "B56809189")
+  "telefono": string | null,         // teléfono principal o del contacto
+  "email": string | null,            // email (ej. de "Email Envio Docs"), en minúsculas
+  "contacto": string | null,         // nombre de la persona de contacto si aparece y es distinto de la razón social
+  "formaPago": string | null,        // forma de pago si es visible (ej. "Giro bancario", "Transferencia")
+  "confianza": "alta" | "media" | "baja"
+}
+
+Reglas:
+- El código de cliente es numérico y suele estar junto a "Código Cliente".
+- Devuelve el email en minúsculas.
+- Si el contacto es la misma razón social, devuelve contacto = null.
+- Devuelve null en cualquier campo que no puedas leer con claridad.`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Extrae los datos del cliente de esta captura:" },
+              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_tokens: 400,
+      });
+
+      const raw = response.choices[0]?.message?.content ?? "{}";
+      const jsonTexto = limpiarJsonOpenAI(raw);
+
+      let datos: any;
+      try {
+        datos = JSON.parse(jsonTexto);
+      } catch {
+        console.error("analizar-cliente: respuesta no parseable:", raw);
+        return res.status(422).json({ success: false, message: "No se pudieron extraer datos de la imagen." });
+      }
+
+      return res.json({ success: true, datos });
+    } catch (error) {
+      console.error("Error en /api/administracion/analizar-cliente:", error);
+      return res.status(500).json({ success: false, message: "Error analizando la imagen." });
+    }
+  }
+);
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
