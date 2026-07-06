@@ -623,18 +623,16 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
 
               <div className="mt-1 border-t border-slate-700 pt-2">
                 <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Compromiso de pago</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Fecha comprometida">
-                    <input type="date" value={fechaCompromiso} onChange={(e) => setFechaCompromiso(e.target.value)} className={inputCls} />
-                  </Field>
-                  <button disabled={trabajando} onClick={() => void accion(async () => {
-                    if (!fechaCompromiso) throw new Error("Indica la fecha comprometida.");
-                    await addRecoveryAction(c.id, "compromiso_pago", userId, `Compromiso de pago para ${fmtFecha(fechaCompromiso)}`, fechaCompromiso);
-                    await updateRecovery(c.id, { status: "compromiso_pago" });
-                  })} className={`${btnSecondary} self-end`}>
-                    <span className="flex items-center justify-center gap-1"><Handshake className="h-4 w-4" /> Registrar</span>
-                  </button>
-                </div>
+                <Field label="Fecha comprometida">
+                  <input type="date" value={fechaCompromiso} onChange={(e) => setFechaCompromiso(e.target.value)} className={inputCls} />
+                </Field>
+                <button disabled={trabajando} onClick={() => void accion(async () => {
+                  if (!fechaCompromiso) throw new Error("Indica la fecha comprometida.");
+                  await addRecoveryAction(c.id, "compromiso_pago", userId, `Compromiso de pago para ${fmtFecha(fechaCompromiso)}`, fechaCompromiso);
+                  await updateRecovery(c.id, { status: "compromiso_pago" });
+                })} className={`${btnSecondary} mt-2 w-full`}>
+                  <span className="flex items-center justify-center gap-1"><Handshake className="h-4 w-4" /> Registrar compromiso</span>
+                </button>
               </div>
 
               <div className="mt-1 border-t border-slate-700 pt-2">
