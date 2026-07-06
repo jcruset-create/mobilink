@@ -64,6 +64,13 @@ export async function saveCustomer(c: Partial<Customer> & { name: string }): Pro
   return data as string;
 }
 
+// Elimina en la tabla maestra 'clientes' (solo rol admin; la RPC valida
+// que no tenga movimientos antes de borrar).
+export async function deleteCustomer(id: string): Promise<void> {
+  const { error } = await supabase.rpc("adm_eliminar_cliente", { p_id: id });
+  if (error) fail(error.message, "eliminar cliente");
+}
+
 // ── OTs y facturas ───────────────────────────────────────────
 export async function listWorkOrders(customerId?: string): Promise<WorkOrder[]> {
   let q = supabase.from("adm_work_orders")
