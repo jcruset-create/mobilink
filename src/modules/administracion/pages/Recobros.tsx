@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import {
   listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
@@ -165,10 +165,70 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
   const [notas, setNotas] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+  const [analizando, setAnalizando] = useState(false);
+  const [avisoImport, setAvisoImport] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listCustomers().then(setClientes).catch(() => setError("No se pudieron cargar los clientes"));
   }, []);
+
+  function normalizar(s: string): string {
+    return s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/gi, " ").replace(/\s+/g, " ").trim().toUpperCase();
+  }
+
+  async function analizarImagen(file: File) {
+    setAnalizando(true);
+    setError("");
+    setAvisoImport("");
+    try {
+      const fd = new FormData();
+      fd.append("imagen", file);
+      const res = await fetch("/api/administracion/analizar-impagado", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
+      const d = data.datos as {
+        clienteCodigo: string | null; clienteNombre: string | null; numeroFactura: string | null;
+        vencimiento: string | null; fechaFactura: string | null;
+        nominal: number | null; gastos: number | null; total: number | null; confianza: string;
+      };
+
+      if (d.numeroFactura) setNumero(d.numeroFactura);
+      if (d.fechaFactura) setFechaFactura(d.fechaFactura);
+      if (d.vencimiento) setVencimiento(d.vencimiento);
+      const total = d.total ?? ((d.nominal ?? 0) + (d.gastos ?? 0));
+      if (total > 0) setImporte(String(total).replace(".", ","));
+
+      const partes: string[] = ["Importado de imagen (devolución de recibo)."];
+      if (d.nominal != null) partes.push(`Nominal: ${d.nominal} €`);
+      if (d.gastos != null) partes.push(`Gastos devolución: ${d.gastos} €`);
+      if (d.clienteNombre) partes.push(`Cliente: ${d.clienteNombre}${d.clienteCodigo ? ` (${d.clienteCodigo})` : ""}`);
+      setNotas((prev) => (prev ? prev + "\n" : "") + partes.join(" · "));
+
+      // Buscar el cliente por nombre
+      if (d.clienteNombre) {
+        const objetivo = normalizar(d.clienteNombre);
+        const encontrado = clientes.find((c) => {
+          const n = normalizar(c.name);
+          return n === objetivo || n.includes(objetivo) || objetivo.includes(n);
+        });
+        if (encontrado) {
+          setCustomerId(encontrado.id);
+          setInvoiceId("");
+          setAvisoImport(`Datos importados (confianza ${d.confianza}). Cliente reconocido: ${encontrado.name}. Revisa y confirma.`);
+        } else {
+          setAvisoImport(`Datos importados (confianza ${d.confianza}), pero el cliente "${d.clienteNombre}" no existe en el módulo: créalo en "Clientes con seguimiento" o selecciona uno a mano.`);
+        }
+      } else {
+        setAvisoImport(`Datos importados (confianza ${d.confianza}). No se pudo leer el cliente: selecciónalo a mano.`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error analizando la imagen");
+    } finally {
+      setAnalizando(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
 
   useEffect(() => {
     if (!customerId) { setFacturas([]); setInvoiceId(""); return; }
@@ -223,6 +283,42 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       }
     >
       {error && <ErrorBox>{error}</ErrorBox>}
+      {avisoImport && (
+        <div className="mb-3 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm text-sky-300">{avisoImport}</div>
+      )}
+
+      {/* Importar desde imagen (captura de WhatsApp / email del banco) */}
+      <div
+        onPaste={(e) => {
+          const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+          const f = item?.getAsFile();
+          if (f) { e.preventDefault(); void analizarImagen(f); }
+        }}
+        className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-slate-600 bg-slate-900 px-3 py-2.5"
+      >
+        <button
+          type="button"
+          disabled={analizando}
+          onClick={() => fileRef.current?.click()}
+          className={btnSecondary}
+        >
+          <span className="flex items-center gap-1">
+            <ScanLine className="h-4 w-4" />
+            {analizando ? "Analizando imagen…" : "Importar desde imagen"}
+          </span>
+        </button>
+        <span className="text-[12px] text-slate-500">
+          Sube la captura del aviso (devolución de recibo, email del banco…) o pégala aquí con Ctrl+V. Los campos se rellenan solos.
+        </span>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void analizarImagen(f); }}
+        />
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <SelectField label="Cliente" value={customerId} onChange={(v) => { setCustomerId(v); setInvoiceId(""); }}>
           <option value="">— Selecciona —</option>

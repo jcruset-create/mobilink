@@ -10987,6 +10987,84 @@ app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
 });
 
 /* =========================================================
+   SEA ADMINISTRACIÓN — analizar imagen de impagado (devolución
+   de recibo bancario) y extraer datos para crear el recobro
+========================================================= */
+app.post(
+  "/api/administracion/analizar-impagado",
+  upload.single("imagen"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: "No se recibió ninguna imagen." });
+      }
+      if (!req.file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ success: false, message: "El archivo debe ser una imagen." });
+      }
+
+      const base64 = req.file.buffer.toString("base64");
+      const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
+
+      const systemPrompt = `Eres un extractor de datos de administración de un taller.
+Recibirás la imagen de un aviso de devolución de recibo bancario o de una factura pendiente
+(normalmente un email del banco o de contabilidad con campos como CLIENTE, FACTURA,
+VENCIMIENTO, NOMINAL, GASTOS, TOTAL).
+
+Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
+{
+  "clienteCodigo": string | null,      // código numérico del cliente si aparece (ej. "100506")
+  "clienteNombre": string | null,      // razón social (ej. "DENIS EXPRESS CARGO, S.L.")
+  "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
+  "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
+  "fechaFactura": string | null,       // fecha de la factura o contabilización en ISO yyyy-mm-dd
+  "nominal": number | null,            // importe nominal en euros
+  "gastos": number | null,             // gastos de devolución en euros
+  "total": number | null,              // importe total en euros (nominal + gastos)
+  "confianza": "alta" | "media" | "baja"
+}
+
+Reglas:
+- Fechas tipo "30.06.26" o "2.07.26" son dd.mm.aa → conviértelas a ISO (2026-06-30, 2026-07-02).
+- Importes en formato español "1.997,32" → 1997.32 (número, punto decimal).
+- Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
+- Devuelve null en cualquier campo que no puedas leer con claridad.`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Extrae los datos del impagado de esta imagen:" },
+              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_tokens: 400,
+      });
+
+      const raw = response.choices[0]?.message?.content ?? "{}";
+      const jsonTexto = limpiarJsonOpenAI(raw);
+
+      let datos: any;
+      try {
+        datos = JSON.parse(jsonTexto);
+      } catch {
+        console.error("analizar-impagado: respuesta no parseable:", raw);
+        return res.status(422).json({ success: false, message: "No se pudieron extraer datos de la imagen." });
+      }
+
+      return res.json({ success: true, datos });
+    } catch (error) {
+      console.error("Error en /api/administracion/analizar-impagado:", error);
+      return res.status(500).json({ success: false, message: "Error analizando la imagen." });
+    }
+  }
+);
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
