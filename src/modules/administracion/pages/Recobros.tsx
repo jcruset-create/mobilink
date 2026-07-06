@@ -93,7 +93,9 @@ export default function Recobros() {
             <th className={thCls}>OT</th>
             <th className={thCls}>Vencimiento</th>
             <th className={`${thCls} text-right`}>Días venc.</th>
-            <th className={`${thCls} text-right`}>Inicial</th>
+            <th className={`${thCls} text-right`}>Nominal</th>
+            <th className={`${thCls} text-right`}>Gastos</th>
+            <th className={`${thCls} text-right`}>Total deuda</th>
             <th className={`${thCls} text-right`}>Pendiente</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}>Prioridad</th>
@@ -102,8 +104,8 @@ export default function Recobros() {
           </tr>
         </thead>
         <tbody>
-          {cargando && <EmptyRow cols={11} text="Cargando…" />}
-          {!cargando && visibles.length === 0 && <EmptyRow cols={11} text="No hay expedientes de recobro abiertos." />}
+          {cargando && <EmptyRow cols={13} text="Cargando…" />}
+          {!cargando && visibles.length === 0 && <EmptyRow cols={13} text="No hay expedientes de recobro abiertos." />}
           {!cargando && visibles.map((c) => {
             const dias = diasVencidos(c.due_date);
             return (
@@ -113,7 +115,9 @@ export default function Recobros() {
                 <td className={tdCls}>{c.work_order?.ot_number ?? "—"}</td>
                 <td className={tdCls}>{fmtFecha(c.due_date)}</td>
                 <td className={`${tdCls} text-right font-bold ${dias > 30 ? "text-rose-300" : dias > 0 ? "text-amber-300" : "text-slate-400"}`}>{dias}</td>
-                <td className={`${tdCls} text-right`}>{fmtEur(c.initial_amount)}</td>
+                <td className={`${tdCls} text-right`}>{c.nominal_amount != null ? fmtEur(c.nominal_amount) : "—"}</td>
+                <td className={`${tdCls} text-right text-slate-400`}>{c.return_expenses != null ? fmtEur(c.return_expenses) : "—"}</td>
+                <td className={`${tdCls} text-right font-semibold`}>{fmtEur(c.initial_amount)}</td>
                 <td className={`${tdCls} text-right font-bold text-rose-300`}>{fmtEur(c.pending_amount)}</td>
                 <td className={tdCls}><Pill className={RECOVERY_STATUS_COLORS[c.status]}>{RECOVERY_STATUS_LABELS[c.status]}</Pill></td>
                 <td className={tdCls}><Pill className={PRIORITY_COLORS[c.priority]}>{PRIORITY_LABELS[c.priority]}</Pill></td>
