@@ -26,6 +26,7 @@ export const CENTROS: Centro[] = ["tarragona", "reus"];
 export type Customer = {
   id: string;
   name: string;
+  customer_code: string | null;
   tax_id: string | null;
   phone: string | null;
   email: string | null;

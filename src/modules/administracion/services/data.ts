@@ -28,7 +28,7 @@ export async function savePaymentMethod(m: Partial<PaymentMethod> & { name: stri
 // ── Clientes ─────────────────────────────────────────────────
 export async function listCustomers(filtro?: string): Promise<Customer[]> {
   let q = supabase.from("adm_customers").select("*").order("name");
-  if (filtro?.trim()) q = q.or(`name.ilike.%${filtro.trim()}%,tax_id.ilike.%${filtro.trim()}%`);
+  if (filtro?.trim()) q = q.or(`name.ilike.%${filtro.trim()}%,tax_id.ilike.%${filtro.trim()}%,customer_code.ilike.%${filtro.trim()}%`);
   const { data, error } = await q;
   if (error) fail(error.message, "clientes");
   return (data ?? []) as Customer[];
@@ -43,6 +43,7 @@ export async function getCustomer(id: string): Promise<Customer | null> {
 export async function saveCustomer(c: Partial<Customer> & { name: string }): Promise<string> {
   const payload = {
     name: c.name,
+    customer_code: c.customer_code ?? null,
     tax_id: c.tax_id ?? null,
     phone: c.phone ?? null,
     email: c.email ?? null,

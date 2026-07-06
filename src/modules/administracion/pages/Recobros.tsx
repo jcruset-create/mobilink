@@ -205,19 +205,25 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       if (d.clienteNombre) partes.push(`Cliente: ${d.clienteNombre}${d.clienteCodigo ? ` (${d.clienteCodigo})` : ""}`);
       setNotas((prev) => (prev ? prev + "\n" : "") + partes.join(" · "));
 
-      // Buscar el cliente por nombre
-      if (d.clienteNombre) {
-        const objetivo = normalizar(d.clienteNombre);
-        const encontrado = clientes.find((c) => {
-          const n = normalizar(c.name);
-          return n === objetivo || n.includes(objetivo) || objetivo.includes(n);
-        });
+      // Buscar el cliente: primero por nº de cliente, después por nombre
+      if (d.clienteCodigo || d.clienteNombre) {
+        const porCodigo = d.clienteCodigo
+          ? clientes.find((c) => c.customer_code && c.customer_code.trim() === d.clienteCodigo?.trim())
+          : undefined;
+        const objetivo = d.clienteNombre ? normalizar(d.clienteNombre) : "";
+        const encontrado = porCodigo ?? (objetivo
+          ? clientes.find((c) => {
+              const n = normalizar(c.name);
+              return n === objetivo || n.includes(objetivo) || objetivo.includes(n);
+            })
+          : undefined);
         if (encontrado) {
           setCustomerId(encontrado.id);
           setInvoiceId("");
           setAvisoImport(`Datos importados (confianza ${d.confianza}). Cliente reconocido: ${encontrado.name}. Revisa y confirma.`);
         } else {
-          setAvisoImport(`Datos importados (confianza ${d.confianza}), pero el cliente "${d.clienteNombre}" no existe en el módulo: créalo en "Clientes con seguimiento" o selecciona uno a mano.`);
+          const ref = d.clienteNombre ?? `nº ${d.clienteCodigo}`;
+          setAvisoImport(`Datos importados (confianza ${d.confianza}), pero el cliente "${ref}" no existe en el módulo: créalo en "Clientes con seguimiento" (con su nº de cliente) o selecciona uno a mano.`);
         }
       } else {
         setAvisoImport(`Datos importados (confianza ${d.confianza}). No se pudo leer el cliente: selecciónalo a mano.`);

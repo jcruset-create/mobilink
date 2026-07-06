@@ -55,7 +55,7 @@ export default function Clientes() {
         <input
           value={filtro}
           onChange={(e) => setFiltro(e.target.value)}
-          placeholder="Buscar por nombre o CIF/NIF…"
+          placeholder="Buscar por nombre, nº cliente o CIF/NIF…"
           className={`${inputCls} pl-9`}
         />
       </div>
@@ -64,6 +64,7 @@ export default function Clientes() {
         <thead>
           <tr className="border-b border-slate-700">
             <th className={thCls}>Cliente</th>
+            <th className={thCls}>Nº cliente</th>
             <th className={thCls}>CIF/NIF</th>
             <th className={thCls}>Teléfono</th>
             <th className={thCls}>Forma de pago</th>
@@ -74,13 +75,14 @@ export default function Clientes() {
           </tr>
         </thead>
         <tbody>
-          {cargando && <EmptyRow cols={8} text="Cargando…" />}
-          {!cargando && clientes.length === 0 && <EmptyRow cols={8} text="No hay clientes. Crea el primero." />}
+          {cargando && <EmptyRow cols={9} text="Cargando…" />}
+          {!cargando && clientes.length === 0 && <EmptyRow cols={9} text="No hay clientes. Crea el primero." />}
           {!cargando && clientes.map((c) => (
             <tr key={c.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
               <td className={`${tdCls} font-semibold`}>
                 <Link to={`/administracion/clientes/${c.id}`} className="text-sky-400 hover:underline">{c.name}</Link>
               </td>
+              <td className={tdCls}>{c.customer_code ?? "—"}</td>
               <td className={tdCls}>{c.tax_id ?? "—"}</td>
               <td className={tdCls}>{c.phone ?? "—"}</td>
               <td className={tdCls}>{c.payment_method ?? "—"}</td>

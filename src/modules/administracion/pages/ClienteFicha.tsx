@@ -68,7 +68,9 @@ export default function ClienteFicha() {
           <Link to="/administracion/clientes" className="rounded-lg p-1.5 hover:bg-slate-800"><ArrowLeft className="h-5 w-5" /></Link>
           <div>
             <h1 className="text-lg font-black">{cliente.name}</h1>
-            <p className="text-sm text-slate-400">{cliente.tax_id ?? "Sin CIF/NIF"} · {cliente.phone ?? "sin teléfono"}</p>
+            <p className="text-sm text-slate-400">
+              {cliente.customer_code ? `Nº ${cliente.customer_code} · ` : ""}{cliente.tax_id ?? "Sin CIF/NIF"} · {cliente.phone ?? "sin teléfono"}
+            </p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -259,6 +261,7 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
 }) {
   const [formas, setFormas] = useState<PaymentMethod[]>([]);
   const [nombre, setNombre] = useState(cliente?.name ?? "");
+  const [codigo, setCodigo] = useState(cliente?.customer_code ?? "");
   const [cif, setCif] = useState(cliente?.tax_id ?? "");
   const [telefono, setTelefono] = useState(cliente?.phone ?? "");
   const [email, setEmail] = useState(cliente?.email ?? "");
@@ -286,6 +289,7 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
       await saveCustomer({
         id: cliente?.id,
         name: nombre.trim(),
+        customer_code: codigo.trim() || null,
         tax_id: cif.trim() || null,
         phone: telefono.trim() || null,
         email: email.trim() || null,
@@ -318,6 +322,7 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
       {error && <ErrorBox>{error}</ErrorBox>}
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField label="Nombre / Razón social" value={nombre} onChange={setNombre} />
+        <TextField label="Nº cliente" value={codigo} onChange={setCodigo} placeholder="100506" />
         <TextField label="CIF/NIF" value={cif} onChange={setCif} />
         <TextField label="Teléfono" value={telefono} onChange={setTelefono} />
         <TextField label="Email" value={email} onChange={setEmail} type="email" />
