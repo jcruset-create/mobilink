@@ -332,6 +332,9 @@ export async function crearRecobroDirecto(opts: {
   priority: RecoveryPriority;
   notes: string | null;
   userId: string | null;
+  nominal?: number | null;          // nominal del recibo/vencimiento impagado
+  gastos?: number | null;           // gastos de devolución
+  numeroVencimiento?: string | null; // ej. "2/3" si la factura está partida
 }): Promise<void> {
   let invoiceId = opts.invoiceId;
   let pendiente = 0;
@@ -377,6 +380,9 @@ export async function crearRecobroDirecto(opts: {
     due_date: dueDate,
     initial_amount: pendiente,
     pending_amount: pendiente,
+    nominal_amount: opts.nominal ?? null,
+    return_expenses: opts.gastos ?? null,
+    installment_number: opts.numeroVencimiento ?? null,
     status: "pendiente",
     priority: opts.priority,
     internal_notes: opts.notes,

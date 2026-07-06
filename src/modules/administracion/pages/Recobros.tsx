@@ -160,7 +160,10 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
   const [numero, setNumero] = useState("");
   const [fechaFactura, setFechaFactura] = useState(hoyISO());
   const [vencimiento, setVencimiento] = useState("");
-  const [importe, setImporte] = useState("");
+  const [numVto, setNumVto] = useState("");
+  const [nominal, setNominal] = useState("");
+  const [gastos, setGastos] = useState("");
+  const [total, setTotal] = useState("");
   const [prioridad, setPrioridad] = useState<RecoveryPriority>("normal");
   const [notas, setNotas] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -189,19 +192,20 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
       const d = data.datos as {
         clienteCodigo: string | null; clienteNombre: string | null; numeroFactura: string | null;
-        vencimiento: string | null; fechaFactura: string | null;
+        vencimiento: string | null; fechaFactura: string | null; numeroVencimiento: string | null;
         nominal: number | null; gastos: number | null; total: number | null; confianza: string;
       };
 
       if (d.numeroFactura) setNumero(d.numeroFactura);
       if (d.fechaFactura) setFechaFactura(d.fechaFactura);
       if (d.vencimiento) setVencimiento(d.vencimiento);
-      const total = d.total ?? ((d.nominal ?? 0) + (d.gastos ?? 0));
-      if (total > 0) setImporte(String(total).replace(".", ","));
+      if (d.numeroVencimiento) setNumVto(d.numeroVencimiento);
+      if (d.nominal != null) setNominal(String(d.nominal).replace(".", ","));
+      if (d.gastos != null) setGastos(String(d.gastos).replace(".", ","));
+      const totalCalc = d.total ?? ((d.nominal ?? 0) + (d.gastos ?? 0));
+      if (totalCalc > 0) setTotal(String(Math.round(totalCalc * 100) / 100).replace(".", ","));
 
       const partes: string[] = ["Importado de imagen (devolución de recibo)."];
-      if (d.nominal != null) partes.push(`Nominal: ${d.nominal} €`);
-      if (d.gastos != null) partes.push(`Gastos devolución: ${d.gastos} €`);
       if (d.clienteNombre) partes.push(`Cliente: ${d.clienteNombre}${d.clienteCodigo ? ` (${d.clienteCodigo})` : ""}`);
       setNotas((prev) => (prev ? prev + "\n" : "") + partes.join(" · "));
 
@@ -245,19 +249,36 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
 
   const usaExistente = invoiceId !== "";
 
+  function parseNum(v: string): number {
+    const n = parseFloat(v.replace(/\./g, "").replace(",", "."));
+    return isNaN(n) ? 0 : n;
+  }
+
+  // Total = nominal + gastos (recalculado al cambiar cualquiera de los dos)
+  function cambiarNominal(v: string) {
+    setNominal(v);
+    const t = parseNum(v) + parseNum(gastos);
+    if (t > 0) setTotal(String(Math.round(t * 100) / 100).replace(".", ","));
+  }
+  function cambiarGastos(v: string) {
+    setGastos(v);
+    const t = parseNum(nominal) + parseNum(v);
+    if (t > 0) setTotal(String(Math.round(t * 100) / 100).replace(".", ","));
+  }
+
   async function guardar() {
     if (!customerId) { setError("Selecciona un cliente."); return; }
     let nuevaFactura = null;
+    const totalNum = parseNum(total);
     if (!usaExistente) {
-      const total = parseFloat(importe.replace(",", "."));
       if (!numero.trim()) { setError("Introduce el número de factura."); return; }
-      if (!total || total <= 0) { setError("Introduce un importe válido."); return; }
+      if (!totalNum || totalNum <= 0) { setError("Introduce el total del recibo devuelto."); return; }
       if (!vencimiento) { setError("Indica la fecha de vencimiento."); return; }
       nuevaFactura = {
         invoice_number: numero.trim(),
         invoice_date: fechaFactura,
         due_date: vencimiento,
-        total_amount: total,
+        total_amount: totalNum,
       };
     }
     setGuardando(true);
@@ -271,6 +292,9 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
         priority: prioridad,
         notes: notas.trim() || null,
         userId,
+        nominal: parseNum(nominal) || null,
+        gastos: parseNum(gastos) || null,
+        numeroVencimiento: numVto.trim() || null,
       });
       onSaved();
     } catch (e) {
@@ -338,12 +362,25 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
 
       {!usaExistente && (
         <>
-          <div className="my-3 border-t border-slate-700 pt-3 text-[10px] font-bold uppercase tracking-wide text-slate-400">Datos de la factura impagada</div>
+          <div className="my-3 border-t border-slate-700 pt-3 text-[10px] font-bold uppercase tracking-wide text-slate-400">Datos del recibo devuelto</div>
           <div className="grid gap-3 sm:grid-cols-2">
             <TextField label="Nº factura" value={numero} onChange={setNumero} placeholder="F-2025-0123" />
-            <TextField label="Importe pendiente (€)" value={importe} onChange={setImporte} placeholder="0,00" />
+            <TextField label="Nº vencimiento (si hay varios)" value={numVto} onChange={setNumVto} placeholder="Ej. 2/3" />
             <Field label="Fecha factura"><input type="date" value={fechaFactura} onChange={(e) => setFechaFactura(e.target.value)} className={inputCls} /></Field>
-            <Field label="Vencimiento"><input type="date" value={vencimiento} onChange={(e) => setVencimiento(e.target.value)} className={inputCls} /></Field>
+            <Field label="Vencimiento impagado"><input type="date" value={vencimiento} onChange={(e) => setVencimiento(e.target.value)} className={inputCls} /></Field>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <TextField label="Nominal (€)" value={nominal} onChange={cambiarNominal} placeholder="0,00" />
+            <TextField label="Gastos devolución (€)" value={gastos} onChange={cambiarGastos} placeholder="0,00" />
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-1.5">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-amber-300">Total recibo devuelto (€)</span>
+              <input
+                value={total}
+                onChange={(e) => setTotal(e.target.value)}
+                placeholder="0,00"
+                className="w-full bg-transparent text-lg font-black text-amber-300 outline-none placeholder:text-amber-300/40"
+              />
+            </div>
           </div>
         </>
       )}
@@ -513,7 +550,10 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
           <Dato label="OT" valor={c.work_order?.ot_number} />
           <Dato label="Fecha factura" valor={fmtFecha(c.invoice?.invoice_date)} />
           <Dato label="Vencimiento" valor={fmtFecha(c.due_date)} />
+          {c.installment_number && <Dato label="Nº vencimiento" valor={c.installment_number} />}
           <Dato label="Días vencidos" valor={String(dias)} />
+          {c.nominal_amount != null && <Dato label="Nominal" valor={fmtEur(c.nominal_amount)} />}
+          {c.return_expenses != null && <Dato label="Gastos devolución" valor={fmtEur(c.return_expenses)} />}
           <div className="mt-2 flex items-center justify-between rounded-lg bg-slate-800 px-3 py-2">
             <span className="text-[11px] uppercase text-slate-400">Pendiente</span>
             <span className="text-lg font-black text-rose-300">{fmtEur(c.pending_amount)}</span>
