@@ -11070,23 +11070,25 @@ Reglas:
 ========================================================= */
 app.post(
   "/api/administracion/analizar-cliente",
-  upload.single("imagen"),
+  upload.array("imagenes", 8),
   async (req, res) => {
     try {
-      if (!req.file) {
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (!files.length) {
         return res.status(400).json({ success: false, message: "No se recibió ninguna imagen." });
       }
-      if (!req.file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ success: false, message: "El archivo debe ser una imagen." });
+      if (files.some((f) => !f.mimetype.startsWith("image/"))) {
+        return res.status(400).json({ success: false, message: "Todos los archivos deben ser imágenes." });
       }
 
-      const base64 = req.file.buffer.toString("base64");
-      const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
+      const dataUrls = files.map((f) => `data:${f.mimetype};base64,${f.buffer.toString("base64")}`);
 
       const systemPrompt = `Eres un extractor de datos de administración de un taller.
-Recibirás la captura de una ficha de cliente de un ERP (normalmente CEINOR GENES,
-con campos como "Código Cliente", "Nombre Comercial", "Nombre Fiscal", "Nº Documento" (NIF/CIF),
-"Email Envio Docs", teléfonos, delegaciones con dirección y contactos).
+Recibirás UNA O VARIAS capturas de la MISMA ficha de cliente de un ERP (normalmente CEINOR GENES):
+pueden ser distintas pestañas de la misma ficha ("Datos Generales", "Delegaciones", "Forma de Pago",
+"Observ. y Coment."...). Combina la información de TODAS las capturas en un único cliente.
+Campos habituales: "Código Cliente", "Nombre Comercial", "Nombre Fiscal", "Nº Documento" (NIF/CIF),
+"Email Envio Docs", teléfonos, delegaciones con dirección y contactos.
 
 Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
 {
@@ -11104,6 +11106,7 @@ Reglas:
 - El código de cliente es numérico y suele estar junto a "Código Cliente".
 - Devuelve el email en minúsculas.
 - Si el contacto es la misma razón social, devuelve contacto = null.
+- Si un dato aparece en varias capturas con valores distintos, prioriza el de "Datos Generales".
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
       const response = await openai.chat.completions.create({
@@ -11113,8 +11116,8 @@ Reglas:
           {
             role: "user",
             content: [
-              { type: "text", text: "Extrae los datos del cliente de esta captura:" },
-              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+              { type: "text", text: `Extrae los datos del cliente combinando estas ${dataUrls.length} captura(s):` },
+              ...dataUrls.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "high" as const } })),
             ],
           },
         ],

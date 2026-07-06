@@ -278,19 +278,28 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
   const [error, setError] = useState("");
   const [analizando, setAnalizando] = useState(false);
   const [avisoImport, setAvisoImport] = useState("");
+  const [imagenes, setImagenes] = useState<File[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listPaymentMethods().then(setFormas).catch(() => { /* opcional */ });
   }, []);
 
-  async function analizarImagen(file: File) {
+  function anadirImagenes(files: File[]) {
+    const nuevas = files.filter((f) => f.type.startsWith("image/"));
+    if (!nuevas.length) return;
+    setImagenes((prev) => [...prev, ...nuevas].slice(0, 8));
+    setAvisoImport("");
+  }
+
+  async function analizarImagenes() {
+    if (!imagenes.length) return;
     setAnalizando(true);
     setError("");
     setAvisoImport("");
     try {
       const fd = new FormData();
-      fd.append("imagen", file);
+      for (const img of imagenes) fd.append("imagenes", img);
       const res = await fetch("/api/administracion/analizar-cliente", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
@@ -311,9 +320,10 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
         if (coincide) setFormaPago(coincide.name);
       }
 
-      setAvisoImport(`Datos importados (confianza ${d.confianza}). Revisa los campos y completa las condiciones económicas antes de guardar.`);
+      setAvisoImport(`Datos importados de ${imagenes.length} captura(s) (confianza ${d.confianza}). Revisa los campos y completa las condiciones económicas antes de guardar.`);
+      setImagenes([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error analizando la imagen");
+      setError(e instanceof Error ? e.message : "Error analizando las imágenes");
     } finally {
       setAnalizando(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -363,36 +373,63 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
         <div className="mb-3 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm text-sky-300">{avisoImport}</div>
       )}
 
-      {/* Importar desde captura del ERP (GENES) */}
+      {/* Importar desde capturas del ERP (GENES) — admite varias pestañas */}
       <div
         onPaste={(e) => {
-          const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
-          const f = item?.getAsFile();
-          if (f) { e.preventDefault(); void analizarImagen(f); }
+          const files = Array.from(e.clipboardData.items)
+            .filter((i) => i.type.startsWith("image/"))
+            .map((i) => i.getAsFile())
+            .filter((f): f is File => f !== null);
+          if (files.length) { e.preventDefault(); anadirImagenes(files); }
         }}
-        className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-slate-600 bg-slate-900 px-3 py-2.5"
+        className="mb-4 rounded-xl border border-dashed border-slate-600 bg-slate-900 px-3 py-2.5"
       >
-        <button
-          type="button"
-          disabled={analizando}
-          onClick={() => fileRef.current?.click()}
-          className={btnSecondary}
-        >
-          <span className="flex items-center gap-1">
-            <ScanLine className="h-4 w-4" />
-            {analizando ? "Analizando imagen…" : "Importar desde imagen"}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={analizando}
+            onClick={() => fileRef.current?.click()}
+            className={btnSecondary}
+          >
+            <span className="flex items-center gap-1">
+              <ScanLine className="h-4 w-4" /> Añadir capturas
+            </span>
+          </button>
+          <span className="text-[12px] text-slate-500">
+            Pega aquí con Ctrl+V (una a una o varias) las pestañas de la ficha en GENES: Datos Generales, Delegaciones, Forma de Pago… Luego pulsa Analizar.
           </span>
-        </button>
-        <span className="text-[12px] text-slate-500">
-          Sube o pega (Ctrl+V) la captura de la ficha del cliente en GENES. Nombre, nº cliente, NIF, teléfono y email se rellenan solos.
-        </span>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) void analizarImagen(f); }}
-        />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) anadirImagenes(fs); }}
+          />
+        </div>
+
+        {imagenes.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {imagenes.map((img, i) => (
+              <span key={`${img.name}-${i}`} className="flex items-center gap-1 rounded-lg bg-slate-800 px-2 py-1 text-[11px] text-slate-300">
+                🖼 {img.name || `captura ${i + 1}`}
+                <button
+                  type="button"
+                  onClick={() => setImagenes((prev) => prev.filter((_, j) => j !== i))}
+                  className="rounded px-1 font-bold text-slate-500 hover:bg-slate-700 hover:text-slate-200"
+                >×</button>
+              </span>
+            ))}
+            <button
+              type="button"
+              disabled={analizando}
+              onClick={() => void analizarImagenes()}
+              className={btnPrimary}
+            >
+              {analizando ? "Analizando…" : `Analizar ${imagenes.length} captura${imagenes.length > 1 ? "s" : ""}`}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
