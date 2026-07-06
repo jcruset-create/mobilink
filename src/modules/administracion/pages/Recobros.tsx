@@ -158,7 +158,8 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
   const [customerId, setCustomerId] = useState("");
   const [invoiceId, setInvoiceId] = useState("");
   const [numero, setNumero] = useState("");
-  const [fechaFactura, setFechaFactura] = useState(hoyISO());
+  const [fechaConta, setFechaConta] = useState(hoyISO());
+  const [fechaFactura, setFechaFactura] = useState("");
   const [vencimiento, setVencimiento] = useState("");
   const [numVto, setNumVto] = useState("");
   const [nominal, setNominal] = useState("");
@@ -192,11 +193,13 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
       const d = data.datos as {
         clienteCodigo: string | null; clienteNombre: string | null; numeroFactura: string | null;
-        vencimiento: string | null; fechaFactura: string | null; numeroVencimiento: string | null;
+        vencimiento: string | null; fechaFactura: string | null; fechaContabilizacion: string | null;
+        numeroVencimiento: string | null;
         nominal: number | null; gastos: number | null; total: number | null; confianza: string;
       };
 
       if (d.numeroFactura) setNumero(d.numeroFactura);
+      if (d.fechaContabilizacion) setFechaConta(d.fechaContabilizacion);
       if (d.fechaFactura) setFechaFactura(d.fechaFactura);
       if (d.vencimiento) setVencimiento(d.vencimiento);
       if (d.numeroVencimiento) setNumVto(d.numeroVencimiento);
@@ -276,7 +279,7 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       if (!vencimiento) { setError("Indica la fecha de vencimiento."); return; }
       nuevaFactura = {
         invoice_number: numero.trim(),
-        invoice_date: fechaFactura,
+        invoice_date: fechaFactura || null,
         due_date: vencimiento,
         total_amount: totalNum,
       };
@@ -295,6 +298,7 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
         nominal: parseNum(nominal) || null,
         gastos: parseNum(gastos) || null,
         numeroVencimiento: numVto.trim() || null,
+        fechaContabilizacion: fechaConta || null,
       });
       onSaved();
     } catch (e) {
@@ -366,8 +370,9 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
           <div className="grid gap-3 sm:grid-cols-2">
             <TextField label="Nº factura" value={numero} onChange={setNumero} placeholder="F-2025-0123" />
             <TextField label="Nº vencimiento (si hay varios)" value={numVto} onChange={setNumVto} placeholder="Ej. 2/3" />
-            <Field label="Fecha factura"><input type="date" value={fechaFactura} onChange={(e) => setFechaFactura(e.target.value)} className={inputCls} /></Field>
+            <Field label="Fecha contabilización"><input type="date" value={fechaConta} onChange={(e) => setFechaConta(e.target.value)} className={inputCls} /></Field>
             <Field label="Vencimiento impagado"><input type="date" value={vencimiento} onChange={(e) => setVencimiento(e.target.value)} className={inputCls} /></Field>
+            <Field label="Fecha factura (opcional)"><input type="date" value={fechaFactura} onChange={(e) => setFechaFactura(e.target.value)} className={inputCls} /></Field>
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <TextField label="Nominal (€)" value={nominal} onChange={cambiarNominal} placeholder="0,00" />
@@ -549,6 +554,7 @@ function ModalDetalleRecobro({ caso: c, formas, puedeGestionar, userId, onClose,
           <Dato label="Factura" valor={c.invoice?.invoice_number} />
           <Dato label="OT" valor={c.work_order?.ot_number} />
           <Dato label="Fecha factura" valor={fmtFecha(c.invoice?.invoice_date)} />
+          {c.accounting_date && <Dato label="Contabilización" valor={fmtFecha(c.accounting_date)} />}
           <Dato label="Vencimiento" valor={fmtFecha(c.due_date)} />
           {c.installment_number && <Dato label="Nº vencimiento" valor={c.installment_number} />}
           <Dato label="Días vencidos" valor={String(dias)} />

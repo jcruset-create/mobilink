@@ -235,6 +235,7 @@ export type RecoveryCase = {
   nominal_amount: number | null;
   return_expenses: number | null;
   installment_number: string | null;
+  accounting_date: string | null;
   status: RecoveryStatus;
   priority: RecoveryPriority;
   responsible_user: string | null;

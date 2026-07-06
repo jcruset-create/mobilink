@@ -11017,7 +11017,8 @@ Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
   "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
   "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
   "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3", "1/2"); null si no aparece
-  "fechaFactura": string | null,       // fecha de la factura o contabilización en ISO yyyy-mm-dd
+  "fechaContabilizacion": string | null, // FECHA CONTABILIZACIÓN del aviso en ISO yyyy-mm-dd
+  "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
   "nominal": number | null,            // importe nominal en euros
   "gastos": number | null,             // gastos de devolución en euros
   "total": number | null,              // importe total en euros (nominal + gastos)

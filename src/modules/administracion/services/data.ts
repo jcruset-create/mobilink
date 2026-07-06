@@ -334,7 +334,7 @@ export async function listRecoveryActions(caseId: string): Promise<RecoveryActio
 export async function crearRecobroDirecto(opts: {
   customerId: string;
   invoiceId: string | null;
-  nuevaFactura: { invoice_number: string; invoice_date: string; due_date: string | null; total_amount: number } | null;
+  nuevaFactura: { invoice_number: string; invoice_date: string | null; due_date: string | null; total_amount: number } | null;
   dueDate: string | null;
   priority: RecoveryPriority;
   notes: string | null;
@@ -342,6 +342,7 @@ export async function crearRecobroDirecto(opts: {
   nominal?: number | null;          // nominal del recibo/vencimiento impagado
   gastos?: number | null;           // gastos de devolución
   numeroVencimiento?: string | null; // ej. "2/3" si la factura está partida
+  fechaContabilizacion?: string | null; // fecha de contabilización de la devolución
 }): Promise<void> {
   let invoiceId = opts.invoiceId;
   let pendiente = 0;
@@ -359,14 +360,16 @@ export async function crearRecobroDirecto(opts: {
     if (pendiente <= 0) throw new Error("Esta factura no tiene importe pendiente.");
     dueDate = dueDate ?? (inv as { due_date: string | null }).due_date;
   } else if (opts.nuevaFactura) {
-    const { data: inv, error: invErr } = await supabase.from("adm_invoices").insert({
+    const facturaPayload: Record<string, unknown> = {
       customer_id: opts.customerId,
       invoice_number: opts.nuevaFactura.invoice_number,
-      invoice_date: opts.nuevaFactura.invoice_date,
       due_date: opts.nuevaFactura.due_date,
       total_amount: opts.nuevaFactura.total_amount,
       pending_amount: opts.nuevaFactura.total_amount,
-    }).select("id").single();
+    };
+    // fecha factura opcional: si no se indica, la BD usa la fecha de hoy
+    if (opts.nuevaFactura.invoice_date) facturaPayload.invoice_date = opts.nuevaFactura.invoice_date;
+    const { data: inv, error: invErr } = await supabase.from("adm_invoices").insert(facturaPayload).select("id").single();
     if (invErr) fail(invErr.message, "crear factura");
     invoiceId = (inv as { id: string }).id;
     pendiente = opts.nuevaFactura.total_amount;
@@ -390,6 +393,7 @@ export async function crearRecobroDirecto(opts: {
     nominal_amount: opts.nominal ?? null,
     return_expenses: opts.gastos ?? null,
     installment_number: opts.numeroVencimiento ?? null,
+    accounting_date: opts.fechaContabilizacion ?? null,
     status: "pendiente",
     priority: opts.priority,
     internal_notes: opts.notes,
