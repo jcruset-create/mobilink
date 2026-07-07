@@ -446,12 +446,16 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
 
+  const [envios, setEnvios] = useState<Notificacion[]>([]);
   const cliente = c.customer;
   const dias = diasVencidos(c.due_date);
   const doc = c.invoice?.invoice_number ? `la factura ${c.invoice.invoice_number}` : c.work_order?.ot_number ? `la orden de trabajo ${c.work_order.ot_number}` : "el importe pendiente";
 
   const cargarHistorial = useCallback(async () => {
-    try { setHistorial(await listRecoveryActions(c.id)); } catch { /* historial no bloquea */ }
+    try {
+      setHistorial(await listRecoveryActions(c.id));
+      setEnvios(await listNotificacionesCaso(c.id));
+    } catch { /* historial no bloquea */ }
   }, [c.id]);
   useEffect(() => { void cargarHistorial(); }, [cargarHistorial]);
 
@@ -676,11 +680,13 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
           {historial.length === 0 ? (
             <div className="text-[12px] text-slate-500">Sin gestiones registradas.</div>
           ) : (
-            <ul className="flex max-h-96 flex-col gap-1.5 overflow-y-auto">
+            <ul className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
               {historial.map((h) => (
-                <li key={h.id} className="rounded-lg bg-slate-800 px-2.5 py-1.5">
+                <li key={h.id} className={`rounded-lg px-2.5 py-1.5 ${h.action_type === "respuesta_whatsapp" ? "border border-emerald-500/40 bg-emerald-500/10" : "bg-slate-800"}`}>
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-sky-300">{ACTION_TYPE_LABELS[h.action_type] ?? h.action_type}</span>
+                    <span className={`text-[11px] font-bold ${h.action_type === "respuesta_whatsapp" ? "text-emerald-300" : "text-sky-300"}`}>
+                      {h.action_type === "respuesta_whatsapp" ? "💬 " : ""}{ACTION_TYPE_LABELS[h.action_type] ?? h.action_type}
+                    </span>
                     <span className="text-[10px] text-slate-500">{fmtFechaHora(h.action_date)}</span>
                   </div>
                   {h.notes && <div className="text-[11px] text-slate-300">{h.notes}</div>}
@@ -690,6 +696,30 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
                 </li>
               ))}
             </ul>
+          )}
+
+          {envios.length > 0 && (
+            <>
+              <div className="mb-2 mt-3 border-t border-slate-700 pt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                Envíos automáticos
+              </div>
+              <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
+                {envios.map((n) => {
+                  const e = estadoEnvioNotif(n);
+                  return (
+                    <li key={n.id} className="flex items-center justify-between rounded-lg bg-slate-800 px-2.5 py-1.5">
+                      <div>
+                        <div className="text-[11px] font-bold text-slate-300">{CANAL_LABELS[n.canal] ?? n.canal}</div>
+                        <div className="text-[10px] text-slate-500">
+                          {fmtFecha(n.fecha_programada)}{n.enviado_at ? ` · enviado ${fmtFechaHora(n.enviado_at)}` : ""}
+                        </div>
+                      </div>
+                      <Pill className={e.cls}>{e.texto}</Pill>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           )}
         </div>
       </div>
@@ -744,6 +774,20 @@ const CANAL_LABELS: Record<string, string> = {
   whatsapp_interno: "WhatsApp interno",
   resumen_interno: "Resumen interno",
 };
+
+// Estado visible de un envío (con ticks de WhatsApp cuando Twilio informa)
+function estadoEnvioNotif(n: Notificacion): { texto: string; cls: string } {
+  if (n.estado === "pendiente") return { texto: "Programado", cls: "bg-amber-500/20 text-amber-300" };
+  if (n.estado === "cancelado") return { texto: "Cancelado", cls: "bg-slate-700 text-slate-400" };
+  if (n.estado === "error") return { texto: "Error", cls: "bg-rose-500/20 text-rose-300" };
+  switch (n.twilio_status) {
+    case "read": return { texto: "Leído ✓✓", cls: "bg-sky-500/30 text-sky-200" };
+    case "delivered": return { texto: "Entregado ✓✓", cls: "bg-emerald-500/20 text-emerald-300" };
+    case "failed":
+    case "undelivered": return { texto: "No entregado", cls: "bg-rose-500/20 text-rose-300" };
+    default: return { texto: "Enviado ✓", cls: "bg-emerald-500/20 text-emerald-300" };
+  }
+}
 
 function ModalProgramarEnvio({ caso: c, userId, onClose }: {
   caso: RecoveryCase;
@@ -835,12 +879,7 @@ function ModalProgramarEnvio({ caso: c, userId, onClose }: {
                   {n.estado === "error" && <span className="ml-2 text-[11px] text-rose-300" title={n.error_text ?? ""}>error</span>}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Pill className={
-                    n.estado === "enviado" ? "bg-emerald-500/20 text-emerald-300"
-                    : n.estado === "pendiente" ? "bg-amber-500/20 text-amber-300"
-                    : n.estado === "error" ? "bg-rose-500/20 text-rose-300"
-                    : "bg-slate-700 text-slate-400"
-                  }>{n.estado}</Pill>
+                  <Pill className={estadoEnvioNotif(n).cls}>{estadoEnvioNotif(n).texto}</Pill>
                   {n.estado === "pendiente" && (
                     <button
                       onClick={async () => {

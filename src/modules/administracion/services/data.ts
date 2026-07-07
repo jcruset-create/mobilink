@@ -305,6 +305,8 @@ export type Notificacion = {
   estado: "pendiente" | "enviado" | "error" | "cancelado";
   enviado_at: string | null;
   error_text: string | null;
+  twilio_sid: string | null;
+  twilio_status: string | null; // queued/sent/delivered/read/failed…
 };
 
 export async function listNotificacionesCaso(caseId: string): Promise<Notificacion[]> {

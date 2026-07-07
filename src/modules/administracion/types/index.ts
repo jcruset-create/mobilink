@@ -273,6 +273,7 @@ export const ACTION_TYPE_LABELS: Record<string, string> = {
   primer_aviso: "Primer aviso",
   segundo_aviso: "Segundo aviso",
   compromiso_pago: "Compromiso de pago",
+  respuesta_whatsapp: "Respuesta WhatsApp del cliente",
   pasado_a_recobro: "Pasado a recobro",
   cambio_estado: "Cambio de estado",
   cierre: "Cierre",

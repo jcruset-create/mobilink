@@ -9177,6 +9177,39 @@ app.post(
       );
       const msgId = msgResult.rows[0].id;
 
+      // ── Respuesta de un cliente con expediente de recobro abierto ─────
+      // Si el remitente coincide con el teléfono de un cliente con recobro
+      // abierto, la respuesta se registra en el historial del expediente.
+      try {
+        const digits = String(From).replace(/[^0-9]/g, "");
+        const local = digits.startsWith("34") ? digits.slice(2) : digits;
+        if (local.length >= 9) {
+          const caso = await db.query(
+            `SELECT r.id FROM adm_recovery_cases r
+             JOIN adm_customers cu ON cu.id = r.customer_id
+             WHERE r.closed_at IS NULL
+               AND (regexp_replace(COALESCE(cu.admin_phone,''), '[^0-9]', '', 'g') LIKE '%' || $1
+                 OR regexp_replace(COALESCE(cu.phone,''), '[^0-9]', '', 'g') LIKE '%' || $1)
+             ORDER BY r.updated_at DESC
+             LIMIT 1`,
+            [local]
+          );
+          if (caso.rows.length > 0) {
+            await db.query(
+              `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
+               VALUES ($1, 'respuesta_whatsapp', $2)`,
+              [
+                caso.rows[0].id,
+                `${ProfileName ? ProfileName + ": " : ""}${Body || "(mensaje multimedia)"}`,
+              ]
+            );
+            console.log(`[Recobros] respuesta WhatsApp registrada en expediente ${caso.rows[0].id}`);
+          }
+        }
+      } catch (e) {
+        console.error("[Recobros] error registrando respuesta WhatsApp:", e);
+      }
+
       // ── Route to active capture session if one exists ─────────────────
       const activeSession = await db.query(
         `SELECT id, job_id FROM whatsapp_capture_sessions WHERE status = 'ACTIVE' LIMIT 1`
@@ -11176,16 +11209,19 @@ async function enviarWhatsAppRecobro(
   telefono: string,
   variables: Record<string, string>,
   contentSidEnv: "TWILIO_RECOBROS_CONTENT_SID" | "TWILIO_RECOBROS_RESUMEN_SID"
-) {
+): Promise<string> {
   const contentSid = String(process.env[contentSidEnv] || "").trim();
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) throw new Error("Twilio no configurado");
   if (!contentSid) throw new Error(`Falta la plantilla ${contentSidEnv}`);
-  await twilioClient.messages.create({
+  const baseUrl = String(process.env.PUBLIC_APP_URL || "https://sea-tarragona.onrender.com").replace(/\/+$/, "");
+  const message = await twilioClient.messages.create({
     from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
     to: `whatsapp:+${telefono}`,
     contentSid,
     contentVariables: JSON.stringify(variables),
+    statusCallback: `${baseUrl}/api/administracion/whatsapp-status`,
   });
+  return message.sid;
 }
 
 async function enviarEmailRecobro(destino: string, asunto: string, cuerpo: string) {
@@ -11225,10 +11261,11 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
         continue;
       }
       const doc = n.factura ? `la factura ${n.factura}` : "el importe pendiente";
+      let twilioSid: string | null = null;
       if (n.canal === "whatsapp_deudor") {
         const tel = normalizarTelefonoWhatsApp(n.telefono);
         if (!tel) throw new Error("Cliente sin teléfono");
-        await enviarWhatsAppRecobro(tel, {
+        twilioSid = await enviarWhatsAppRecobro(tel, {
           "1": n.contacto || n.cliente_nombre || "cliente",
           "2": n.factura || "pendiente",
           "3": fmtEurServer(Number(n.pendiente ?? 0)),
@@ -11244,7 +11281,10 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
           `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración SEA`;
         await enviarEmailRecobro(n.email, `Recordatorio de pago — ${doc}`, cuerpo);
       }
-      await db.query(`UPDATE adm_notificaciones SET estado='enviado', enviado_at=now() WHERE id=$1`, [n.id]);
+      await db.query(
+        `UPDATE adm_notificaciones SET estado='enviado', enviado_at=now(), twilio_sid=$2, twilio_status=$3 WHERE id=$1`,
+        [n.id, twilioSid, twilioSid ? "sent" : null]
+      );
       if (n.recovery_case_id) {
         await db.query(
           `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
@@ -11292,16 +11332,16 @@ async function procesarAvisosDiariosRecobros(hoy: string) {
     try {
       const tel = normalizarTelefonoWhatsApp(r.telefono);
       if (!tel) continue;
-      await enviarWhatsAppRecobro(tel, {
+      const sid = await enviarWhatsAppRecobro(tel, {
         "1": r.contacto || r.cliente_nombre || "cliente",
         "2": r.factura || "pendiente",
         "3": fmtEurServer(Number(r.pending_amount ?? 0)),
         "4": fmtFechaServer(r.vencimiento),
       }, "TWILIO_RECOBROS_CONTENT_SID");
       await db.query(
-        `INSERT INTO adm_notificaciones (recovery_case_id, canal, destinatario, fecha_programada, estado, enviado_at)
-         VALUES ($1,'whatsapp_deudor',$2,$3,'enviado',now())`,
-        [r.id, tel, hoy]
+        `INSERT INTO adm_notificaciones (recovery_case_id, canal, destinatario, fecha_programada, estado, enviado_at, twilio_sid, twilio_status)
+         VALUES ($1,'whatsapp_deudor',$2,$3,'enviado',now(),$4,'sent')`,
+        [r.id, tel, hoy, sid]
       );
       await db.query(
         `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
@@ -11359,6 +11399,29 @@ async function procesarAvisosDiariosRecobros(hoy: string) {
   );
   console.log(`[Recobros] resumen interno ${hoy}: ${texto} → ${enviados} enviado(s)`);
 }
+
+// Callback de Twilio con el estado de entrega de los WhatsApp de recobros
+// (queued → sent → delivered → read / failed)
+app.post(
+  "/api/administracion/whatsapp-status",
+  express.urlencoded({ extended: false }),
+  async (req, res) => {
+    try {
+      const sid = String(req.body?.MessageSid || "").trim();
+      const status = String(req.body?.MessageStatus || "").trim();
+      if (sid && status) {
+        await db.query(
+          `UPDATE adm_notificaciones SET twilio_status = $2 WHERE twilio_sid = $1`,
+          [sid, status]
+        );
+      }
+      res.status(200).send("<Response></Response>");
+    } catch (error) {
+      console.error("POST /api/administracion/whatsapp-status error:", error);
+      res.status(200).send("<Response></Response>");
+    }
+  }
+);
 
 let recobrosNotifierRunning = false;
 async function checkRecobrosNotifications() {
