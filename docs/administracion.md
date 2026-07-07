@@ -72,27 +72,46 @@ Desde la fase 3, la tabla maestra de clientes de toda la aplicación es **`clien
 - Crear o editar un cliente desde **Administración** escribe en la maestra vía la función `adm_guardar_cliente` (nombre, nº cliente, NIF, teléfono, email) y guarda aparte las condiciones económicas.
 - Las migraciones se aplican en orden: `administracion_fase1.sql` → `administracion_fase3_unificar_clientes.sql` (la fase 3 ya incluye la fase 2).
 
-## Envíos automáticos (fase 8)
+## Envíos automáticos y escalada de cobro (fase 8-10)
 
-El servidor procesa cada mañana (a partir de `RECOBROS_NOTIFY_HOUR`, por defecto 08:00) los envíos de recobros:
+El servidor procesa cada mañana (a partir de `RECOBROS_NOTIFY_HOUR`, por defecto 08:00) los envíos de recobros, y además permite disparar la escalada de cobro a mano desde el expediente.
 
-- **Programados**: desde el expediente → "Programar envío automático" (WhatsApp y/o email al cliente en la fecha elegida). Se pueden cancelar mientras estén pendientes.
-- **Automáticos**: recordatorio por WhatsApp al cliente cuyo **compromiso de pago vence hoy**, y **resumen interno** por WhatsApp a los teléfonos configurados en Configuración → "Avisos WhatsApp internos".
-- Todo queda en el historial del expediente y en la tabla `adm_notificaciones`.
+### Escalada manual por WhatsApp (4 avisos)
 
-Configuración necesaria (variables en Render):
+En el detalle del expediente, bloque "Escalada de cobro (WhatsApp)":
+
+1. **Aviso 1 — Recibo devuelto**: notifica la devolución del recibo con el IBAN para transferir. Pasa el estado a "Primer aviso enviado".
+2. **Aviso 2 — Recordatorio**: recuerda que sigue pendiente. Pasa a "Segundo aviso enviado".
+3. **Aviso Crédito y Caución**: avisa de que en 2 días se traslada el expediente a la aseguradora de crédito si no se regulariza. Pasa a "Aviso Crédito y Caución" (pide confirmación).
+4. **Trasladar a Crédito y Caución**: confirma el traslado real del expediente. Pasa a "Trasladado a Crédito y Caución" (pide confirmación, no se puede deshacer).
+
+Los avisos 3 y 4 solo se envían manualmente: no hay automatismo que dispare el aviso 4 a los 2 días, es una decisión del administrativo.
+
+### Programados y automáticos
+
+- **Programados**: desde el expediente → "Programar envío automático", eligiendo aviso 1 o aviso 2 por WhatsApp y/o email al cliente en la fecha elegida. Se pueden cancelar mientras estén pendientes.
+- **Automáticos diarios**: recordatorio (plantilla del aviso 2) al cliente cuyo **compromiso de pago vence hoy**, y **resumen interno** por WhatsApp a los teléfonos configurados en Configuración → "Avisos WhatsApp internos".
+- Todo queda en el historial del expediente (con el estado de entrega: enviado / entregado / leído) y en la tabla `adm_notificaciones`.
+
+### Configuración necesaria (variables en Render)
 
 | Variable | Qué es |
 |---|---|
-| `TWILIO_RECOBROS_CONTENT_SID` | Plantilla aprobada de recordatorio al deudor (4 variables: nombre, factura, importe, vencimiento) |
-| `TWILIO_RECOBROS_RESUMEN_SID` | Plantilla aprobada del resumen interno (2 variables: fecha, resumen) |
+| `TWILIO_RECOBROS_AVISO1_SID` | Plantilla "recibo devuelto" (4 variables: nombre, factura, importe, vencimiento) |
+| `TWILIO_RECOBROS_AVISO2_SID` | Plantilla "recordatorio" (4 variables: igual que el aviso 1) |
+| `TWILIO_RECOBROS_AVISO3_SID` | Plantilla "aviso previo Crédito y Caución" (1 variable: nombre) |
+| `TWILIO_RECOBROS_AVISO4_SID` | Plantilla "traslado a Crédito y Caución" (1 variable: nombre) |
+| `TWILIO_RECOBROS_RESUMEN_SID` | Plantilla del resumen interno (2 variables: fecha, resumen) |
 | `RECOBROS_NOTIFY_HOUR` | Hora de envío diario, formato HH:MM (por defecto 08:00) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | Cuenta Gmail de empresa para los emails (smtp.gmail.com:587 + contraseña de aplicación) |
 
-Textos sugeridos para las plantillas de Twilio (Content Template Builder → tipo *Text*):
+### Texto sugerido para la 5ª plantilla (resumen interno)
 
-- **Recordatorio deudor**: `Hola {{1}}, le recordamos que la factura {{2}} tiene un importe pendiente de {{3}} con vencimiento {{4}}. Si ya ha realizado el pago, ignore este mensaje. Gracias. — Administración SEA`
-- **Resumen interno**: `Resumen de recobros {{1}}: {{2}}`
+Content Template Builder → tipo *Text*, nombre p. ej. `sea_recobros_resumen`:
+
+```
+Resumen de recobros {{1}}: {{2}}
+```
 
 ## Tablas (prefijo `adm_`)
 

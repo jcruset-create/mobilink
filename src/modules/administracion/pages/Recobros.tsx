@@ -508,6 +508,40 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
     }, "WhatsApp preparado y registrado en el historial.");
   }
 
+  async function enviarAvisoEscalada(aviso: 1 | 2 | 3 | 4) {
+    if (!(cliente?.admin_phone || cliente?.phone)) {
+      setError("El cliente no tiene teléfono de administración.");
+      return;
+    }
+    if (aviso >= 3) {
+      const confirmado = window.confirm(
+        aviso === 3
+          ? "¿Enviar el aviso previo de traslado a Crédito y Caución? El cliente lo recibirá por WhatsApp."
+          : "¿Confirmas el traslado a Crédito y Caución? Se notificará al cliente por WhatsApp y esta acción no se puede deshacer."
+      );
+      if (!confirmado) return;
+    }
+    setTrabajando(true);
+    setError("");
+    try {
+      const res = await fetch("/api/administracion/recobro-whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recoveryCaseId: c.id, aviso }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message ?? "Error enviando el aviso");
+      setMensaje(`Aviso ${aviso} enviado por WhatsApp.`);
+      await cargarHistorial();
+      const fresh = await getRecoveryCase(c.id);
+      if (fresh) setC(fresh);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error enviando el aviso");
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
   async function registrarPago(total: boolean) {
     const amount = total ? Number(c.pending_amount) : parseFloat(importePago.replace(",", "."));
     if (!amount || amount <= 0) { setError("Introduce un importe válido."); return; }
@@ -603,6 +637,23 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
           <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Gestionar</div>
           {puedeGestionar ? (
             <div className="flex flex-col gap-2">
+              <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-2">
+                <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Escalada de cobro (WhatsApp)</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button disabled={trabajando} onClick={() => void enviarAvisoEscalada(1)} className={btnSecondary}>
+                    <span className="text-[12px]">1️⃣ Recibo devuelto</span>
+                  </button>
+                  <button disabled={trabajando} onClick={() => void enviarAvisoEscalada(2)} className={btnSecondary}>
+                    <span className="text-[12px]">2️⃣ Recordatorio</span>
+                  </button>
+                  <button disabled={trabajando} onClick={() => void enviarAvisoEscalada(3)} className={`${btnSecondary} text-orange-300`}>
+                    <span className="text-[12px]">⚠️ Aviso Créd. y Caución</span>
+                  </button>
+                  <button disabled={trabajando} onClick={() => void enviarAvisoEscalada(4)} className={`${btnSecondary} text-rose-300`}>
+                    <span className="text-[12px]">🚨 Trasladar a Créd. y Caución</span>
+                  </button>
+                </div>
+              </div>
               <button onClick={() => setNuevaGestion(true)} className={`${btnPrimary} py-3`}>
                 <span className="flex items-center justify-center gap-1 text-base"><Plus className="h-5 w-5" /> Nueva gestión</span>
               </button>
@@ -769,7 +820,8 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
 
 // ── Programar envío automático (WhatsApp/email al deudor) ────
 const CANAL_LABELS: Record<string, string> = {
-  whatsapp_deudor: "WhatsApp al cliente",
+  whatsapp_deudor: "WhatsApp al cliente (aviso 2 — recordatorio)",
+  whatsapp_deudor_aviso1: "WhatsApp al cliente (aviso 1 — recibo devuelto)",
   email_deudor: "Email al cliente",
   whatsapp_interno: "WhatsApp interno",
   resumen_interno: "Resumen interno",
@@ -794,7 +846,7 @@ function ModalProgramarEnvio({ caso: c, userId, onClose }: {
   userId: string | null;
   onClose: () => void;
 }) {
-  const [whats, setWhats] = useState(true);
+  const [whatsPlantilla, setWhatsPlantilla] = useState<"" | "whatsapp_deudor_aviso1" | "whatsapp_deudor">("whatsapp_deudor");
   const [email, setEmail] = useState(false);
   const [fecha, setFecha] = useState(hoyISO());
   const [mensaje, setMensaje] = useState("");
@@ -809,12 +861,12 @@ function ModalProgramarEnvio({ caso: c, userId, onClose }: {
   useEffect(() => { void cargarPendientes(); }, [cargarPendientes]);
 
   async function programar() {
-    const canales: ("whatsapp_deudor" | "email_deudor")[] = [];
-    if (whats) canales.push("whatsapp_deudor");
+    const canales: ("whatsapp_deudor" | "whatsapp_deudor_aviso1" | "email_deudor")[] = [];
+    if (whatsPlantilla) canales.push(whatsPlantilla);
     if (email) canales.push("email_deudor");
     if (!canales.length) { setError("Selecciona al menos un canal."); return; }
     if (!fecha) { setError("Indica la fecha de envío."); return; }
-    if (whats && !(c.customer?.admin_phone || c.customer?.phone)) {
+    if (whatsPlantilla && !(c.customer?.admin_phone || c.customer?.phone)) {
       setError("El cliente no tiene teléfono en su ficha."); return;
     }
     if (email && !(c.customer?.admin_email || c.customer?.email)) {
@@ -851,7 +903,15 @@ function ModalProgramarEnvio({ caso: c, userId, onClose }: {
 
       <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">Canales</div>
       <div className="grid gap-2 sm:grid-cols-2">
-        <CheckField label={`WhatsApp al cliente (${c.customer?.admin_phone || c.customer?.phone || "sin teléfono"})`} checked={whats} onChange={setWhats} />
+        <SelectField
+          label={`WhatsApp al cliente (${c.customer?.admin_phone || c.customer?.phone || "sin teléfono"})`}
+          value={whatsPlantilla}
+          onChange={(v) => setWhatsPlantilla(v as typeof whatsPlantilla)}
+        >
+          <option value="">No enviar</option>
+          <option value="whatsapp_deudor_aviso1">Aviso 1 — recibo devuelto (con IBAN)</option>
+          <option value="whatsapp_deudor">Aviso 2 — recordatorio</option>
+        </SelectField>
         <CheckField label={`Email al cliente (${c.customer?.admin_email || c.customer?.email || "sin email"})`} checked={email} onChange={setEmail} />
       </div>
 

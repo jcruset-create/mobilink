@@ -188,6 +188,8 @@ export type RecoveryStatus =
   | "compromiso_pago"
   | "pago_parcial"
   | "pago_recibido"
+  | "aviso_credito_caucion"
+  | "trasladado_credito_caucion"
   | "cerrado";
 
 export const RECOVERY_STATUS_LABELS: Record<RecoveryStatus, string> = {
@@ -198,6 +200,8 @@ export const RECOVERY_STATUS_LABELS: Record<RecoveryStatus, string> = {
   compromiso_pago: "Compromiso de pago",
   pago_parcial: "Pago parcial",
   pago_recibido: "Pago recibido",
+  aviso_credito_caucion: "Aviso Crédito y Caución",
+  trasladado_credito_caucion: "Trasladado a Crédito y Caución",
   cerrado: "Cerrado",
 };
 
@@ -209,6 +213,8 @@ export const RECOVERY_STATUS_COLORS: Record<RecoveryStatus, string> = {
   compromiso_pago: "bg-teal-500/20 text-teal-300",
   pago_parcial: "bg-orange-500/20 text-orange-300",
   pago_recibido: "bg-emerald-500/20 text-emerald-300",
+  aviso_credito_caucion: "bg-orange-600/30 text-orange-200",
+  trasladado_credito_caucion: "bg-rose-600/30 text-rose-200",
   cerrado: "bg-slate-700 text-slate-400",
 };
 
@@ -273,6 +279,8 @@ export const ACTION_TYPE_LABELS: Record<string, string> = {
   primer_aviso: "Primer aviso",
   segundo_aviso: "Segundo aviso",
   compromiso_pago: "Compromiso de pago",
+  aviso_credito_caucion: "Aviso Crédito y Caución",
+  trasladado_credito_caucion: "Trasladado a Crédito y Caución",
   respuesta_whatsapp: "Respuesta WhatsApp del cliente",
   pasado_a_recobro: "Pasado a recobro",
   cambio_estado: "Cambio de estado",

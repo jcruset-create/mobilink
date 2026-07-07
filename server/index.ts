@@ -11208,7 +11208,7 @@ function fmtFechaServer(iso: string | null): string {
 async function enviarWhatsAppRecobro(
   telefono: string,
   variables: Record<string, string>,
-  contentSidEnv: "TWILIO_RECOBROS_CONTENT_SID" | "TWILIO_RECOBROS_RESUMEN_SID"
+  contentSidEnv: string
 ): Promise<string> {
   const contentSid = String(process.env[contentSidEnv] || "").trim();
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) throw new Error("Twilio no configurado");
@@ -11247,7 +11247,7 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
      LEFT JOIN adm_customers cu ON cu.id = r.customer_id
      LEFT JOIN adm_invoices inv ON inv.id = r.invoice_id
      WHERE n.estado = 'pendiente' AND n.fecha_programada <= $1
-       AND n.canal IN ('whatsapp_deudor','email_deudor')`,
+       AND n.canal IN ('whatsapp_deudor','whatsapp_deudor_aviso1','email_deudor')`,
     [hoy]
   );
 
@@ -11262,15 +11262,16 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
       }
       const doc = n.factura ? `la factura ${n.factura}` : "el importe pendiente";
       let twilioSid: string | null = null;
-      if (n.canal === "whatsapp_deudor") {
+      if (n.canal === "whatsapp_deudor" || n.canal === "whatsapp_deudor_aviso1") {
         const tel = normalizarTelefonoWhatsApp(n.telefono);
         if (!tel) throw new Error("Cliente sin teléfono");
+        const contentSidEnv = n.canal === "whatsapp_deudor_aviso1" ? "TWILIO_RECOBROS_AVISO1_SID" : "TWILIO_RECOBROS_AVISO2_SID";
         twilioSid = await enviarWhatsAppRecobro(tel, {
           "1": n.contacto || n.cliente_nombre || "cliente",
           "2": n.factura || "pendiente",
           "3": fmtEurServer(Number(n.pendiente ?? 0)),
           "4": fmtFechaServer(n.vencimiento),
-        }, "TWILIO_RECOBROS_CONTENT_SID");
+        }, contentSidEnv);
       } else {
         if (!n.email) throw new Error("Cliente sin email");
         const cuerpo =
@@ -11286,13 +11287,14 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
         [n.id, twilioSid, twilioSid ? "sent" : null]
       );
       if (n.recovery_case_id) {
+        const esWhatsapp = n.canal === "whatsapp_deudor" || n.canal === "whatsapp_deudor_aviso1";
         await db.query(
           `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
            VALUES ($1, $2, $3)`,
           [
             n.recovery_case_id,
-            n.canal === "whatsapp_deudor" ? "whatsapp" : "recordatorio_email",
-            `Envío automático programado (${n.canal === "whatsapp_deudor" ? "WhatsApp" : "email"})`,
+            esWhatsapp ? "whatsapp" : "recordatorio_email",
+            `Envío automático programado (${esWhatsapp ? "WhatsApp" : "email"})`,
           ]
         );
       }
@@ -11337,7 +11339,7 @@ async function procesarAvisosDiariosRecobros(hoy: string) {
         "2": r.factura || "pendiente",
         "3": fmtEurServer(Number(r.pending_amount ?? 0)),
         "4": fmtFechaServer(r.vencimiento),
-      }, "TWILIO_RECOBROS_CONTENT_SID");
+      }, "TWILIO_RECOBROS_AVISO2_SID");
       await db.query(
         `INSERT INTO adm_notificaciones (recovery_case_id, canal, destinatario, fecha_programada, estado, enviado_at, twilio_sid, twilio_status)
          VALUES ($1,'whatsapp_deudor',$2,$3,'enviado',now(),$4,'sent')`,
@@ -11422,6 +11424,88 @@ app.post(
     }
   }
 );
+
+// Escalada manual de cobro por WhatsApp (avisos 1 a 4, disparados a mano
+// desde el expediente): 1) recibo devuelto, 2) recordatorio, 3) aviso previo
+// de traslado a Crédito y Caución, 4) confirmación del traslado.
+app.post("/api/administracion/recobro-whatsapp", async (req, res) => {
+  try {
+    const recoveryCaseId = String(req.body?.recoveryCaseId || "").trim();
+    const aviso = Number(req.body?.aviso);
+    if (!recoveryCaseId || ![1, 2, 3, 4].includes(aviso)) {
+      return res.status(400).json({ success: false, message: "Datos inválidos" });
+    }
+
+    const { rows } = await db.query(
+      `SELECT r.id, r.pending_amount, r.due_date::text AS vencimiento,
+              cu.name AS cliente_nombre, cu.payment_contact_name AS contacto,
+              COALESCE(cu.admin_phone, cu.phone) AS telefono,
+              inv.invoice_number AS factura
+       FROM adm_recovery_cases r
+       JOIN adm_customers cu ON cu.id = r.customer_id
+       LEFT JOIN adm_invoices inv ON inv.id = r.invoice_id
+       WHERE r.id = $1`,
+      [recoveryCaseId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: "Expediente no encontrado" });
+    const r = rows[0];
+
+    const tel = normalizarTelefonoWhatsApp(r.telefono);
+    if (!tel) return res.status(400).json({ success: false, message: "El cliente no tiene teléfono" });
+    if (Number(r.pending_amount ?? 0) <= 0) {
+      return res.status(400).json({ success: false, message: "El expediente no tiene importe pendiente" });
+    }
+
+    const nombreContacto = r.contacto || r.cliente_nombre || "cliente";
+    let contentSidEnv: string;
+    let variables: Record<string, string>;
+    let nuevoEstado: string;
+    let actionType: string;
+
+    if (aviso === 1) {
+      contentSidEnv = "TWILIO_RECOBROS_AVISO1_SID";
+      variables = {
+        "1": nombreContacto, "2": r.factura || "pendiente",
+        "3": fmtEurServer(Number(r.pending_amount ?? 0)), "4": fmtFechaServer(r.vencimiento),
+      };
+      nuevoEstado = "primer_aviso"; actionType = "primer_aviso";
+    } else if (aviso === 2) {
+      contentSidEnv = "TWILIO_RECOBROS_AVISO2_SID";
+      variables = {
+        "1": nombreContacto, "2": r.factura || "pendiente",
+        "3": fmtEurServer(Number(r.pending_amount ?? 0)), "4": fmtFechaServer(r.vencimiento),
+      };
+      nuevoEstado = "segundo_aviso"; actionType = "segundo_aviso";
+    } else if (aviso === 3) {
+      contentSidEnv = "TWILIO_RECOBROS_AVISO3_SID";
+      variables = { "1": nombreContacto };
+      nuevoEstado = "aviso_credito_caucion"; actionType = "aviso_credito_caucion";
+    } else {
+      contentSidEnv = "TWILIO_RECOBROS_AVISO4_SID";
+      variables = { "1": nombreContacto };
+      nuevoEstado = "trasladado_credito_caucion"; actionType = "trasladado_credito_caucion";
+    }
+
+    const sid = await enviarWhatsAppRecobro(tel, variables, contentSidEnv);
+
+    await db.query(
+      `INSERT INTO adm_notificaciones (recovery_case_id, canal, destinatario, fecha_programada, estado, enviado_at, twilio_sid, twilio_status)
+       VALUES ($1,'whatsapp_deudor',$2,current_date,'enviado',now(),$3,'sent')`,
+      [recoveryCaseId, tel, sid]
+    );
+    await db.query(
+      `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
+       VALUES ($1,$2,$3)`,
+      [recoveryCaseId, actionType, `Aviso ${aviso} enviado por WhatsApp`]
+    );
+    await db.query(`UPDATE adm_recovery_cases SET status = $2 WHERE id = $1`, [recoveryCaseId, nuevoEstado]);
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Error en /api/administracion/recobro-whatsapp:", error);
+    res.status(500).json({ success: false, message: error?.message || "Error enviando el aviso" });
+  }
+});
 
 let recobrosNotifierRunning = false;
 async function checkRecobrosNotifications() {

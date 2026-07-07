@@ -298,7 +298,7 @@ export async function deleteDestinatario(id: string): Promise<void> {
 export type Notificacion = {
   id: string;
   recovery_case_id: string | null;
-  canal: "whatsapp_deudor" | "email_deudor" | "whatsapp_interno" | "resumen_interno";
+  canal: "whatsapp_deudor" | "whatsapp_deudor_aviso1" | "email_deudor" | "whatsapp_interno" | "resumen_interno";
   destinatario: string | null;
   mensaje: string | null;
   fecha_programada: string;
@@ -320,7 +320,7 @@ export async function listNotificacionesCaso(caseId: string): Promise<Notificaci
 
 export async function programarNotificacion(opts: {
   caseId: string;
-  canales: ("whatsapp_deudor" | "email_deudor")[];
+  canales: ("whatsapp_deudor" | "whatsapp_deudor_aviso1" | "email_deudor")[];
   fecha: string;
   mensaje: string | null;
   userId: string | null;
