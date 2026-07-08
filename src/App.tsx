@@ -103,6 +103,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
+      {/* Login clásico del panel (pantallas de TV, supervisor por contraseña…) */}
+      <Route path="/panel" element={<SeaTarragonaV1 permitirLoginClasico />} />
       <Route path="/sea" element={<SeaHub />} />
       <Route path="/qr/:tipo/:id" element={<QrScan />} />
       <Route path="/portal" element={<PortalLogin />} />

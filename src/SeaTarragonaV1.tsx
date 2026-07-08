@@ -226,7 +226,7 @@ import { applyManualTechStatusOverrides } from "./modules/workshopPureHelpers";
 import { getAdminHeaders } from "./modules/adminHeaders";
 import { useScheduledJobs } from "./modules/useScheduledJobs";
 
-export default function SeaTarragonaV1({ initialView }: { initialView?: AppView } = {}) {
+export default function SeaTarragonaV1({ initialView, permitirLoginClasico }: { initialView?: AppView; permitirLoginClasico?: boolean } = {}) {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
   const [rules, setRules] = useState<string[]>([]);
   const [newRule, setNewRule] = useState("");
@@ -1334,7 +1334,12 @@ useEffect(() => {
     try {
       const { data } = await supabaseUnificado.auth.getSession();
       const token = data.session?.access_token;
-      if (!token) return;
+      if (!token) {
+        // Sin sesión unificada: la puerta de entrada es el login nuevo.
+        // (El login clásico queda disponible en /panel para pantallas de TV, etc.)
+        if (!permitirLoginClasico && activo) window.location.replace("/acceso");
+        return;
+      }
       const res = await fetch(`${API_BASE}/api/login-sso`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -4136,6 +4141,7 @@ if (userRole === "tv75") {
         setUserRole(null);
         setIsAuthenticated(false);
         setView("operativo");
+        if (!permitirLoginClasico) window.location.assign("/inicio");
       }}
     />
   );
@@ -4244,6 +4250,7 @@ if (view === "operarios" && canView("operarios")) {
         setUserRole(null);
         setIsAuthenticated(false);
         setView("operativo");
+        if (!permitirLoginClasico) window.location.assign("/inicio");
       }}
       onSetWorkshopPin={isSupervisor ? (techName) => {
         setWorkshopPinModal({ techName });
@@ -4278,6 +4285,7 @@ if (view === "workshop_tv_75" && canView("workshop_tv_75")) {
         setUserRole(null);
         setIsAuthenticated(false);
         setView("operativo");
+        if (!permitirLoginClasico) window.location.assign("/inicio");
       }}
     />
   );
@@ -4971,6 +4979,7 @@ return (
       setUserRole(null);
       setIsAuthenticated(false);
       setView("operativo");
+      if (!permitirLoginClasico) window.location.assign("/inicio");
     }}
     className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
   >
