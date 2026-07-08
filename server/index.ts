@@ -7586,6 +7586,63 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// Puente SSO: entra al panel de taller con la sesión unificada (Supabase).
+// Empareja el usuario unificado con un usuario del panel por nombre
+// (username o nombre completo). Los superadmin entran como admin.
+app.post("/api/login-sso", async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Falta el token de sesión" });
+
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
+
+    const r = await db.query(
+      `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
+              coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS adm_admin
+       FROM app_usuarios a WHERE a.id = $1`,
+      [data.user.id]
+    );
+    const u = r.rows[0];
+    if (!u || !u.activo) return res.status(403).json({ error: "Usuario no activo en la aplicación" });
+
+    // 1) Usuario del panel con el mismo nombre (username o nombre completo)
+    try {
+      const users = await listDbAppUsers();
+      const objetivo = [String(u.username).toLowerCase(), String(u.nombre).toLowerCase()];
+      const panelUser = users.find((p) => objetivo.includes(p.name.toLowerCase()));
+      if (panelUser) {
+        return res.json({
+          ok: true,
+          role: panelUser.role,
+          name: panelUser.name,
+          allowedViews: panelUser.allowedViews,
+          adminToken: panelUser.password ?? "",
+        });
+      }
+    } catch (e) {
+      console.error("login-sso db users error:", e);
+    }
+
+    // 2) Superadmin / admin de administración → admin del panel
+    if ((u.es_superadmin || u.adm_admin) && process.env.ADMIN_PASSWORD) {
+      return res.json({
+        ok: true,
+        role: "admin",
+        name: u.nombre,
+        allowedViews: null,
+        adminToken: process.env.ADMIN_PASSWORD,
+      });
+    }
+
+    return res.status(404).json({ error: "Tu usuario no tiene acceso al panel de taller" });
+  } catch (error) {
+    console.error("POST /api/login-sso error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
 /* =========================================================
    USUARIOS (gestión de accesos)
 ========================================================= */

@@ -9,6 +9,7 @@ import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import UsersScreen from "./components/UsersScreen";
 import EmptyState from "./components/EmptyState";
 import { APP_VERSION } from "./version";
+import { supabase as supabaseUnificado } from "./modules/administracion/services/supabase";
 import { useAutoSync } from "./modules/useAutoSync";
 import { useMaintenanceAvailability } from "./modules/useMaintenanceAvailability";
 import {
@@ -1324,6 +1325,53 @@ setExternalAIAnswer(cleanText || "La IA no devolvió respuesta.");
     setExternalAILoading(false);
   }
 }
+// SSO: si hay sesión del acceso unificado (/acceso), entrar al panel sin
+// pedir la contraseña interna. Si no hay coincidencia, queda el login clásico.
+useEffect(() => {
+  if (isAuthenticated) return;
+  let activo = true;
+  (async () => {
+    try {
+      const { data } = await supabaseUnificado.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) return;
+      const res = await fetch(`${API_BASE}/api/login-sso`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok || !activo) return;
+      const d = await res.json();
+
+      localStorage.setItem("sea-authenticated", "true");
+      localStorage.setItem("sea-admin-token", d.adminToken || "");
+      localStorage.setItem("sea-role", d.role);
+
+      const role = isValidUserRole(d.role) ? d.role : null;
+      const userAllowedViews = Array.isArray(d.allowedViews) && d.allowedViews.length > 0
+        ? d.allowedViews.map(String)
+        : null;
+      if (userAllowedViews) {
+        localStorage.setItem("sea-allowed-views", JSON.stringify(userAllowedViews));
+      } else {
+        localStorage.removeItem("sea-allowed-views");
+      }
+      setAllowedViews(userAllowedViews);
+
+      const loggedName = typeof d.name === "string" && d.name.trim() ? d.name.trim() : null;
+      if (loggedName) {
+        localStorage.setItem("sea-user-name", loggedName);
+      } else {
+        localStorage.removeItem("sea-user-name");
+      }
+      setUserName(loggedName);
+      setUserRole(role);
+      setIsAuthenticated(true);
+    } catch { /* sin SSO: login clásico */ }
+  })();
+  return () => { activo = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [isAuthenticated]);
+
 async function handleLogin() {
   setLoginError("");
   setLoginLoading(true);
