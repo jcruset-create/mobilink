@@ -76,6 +76,7 @@ import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
 
 import TyreControlApp from "./modules/tyrecontrol/TyreControlApp";
 import AdministracionApp from "./modules/administracion/AdministracionApp";
+import AccesoPage from "./pages/AccesoPage";
 
 type RolAlmacen = "admin" | "responsable" | "operario";
 
@@ -314,6 +315,9 @@ export default function App() {
 
       {/* SEA TyreControl */}
       <Route path="/tyrecontrol/*" element={<TyreControlApp />} />
+
+      {/* Login unificado por usuario y contraseña */}
+      <Route path="/acceso" element={<AccesoPage />} />
 
       {/* SEA Administración (cobros, seguimiento de pagos y recobros) */}
       <Route path="/administracion/*" element={<AdministracionApp />} />

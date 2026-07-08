@@ -344,6 +344,155 @@ export async function cancelarNotificacion(id: string): Promise<void> {
   if (error) fail(error.message, "cancelar envío");
 }
 
+// ── Usuarios unificados de la aplicación ─────────────────────
+import { claveInterna } from "./authClave";
+
+export type AccesoModulo = {
+  modulo: string;
+  rol: string;
+  pantallas: string[] | null;
+  empresa_id: string | null;
+};
+
+export type AppUsuario = {
+  id: string;
+  username: string;
+  nombre: string;
+  email_recuperacion: string | null;
+  telefono: string | null;
+  activo: boolean;
+  es_superadmin: boolean;
+  employee_id: string | null;
+  accesos: AccesoModulo[];
+};
+
+async function tokenSesion(): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Sesión caducada, vuelve a entrar");
+  return token;
+}
+
+export async function listAppUsuarios(): Promise<AppUsuario[]> {
+  const { data, error } = await supabase.from("app_usuarios")
+    .select("*, accesos:app_usuario_modulos(modulo, rol, pantallas, empresa_id)")
+    .order("username");
+  if (error) fail(error.message, "usuarios de la aplicación");
+  return (data ?? []) as AppUsuario[];
+}
+
+export async function crearUsuarioAuth(username: string, nombre: string, pin: string): Promise<string> {
+  const res = await fetch("/api/administracion/usuarios/crear-auth", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
+    body: JSON.stringify({ username, nombre, password: claveInterna(pin) }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message ?? "Error creando el usuario");
+  return data.userId as string;
+}
+
+export async function guardarAppUsuario(u: {
+  id: string;
+  username: string;
+  nombre: string;
+  email_recuperacion: string | null;
+  telefono: string | null;
+  activo: boolean;
+  es_superadmin: boolean;
+  employee_id: string | null;
+  accesos: AccesoModulo[];
+}): Promise<void> {
+  const { error } = await supabase.rpc("app_guardar_usuario", {
+    p_id: u.id,
+    p_username: u.username,
+    p_nombre: u.nombre,
+    p_email_recuperacion: u.email_recuperacion,
+    p_telefono: u.telefono,
+    p_activo: u.activo,
+    p_es_superadmin: u.es_superadmin,
+    p_employee_id: u.employee_id,
+    p_accesos: u.accesos,
+  });
+  if (error) fail(error.message, "guardar usuario");
+}
+
+export async function resetPasswordUsuario(userId: string, pin: string): Promise<void> {
+  const res = await fetch("/api/administracion/usuarios/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
+    body: JSON.stringify({ userId, password: claveInterna(pin) }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message ?? "Error cambiando la contraseña");
+}
+
+export async function eliminarAppUsuario(userId: string): Promise<"eliminado" | "desactivado"> {
+  const { data, error } = await supabase.rpc("app_eliminar_usuario", { p_id: userId });
+  if (error) fail(error.message, "eliminar usuario");
+  const resultado = data as "eliminado" | "desactivado";
+  if (resultado === "eliminado") {
+    // borrar también la cuenta de Auth (best-effort)
+    try {
+      await fetch("/api/administracion/usuarios/eliminar-auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
+        body: JSON.stringify({ userId }),
+      });
+    } catch { /* la ficha ya no existe; la cuenta Auth huérfana no da acceso */ }
+  }
+  return resultado;
+}
+
+// Pantallas permitidas del usuario actual en un módulo (null = todas)
+export async function getMisPantallas(modulo: string): Promise<string[] | null> {
+  try {
+    const { data, error } = await supabase.from("app_usuario_modulos")
+      .select("pantallas")
+      .eq("modulo", modulo)
+      .maybeSingle();
+    if (error) return null; // tabla aún sin migrar → sin gating
+    return (data?.pantallas as string[] | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Módulos del usuario actual (para redirigir tras el login unificado)
+export async function getMisModulos(): Promise<string[]> {
+  try {
+    const { data, error } = await supabase.from("app_usuario_modulos").select("modulo");
+    if (error) return [];
+    return ((data ?? []) as { modulo: string }[]).map((m) => m.modulo);
+  } catch {
+    return [];
+  }
+}
+
+export async function listSeaEmployees(): Promise<{ id: string; nombre: string }[]> {
+  try {
+    const { data, error } = await supabase.from("sea_employees")
+      .select("id, nombre, apellidos")
+      .eq("activo", true)
+      .order("nombre");
+    if (error) return [];
+    return ((data ?? []) as { id: string; nombre: string; apellidos: string | null }[])
+      .map((e) => ({ id: e.id, nombre: `${e.nombre}${e.apellidos ? " " + e.apellidos : ""}` }));
+  } catch {
+    return [];
+  }
+}
+
+export async function listTcEmpresas(): Promise<{ id: string; nombre: string }[]> {
+  try {
+    const { data, error } = await supabase.from("tc_empresas").select("id, nombre").order("nombre");
+    if (error) return [];
+    return (data ?? []) as { id: string; nombre: string }[];
+  } catch {
+    return [];
+  }
+}
+
 // ── Usuarios del módulo (para "Gestionado por") ──────────────
 export async function listUsuariosActivos(): Promise<{ id: string; nombre: string }[]> {
   const { data, error } = await supabase.from("adm_usuarios")

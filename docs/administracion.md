@@ -113,6 +113,17 @@ Content Template Builder → tipo *Text*, nombre p. ej. `sea_recobros_resumen`:
 Resumen de recobros {{1}}: {{2}}
 ```
 
+## Usuarios unificados (fase 11)
+
+Desde la fase 11 existe una **tabla maestra de usuarios** (`app_usuarios` + `app_usuario_modulos`) para toda la aplicación, con **login por usuario y contraseña** en `/acceso` (ej.: usuario `Jordi`, contraseña `1234`). Un solo login da acceso a todos los módulos permitidos.
+
+- **Pantalla Usuarios** (`/administracion/usuarios`, solo rol admin): crear, editar y eliminar usuarios; rol por módulo; checkboxes de pantallas permitidas; botón llave para restablecer contraseñas.
+- **Sincronización automática** maestro → `adm_usuarios`, `tc_usuarios` y `perfiles_usuario` (almacén). Desactivar un usuario lo apaga en todos los módulos. Eliminar con historial = desactivar (no se borra).
+- **Cómo funciona el login**: Supabase Auth exige email y contraseña ≥ 6 caracteres. Internamente cada usuario nuevo usa un email sintético `{usuario}@usuarios.sea` y a toda contraseña se le añade el sufijo `#SEA` (ver `services/authClave.ts` y `emailSintetico()` en el servidor). El usuario solo conoce su nombre y su PIN corto.
+- **Usuarios ya existentes** (creados por email): el backfill les asigna como username la parte local de su email (ej. `jcruset`); se puede cambiar desde la pantalla. Para que puedan entrar por `/acceso` hay que ponerles contraseña con el botón llave (sus enlaces mágicos por email siguen funcionando).
+- **Gating por pantallas**: aplicado en Administración (menú + URL). En Almacén y TyreControl se guarda la selección pero aún no se aplica (fase futura).
+- Migración: `administracion_fase11_usuarios_unificados.sql` (incluye backfill). Los endpoints del servidor (`/api/administracion/usuarios/*`) usan `SUPABASE_SERVICE_ROLE_KEY`, ya configurada en Render.
+
 ## Tablas (prefijo `adm_`)
 
 `adm_usuarios`, `adm_customers`, `adm_work_orders`, `adm_invoices`, `adm_payment_methods`, `adm_payments`, `adm_payment_tracking`, `adm_payment_tracking_actions`, `adm_recovery_cases`, `adm_recovery_actions` + vista `adm_ot_estado`.

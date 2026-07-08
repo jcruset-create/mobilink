@@ -1,16 +1,26 @@
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Menu, LogOut, Wallet } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import { NAV, navVisible } from "../config/navigation";
 import { ROL_LABELS } from "../types";
 
 export default function AdminLayout() {
-  const { perfil, signOut } = useAdminAuth();
+  const { perfil, pantallas, signOut } = useAdminAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [open, setOpen] = useState(false);
 
-  const items = NAV.filter((i) => navVisible(i, perfil?.rol));
+  const items = NAV.filter((i) => navVisible(i, perfil?.rol, pantallas));
+
+  // Gating por URL: si la pantalla actual no está permitida, se bloquea
+  // aunque se entre escribiendo la dirección a mano.
+  const pantallaActual = location.pathname.split("/")[2] || "dashboard";
+  const bloqueada =
+    perfil?.rol !== "admin" &&
+    pantallas !== null &&
+    pantallaActual !== "dashboard" &&
+    !pantallas.includes(pantallaActual);
 
   async function handleSignOut() {
     await signOut();
@@ -65,7 +75,13 @@ export default function AdminLayout() {
 
         {/* Contenido */}
         <main className="min-w-0 flex-1 p-3">
-          <Outlet />
+          {bloqueada ? (
+            <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-300">
+              No tienes acceso a esta pantalla. Contacta con un administrador.
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
       </div>
     </div>

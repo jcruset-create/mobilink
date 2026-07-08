@@ -6,6 +6,8 @@ import type { Perfil } from "../types";
 type AdminAuthValue = {
   user: User | null;
   perfil: Perfil | null;
+  /** Pantallas permitidas en Administración (null = todas las del rol). */
+  pantallas: string[] | null;
   loading: boolean;
   error: string;
   refresh: () => Promise<void>;
@@ -27,9 +29,27 @@ async function cargarPerfil(userId: string): Promise<Perfil | null> {
   return (data as Perfil | null) ?? null;
 }
 
+// Pantallas permitidas del usuario en el módulo (unificación de usuarios,
+// fase 11). Si la tabla no existe aún o no hay fila, null = sin restricción.
+async function cargarPantallas(userId: string): Promise<string[] | null> {
+  try {
+    const { data, error } = await supabase
+      .from("app_usuario_modulos")
+      .select("pantallas")
+      .eq("user_id", userId)
+      .eq("modulo", "administracion")
+      .maybeSingle();
+    if (error) return null;
+    return (data?.pantallas as string[] | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [perfil, setPerfil] = useState<Perfil | null>(null);
+  const [pantallas, setPantallas] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -37,13 +57,15 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
     if (!nextUser) {
       setPerfil(null);
+      setPantallas(null);
       setLoading(false);
       return;
     }
     setError("");
-    const p = await cargarPerfil(nextUser.id);
+    const [p, pant] = await Promise.all([cargarPerfil(nextUser.id), cargarPantallas(nextUser.id)]);
     if (!p) setError("No hay perfil activo vinculado a este usuario.");
     setPerfil(p);
+    setPantallas(pant);
     setLoading(false);
   }
 
@@ -74,7 +96,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AdminAuthContext.Provider value={{ user, perfil, loading, error, refresh, signOut }}>
+    <AdminAuthContext.Provider value={{ user, perfil, pantallas, loading, error, refresh, signOut }}>
       {children}
     </AdminAuthContext.Provider>
   );

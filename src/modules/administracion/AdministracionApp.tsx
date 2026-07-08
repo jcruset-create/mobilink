@@ -12,6 +12,7 @@ import ClienteFicha from "./pages/ClienteFicha";
 import FormasPago from "./pages/FormasPago";
 import Informes from "./pages/Informes";
 import EstadoOts from "./pages/EstadoOts";
+import UsuariosApp from "./pages/UsuariosApp";
 
 export default function AdministracionApp() {
   return (
@@ -43,6 +44,11 @@ export default function AdministracionApp() {
             {/* Solo administración/admin */}
             <Route element={<RoleRoute roles={["administracion"]} />}>
               <Route path="formas-pago" element={<FormasPago />} />
+            </Route>
+
+            {/* Solo admin: gestión de usuarios de toda la aplicación */}
+            <Route element={<RoleRoute roles={[]} />}>
+              <Route path="usuarios" element={<UsuariosApp />} />
             </Route>
           </Route>
         </Route>

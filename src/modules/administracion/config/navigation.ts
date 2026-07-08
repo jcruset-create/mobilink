@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Euro, ClipboardList, AlertTriangle, Users, Settings, BarChart3, Wrench,
+  LayoutDashboard, Euro, ClipboardList, AlertTriangle, Users, Settings, BarChart3, Wrench, ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { Rol } from "../types";
@@ -10,6 +10,7 @@ export type NavItem = {
   label: string;
   icon: LucideIcon;
   roles?: Rol[]; // visible para estos roles (el admin siempre ve todo)
+  adminOnly?: boolean; // solo rol admin
 };
 
 export const NAV: NavItem[] = [
@@ -21,11 +22,15 @@ export const NAV: NavItem[] = [
   { key: "formas-pago", path: "formas-pago", label: "Configuración", icon: Settings, roles: ["administracion"] },
   { key: "informes", path: "informes", label: "Informes", icon: BarChart3, roles: ["administracion", "supervisor"] },
   { key: "estado-ots", path: "estado-ots", label: "Estado de OTs", icon: Wrench, roles: ["tecnico", "supervisor"] },
+  { key: "usuarios", path: "usuarios", label: "Usuarios", icon: ShieldCheck, adminOnly: true },
 ];
 
-export function navVisible(item: NavItem, rol: Rol | undefined): boolean {
+export function navVisible(item: NavItem, rol: Rol | undefined, pantallas?: string[] | null): boolean {
   if (!rol) return false;
+  if (item.adminOnly) return rol === "admin";
   if (rol === "admin") return true;
-  if (!item.roles) return true;
-  return item.roles.includes(rol);
+  if (item.roles && !item.roles.includes(rol)) return false;
+  // Gating por pantallas (usuarios unificados): null = todas las del rol
+  if (pantallas && item.key !== "dashboard" && !pantallas.includes(item.key)) return false;
+  return true;
 }

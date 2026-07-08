@@ -11507,6 +11507,108 @@ app.post("/api/administracion/recobro-whatsapp", async (req, res) => {
   }
 });
 
+/* =========================================================
+   USUARIOS UNIFICADOS — gestión de cuentas de Auth desde la
+   pantalla Usuarios (solo administradores). El login es por
+   USERNAME + contraseña; internamente Supabase Auth usa un
+   email sintético {username}@usuarios.sea.
+========================================================= */
+
+// Verifica que quien llama es admin (superadmin de app_usuarios
+// o rol admin de adm_usuarios) a partir de su token de sesión.
+async function verificarAdminApp(req: express.Request): Promise<{ ok: boolean; userId?: string; error?: string }> {
+  const auth = String(req.headers.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return { ok: false, error: "Falta el token de sesión" };
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) return { ok: false, error: "Sesión no válida" };
+  const r = await db.query(
+    `SELECT
+       coalesce((SELECT es_superadmin FROM app_usuarios WHERE id = $1 AND activo), false)
+       OR coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS es_admin`,
+    [data.user.id]
+  );
+  if (!r.rows[0]?.es_admin) return { ok: false, error: "Solo un administrador puede gestionar usuarios" };
+  return { ok: true, userId: data.user.id };
+}
+
+function emailSintetico(username: string): string {
+  return `${username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "")}@usuarios.sea`;
+}
+
+// Crear cuenta de Auth para un usuario nuevo (la ficha y los accesos
+// se guardan después vía RPC app_guardar_usuario desde el cliente).
+app.post("/api/administracion/usuarios/crear-auth", async (req, res) => {
+  try {
+    const admin = await verificarAdminApp(req);
+    if (!admin.ok) return res.status(403).json({ success: false, message: admin.error });
+
+    const username = String(req.body?.username || "").trim();
+    const nombre = String(req.body?.nombre || "").trim();
+    const password = String(req.body?.password || "");
+    if (username.length < 2) return res.status(400).json({ success: false, message: "Usuario demasiado corto" });
+    if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
+
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: emailSintetico(username),
+      password,
+      email_confirm: true,
+      user_metadata: { username, nombre },
+    });
+    if (error) {
+      const msg = /already/i.test(error.message) ? "Ya existe un usuario con ese nombre" : error.message;
+      return res.status(400).json({ success: false, message: msg });
+    }
+    return res.json({ success: true, userId: data.user?.id });
+  } catch (e: any) {
+    console.error("crear-auth error:", e);
+    return res.status(500).json({ success: false, message: e?.message || "Error creando el usuario" });
+  }
+});
+
+// Restablecer la contraseña de cualquier usuario (botón llave)
+app.post("/api/administracion/usuarios/reset-password", async (req, res) => {
+  try {
+    const admin = await verificarAdminApp(req);
+    if (!admin.ok) return res.status(403).json({ success: false, message: admin.error });
+
+    const userId = String(req.body?.userId || "").trim();
+    const password = String(req.body?.password || "");
+    if (!userId) return res.status(400).json({ success: false, message: "Falta el usuario" });
+    if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
+
+    const { error } = await supabase.auth.admin.updateUserById(userId, { password });
+    if (error) return res.status(400).json({ success: false, message: error.message });
+    return res.json({ success: true });
+  } catch (e: any) {
+    console.error("reset-password error:", e);
+    return res.status(500).json({ success: false, message: e?.message || "Error cambiando la contraseña" });
+  }
+});
+
+// Borrar la cuenta de Auth (solo tras app_eliminar_usuario = 'eliminado')
+app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
+  try {
+    const admin = await verificarAdminApp(req);
+    if (!admin.ok) return res.status(403).json({ success: false, message: admin.error });
+
+    const userId = String(req.body?.userId || "").trim();
+    if (!userId) return res.status(400).json({ success: false, message: "Falta el usuario" });
+    if (userId === admin.userId) return res.status(400).json({ success: false, message: "No puedes eliminar tu propio usuario" });
+
+    // seguridad extra: no borrar Auth si la ficha maestra sigue existiendo
+    const r = await db.query(`SELECT 1 FROM app_usuarios WHERE id = $1`, [userId]);
+    if (r.rows.length) return res.status(400).json({ success: false, message: "El usuario aún existe en la aplicación" });
+
+    const { error } = await supabase.auth.admin.deleteUser(userId);
+    if (error) return res.status(400).json({ success: false, message: error.message });
+    return res.json({ success: true });
+  } catch (e: any) {
+    console.error("eliminar-auth error:", e);
+    return res.status(500).json({ success: false, message: e?.message || "Error eliminando el usuario" });
+  }
+});
+
 let recobrosNotifierRunning = false;
 async function checkRecobrosNotifications() {
   if (recobrosNotifierRunning) return;
