@@ -3,25 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { KeyRound } from "lucide-react";
 import { supabase } from "../modules/administracion/services/supabase";
 import { claveInterna } from "../modules/administracion/services/authClave";
-import { getMisModulos } from "../modules/administracion/services/data";
-
-// Destino por módulo, en orden de preferencia
-const DESTINOS: [string, string][] = [
-  ["administracion", "/administracion/dashboard"],
-  ["almacen", "/almacen-neumaticos"],
-  ["tyrecontrol", "/tyrecontrol/dashboard"],
-];
-
-async function redirigirSegunModulos(navigate: (to: string, opts?: { replace?: boolean }) => void): Promise<boolean> {
-  const modulos = await getMisModulos();
-  for (const [mod, ruta] of DESTINOS) {
-    if (modulos.includes(mod)) {
-      navigate(ruta, { replace: true });
-      return true;
-    }
-  }
-  return false;
-}
 
 /** Login unificado por usuario y contraseña para toda la aplicación. */
 export default function AccesoPage() {
@@ -31,10 +12,10 @@ export default function AccesoPage() {
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
 
-  // Si ya hay sesión, entrar directo
+  // Si ya hay sesión, entrar directo al hub
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (data.session?.user) void redirigirSegunModulos(navigate);
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user) navigate("/inicio", { replace: true });
     });
   }, [navigate]);
 
@@ -52,8 +33,7 @@ export default function AccesoPage() {
       });
       if (e2) throw new Error("Usuario o contraseña incorrectos");
 
-      const ok = await redirigirSegunModulos(navigate);
-      if (!ok) setError("Tu usuario no tiene módulos asignados. Contacta con un administrador.");
+      navigate("/inicio", { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Usuario o contraseña incorrectos");
     } finally {

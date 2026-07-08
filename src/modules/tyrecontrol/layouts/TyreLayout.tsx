@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Menu, LogOut, Truck } from "lucide-react";
+import { Menu, LogOut, Truck, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { NAV, navVisible } from "../config/navigation";
 import { ROL_LABELS } from "../types";
@@ -46,6 +46,9 @@ export default function TyreLayout() {
               {perfil?.empresa?.nombre ? ` · ${perfil.empresa.nombre}` : ""}
             </div>
           </div>
+          <button onClick={() => navigate("/inicio")} title="Volver al inicio" className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
+            <Home className="h-4 w-4" /> Inicio
+          </button>
           <button onClick={handleSignOut} className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
             <LogOut className="h-4 w-4" /> Salir
           </button>
