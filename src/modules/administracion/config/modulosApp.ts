@@ -10,12 +10,16 @@ export type RolApp = { value: string; label: string };
 export type PantallaApp = { key: string; label: string };
 
 export type ModuloApp = {
-  key: "administracion" | "almacen" | "tyrecontrol";
+  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
   conEmpresa?: boolean; // tyrecontrol: los usuarios tipo cliente van ligados a una empresa
 };
+
+// Rol único para los módulos de SEA Core (no tienen roles propios;
+// el acceso se controla por pantallas)
+const ROL_ACCESO: RolApp[] = [{ value: "usuario", label: "Usuario" }];
 
 export const MODULOS_APP: ModuloApp[] = [
   {
@@ -91,6 +95,59 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "catalogo-neumaticos", label: "Catálogo de neumáticos" },
       { key: "configuracion", label: "Configuración" },
       { key: "perfil", label: "Perfil" },
+    ],
+  },
+  {
+    key: "sea-core",
+    label: "SEA Core (RRHH)",
+    roles: ROL_ACCESO,
+    pantallas: [
+      { key: "dashboard", label: "Panel" },
+      { key: "empleados", label: "Empleados" },
+      { key: "empresas", label: "Empresas" },
+      { key: "centros", label: "Centros de trabajo" },
+      { key: "competencias", label: "Competencias" },
+      { key: "autorizaciones", label: "Autorizaciones" },
+    ],
+  },
+  {
+    key: "toolcontrol",
+    label: "ToolControl",
+    roles: ROL_ACCESO,
+    pantallas: [
+      { key: "dashboard", label: "Panel" },
+      { key: "herramientas", label: "Herramientas" },
+      { key: "maquinas", label: "Máquinas" },
+      { key: "movimientos", label: "Movimientos" },
+      { key: "mantenimiento", label: "Mantenimiento" },
+      { key: "inventario", label: "Inventario" },
+      { key: "incidencias", label: "Incidencias" },
+      { key: "ubicaciones", label: "Ubicaciones" },
+      { key: "categorias", label: "Categorías" },
+    ],
+  },
+  {
+    key: "safety",
+    label: "Safety Manager",
+    roles: ROL_ACCESO,
+    pantallas: [
+      { key: "dashboard", label: "Panel" },
+      { key: "epis", label: "EPIs" },
+      { key: "entregas", label: "Entregas" },
+      { key: "stock", label: "Stock" },
+      { key: "documentos", label: "Documentos" },
+      { key: "reuniones", label: "Reuniones" },
+      { key: "formacion", label: "Formación" },
+      { key: "inspecciones", label: "Inspecciones" },
+    ],
+  },
+  {
+    key: "presencia",
+    label: "Presencia",
+    roles: ROL_ACCESO,
+    pantallas: [
+      { key: "dashboard", label: "Panel" },
+      { key: "fichajes", label: "Fichajes" },
     ],
   },
 ];

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, type LucideIcon } from "lucide-react";
+import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, type LucideIcon } from "lucide-react";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 
@@ -12,24 +12,43 @@ const ICONOS: Record<string, LucideIcon> = {
   administracion: Wallet,
   almacen: Warehouse,
   tyrecontrol: Truck,
+  "sea-core": Users,
+  toolcontrol: Hammer,
+  safety: HardHat,
+  presencia: Clock,
 };
 
 const COLORES: Record<string, { bg: string; text: string }> = {
   administracion: { bg: "bg-sky-500/15", text: "text-sky-400" },
   almacen: { bg: "bg-emerald-500/15", text: "text-emerald-400" },
   tyrecontrol: { bg: "bg-violet-500/15", text: "text-violet-400" },
+  "sea-core": { bg: "bg-rose-500/15", text: "text-rose-400" },
+  toolcontrol: { bg: "bg-orange-500/15", text: "text-orange-400" },
+  safety: { bg: "bg-lime-500/15", text: "text-lime-400" },
+  presencia: { bg: "bg-cyan-500/15", text: "text-cyan-400" },
+};
+
+const BASES: Record<string, string> = {
+  administracion: "/administracion",
+  almacen: "/almacen-neumaticos",
+  tyrecontrol: "/tyrecontrol",
+  "sea-core": "/sea-core",
+  toolcontrol: "/toolcontrol",
+  safety: "/safety",
+  presencia: "/presencia",
 };
 
 function rutaModulo(modulo: string): string {
-  if (modulo === "administracion") return "/administracion/dashboard";
-  if (modulo === "almacen") return "/almacen-neumaticos";
-  return "/tyrecontrol/dashboard";
+  const base = BASES[modulo] ?? "/";
+  // administración y tyrecontrol tienen su portada en /dashboard
+  if (modulo === "administracion" || modulo === "tyrecontrol") return `${base}/dashboard`;
+  return base;
 }
 
 function rutaPantalla(modulo: string, pantalla: string): string {
-  if (modulo === "administracion") return `/administracion/${pantalla}`;
-  if (modulo === "almacen") return pantalla === "dashboard" ? "/almacen-neumaticos" : `/almacen-neumaticos/${pantalla}`;
-  return `/tyrecontrol/${pantalla}`;
+  const base = BASES[modulo] ?? "/";
+  if (modulo === "administracion" || modulo === "tyrecontrol") return `${base}/${pantalla}`;
+  return pantalla === "dashboard" ? base : `${base}/${pantalla}`;
 }
 
 type TarjetaModulo = {
