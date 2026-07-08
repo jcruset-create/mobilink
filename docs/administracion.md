@@ -121,7 +121,7 @@ Desde la fase 11 existe una **tabla maestra de usuarios** (`app_usuarios` + `app
 - **Sincronización automática** maestro → `adm_usuarios`, `tc_usuarios` y `perfiles_usuario` (almacén). Desactivar un usuario lo apaga en todos los módulos. Eliminar con historial = desactivar (no se borra).
 - **Cómo funciona el login**: Supabase Auth exige email y contraseña ≥ 6 caracteres. Internamente cada usuario nuevo usa un email sintético `{usuario}@usuarios.sea` y a toda contraseña se le añade el sufijo `#SEA` (ver `services/authClave.ts` y `emailSintetico()` en el servidor). El usuario solo conoce su nombre y su PIN corto.
 - **Usuarios ya existentes** (creados por email): el backfill les asigna como username la parte local de su email (ej. `jcruset`); se puede cambiar desde la pantalla. Para que puedan entrar por `/acceso` hay que ponerles contraseña con el botón llave (sus enlaces mágicos por email siguen funcionando).
-- **Gating por pantallas**: aplicado en Administración (menú + URL). En Almacén y TyreControl se guarda la selección pero aún no se aplica (fase futura).
+- **Gating por pantallas**: aplicado en los tres módulos. En Administración y TyreControl se filtra el menú y el acceso por URL; en Almacén se bloquea el acceso por URL a las pantallas desmarcadas (las tarjetas del panel siguen visibles). El superadmin de TyreControl no se filtra.
 - Migración: `administracion_fase11_usuarios_unificados.sql` (incluye backfill). Los endpoints del servidor (`/api/administracion/usuarios/*`) usan `SUPABASE_SERVICE_ROLE_KEY`, ya configurada en Render.
 
 ## Tablas (prefijo `adm_`)

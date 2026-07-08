@@ -37,10 +37,20 @@ export const NAV: NavItem[] = [
   { key: "perfil", path: "perfil", label: "Perfil", icon: User },
 ];
 
-export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean): boolean {
+export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean, pantallas?: string[] | null): boolean {
   if (item.superadminOnly) return esSuperadmin;
   // el super-admin ve lo de administrador; el resto según su rol
-  if (!item.roles) return true;
-  if (esSuperadmin) return item.roles.includes("administrador");
-  return rol ? item.roles.includes(rol) : false;
+  if (item.roles) {
+    if (esSuperadmin) {
+      if (!item.roles.includes("administrador")) return false;
+    } else if (!rol || !item.roles.includes(rol)) {
+      return false;
+    }
+  }
+  // Gating por pantallas (usuarios unificados): se compara por path;
+  // null = todas las del rol; el super-admin no se filtra.
+  if (!esSuperadmin && pantallas && item.path !== "dashboard" && !pantallas.includes(item.path)) {
+    return false;
+  }
+  return true;
 }
