@@ -628,8 +628,17 @@ export async function listarTiposLlanta(): Promise<TipoLlanta[]> {
   if (error) throw new Error(error.message);
   return (data ?? []) as TipoLlanta[];
 }
-export async function crearTipoLlanta(material: string, medida: string): Promise<void> {
-  const { error } = await supabase.from("tc_tipos_llanta").insert({ material: material.trim(), medida: medida.trim() });
+export async function crearTipoLlanta(l: {
+  material: string; medida: string;
+  agujeros?: number | null; centrado?: string | null; tapacubo?: boolean;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_llanta").insert({
+    material: l.material.trim(),
+    medida: l.medida.trim(),
+    agujeros: l.agujeros ?? null,
+    centrado: l.centrado || null,
+    tapacubo: l.tapacubo ?? false,
+  });
   if (error) throw new Error(error.message);
 }
 export async function desactivarTipoLlanta(id: string): Promise<void> {

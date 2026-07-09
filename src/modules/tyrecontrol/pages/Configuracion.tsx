@@ -13,6 +13,7 @@ import {
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
 } from "../services/data";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
+import { tipoLlantaLabel } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -314,8 +315,11 @@ export default function Configuracion() {
   const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
   const [nuevaConfig, setNuevaConfig] = useState("");
   const [nuevaConfigDesc, setNuevaConfigDesc] = useState("");
-  const [nuevaLlantaMat, setNuevaLlantaMat] = useState("acero");
+  const [nuevaLlantaMat, setNuevaLlantaMat] = useState("aluminio");
   const [nuevaLlantaMed, setNuevaLlantaMed] = useState("");
+  const [nuevaLlantaAguj, setNuevaLlantaAguj] = useState("");
+  const [nuevaLlantaCentrado, setNuevaLlantaCentrado] = useState("");
+  const [nuevaLlantaTapa, setNuevaLlantaTapa] = useState(false);
   const [marcaSel, setMarcaSel] = useState("");
   const [nuevaMarca, setNuevaMarca] = useState("");
   const [nuevoModelo, setNuevoModelo] = useState("");
@@ -341,8 +345,17 @@ export default function Configuracion() {
   async function guardarLlanta() {
     if (!nuevaLlantaMat.trim() || !nuevaLlantaMed.trim()) return;
     setMsg("");
-    try { await crearTipoLlanta(nuevaLlantaMat, nuevaLlantaMed); setNuevaLlantaMed(""); await cargar(); }
-    catch (e: any) { setMsg(e?.message || "Error"); }
+    try {
+      await crearTipoLlanta({
+        material: nuevaLlantaMat,
+        medida: nuevaLlantaMed,
+        agujeros: nuevaLlantaAguj ? parseInt(nuevaLlantaAguj, 10) : null,
+        centrado: nuevaLlantaCentrado || null,
+        tapacubo: nuevaLlantaTapa,
+      });
+      setNuevaLlantaMed(""); setNuevaLlantaAguj(""); setNuevaLlantaCentrado(""); setNuevaLlantaTapa(false);
+      await cargar();
+    } catch (e: any) { setMsg(e?.message || "Error"); }
   }
   async function guardarMotivo() {
     if (!nuevoMotivo.trim()) return;
@@ -418,20 +431,37 @@ export default function Configuracion() {
         <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Tipos de llanta ({tiposLlanta.length})</div>
         <div className="mb-3 text-[11px] text-slate-500">Material y medida de llanta (pulgadas) que se pueden elegir en la ficha del vehículo.</div>
         {puedeEditar && (
-          <div className="mb-2 flex max-w-md flex-wrap gap-2">
-            <select className={`${inputCls} max-w-[130px]`} value={nuevaLlantaMat} onChange={(e) => setNuevaLlantaMat(e.target.value)}>
-              <option value="acero">Acero</option>
-              <option value="aluminio">Aluminio</option>
-              <option value="otros">Otros</option>
-            </select>
-            <input className={`${inputCls} max-w-[150px]`} placeholder="22.5x11.75" value={nuevaLlantaMed} onChange={(e) => setNuevaLlantaMed(e.target.value)} />
-            <button onClick={guardarLlanta} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
+          <div className="mb-2 flex flex-wrap items-end gap-2">
+            <label className="flex flex-col text-[10px] text-slate-500">Material
+              <select className={`${inputCls} max-w-[120px]`} value={nuevaLlantaMat} onChange={(e) => setNuevaLlantaMat(e.target.value)}>
+                <option value="aluminio">Aluminio</option>
+                <option value="hierro">Hierro</option>
+              </select>
+            </label>
+            <label className="flex flex-col text-[10px] text-slate-500">Medida
+              <input className={`${inputCls} max-w-[140px]`} placeholder="22.5x11.75" value={nuevaLlantaMed} onChange={(e) => setNuevaLlantaMed(e.target.value)} />
+            </label>
+            <label className="flex flex-col text-[10px] text-slate-500">Agujeros
+              <input type="number" className={`${inputCls} max-w-[90px]`} placeholder="10" value={nuevaLlantaAguj} onChange={(e) => setNuevaLlantaAguj(e.target.value)} />
+            </label>
+            <label className="flex flex-col text-[10px] text-slate-500">Offset
+              <select className={`${inputCls} max-w-[130px]`} value={nuevaLlantaCentrado} onChange={(e) => setNuevaLlantaCentrado(e.target.value)}>
+                <option value="">—</option>
+                <option value="centrada">Centrada</option>
+                <option value="desplazada">Desplazada</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1 pb-2 text-[12px] text-slate-300">
+              <input type="checkbox" className="h-4 w-4 accent-emerald-500" checked={nuevaLlantaTapa} onChange={(e) => setNuevaLlantaTapa(e.target.checked)} />
+              Tapacubo
+            </label>
+            <button onClick={guardarLlanta} className="mb-1 rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+ Añadir</button>
           </div>
         )}
-        <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
           {tiposLlanta.map((l) => (
             <div key={l.id} className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
-              <span className="flex-1">{l.material.charAt(0).toUpperCase() + l.material.slice(1)} {l.medida}</span>
+              <span className="flex-1">{tipoLlantaLabel(l)}</span>
               {puedeEditar && (
                 <button onClick={async () => { if (window.confirm("¿Eliminar este tipo de llanta?")) { await desactivarTipoLlanta(l.id); await cargar(); } }} className="text-[10px] text-rose-400 hover:underline">borrar</button>
               )}

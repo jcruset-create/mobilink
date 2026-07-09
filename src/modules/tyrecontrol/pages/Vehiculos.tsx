@@ -8,7 +8,7 @@ import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
   ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje,
 } from "../types";
-import { ORIGEN_KM_LABELS } from "../types";
+import { ORIGEN_KM_LABELS, tipoLlantaLabel } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
 const VACIO: VehiculoInput = {
@@ -22,10 +22,6 @@ const VACIO: VehiculoInput = {
 function ruedasDeConfig(nombre: string | undefined): number[] {
   if (!nombre) return [];
   return nombre.split(/x/i).map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
-}
-
-function llantaLabel(l: TipoLlanta): string {
-  return `${l.material.charAt(0).toUpperCase() + l.material.slice(1)} ${l.medida}`;
 }
 
 type ModalState = { id: string | null; draft: VehiculoInput; ejes: VehiculoEje[] };
@@ -268,7 +264,7 @@ export default function Vehiculos() {
                 <Field label="Tipo de llanta">
                   <select className={inputCls} value={modal.draft.tipo_llanta_id ?? ""} onChange={(e) => set({ tipo_llanta_id: e.target.value || null })}>
                     <option value="">—</option>
-                    {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{llantaLabel(l)}</option>)}
+                    {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}
                   </select>
                 </Field>
               </>
@@ -310,7 +306,7 @@ export default function Vehiculos() {
                       </select>
                       <select className={inputCls} value={f.tipo_llanta_id ?? ""} onChange={(e) => setEje(f.eje, { tipo_llanta_id: e.target.value || null })}>
                         <option value="">Llanta…</option>
-                        {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{llantaLabel(l)}</option>)}
+                        {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}
                       </select>
                     </div>
                   ))}

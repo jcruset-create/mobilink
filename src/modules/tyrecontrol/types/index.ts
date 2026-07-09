@@ -154,9 +154,24 @@ export interface ConfigEjes {
   id: string; nombre: string; descripcion?: string | null; orden: number; activo: boolean;
 }
 
-// Tipo de llanta (catálogo editable): material + medida en pulgadas
+// Tipo de llanta (catálogo editable): material + medida + detalle
 export interface TipoLlanta {
   id: string; material: string; medida: string; orden: number; activo: boolean;
+  agujeros?: number | null;
+  centrado?: "centrada" | "desplazada" | null;
+  tapacubo?: boolean;
+}
+
+// Etiqueta legible de una llanta para desplegables y listas
+export function tipoLlantaLabel(l: TipoLlanta): string {
+  const partes = [
+    l.material.charAt(0).toUpperCase() + l.material.slice(1),
+    l.medida,
+  ];
+  if (l.agujeros) partes.push(`${l.agujeros} aguj.`);
+  if (l.centrado) partes.push(l.centrado);
+  partes.push(l.tapacubo ? "c/tapacubo" : "s/tapacubo");
+  return partes.join(" · ");
 }
 
 // Desglose por eje de un vehículo (cuando medidas_por_eje = true)
