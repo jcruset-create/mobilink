@@ -93,6 +93,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "autorizaciones", label: "Autorizaciones" },
       { key: "medidas-neumaticos", label: "Medidas de neumáticos" },
       { key: "catalogo-neumaticos", label: "Catálogo de neumáticos" },
+      { key: "sonda", label: "Sonda TLGX" },
       { key: "configuracion", label: "Configuración" },
       { key: "perfil", label: "Perfil" },
     ],
