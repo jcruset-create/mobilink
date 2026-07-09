@@ -1371,6 +1371,13 @@ useEffect(() => {
       setUserName(loggedName);
       setUserRole(role);
       setIsAuthenticated(true);
+
+      // Al entrar por el hub, aterrizar en Operativo 2 (si el rol/permisos lo
+      // permiten); si no, en la vista por defecto del rol.
+      const firstView: AppView = userAllowedViews
+        ? (userAllowedViews.includes("operativo2") ? "operativo2" : "operativo")
+        : (canAccessView(role, "operativo2") ? "operativo2" : getDefaultViewForRole(role));
+      setView(firstView);
     } catch { /* sin SSO: login clásico */ }
   })();
   return () => { activo = false; };
