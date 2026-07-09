@@ -7,6 +7,7 @@ import type {
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
+  ConfigEjes, TipoLlanta, VehiculoEje,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -24,7 +25,7 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 
 const COLS_EMPRESA = ["nombre", "cif", "codigo_cliente", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
 const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo"] as const;
-const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo"] as const;
+const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id", "tipo_llanta_id", "medidas_por_eje"] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
 // ── Empresas ─────────────────────────────────────────────────
@@ -150,7 +151,7 @@ export async function guardarCoordenadasPosicion(id: string, coords: { pos_x: nu
 }
 
 // ── Vehículos ────────────────────────────────────────────────
-const VEHICULO_SELECT = "*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*), tipo:tc_tipos_vehiculo(*)";
+const VEHICULO_SELECT = "*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(*)";
 
 export async function listarVehiculos(filtros?: { empresaId?: string }): Promise<Vehiculo[]> {
   let q = supabase.from("tc_vehiculos").select(VEHICULO_SELECT).order("matricula");
@@ -166,11 +167,12 @@ export async function obtenerVehiculo(id: string): Promise<Vehiculo | null> {
   return (data as unknown as Vehiculo) ?? null;
 }
 
-export async function crearVehiculo(input: VehiculoInput): Promise<void> {
+export async function crearVehiculo(input: VehiculoInput): Promise<string> {
   const payload = pick(input, COLS_VEHICULO);
   payload.matricula = String(input.matricula ?? "").trim().toUpperCase();
-  const { error } = await supabase.from("tc_vehiculos").insert(payload);
+  const { data, error } = await supabase.from("tc_vehiculos").insert(payload).select("id").single();
   if (error) throw new Error(error.message);
+  return (data as { id: string }).id;
 }
 
 export async function actualizarVehiculo(id: string, patch: Partial<VehiculoInput>): Promise<void> {
@@ -602,6 +604,48 @@ export async function fijarTiposDeMedida(medidaId: string, tipoVehiculoIds: stri
 }
 export async function crearMedida(valor: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: valor.trim() });
+  if (error) throw new Error(error.message);
+}
+
+// ── Configuración de ejes (catálogo editable) ────────────────
+export async function listarConfigEjes(): Promise<ConfigEjes[]> {
+  const { data, error } = await supabase.from("tc_config_ejes").select("*").eq("activo", true).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ConfigEjes[];
+}
+export async function crearConfigEjes(nombre: string, descripcion?: string): Promise<void> {
+  const { error } = await supabase.from("tc_config_ejes").insert({ nombre: nombre.trim(), descripcion: descripcion?.trim() || null });
+  if (error) throw new Error(error.message);
+}
+export async function desactivarConfigEjes(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_config_ejes").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Tipos de llanta (catálogo editable: material + medida) ───
+export async function listarTiposLlanta(): Promise<TipoLlanta[]> {
+  const { data, error } = await supabase.from("tc_tipos_llanta").select("*").eq("activo", true).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as TipoLlanta[];
+}
+export async function crearTipoLlanta(material: string, medida: string): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_llanta").insert({ material: material.trim(), medida: medida.trim() });
+  if (error) throw new Error(error.message);
+}
+export async function desactivarTipoLlanta(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_llanta").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Desglose por eje de un vehículo ──────────────────────────
+export async function listarEjesVehiculo(vehiculoId: string): Promise<VehiculoEje[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_ejes")
+    .select("eje, ruedas, medida_id, tipo_llanta_id").eq("vehiculo_id", vehiculoId).order("eje");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as VehiculoEje[];
+}
+export async function guardarEjesVehiculo(vehiculoId: string, ejes: VehiculoEje[]): Promise<void> {
+  const { error } = await supabase.rpc("tc_set_vehiculo_ejes", { p_vehiculo: vehiculoId, p_ejes: ejes });
   if (error) throw new Error(error.message);
 }
 

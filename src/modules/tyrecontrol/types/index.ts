@@ -134,14 +134,35 @@ export interface Vehiculo {
   km_actual: number;
   origen_km: OrigenKm;
   activo: boolean;
+  // Configuración de neumáticos (fase 30)
+  config_ejes_id?: string | null;
+  medida_id?: string | null;
+  tipo_llanta_id?: string | null;
+  medidas_por_eje?: boolean;
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
   delegacion?: Delegacion | null;
   tipo?: TipoVehiculo | null;
+  config_ejes?: ConfigEjes | null;
 }
 
-export type VehiculoInput = Omit<Vehiculo, "id" | "created_at" | "updated_at" | "empresa" | "delegacion" | "tipo">;
+export type VehiculoInput = Omit<Vehiculo, "id" | "created_at" | "updated_at" | "empresa" | "delegacion" | "tipo" | "config_ejes">;
+
+// Configuración de ejes (catálogo editable): "2x2x2", "2x4"…
+export interface ConfigEjes {
+  id: string; nombre: string; descripcion?: string | null; orden: number; activo: boolean;
+}
+
+// Tipo de llanta (catálogo editable): material + medida en pulgadas
+export interface TipoLlanta {
+  id: string; material: string; medida: string; orden: number; activo: boolean;
+}
+
+// Desglose por eje de un vehículo (cuando medidas_por_eje = true)
+export interface VehiculoEje {
+  eje: number; ruedas: number | null; medida_id: string | null; tipo_llanta_id: string | null;
+}
 
 export const ORIGEN_KM_LABELS: Record<OrigenKm, string> = {
   manual: "Manual",

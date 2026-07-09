@@ -9,8 +9,10 @@ import {
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
+  listarConfigEjes, crearConfigEjes, desactivarConfigEjes,
+  listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
 } from "../services/data";
-import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen } from "../types";
+import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -308,6 +310,12 @@ export default function Configuracion() {
   const [contadores, setContadores] = useState<MarcaContadores[]>([]);
   const [motivosFueraAlmacen, setMotivosFueraAlmacen] = useState<MotivoFueraAlmacen[]>([]);
   const [nuevoMotivo, setNuevoMotivo] = useState("");
+  const [configEjes, setConfigEjes] = useState<ConfigEjes[]>([]);
+  const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
+  const [nuevaConfig, setNuevaConfig] = useState("");
+  const [nuevaConfigDesc, setNuevaConfigDesc] = useState("");
+  const [nuevaLlantaMat, setNuevaLlantaMat] = useState("acero");
+  const [nuevaLlantaMed, setNuevaLlantaMed] = useState("");
   const [marcaSel, setMarcaSel] = useState("");
   const [nuevaMarca, setNuevaMarca] = useState("");
   const [nuevoModelo, setNuevoModelo] = useState("");
@@ -316,11 +324,25 @@ export default function Configuracion() {
   const [msg, setMsg] = useState("");
 
   async function cargar() {
-    const [m, med, ic, iv, t, f, c, mf] = await Promise.all([
+    const [m, med, ic, iv, t, f, c, mf, ce, tl] = await Promise.all([
       listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
       listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
+      listarConfigEjes(), listarTiposLlanta(),
     ]);
     setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
+    setConfigEjes(ce); setTiposLlanta(tl);
+  }
+  async function guardarConfig() {
+    if (!nuevaConfig.trim()) return;
+    setMsg("");
+    try { await crearConfigEjes(nuevaConfig, nuevaConfigDesc); setNuevaConfig(""); setNuevaConfigDesc(""); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error"); }
+  }
+  async function guardarLlanta() {
+    if (!nuevaLlantaMat.trim() || !nuevaLlantaMed.trim()) return;
+    setMsg("");
+    try { await crearTipoLlanta(nuevaLlantaMat, nuevaLlantaMed); setNuevaLlantaMed(""); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error"); }
   }
   async function guardarMotivo() {
     if (!nuevoMotivo.trim()) return;
@@ -365,6 +387,56 @@ export default function Configuracion() {
         )}
         <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-4">
           {fabricantes.map((f) => <FilaFabricante key={f.id} fabricante={f} puedeEditar={puedeEditar} onCambio={cargar} />)}
+        </div>
+      </div>
+
+      {/* Configuraciones de ejes */}
+      <div className="mb-4 rounded-lg bg-slate-800 p-3">
+        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Configuraciones de ejes ({configEjes.length})</div>
+        <div className="mb-3 text-[11px] text-slate-500">Etiquetas para la ficha del vehículo (ej. 2x2x2, 2x4). Cada número es un eje y sus ruedas: 2 = sencillo, 4 = gemelo.</div>
+        {puedeEditar && (
+          <div className="mb-2 flex max-w-md flex-wrap gap-2">
+            <input className={`${inputCls} max-w-[130px]`} placeholder="2x2x2" value={nuevaConfig} onChange={(e) => setNuevaConfig(e.target.value)} />
+            <input className={inputCls} placeholder="Descripción (opcional)" value={nuevaConfigDesc} onChange={(e) => setNuevaConfigDesc(e.target.value)} />
+            <button onClick={guardarConfig} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
+          </div>
+        )}
+        <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-4">
+          {configEjes.map((c) => (
+            <div key={c.id} className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
+              <span className="flex-1"><b>{c.nombre}</b>{c.descripcion ? ` · ${c.descripcion}` : ""}</span>
+              {puedeEditar && (
+                <button onClick={async () => { if (window.confirm(`¿Eliminar la configuración "${c.nombre}"?`)) { await desactivarConfigEjes(c.id); await cargar(); } }} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tipos de llanta */}
+      <div className="mb-4 rounded-lg bg-slate-800 p-3">
+        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Tipos de llanta ({tiposLlanta.length})</div>
+        <div className="mb-3 text-[11px] text-slate-500">Material y medida de llanta (pulgadas) que se pueden elegir en la ficha del vehículo.</div>
+        {puedeEditar && (
+          <div className="mb-2 flex max-w-md flex-wrap gap-2">
+            <select className={`${inputCls} max-w-[130px]`} value={nuevaLlantaMat} onChange={(e) => setNuevaLlantaMat(e.target.value)}>
+              <option value="acero">Acero</option>
+              <option value="aluminio">Aluminio</option>
+              <option value="otros">Otros</option>
+            </select>
+            <input className={`${inputCls} max-w-[150px]`} placeholder="22.5x11.75" value={nuevaLlantaMed} onChange={(e) => setNuevaLlantaMed(e.target.value)} />
+            <button onClick={guardarLlanta} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
+          </div>
+        )}
+        <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-4">
+          {tiposLlanta.map((l) => (
+            <div key={l.id} className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
+              <span className="flex-1">{l.material.charAt(0).toUpperCase() + l.material.slice(1)} {l.medida}</span>
+              {puedeEditar && (
+                <button onClick={async () => { if (window.confirm("¿Eliminar este tipo de llanta?")) { await desactivarTipoLlanta(l.id); await cargar(); } }} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
