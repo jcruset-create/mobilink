@@ -4974,6 +4974,16 @@ return (
     </button>
   )}
 
+  {!permitirLoginClasico && (
+    <button
+      type="button"
+      onClick={() => window.location.assign("/inicio")}
+      className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100"
+    >
+      🏠 Inicio
+    </button>
+  )}
+
   <button
     type="button"
     onClick={() => {
