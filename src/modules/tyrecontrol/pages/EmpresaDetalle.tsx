@@ -8,6 +8,7 @@ import type { Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Client
 import { ROL_LABELS } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { EmpresaFormFields, EMPRESA_VACIA, DelegacionFormFields, delegacionVacia } from "../components/forms";
+import UmbralesEmpresa from "../components/UmbralesEmpresa";
 
 export default function EmpresaDetalle() {
   const { id = "" } = useParams();
@@ -109,6 +110,11 @@ export default function EmpresaDetalle() {
         <button onClick={abrirModalAlmacen} className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200">
           {empresa.cliente_almacen_id ? "Cambiar enlace" : "Enlazar con almacén"}
         </button>
+      </div>
+
+      {/* Umbrales de profundidad */}
+      <div className="mb-3">
+        <UmbralesEmpresa empresaId={id} />
       </div>
 
       {/* Delegaciones */}

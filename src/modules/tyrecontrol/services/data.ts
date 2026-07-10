@@ -7,7 +7,7 @@ import type {
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
-  ConfigEjes, TipoLlanta, VehiculoEje,
+  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -672,6 +672,21 @@ export async function crearConfigEjes(nombre: string, descripcion?: string): Pro
 }
 export async function desactivarConfigEjes(id: string): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Umbrales de profundidad por empresa ──────────────────────
+export async function obtenerUmbralesEmpresa(empresaId: string): Promise<UmbralesEmpresa | null> {
+  const { data, error } = await supabase.from("tc_config_umbrales").select("*").eq("empresa_id", empresaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as UmbralesEmpresa) ?? null;
+}
+
+export async function guardarUmbralesEmpresa(empresaId: string, patch: {
+  profundidad_minima_mm: number; profundidad_aviso_mm: number; presion_tolerancia_bar: number;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_config_umbrales")
+    .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
   if (error) throw new Error(error.message);
 }
 

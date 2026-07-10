@@ -67,7 +67,7 @@ export default function InformeEstadoFlota() {
 
       <div className="mt-3 text-[11px] text-slate-500">
         Clasificación por la profundidad mínima de la última revisión de cada vehículo: urgente ≤ 1,6 mm · revisar ≤ 3,0 mm.
-        Los vehículos activos sin ninguna revisión cuentan como «pendientes». Los umbrales serán configurables por empresa en una próxima fase.
+        Los vehículos activos sin ninguna revisión cuentan como «pendientes». Los umbrales son configurables por empresa en su ficha (Empresas → ficha → Umbrales de profundidad).
       </div>
     </div>
   );

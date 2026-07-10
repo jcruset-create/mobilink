@@ -149,6 +149,14 @@ export interface Vehiculo {
 
 export type VehiculoInput = Omit<Vehiculo, "id" | "created_at" | "updated_at" | "empresa" | "delegacion" | "tipo" | "config_ejes">;
 
+// Umbrales de profundidad por empresa (mínimo legal, aviso, tolerancia presión).
+export interface UmbralesEmpresa {
+  empresa_id: string;
+  profundidad_minima_mm: number;
+  profundidad_aviso_mm: number;
+  presion_tolerancia_bar: number;
+}
+
 // Configuración de ejes (catálogo editable): "2x2x2", "2x4"…
 // imagen_chasis_url: imagen del plano que heredan todos los vehículos con
 // esta configuración (la del tipo de vehículo, si existe, tiene prioridad).
