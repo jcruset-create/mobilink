@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -27,6 +27,7 @@ export const NAV: NavItem[] = [
   { key: "medidas-neumaticos", path: "medidas-neumaticos", label: "Medidas de neumáticos", icon: Ruler, roles: ["administrador"] },
   { key: "catalogo-neumaticos", path: "catalogo-neumaticos", label: "Catálogo de neumáticos", icon: BookOpen, roles: ["administrador"] },
   { key: "sonda", path: "sonda", label: "Sonda TLGX", icon: Bluetooth, roles: ["administrador"] },
+  { key: "importar", path: "importar", label: "Importar", icon: Upload, roles: ["administrador"] },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, roles: ["administrador"] },
   // Cliente
   { key: "mi-empresa", path: "mi-empresa", label: "Mi empresa", icon: Building2, roles: ["cliente"] },

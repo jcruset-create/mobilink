@@ -26,6 +26,7 @@ import MisVehiculos from "./pages/MisVehiculos";
 import MisNeumaticos from "./pages/MisNeumaticos";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
+import Importar from "./pages/Importar";
 import InformesLayout from "./pages/informes/InformesLayout";
 import InformeAlertas from "./pages/informes/InformeAlertas";
 import InformeInventario from "./pages/informes/InformeInventario";
@@ -92,6 +93,7 @@ export default function TyreControlApp() {
               <Route path="catalogo-neumaticos" element={<CatalogoNeumaticos />} />
               <Route path="sonda" element={<SondaTLGX />} />
               <Route path="configuracion" element={<Configuracion />} />
+              <Route path="importar" element={<Importar />} />
             </Route>
           </Route>
         </Route>
