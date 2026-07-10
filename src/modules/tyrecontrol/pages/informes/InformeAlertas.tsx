@@ -90,7 +90,7 @@ export default function InformeAlertas() {
 
       <div className="mt-3 text-[11px] text-slate-500">
         Reglas: bajo mínimo ≤ 1,6 mm · próximo a sustitución ≤ 3,0 mm (sobre la última medición de cada neumático montado) ·
-        vehículos activos sin ninguna revisión. Umbrales configurables por empresa en su ficha (Empresas → ficha → Umbrales de profundidad).
+        vehículos activos sin ninguna revisión. Umbrales configurables por empresa y por medida en la ficha de la empresa (Empresas → ficha → Umbrales de profundidad).
       </div>
     </div>
   );

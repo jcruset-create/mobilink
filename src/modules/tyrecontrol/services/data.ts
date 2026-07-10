@@ -7,7 +7,7 @@ import type {
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
-  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa,
+  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -687,6 +687,26 @@ export async function guardarUmbralesEmpresa(empresaId: string, patch: {
 }): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales")
     .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
+  if (error) throw new Error(error.message);
+}
+
+// Overrides de umbrales por medida dentro de una empresa
+export async function listarUmbralesMedida(empresaId: string): Promise<UmbralMedida[]> {
+  const { data, error } = await supabase.from("tc_config_umbrales_medida").select("*").eq("empresa_id", empresaId).order("medida");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UmbralMedida[];
+}
+
+export async function guardarUmbralMedida(empresaId: string, medida: string, patch: {
+  profundidad_minima_mm: number; profundidad_aviso_mm: number;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_config_umbrales_medida")
+    .upsert({ empresa_id: empresaId, medida, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id,medida" });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarUmbralMedida(empresaId: string, medida: string): Promise<void> {
+  const { error } = await supabase.from("tc_config_umbrales_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
   if (error) throw new Error(error.message);
 }
 

@@ -157,6 +157,14 @@ export interface UmbralesEmpresa {
   presion_tolerancia_bar: number;
 }
 
+// Override de umbrales para una medida concreta dentro de una empresa.
+export interface UmbralMedida {
+  empresa_id: string;
+  medida: string;
+  profundidad_minima_mm: number;
+  profundidad_aviso_mm: number;
+}
+
 // Configuración de ejes (catálogo editable): "2x2x2", "2x4"…
 // imagen_chasis_url: imagen del plano que heredan todos los vehículos con
 // esta configuración (la del tipo de vehículo, si existe, tiene prioridad).
