@@ -107,6 +107,7 @@ language sql security invoker stable as $$
 $$;
 
 -- ── Ranking de marcas ────────────────────────────────────────
+drop function if exists public.tc_informes_ranking_marcas(uuid);
 create or replace function public.tc_informes_ranking_marcas(
   p_empresa uuid default null
 )
