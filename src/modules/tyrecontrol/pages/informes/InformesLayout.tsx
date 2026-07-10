@@ -25,6 +25,8 @@ const TABS = [
   { to: "/tyrecontrol/informes/economico", label: "Económico" },
   { to: "/tyrecontrol/informes/rankings", label: "Rankings" },
   { to: "/tyrecontrol/informes/desgaste", label: "Desgaste" },
+  { to: "/tyrecontrol/informes/presiones", label: "Presiones" },
+  { to: "/tyrecontrol/informes/productividad", label: "Productividad" },
   { to: "/tyrecontrol/informes/historial-neumatico", label: "Historial neumático" },
   { to: "/tyrecontrol/informes/historial-vehiculo", label: "Historial vehículo" },
 ];

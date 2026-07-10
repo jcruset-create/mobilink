@@ -91,6 +91,25 @@ export interface RankingMarca {
   coste_km_medio: number | null;
 }
 
+export interface PresionNeumatico {
+  neumatico_id: string;
+  codigo: string | null;
+  matricula: string | null;
+  posicion: string | null;
+  presion_medida: number | null;
+  presion_recomendada: number | null;
+  diferencia: number | null;
+  estado: "baja" | "alta" | "ok" | "sin_referencia" | string;
+}
+
+export interface ProductividadTecnico {
+  tecnico_id: string | null;
+  tecnico: string;
+  revisiones: number;
+  neumaticos_revisados: number;
+  operaciones: number;
+}
+
 export interface DesgasteNeumatico {
   neumatico_id: string;
   codigo: string | null;
