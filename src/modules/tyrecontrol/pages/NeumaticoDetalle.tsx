@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerNeumatico, historialNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd, actualizarNeumatico } from "../services/data";
+import { obtenerNeumatico, historialNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo } from "../services/data";
 import type { HistorialMontaje, MontajeActual, Neumatico } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, Modal, Field, inputCls } from "../components/ui";
@@ -49,10 +49,22 @@ export default function NeumaticoDetalle() {
     } catch (e: any) { setMsg(e?.message || "Error al guardar"); } finally { setSaving(false); }
   }
 
+  const [fotoModelo, setFotoModelo] = useState<string | null>(null);
+
   async function cargar() {
-    setN(await obtenerNeumatico(id));
+    const neu = await obtenerNeumatico(id);
+    setN(neu);
     setMontaje(await montajeActualDeNeumatico(id));
     setHistorial(await historialNeumatico(id));
+
+    // Foto heredada del modelo de catálogo (se sube una vez en Catálogo de
+    // neumáticos y sirve para todos los neumáticos de esa marca+modelo).
+    if (neu?.marca && neu?.modelo) {
+      const fotos = await listarFotosCatalogoPorModelo().catch(() => ({} as Record<string, string>));
+      setFotoModelo(fotos[claveModeloCatalogo(neu.marca, neu.modelo)] ?? null);
+    } else {
+      setFotoModelo(null);
+    }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
 
@@ -96,7 +108,20 @@ export default function NeumaticoDetalle() {
       </div>
       {msg && <div className="mb-3 text-sm text-red-300">{msg}</div>}
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-[220px_1fr_1fr]">
+        <div className="rounded-lg bg-slate-800 p-3">
+          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Modelo</div>
+          {fotoModelo ? (
+            <a href={fotoModelo} target="_blank" rel="noreferrer" title="Ver a tamaño completo">
+              <img src={fotoModelo} alt={`${n.marca ?? ""} ${n.modelo ?? ""}`.trim()} className="mx-auto max-h-44 rounded bg-slate-950 object-contain" />
+            </a>
+          ) : (
+            <div className="flex h-32 items-center justify-center rounded border border-dashed border-slate-700 px-3 text-center text-[11px] text-slate-500">
+              Sin foto de modelo. Súbela en Catálogo de neumáticos y la heredan todos los neumáticos de ese modelo.
+            </div>
+          )}
+          <div className="mt-1 text-center text-[11px] text-slate-400">{[n.marca, n.modelo].filter(Boolean).join(" ") || "—"}</div>
+        </div>
         <div className="rounded-lg bg-slate-800 p-3">
           <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos técnicos</div>
           <div className="grid gap-2 sm:grid-cols-2">

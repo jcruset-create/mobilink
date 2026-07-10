@@ -800,6 +800,29 @@ export async function eliminarFotoModelo(modeloId: string): Promise<void> {
   await actualizarModeloTecnico(modeloId, { foto_modelo_url: null });
 }
 
+// Clave normalizada para casar un neumático (marca/modelo en texto libre)
+// con su modelo de catálogo. Igual criterio que las presiones recomendadas.
+export function claveModeloCatalogo(marca?: string | null, modelo?: string | null): string {
+  return `${marca ?? ""}|${modelo ?? ""}`.toLowerCase().replace(/\s+/g, "");
+}
+
+// Fotos del catálogo por marca+modelo: la foto se sube UNA vez al modelo
+// (Catálogo de neumáticos) y la hereda cualquier neumático de ese modelo
+// en fichas, planos y listados.
+export async function listarFotosCatalogoPorModelo(): Promise<Record<string, string>> {
+  const { data, error } = await supabase.from("tc_cat_modelos_neumatico")
+    .select("nombre, foto_modelo_url, marca:tc_cat_marcas_neumatico(nombre)")
+    .not("foto_modelo_url", "is", null);
+  if (error) throw new Error(error.message);
+  const mapa: Record<string, string> = {};
+  for (const m of (data ?? []) as any[]) {
+    const marca = m.marca?.nombre as string | undefined;
+    if (!marca || !m.nombre || !m.foto_modelo_url) continue;
+    mapa[claveModeloCatalogo(marca, m.nombre)] = m.foto_modelo_url as string;
+  }
+  return mapa;
+}
+
 const REFERENCIA_SELECT = "*, modelo:tc_cat_modelos_neumatico(*, marca:tc_cat_marcas_neumatico(*)), tyre_size:tyre_sizes(*)";
 
 export async function listarReferenciasNeumatico(filtros?: {

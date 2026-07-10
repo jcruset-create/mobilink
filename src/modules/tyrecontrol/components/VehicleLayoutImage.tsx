@@ -3,6 +3,7 @@ import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from ".
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico,
   actualizarImagenChasis, guardarCoordenadasPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
+  listarFotosCatalogoPorModelo, claveModeloCatalogo,
 } from "../services/data";
 import { inputCls } from "./ui";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
@@ -77,6 +78,12 @@ export default function VehicleLayoutImage({
 
   useEffect(() => {
     listarPresionesCatalogoPorModelo().then(setPresionesCatalogo).catch(() => setPresionesCatalogo({}));
+  }, []);
+
+  // Fotos de modelo del catálogo (heredadas por marca+modelo).
+  const [fotosCatalogo, setFotosCatalogo] = useState<Record<string, string>>({});
+  useEffect(() => {
+    listarFotosCatalogoPorModelo().then(setFotosCatalogo).catch(() => setFotosCatalogo({}));
   }, []);
 
   async function onArchivoSeleccionado(file: File | undefined) {
@@ -343,6 +350,10 @@ export default function VehicleLayoutImage({
         ) : montajeSeleccionado?.neumatico ? (
           <div>
             <div className="text-[11px] font-bold uppercase text-slate-400">{posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}</div>
+            {(() => {
+              const foto = fotosCatalogo[claveModeloCatalogo(montajeSeleccionado.neumatico.marca, montajeSeleccionado.neumatico.modelo)];
+              return foto ? <img src={foto} alt={montajeSeleccionado.neumatico.modelo ?? ""} className="mt-2 max-h-28 w-full rounded bg-slate-950 object-contain" /> : null;
+            })()}
             <div className="mt-1 text-sm font-bold text-slate-100">{montajeSeleccionado.neumatico.codigo_interno ?? montajeSeleccionado.neumatico.numero_serie}</div>
             <div className="text-xs text-slate-400">{montajeSeleccionado.neumatico.marca} {montajeSeleccionado.neumatico.medida}</div>
             <div className="mt-1 text-[10px] text-slate-500">Desde {montajeSeleccionado.fecha_montaje}{montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}</div>
