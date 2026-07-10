@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import {
   obtenerUmbralesEmpresa, guardarUmbralesEmpresa,
   listarUmbralesMedida, guardarUmbralMedida, eliminarUmbralMedida, listarMedidas,
+  listarUmbralesCategoria, guardarUmbralCategoria, eliminarUmbralCategoria,
 } from "../services/data";
 import type { UmbralMedida, MedidaNeumatico } from "../types";
+import { CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
 import { inputCls, Field, TableWrap, tdCls, thCls } from "./ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
@@ -21,6 +23,10 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // Overrides por categoría (turismo/4x4/furgoneta/camión/otros)
+  const [cats, setCats] = useState<Record<string, { min: string; aviso: string }>>({});
+  const [guardandoCat, setGuardandoCat] = useState(false);
+
   // Overrides por medida
   const [overrides, setOverrides] = useState<UmbralMedida[]>([]);
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
@@ -29,10 +35,11 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
   const [nuevoAviso, setNuevoAviso] = useState("");
 
   async function cargar() {
-    const [u, ov, meds] = await Promise.all([
+    const [u, ov, meds, cat] = await Promise.all([
       obtenerUmbralesEmpresa(empresaId).catch(() => null),
       listarUmbralesMedida(empresaId).catch(() => [] as UmbralMedida[]),
       listarMedidas().catch(() => [] as MedidaNeumatico[]),
+      listarUmbralesCategoria(empresaId).catch(() => []),
     ]);
     if (u) {
       setMinimo(String(u.profundidad_minima_mm));
@@ -41,6 +48,10 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
     }
     setOverrides(ov);
     setMedidas(meds);
+    const mapa: Record<string, { min: string; aviso: string }> = {};
+    for (const c of CATEGORIAS_NEUMATICO) mapa[c] = { min: "", aviso: "" };
+    for (const c of cat) mapa[c.categoria] = { min: String(c.profundidad_minima_mm), aviso: String(c.profundidad_aviso_mm) };
+    setCats(mapa);
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [empresaId]);
 
@@ -54,6 +65,21 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
       });
       setMsg("✔ Umbrales por defecto guardados");
     } catch (e: any) { setMsg(e?.message || "Error al guardar"); } finally { setGuardando(false); }
+  }
+
+  async function guardarCategorias() {
+    setGuardandoCat(true); setMsg("");
+    try {
+      for (const c of CATEGORIAS_NEUMATICO) {
+        const v = cats[c];
+        if (v?.min && v?.aviso) {
+          await guardarUmbralCategoria(empresaId, c, { profundidad_minima_mm: num(v.min), profundidad_aviso_mm: num(v.aviso) });
+        } else {
+          await eliminarUmbralCategoria(empresaId, c);
+        }
+      }
+      setMsg("✔ Umbrales por categoría guardados");
+    } catch (e: any) { setMsg(e?.message || "Error al guardar categorías"); } finally { setGuardandoCat(false); }
   }
 
   async function anadirOverride() {
@@ -76,7 +102,7 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
     <div className="rounded-lg bg-slate-800 p-3">
       <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Umbrales de profundidad</div>
       <div className="mb-3 text-[11px] text-slate-500">
-        Definen el semáforo del estado de flota y las alertas. Cada neumático usa: umbral de su medida → defecto de la empresa → valores legales (1,6/3,0 mm).
+        Definen el semáforo del estado de flota y las alertas. Cada neumático resuelve su umbral en cascada: medida → categoría → defecto de la empresa → valores legales (1,6/3,0 mm).
       </div>
 
       {/* Defecto de empresa */}
@@ -91,6 +117,30 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
             {guardando ? "Guardando…" : "Guardar por defecto"}
           </button>
           {msg && <span className={`text-[12px] ${msg.startsWith("✔") ? "text-emerald-400" : "text-rose-300"}`}>{msg}</span>}
+        </div>
+      )}
+
+      {/* Overrides por categoría */}
+      <div className="mt-4 mb-2 text-[11px] font-bold uppercase text-slate-400">Umbrales por categoría de neumático</div>
+      <div className="mb-2 text-[11px] text-slate-500">Turismo, 4x4, furgoneta o camión. Deja en blanco una categoría para que use el defecto de la empresa. La categoría de cada medida se asigna en Configuración → Medidas.</div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {CATEGORIAS_NEUMATICO.map((c) => (
+          <div key={c} className="rounded bg-slate-900 p-2">
+            <div className="mb-1 text-[12px] font-semibold text-slate-200">{CATEGORIA_NEUMATICO_LABELS[c]}</div>
+            <div className="flex gap-2">
+              <input type="number" step="0.1" className={inputCls} placeholder="mín mm" value={cats[c]?.min ?? ""} disabled={!puedeEditar}
+                onChange={(e) => setCats({ ...cats, [c]: { ...(cats[c] ?? { min: "", aviso: "" }), min: e.target.value } })} />
+              <input type="number" step="0.1" className={inputCls} placeholder="aviso mm" value={cats[c]?.aviso ?? ""} disabled={!puedeEditar}
+                onChange={(e) => setCats({ ...cats, [c]: { ...(cats[c] ?? { min: "", aviso: "" }), aviso: e.target.value } })} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {puedeEditar && (
+        <div className="mt-2">
+          <button onClick={guardarCategorias} disabled={guardandoCat} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
+            {guardandoCat ? "Guardando…" : "Guardar por categoría"}
+          </button>
         </div>
       )}
 

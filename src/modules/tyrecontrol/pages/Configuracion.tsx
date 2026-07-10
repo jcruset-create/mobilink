@@ -5,7 +5,7 @@ import {
   listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
   listarTiposVehiculo, actualizarConfiguracionEjes,
-  listarTiposDeMedida, fijarTiposDeMedida,
+  listarTiposDeMedida, fijarTiposDeMedida, actualizarMedidaCategoria,
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
@@ -13,7 +13,7 @@ import {
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
 } from "../services/data";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
-import { tipoLlantaLabel } from "../types";
+import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -267,8 +267,14 @@ function FilaMedidaCompatibilidad({ medida, tipos, puedeEditar }: { medida: Medi
   const [seleccionados, setSeleccionados] = useState<string[]>([]);
   const [abierto, setAbierto] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [categoria, setCategoria] = useState(medida.categoria ?? "");
 
   useEffect(() => { if (abierto) listarTiposDeMedida(medida.id).then(setSeleccionados); }, [abierto, medida.id]);
+
+  async function cambiarCategoria(cat: string) {
+    setCategoria(cat);
+    try { await actualizarMedidaCategoria(medida.id, cat || null); } catch { /* la RLS o red; se reintenta al reeditar */ }
+  }
 
   async function alternar(tipoId: string) {
     const next = seleccionados.includes(tipoId) ? seleccionados.filter((x) => x !== tipoId) : [...seleccionados, tipoId];
@@ -279,11 +285,23 @@ function FilaMedidaCompatibilidad({ medida, tipos, puedeEditar }: { medida: Medi
 
   return (
     <div className="rounded bg-slate-900 px-2 py-1.5 text-[12px]">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-slate-200">{medida.valor}</span>
-        <button onClick={() => setAbierto((v) => !v)} className="text-[10px] text-sky-300 hover:underline">
-          {abierto ? "cerrar" : "tipos de vehículo"}
-        </button>
+        <div className="flex items-center gap-2">
+          <select
+            className="rounded border border-slate-700 bg-slate-800 px-1 py-0.5 text-[10px] text-slate-300"
+            value={categoria}
+            disabled={!puedeEditar}
+            onChange={(e) => cambiarCategoria(e.target.value)}
+            title="Categoría (para los umbrales por tipo)"
+          >
+            <option value="">Categoría…</option>
+            {CATEGORIAS_NEUMATICO.map((c) => <option key={c} value={c}>{CATEGORIA_NEUMATICO_LABELS[c]}</option>)}
+          </select>
+          <button onClick={() => setAbierto((v) => !v)} className="text-[10px] text-sky-300 hover:underline">
+            {abierto ? "cerrar" : "tipos de vehículo"}
+          </button>
+        </div>
       </div>
       {abierto && (
         <div className="mt-2 flex flex-wrap gap-2">

@@ -461,6 +461,22 @@ export interface MedidaNeumatico {
   ancho?: number | null; perfil?: number | null; diametro?: number | null;
   construccion?: "radial" | "diagonal" | "otros" | null;
   aplicacion?: string | null; notas?: string | null;
+  categoria?: string | null; // turismo | 4x4 | furgoneta | camion | otros
+}
+
+// Categorías de neumático para umbrales por tipo de vehículo.
+export const CATEGORIAS_NEUMATICO = ["turismo", "4x4", "furgoneta", "camion", "otros"] as const;
+export type CategoriaNeumatico = (typeof CATEGORIAS_NEUMATICO)[number];
+export const CATEGORIA_NEUMATICO_LABELS: Record<CategoriaNeumatico, string> = {
+  turismo: "Turismo", "4x4": "4x4", furgoneta: "Furgoneta", camion: "Camión", otros: "Otros",
+};
+
+// Override de umbrales para una categoría dentro de una empresa.
+export interface UmbralCategoria {
+  empresa_id: string;
+  categoria: string;
+  profundidad_minima_mm: number;
+  profundidad_aviso_mm: number;
 }
 export interface IndiceCarga { id: string; valor: string; activo: boolean; }
 export interface IndiceVelocidad { id: string; valor: string; activo: boolean; }

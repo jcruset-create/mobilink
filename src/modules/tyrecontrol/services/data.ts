@@ -7,7 +7,7 @@ import type {
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
-  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida,
+  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -707,6 +707,32 @@ export async function guardarUmbralMedida(empresaId: string, medida: string, pat
 
 export async function eliminarUmbralMedida(empresaId: string, medida: string): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
+  if (error) throw new Error(error.message);
+}
+
+// Categoría de una medida del catálogo (turismo/4x4/furgoneta/camion/otros)
+export async function actualizarMedidaCategoria(medidaId: string, categoria: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_cat_medidas_neumatico").update({ categoria }).eq("id", medidaId);
+  if (error) throw new Error(error.message);
+}
+
+// Overrides de umbrales por categoría dentro de una empresa
+export async function listarUmbralesCategoria(empresaId: string): Promise<UmbralCategoria[]> {
+  const { data, error } = await supabase.from("tc_config_umbrales_categoria").select("*").eq("empresa_id", empresaId);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UmbralCategoria[];
+}
+
+export async function guardarUmbralCategoria(empresaId: string, categoria: string, patch: {
+  profundidad_minima_mm: number; profundidad_aviso_mm: number;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_config_umbrales_categoria")
+    .upsert({ empresa_id: empresaId, categoria, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id,categoria" });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarUmbralCategoria(empresaId: string, categoria: string): Promise<void> {
+  const { error } = await supabase.from("tc_config_umbrales_categoria").delete().eq("empresa_id", empresaId).eq("categoria", categoria);
   if (error) throw new Error(error.message);
 }
 
