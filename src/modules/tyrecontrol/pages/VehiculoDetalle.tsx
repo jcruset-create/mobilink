@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo } from "../services/data";
-import type { MontajeActual, PosicionVehiculo, Vehiculo } from "../types";
-import { ORIGEN_KM_LABELS } from "../types";
-import { Badge } from "../components/ui";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision } from "../services/data";
+import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
+import { ORIGEN_KM_LABELS, tipoLlantaLabel } from "../types";
+import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+
+// Fecha + hora de una revisión: el día de fecha_revision y la hora del
+// created_at (marca de tiempo real), igual que en la pantalla de revisiones.
+function fechaHora(r: RevisionVehiculoT): string {
+  const fecha = r.fecha_revision ?? "";
+  const hora = r.created_at ? new Date(r.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
+  return hora ? `${fecha} · ${hora}` : fecha;
+}
 
 export default function VehiculoDetalle() {
   const { id = "" } = useParams();
@@ -15,20 +23,44 @@ export default function VehiculoDetalle() {
   const [v, setV] = useState<Vehiculo | null>(null);
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
   const [montajes, setMontajes] = useState<MontajeActual[]>([]);
+  const [medidasMap, setMedidasMap] = useState<Map<string, string>>(new Map());
+  const [llantasMap, setLlantasMap] = useState<Map<string, TipoLlanta>>(new Map());
+  const [ejes, setEjes] = useState<VehiculoEje[]>([]);
+  const [revisiones, setRevisiones] = useState<RevisionVehiculoT[]>([]);
+  const [fichaRevision, setFichaRevision] = useState<RevisionVehiculoT | null>(null);
+  const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
+  const [cargandoFicha, setCargandoFicha] = useState(false);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
     setV(veh);
     if (veh?.tipo_vehiculo_id) setPosiciones(await listarPosiciones(veh.tipo_vehiculo_id));
     setMontajes(await listarMontajesVehiculo(id));
+
+    // Catálogos para traducir medida_id / tipo_llanta_id a etiquetas legibles.
+    const [medidas, llantas] = await Promise.all([listarMedidas(), listarTiposLlanta()]);
+    setMedidasMap(new Map(medidas.map((m) => [m.id, m.valor])));
+    setLlantasMap(new Map(llantas.map((l) => [l.id, l])));
+
+    setEjes(veh?.medidas_por_eje ? await listarEjesVehiculo(id) : []);
+    setRevisiones(await listarRevisiones(id));
+  }
+
+  async function verFichaRevision(r: RevisionVehiculoT) {
+    setFichaRevision(r); setCargandoFicha(true);
+    try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
 
   const dato = (l: string, val?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{val || "—"}</div></div>
   );
+  const medidaLabel = (mid?: string | null) => (mid ? medidasMap.get(mid) : null) ?? "—";
+  const llantaLabel = (lid?: string | null) => { const l = lid ? llantasMap.get(lid) : null; return l ? tipoLlantaLabel(l) : "—"; };
 
   if (!v) return <div className="text-slate-400">Cargando ficha…</div>;
+
+  const configEjesLabel = [v.config_ejes?.nombre, v.config_ejes?.descripcion].filter(Boolean).join(" · ") || "—";
 
   return (
     <div>
@@ -57,6 +89,31 @@ export default function VehiculoDetalle() {
           <div className="text-3xl font-black">{Number(v.km_actual).toLocaleString("es-ES")} <span className="text-sm font-normal text-slate-400">km</span></div>
           <div className="mt-1 text-xs text-slate-500">Origen: {ORIGEN_KM_LABELS[v.origen_km]}</div>
         </div>
+      </div>
+
+      {/* Configuración de neumáticos */}
+      <div className="mt-3 rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Configuración de neumáticos</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {dato("Configuración de ejes", configEjesLabel)}
+          {dato("Medidas por eje", v.medidas_por_eje ? "Sí · distintas por eje" : "No · misma medida")}
+          {!v.medidas_por_eje && dato("Medida de neumático", medidaLabel(v.medida_id))}
+          {!v.medidas_por_eje && dato("Tipo de llanta", llantaLabel(v.tipo_llanta_id))}
+        </div>
+        {v.medidas_por_eje && ejes.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-[10px] text-slate-400">Medida / llanta por eje</div>
+            <div className="flex flex-wrap gap-2">
+              {ejes.map((e) => (
+                <div key={e.eje} className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2">
+                  <div className="text-[12px] font-bold text-sky-300">Eje {e.eje}{e.ruedas ? ` · ${e.ruedas} ruedas` : ""}</div>
+                  <div className="text-[11px] text-slate-300">{medidaLabel(e.medida_id)}</div>
+                  <div className="text-[10px] text-slate-500">{llantaLabel(e.tipo_llanta_id)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Plano gráfico del vehículo */}
@@ -96,14 +153,67 @@ export default function VehiculoDetalle() {
         )}
       </div>
 
+      {/* Inspecciones (revisiones del vehículo) */}
+      <div className="mt-3 rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Inspecciones ({revisiones.length})</div>
+        {revisiones.length === 0 ? (
+          <div className="text-sm text-slate-500">Este vehículo aún no tiene revisiones registradas.</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {revisiones.map((r) => (
+              <div key={r.id} className="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-[12px] text-slate-300">
+                <span>
+                  {fechaHora(r)} · {r.km_vehiculo ?? "—"} km
+                  {r.tecnico_nombre ? <span className="text-slate-500"> · {r.tecnico_nombre}</span> : ""}
+                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-slate-500">{r.estado_revision}</span>
+                  <button onClick={() => verFichaRevision(r)} className="text-sky-300 hover:underline">Ver ficha</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Placeholders futuros */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        {["Histórico de neumáticos", "Inspecciones", "Operaciones"].map((t) => (
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {["Histórico de neumáticos", "Operaciones"].map((t) => (
           <div key={t} className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-6 text-center text-sm text-slate-500">
             {t}<div className="text-[11px]">Disponible en próximas fases</div>
           </div>
         ))}
       </div>
+
+      {fichaRevision && (
+        <Modal title={`Revisión del ${fechaHora(fichaRevision)}`} onClose={() => setFichaRevision(null)}>
+          <div className="mb-2 text-[12px] text-slate-400">
+            {fichaRevision.km_vehiculo ?? "—"} km · Estado: {fichaRevision.estado_revision}
+            {fichaRevision.tecnico_nombre ? ` · Técnico: ${fichaRevision.tecnico_nombre}` : ""}
+            {fichaRevision.observaciones ? ` · ${fichaRevision.observaciones}` : ""}
+          </div>
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th><th className={thCls}>Profundidad</th>
+              <th className={thCls}>Presión</th><th className={thCls}>Estado visual</th><th className={thCls}>Observaciones</th>
+            </tr></thead>
+            <tbody>
+              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Cargando…</td></tr>
+              : fichaDetalle.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos.</td></tr>
+              : fichaDetalle.map((d) => (
+                <tr key={d.id} className="border-t border-slate-700/60">
+                  <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${d.presion_bar} bar` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Modal>
+      )}
     </div>
   );
 }

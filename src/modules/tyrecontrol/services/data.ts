@@ -255,19 +255,27 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   if (ids.length === 0) return {};
 
   const { data: dets, error: e2 } = await supabase.from("revisiones_neumaticos_detalle")
-    .select("neumatico_id, profundidad_mm, presion_bar, revision_id").in("revision_id", ids).not("neumatico_id", "is", null);
+    .select("neumatico_id, posicion_id, profundidad_mm, presion_bar, revision_id").in("revision_id", ids);
   if (e2) throw new Error(e2.message);
+
+  // Detalles guardados sin neumatico_id (p. ej. la posición aún no tenía
+  // montaje al crear la revisión): se atribuyen por posición al neumático
+  // montado actualmente en ella, para no perder la medición en el plano.
+  const { data: mons } = await supabase.from("tc_montajes_actuales")
+    .select("posicion_id, neumatico_id").eq("vehiculo_id", vehiculoId);
+  const neuPorPosicion = new Map((mons ?? []).map((m) => [m.posicion_id as string, m.neumatico_id as string]));
 
   const ordenRevision = new Map(ids.map((id, i) => [id, i]));
   const detsOrdenados = [...(dets ?? [])].sort((a, b) => (ordenRevision.get(a.revision_id) ?? 0) - (ordenRevision.get(b.revision_id) ?? 0));
 
   const mapa: Record<string, { profundidad_mm: number | null; presion_bar: number | null }> = {};
   for (const d of detsOrdenados) {
-    if (!d.neumatico_id) continue;
-    const actual = mapa[d.neumatico_id] ?? { profundidad_mm: null, presion_bar: null };
+    const nid = d.neumatico_id ?? (d.posicion_id ? neuPorPosicion.get(d.posicion_id) : null);
+    if (!nid) continue;
+    const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null };
     if (actual.profundidad_mm == null && d.profundidad_mm != null) actual.profundidad_mm = d.profundidad_mm;
     if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
-    mapa[d.neumatico_id] = actual;
+    mapa[nid] = actual;
   }
   return mapa;
 }
