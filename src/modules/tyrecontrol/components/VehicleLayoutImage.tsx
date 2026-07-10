@@ -354,9 +354,37 @@ export default function VehicleLayoutImage({
               const foto = fotosCatalogo[claveModeloCatalogo(montajeSeleccionado.neumatico.marca, montajeSeleccionado.neumatico.modelo)];
               return foto ? <img src={foto} alt={montajeSeleccionado.neumatico.modelo ?? ""} className="mt-2 max-h-28 w-full rounded bg-slate-950 object-contain" /> : null;
             })()}
-            <div className="mt-1 text-sm font-bold text-slate-100">{montajeSeleccionado.neumatico.codigo_interno ?? montajeSeleccionado.neumatico.numero_serie}</div>
-            <div className="text-xs text-slate-400">{montajeSeleccionado.neumatico.marca} {montajeSeleccionado.neumatico.medida}</div>
-            <div className="mt-1 text-[10px] text-slate-500">Desde {montajeSeleccionado.fecha_montaje}{montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}</div>
+            {(() => {
+              const neu = montajeSeleccionado.neumatico;
+              const medicion = medicionesActuales[neu.id];
+              const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
+              const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
+              const presionMedida = medicion?.presion_bar ?? null;
+              const presionRecom = neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
+              const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("/");
+              const fila = (l: string, v: string) => (
+                <div className="flex justify-between gap-2 border-t border-slate-700/50 py-1">
+                  <span className="text-[11px] text-slate-500">{l}</span>
+                  <span className="text-right text-[12px] font-semibold text-slate-200">{v || "—"}</span>
+                </div>
+              );
+              return (
+                <div className="mt-2">
+                  <div className="text-sm font-bold text-slate-100">{neu.codigo_interno ?? neu.numero_serie ?? "—"}</div>
+                  <div className="mt-2">
+                    {fila("Marca", neu.marca ?? "")}
+                    {fila("Modelo", neu.modelo ?? "")}
+                    {fila("Medida", neu.medida ?? "")}
+                    {fila("IC / CV", indices)}
+                    {neu.dot ? fila("DOT", neu.dot) : null}
+                    {fila("Presión recom.", presionRecom != null ? `${presionRecom} bar` : "")}
+                    {fila("Última prof.", profundidad != null ? `${profundidad} mm` : "")}
+                    {fila("Última pres.", presionMedida != null ? `${presionMedida} bar` : "")}
+                    {fila("Montado", `${montajeSeleccionado.fecha_montaje}${montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}`)}
+                  </div>
+                </div>
+              );
+            })()}
             <div className="mt-3 flex flex-col gap-2">
               <button onClick={() => onFicha?.(montajeSeleccionado.neumatico!.id)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200">Ver ficha</button>
               {editable && <button onClick={() => setModalFicha({ sustitucion: true })} className="rounded bg-sky-600 px-2 py-1 text-[12px] font-bold text-white">Sustituir</button>}
