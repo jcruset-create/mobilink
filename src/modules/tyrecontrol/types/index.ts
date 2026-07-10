@@ -150,8 +150,11 @@ export interface Vehiculo {
 export type VehiculoInput = Omit<Vehiculo, "id" | "created_at" | "updated_at" | "empresa" | "delegacion" | "tipo" | "config_ejes">;
 
 // Configuración de ejes (catálogo editable): "2x2x2", "2x4"…
+// imagen_chasis_url: imagen del plano que heredan todos los vehículos con
+// esta configuración (la del tipo de vehículo, si existe, tiene prioridad).
 export interface ConfigEjes {
   id: string; nombre: string; descripcion?: string | null; orden: number; activo: boolean;
+  imagen_chasis_url?: string | null;
 }
 
 // Tipo de llanta (catálogo editable): material + medida + detalle

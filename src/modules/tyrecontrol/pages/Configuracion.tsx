@@ -9,7 +9,7 @@ import {
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
-  listarConfigEjes, crearConfigEjes, desactivarConfigEjes,
+  listarConfigEjes, crearConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
 } from "../services/data";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
@@ -17,6 +17,59 @@ import { tipoLlantaLabel } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+
+// Fila de configuración de ejes con su imagen de chasis asociada: la imagen
+// se sube una vez aquí y la heredan todos los vehículos con esa configuración.
+function FilaConfigEjes({ config, puedeEditar, onCambio }: { config: ConfigEjes; puedeEditar: boolean; onCambio: () => void }) {
+  const [subiendo, setSubiendo] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function onArchivo(file: File | undefined) {
+    if (!file) return;
+    setSubiendo(true); setErr("");
+    try {
+      const url = await subirImagenConfigEjes(config.id, file);
+      await actualizarImagenConfigEjes(config.id, url);
+      onCambio();
+    } catch (e: any) { setErr(e?.message || "Error al subir la imagen"); } finally { setSubiendo(false); }
+  }
+
+  async function quitarImagen() {
+    if (!window.confirm(`¿Quitar la imagen de la configuración "${config.nombre}"?`)) return;
+    setErr("");
+    try { await actualizarImagenConfigEjes(config.id, null); onCambio(); }
+    catch (e: any) { setErr(e?.message || "Error"); }
+  }
+
+  async function borrar() {
+    if (!window.confirm(`¿Eliminar la configuración "${config.nombre}"?`)) return;
+    await desactivarConfigEjes(config.id); onCambio();
+  }
+
+  return (
+    <div className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
+      {config.imagen_chasis_url ? (
+        <img src={config.imagen_chasis_url} alt={config.nombre} className="h-8 w-8 rounded border border-slate-700 object-contain bg-slate-950" />
+      ) : (
+        <div className="flex h-8 w-8 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin img</div>
+      )}
+      <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
+      {err && <span className="text-[10px] text-rose-400">{err}</span>}
+      {puedeEditar && (
+        <>
+          <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+            {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
+            <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
+          </label>
+          {config.imagen_chasis_url && (
+            <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+          )}
+          <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+        </>
+      )}
+    </div>
+  );
+}
 
 function FilaMotivo({ motivo, puedeEditar, onCambio }: { motivo: MotivoFueraAlmacen; puedeEditar: boolean; onCambio: () => void }) {
   const [editando, setEditando] = useState(false);
@@ -414,15 +467,9 @@ export default function Configuracion() {
             <button onClick={guardarConfig} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
           </div>
         )}
-        <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-4">
-          {configEjes.map((c) => (
-            <div key={c.id} className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
-              <span className="flex-1"><b>{c.nombre}</b>{c.descripcion ? ` · ${c.descripcion}` : ""}</span>
-              {puedeEditar && (
-                <button onClick={async () => { if (window.confirm(`¿Eliminar la configuración "${c.nombre}"?`)) { await desactivarConfigEjes(c.id); await cargar(); } }} className="text-[10px] text-rose-400 hover:underline">borrar</button>
-              )}
-            </div>
-          ))}
+        <div className="mb-2 text-[11px] text-slate-500">La imagen de chasis asociada a cada configuración la heredan todos los vehículos que la usen (si el tipo de vehículo tiene imagen propia, esa tiene prioridad).</div>
+        <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} />)}
         </div>
       </div>
 

@@ -121,6 +121,7 @@ export default function VehiculoDetalle() {
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
         <VehicleLayoutImage
           tipo={v.tipo}
+          imagenFallback={v.config_ejes?.imagen_chasis_url ?? null}
           posiciones={posiciones}
           vehiculoId={v.id}
           empresaId={v.empresa_id}

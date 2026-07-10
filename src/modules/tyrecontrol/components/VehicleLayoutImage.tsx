@@ -47,18 +47,22 @@ interface Props {
   montajes: MontajeActual[];
   editable: boolean;         // puede montar/desmontar/rotar
   puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
+  imagenFallback?: string | null; // imagen heredada de la configuración de ejes (si el tipo no tiene propia)
   onFicha?: (neumaticoId: string) => void;
   onChanged?: () => void;
   onTipoChanged?: () => void;
 }
 
 export default function VehicleLayoutImage({
-  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, onFicha, onChanged, onTipoChanged,
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenFallback, onFicha, onChanged, onTipoChanged,
 }: Props) {
+  // Imagen efectiva del plano: la del tipo de vehículo si existe; si no,
+  // la heredada de la configuración de ejes del vehículo.
+  const imagenBase = tipo?.imagen_chasis_url ?? imagenFallback ?? null;
   const containerRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<Record<string, Coords>>({});
   const [calibrando, setCalibrando] = useState(false);
-  const [urlDraft, setUrlDraft] = useState(tipo?.imagen_chasis_url ?? "");
+  const [urlDraft, setUrlDraft] = useState(imagenBase ?? "");
   const [saving, setSaving] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [msg, setMsg] = useState("");
@@ -88,8 +92,9 @@ export default function VehicleLayoutImage({
     const next: Record<string, Coords> = {};
     posiciones.forEach((p, i) => { next[p.codigo_posicion] = coordsDe(p, i); });
     setCoords(next);
-    setUrlDraft(tipo?.imagen_chasis_url ?? "");
-  }, [posiciones, tipo?.id, tipo?.imagen_chasis_url]);
+    setUrlDraft(imagenBase ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posiciones, tipo?.id, imagenBase]);
 
   const posicionPorCodigo = new Map(posiciones.map((p) => [p.codigo_posicion, p]));
   const montajePorPosicionId = new Map(montajes.map((m) => [m.posicion_id, m]));
@@ -171,7 +176,10 @@ export default function VehicleLayoutImage({
   async function guardarCalibracion() {
     setSaving(true); setMsg("");
     try {
-      if (tipo && urlDraft !== (tipo.imagen_chasis_url ?? "")) await actualizarImagenChasis(tipo.id, urlDraft || null);
+      // Solo se guarda en el tipo si el usuario cambió la URL respecto a la
+      // imagen efectiva; así la heredada de la configuración de ejes no se
+      // "copia" al tipo al calibrar posiciones sin tocar la imagen.
+      if (tipo && urlDraft !== (imagenBase ?? "")) await actualizarImagenChasis(tipo.id, urlDraft || null);
       for (const p of posiciones) {
         const c = coords[p.codigo_posicion];
         if (!c) continue;
@@ -207,10 +215,10 @@ export default function VehicleLayoutImage({
     catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
   }
 
-  if (!tipo?.imagen_chasis_url && !calibrando) {
+  if (!imagenBase && !calibrando) {
     return (
       <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-8 text-center text-sm text-slate-500">
-        Este tipo de vehículo ({tipo?.nombre ?? "—"}) todavía no tiene imagen de chasis.
+        Este vehículo no tiene imagen de chasis: ni el tipo ({tipo?.nombre ?? "—"}) ni su configuración de ejes tienen una asociada.
         {puedeCalibrar ? (
           <div className="mt-3">
             <button onClick={() => setCalibrando(true)} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white">Añadir imagen y calibrar posiciones</button>
@@ -251,9 +259,9 @@ export default function VehicleLayoutImage({
           onPointerMove={onPointerMoveContainer}
           onPointerUp={onPointerUpContainer}
         >
-          {(calibrando ? urlDraft : tipo?.imagen_chasis_url) ? (
+          {(calibrando ? urlDraft : imagenBase) ? (
             <img
-              src={calibrando ? urlDraft : tipo!.imagen_chasis_url!}
+              src={calibrando ? urlDraft : imagenBase!}
               alt={tipo?.nombre}
               className="absolute inset-0 h-full w-full object-contain"
               draggable={false}

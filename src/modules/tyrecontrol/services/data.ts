@@ -641,6 +641,22 @@ export async function desactivarConfigEjes(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// Imagen de chasis asociada a la configuración de ejes: se sube una vez al
+// catálogo y la heredan todos los vehículos con esa configuración (la imagen
+// propia del tipo de vehículo, si existe, tiene prioridad).
+export async function subirImagenConfigEjes(configId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `config-ejes/${configId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from("tc-chasis").upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
+}
+
+export async function actualizarImagenConfigEjes(configId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_config_ejes").update({ imagen_chasis_url: url }).eq("id", configId);
+  if (error) throw new Error(error.message);
+}
+
 // ── Tipos de llanta (catálogo editable: material + medida) ───
 export async function listarTiposLlanta(): Promise<TipoLlanta[]> {
   const { data, error } = await supabase.from("tc_tipos_llanta").select("*").eq("activo", true).order("orden");
