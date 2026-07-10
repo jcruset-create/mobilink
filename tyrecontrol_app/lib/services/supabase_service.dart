@@ -48,6 +48,27 @@ class TyreControlApi {
     return await _db.from('tc_usuarios').select('*, empresa:tc_empresas(*)').eq('id', uid).maybeSingle();
   }
 
+  // ── Catalogo: fotos de modelo ────────────────────────────────
+  /// Mapa "marca|modelo" (normalizado con [claveModeloCatalogo]) → URL de
+  /// la foto del modelo. La foto se sube UNA vez en el panel web (Catalogo
+  /// de neumaticos) y la heredan todos los neumaticos de esa marca+modelo.
+  static Future<Map<String, String>> fotosCatalogoPorModelo() async {
+    final data = await _db
+        .from('tc_cat_modelos_neumatico')
+        .select('nombre, foto_modelo_url, marca:tc_cat_marcas_neumatico(nombre)')
+        .not('foto_modelo_url', 'is', null);
+    final mapa = <String, String>{};
+    for (final e in (data as List)) {
+      final m = Map<String, dynamic>.from(e);
+      final marca = m['marca'] is Map ? m['marca']['nombre'] as String? : null;
+      final modelo = m['nombre'] as String?;
+      final url = m['foto_modelo_url'] as String?;
+      if (marca == null || modelo == null || url == null || url.isEmpty) continue;
+      mapa[claveModeloCatalogo(marca, modelo)] = url;
+    }
+    return mapa;
+  }
+
   // ── Vehiculos ────────────────────────────────────────────────
   static Future<List<Vehiculo>> buscarVehiculos(String texto) async {
     final t = texto.trim();

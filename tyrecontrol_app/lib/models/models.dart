@@ -3,6 +3,12 @@
 // la logica compleja (montar, desmontar, sustituir) vive en RPCs de
 // Postgres que ya usa el panel web y que esta app reutiliza igual.
 
+/// Clave normalizada "marca|modelo" para casar un neumatico (texto libre)
+/// con su modelo del catalogo. Mismo criterio que el panel web (ignora
+/// mayusculas y espacios).
+String claveModeloCatalogo(String? marca, String? modelo) =>
+    '${marca ?? ''}|${modelo ?? ''}'.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
 class Empresa {
   final String id;
   final String nombre;

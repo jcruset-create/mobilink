@@ -24,6 +24,7 @@ const _estadosVisuales = <String, String>{
 class TireDetailScreen extends StatefulWidget {
   final PosicionVehiculo posicion;
   final Neumatico? neumatico;
+  final String? fotoModeloUrl; // foto del modelo heredada del catálogo
   final RevisionDetalleDraft draft;
   final RevisionVehiculo revision;
   final Vehiculo vehiculo;
@@ -32,6 +33,7 @@ class TireDetailScreen extends StatefulWidget {
     super.key,
     required this.posicion,
     required this.neumatico,
+    this.fotoModeloUrl,
     required this.draft,
     required this.revision,
     required this.vehiculo,
@@ -163,10 +165,17 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
                   child: Row(
                     children: [
                       Container(
-                        width: 56,
-                        height: 56,
+                        width: 64,
+                        height: 64,
+                        clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(10)),
-                        child: const Icon(Icons.trip_origin, color: AppColors.textSecondary),
+                        child: widget.fotoModeloUrl != null
+                            ? Image.network(
+                                widget.fotoModeloUrl!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const Icon(Icons.trip_origin, color: AppColors.textSecondary),
+                              )
+                            : const Icon(Icons.trip_origin, color: AppColors.textSecondary),
                       ),
                       const SizedBox(width: 14),
                       Expanded(

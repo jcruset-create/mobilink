@@ -32,6 +32,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   List<PosicionVehiculo> _posiciones = [];
   final Map<String, MontajeActual> _montajePorPosicion = {};
   final Map<String, String> _posPorEpc = {}; // rfid_epc (mayúsculas) → posicionId
+  Map<String, String> _fotosModelo = {}; // claveModeloCatalogo → url foto del catálogo
   final Map<String, RevisionDetalleDraft> _detalles = {};
   RevisionVehiculo? _revision;
   int _index = 0;
@@ -96,6 +97,18 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
       for (final p in posiciones) {
         _detalles[p.id] = RevisionDetalleDraft(posicionId: p.id, neumaticoId: _montajePorPosicion[p.id]?.neumaticoId);
+      }
+
+      // Fotos de modelo del catálogo, con caché para trabajar sin cobertura.
+      // Si falla no bloquea la revisión: simplemente no se muestra foto.
+      try {
+        _fotosModelo = await TyreControlApi.fotosCatalogoPorModelo();
+        await OfflineStore.cacheJson('fotos_modelo_catalogo', _fotosModelo);
+      } catch (_) {
+        final raw = OfflineStore.cachedJson('fotos_modelo_catalogo');
+        if (raw is Map) {
+          _fotosModelo = raw.map((k, v) => MapEntry(k.toString(), v.toString()));
+        }
       }
 
       if (!mounted) return;
@@ -247,6 +260,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         builder: (_) => TireDetailScreen(
           posicion: p,
           neumatico: montaje?.neumatico,
+          fotoModeloUrl: _fotosModelo[claveModeloCatalogo(montaje?.neumatico?.marca, montaje?.neumatico?.modelo)],
           draft: draft,
           revision: _revision!,
           vehiculo: widget.vehiculo,
