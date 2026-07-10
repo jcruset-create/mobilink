@@ -4,7 +4,7 @@
 import { supabase } from "./supabase";
 import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
-  EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico,
+  EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -69,4 +69,10 @@ export async function costeKmNeumatico(f: FiltrosInformes): Promise<CosteKmNeuma
   const { data, error } = await supabase.rpc("tc_informes_coste_km_neumatico", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as CosteKmNeumatico[];
+}
+
+export async function desgaste(f: FiltrosInformes): Promise<DesgasteNeumatico[]> {
+  const { data, error } = await supabase.rpc("tc_informes_desgaste", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as DesgasteNeumatico[];
 }

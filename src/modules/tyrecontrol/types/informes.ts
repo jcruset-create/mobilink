@@ -91,6 +91,19 @@ export interface RankingMarca {
   coste_km_medio: number | null;
 }
 
+export interface DesgasteNeumatico {
+  neumatico_id: string;
+  codigo: string | null;
+  marca: string | null;
+  modelo: string | null;
+  medida: string | null;
+  ultima_prof: number | null;
+  mm_por_1000km: number | null;
+  km_restantes: number | null;
+  fecha_prevista: string | null;
+  n_medidas: number;
+}
+
 export interface CosteKmNeumatico {
   neumatico_id: string;
   codigo: string | null;

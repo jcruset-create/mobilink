@@ -34,6 +34,7 @@ import InformeHistorialNeumatico from "./pages/informes/InformeHistorialNeumatic
 import InformeHistorialVehiculo from "./pages/informes/InformeHistorialVehiculo";
 import InformeEconomico from "./pages/informes/InformeEconomico";
 import InformeRankings from "./pages/informes/InformeRankings";
+import InformeDesgaste from "./pages/informes/InformeDesgaste";
 
 export default function TyreControlApp() {
   return (
@@ -60,6 +61,7 @@ export default function TyreControlApp() {
               <Route path="historial-vehiculo" element={<InformeHistorialVehiculo />} />
               <Route path="economico" element={<InformeEconomico />} />
               <Route path="rankings" element={<InformeRankings />} />
+              <Route path="desgaste" element={<InformeDesgaste />} />
             </Route>
 
             {/* Cliente */}
