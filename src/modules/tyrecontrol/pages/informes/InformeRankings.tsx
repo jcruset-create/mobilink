@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useInformesFiltros } from "./InformesLayout";
-import { rankingVehiculos, rankingMarcas } from "../../services/informes";
-import type { RankingVehiculo, RankingMarca } from "../../types/informes";
+import { rankingVehiculos, rankingMarcas, costeKmNeumatico } from "../../services/informes";
+import type { RankingVehiculo, RankingMarca, CosteKmNeumatico } from "../../types/informes";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
 
@@ -19,16 +19,18 @@ const ORDENES: { k: OrdenVeh; label: string }[] = [
 
 export default function InformeRankings() {
   const { filtros } = useInformesFiltros();
-  const [tab, setTab] = useState<"vehiculos" | "marcas">("vehiculos");
+  const [tab, setTab] = useState<"vehiculos" | "marcas" | "neumaticos">("vehiculos");
   const [orden, setOrden] = useState<OrdenVeh>("coste_km");
   const [veh, setVeh] = useState<RankingVehiculo[]>([]);
   const [marcas, setMarcas] = useState<RankingMarca[]>([]);
+  const [neus, setNeus] = useState<CosteKmNeumatico[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let vivo = true; setError("");
     if (tab === "vehiculos") rankingVehiculos(filtros, orden).then((r) => vivo && setVeh(r)).catch((e) => vivo && setError(e?.message || "Error"));
-    else rankingMarcas(filtros).then((r) => vivo && setMarcas(r)).catch((e) => vivo && setError(e?.message || "Error"));
+    else if (tab === "marcas") rankingMarcas(filtros).then((r) => vivo && setMarcas(r)).catch((e) => vivo && setError(e?.message || "Error"));
+    else costeKmNeumatico(filtros).then((r) => vivo && setNeus(r)).catch((e) => vivo && setError(e?.message || "Error"));
     return () => { vivo = false; };
   }, [filtros, tab, orden]);
 
@@ -37,6 +39,7 @@ export default function InformeRankings() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex gap-1">
           <button onClick={() => setTab("vehiculos")} className={`rounded px-3 py-1.5 text-[12px] font-semibold ${tab === "vehiculos" ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300"}`}>Vehículos</button>
+          <button onClick={() => setTab("neumaticos")} className={`rounded px-3 py-1.5 text-[12px] font-semibold ${tab === "neumaticos" ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300"}`}>Neumáticos (€/km)</button>
           <button onClick={() => setTab("marcas")} className={`rounded px-3 py-1.5 text-[12px] font-semibold ${tab === "marcas" ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300"}`}>Marcas</button>
         </div>
         {tab === "vehiculos" && (
@@ -77,27 +80,56 @@ export default function InformeRankings() {
             </tbody>
           </TableWrap>
         </div>
-      ) : (
+      ) : tab === "marcas" ? (
         <div className="rounded-lg bg-slate-800 p-3">
           <div className="mb-2 flex justify-end">
-            <button onClick={() => descargarCSV("ranking_marcas", ["Marca", "Neumáticos", "Coste medio", "Prof. media (mm)", "Reparaciones"],
-              marcas.map((m) => [m.marca, m.n_neumaticos, m.coste_medio, m.prof_media ?? "", m.n_reparaciones]))}
+            <button onClick={() => descargarCSV("ranking_marcas", ["Marca", "Neumáticos", "Coste medio", "Km medio", "Coste/km", "Prof. media (mm)", "Reparaciones"],
+              marcas.map((m) => [m.marca, m.n_neumaticos, m.coste_medio, m.km_medio ?? "", m.coste_km_medio ?? "", m.prof_media ?? "", m.n_reparaciones]))}
               className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">Exportar CSV</button>
           </div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
               <th className={thCls}>Marca</th><th className={thCls}>Neumáticos</th><th className={thCls}>Coste medio</th>
-              <th className={thCls}>Prof. media</th><th className={thCls}>Reparaciones</th>
+              <th className={thCls}>Km medio</th><th className={thCls}>Coste/km</th><th className={thCls}>Prof. media</th><th className={thCls}>Reparaciones</th>
             </tr></thead>
             <tbody>
-              {marcas.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={5}>Sin datos.</td></tr>
+              {marcas.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Sin datos.</td></tr>
               : marcas.map((m) => (
                 <tr key={m.marca} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold text-slate-200"}>{m.marca}</td>
                   <td className={tdCls + " text-slate-400"}>{m.n_neumaticos}</td>
                   <td className={tdCls + " text-slate-200"}>{m.coste_medio ? eur(m.coste_medio) : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{m.km_medio != null ? Number(m.km_medio).toLocaleString("es-ES") : "—"}</td>
+                  <td className={tdCls + " font-semibold text-emerald-300"}>{m.coste_km_medio != null ? eur3(m.coste_km_medio) : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{m.prof_media != null ? `${m.prof_media} mm` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{m.n_reparaciones}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-slate-800 p-3">
+          <div className="mb-2 flex justify-end">
+            <button onClick={() => descargarCSV("coste_km_neumatico", ["Neumático", "Marca", "Modelo", "Medida", "Km rodados", "Coste total", "Coste/km"],
+              neus.map((n) => [n.codigo, n.marca, n.modelo, n.medida, n.km_recorridos, n.coste_total, n.coste_km ?? ""]))}
+              className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">Exportar CSV</button>
+          </div>
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Neumático</th><th className={thCls}>Marca / modelo</th><th className={thCls}>Medida</th>
+              <th className={thCls}>Km rodados</th><th className={thCls}>Coste total</th><th className={thCls}>Coste/km</th>
+            </tr></thead>
+            <tbody>
+              {neus.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos con km registrados.</td></tr>
+              : neus.map((n) => (
+                <tr key={n.neumatico_id} className="border-t border-slate-700/60">
+                  <td className={tdCls + " font-semibold"}><Link to={`/tyrecontrol/neumaticos/${n.neumatico_id}`} className="text-sky-300 hover:underline">{n.codigo ?? "—"}</Link></td>
+                  <td className={tdCls + " text-slate-400"}>{[n.marca, n.modelo].filter(Boolean).join(" ") || "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{n.medida ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{Number(n.km_recorridos).toLocaleString("es-ES")}</td>
+                  <td className={tdCls + " text-slate-200"}>{eur(n.coste_total)}</td>
+                  <td className={tdCls + " font-semibold text-emerald-300"}>{n.coste_km != null ? eur3(n.coste_km) : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -106,8 +138,8 @@ export default function InformeRankings() {
       )}
 
       <div className="mt-3 text-[11px] text-slate-500">
-        Coste por vehículo = coste de compra de sus neumáticos montados + costes de sus operaciones. Coste/km sobre el odómetro actual.
-        Vida útil media y coste/km por marca llegarán cuando registremos duración de montaje y km por neumático.
+        Coste/km del neumático = (coste de compra + costes de sus operaciones) ÷ km rodados (km de montaje/desmontaje y odómetro actual).
+        Solo aparece en neumáticos con km registrados. El coste/km del vehículo incluye además todas sus operaciones.
       </div>
     </div>
   );

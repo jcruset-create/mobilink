@@ -87,6 +87,19 @@ export interface RankingMarca {
   coste_medio: number;
   prof_media: number | null;
   n_reparaciones: number;
+  km_medio: number | null;
+  coste_km_medio: number | null;
+}
+
+export interface CosteKmNeumatico {
+  neumatico_id: string;
+  codigo: string | null;
+  marca: string | null;
+  modelo: string | null;
+  medida: string | null;
+  km_recorridos: number;
+  coste_total: number;
+  coste_km: number | null;
 }
 
 export interface ProfundidadDistribucion {
