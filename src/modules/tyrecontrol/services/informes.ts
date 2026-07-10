@@ -4,6 +4,7 @@
 import { supabase } from "./supabase";
 import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
+  EconomicoInformes, RankingVehiculo, RankingMarca,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -44,4 +45,22 @@ export async function listarAlertas(f: FiltrosInformes): Promise<Alerta[]> {
   const { data, error } = await supabase.rpc("tc_informes_alertas", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as Alerta[];
+}
+
+export async function obtenerEconomico(f: FiltrosInformes): Promise<EconomicoInformes> {
+  const { data, error } = await supabase.rpc("tc_informes_economico", params(f));
+  if (error) throw new Error(error.message);
+  return data as EconomicoInformes;
+}
+
+export async function rankingVehiculos(f: FiltrosInformes, orden: "coste" | "coste_km" | "pinchazos" | "reparaciones"): Promise<RankingVehiculo[]> {
+  const { data, error } = await supabase.rpc("tc_informes_ranking_vehiculos", { p_empresa: f.empresaId ?? null, p_orden: orden });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RankingVehiculo[];
+}
+
+export async function rankingMarcas(f: FiltrosInformes): Promise<RankingMarca[]> {
+  const { data, error } = await supabase.rpc("tc_informes_ranking_marcas", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RankingMarca[];
 }

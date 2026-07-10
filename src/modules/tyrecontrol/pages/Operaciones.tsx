@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { listarOperaciones, listarEmpresas, listarVehiculos } from "../services/data";
+import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion } from "../services/data";
 import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS } from "../types";
-import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
+import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 const COLOR_TIPO: Record<TipoOperacion, string> = {
@@ -25,6 +25,8 @@ export default function Operaciones() {
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  const [editCoste, setEditCoste] = useState<null | { id: string; material: string; mano: string }>(null);
+  const [savingCoste, setSavingCoste] = useState(false);
 
   const [fEmpresa, setFEmpresa] = useState(esCliente ? (perfil?.empresa_id ?? "") : "");
   const [fVehiculo, setFVehiculo] = useState("");
@@ -47,6 +49,16 @@ export default function Operaciones() {
   }
   useEffect(() => { if (!esCliente) listarEmpresas().then(setEmpresas); }, [esCliente]);
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [fEmpresa, fVehiculo, fTipo, fDesde, fHasta]);
+
+  const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
+  async function guardarCoste() {
+    if (!editCoste) return;
+    setSavingCoste(true);
+    try {
+      await actualizarCosteOperacion(editCoste.id, { coste_material: num(editCoste.material), coste_mano_obra: num(editCoste.mano) });
+      setEditCoste(null); await cargar();
+    } catch (e: any) { setMsg(e?.message || "Error al guardar el coste"); } finally { setSavingCoste(false); }
+  }
 
   return (
     <div>
@@ -76,11 +88,11 @@ export default function Operaciones() {
         <thead className="bg-slate-900"><tr>
           <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
           <th className={thCls}>Tipo</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
-          <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th>
+          <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th><th className={thCls}>Coste</th>
         </tr></thead>
         <tbody>
-          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={9}>Cargando…</td></tr>
-          : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={9}>Sin operaciones.</td></tr>
+          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Cargando…</td></tr>
+          : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Sin operaciones.</td></tr>
           : items.map((o) => (
             <tr key={o.id} className="border-t border-slate-700/60">
               <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}</td>
@@ -92,10 +104,40 @@ export default function Operaciones() {
               <td className={tdCls + " text-slate-400"}>{o.km_vehiculo ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.destino ?? "—"}</td>
+              <td className={tdCls}>
+                {(() => {
+                  const total = (o.coste_material ?? 0) + (o.coste_mano_obra ?? 0);
+                  const tiene = o.coste_material != null || o.coste_mano_obra != null;
+                  return (
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-300">{tiene ? total.toLocaleString("es-ES", { style: "currency", currency: "EUR" }) : "—"}</span>
+                      {!esCliente && (
+                        <button
+                          onClick={() => setEditCoste({ id: o.id, material: o.coste_material != null ? String(o.coste_material) : "", mano: o.coste_mano_obra != null ? String(o.coste_mano_obra) : "" })}
+                          className="text-[11px] text-sky-300 hover:underline"
+                        >editar</button>
+                      )}
+                    </div>
+                  );
+                })()}
+              </td>
             </tr>
           ))}
         </tbody>
       </TableWrap>
+
+      {editCoste && (
+        <Modal title="Coste de la operación" onClose={() => setEditCoste(null)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setEditCoste(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={guardarCoste} disabled={savingCoste} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{savingCoste ? "Guardando…" : "Guardar"}</button>
+          </div>}>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="Coste material (€)"><input type="number" step="0.01" className={inputCls} value={editCoste.material} onChange={(e) => setEditCoste({ ...editCoste, material: e.target.value })} /></Field>
+            <Field label="Coste mano de obra (€)"><input type="number" step="0.01" className={inputCls} value={editCoste.mano} onChange={(e) => setEditCoste({ ...editCoste, mano: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

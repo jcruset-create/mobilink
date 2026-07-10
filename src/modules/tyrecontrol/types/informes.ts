@@ -59,6 +59,36 @@ export interface Alerta {
   valor: number | null;
 }
 
+export interface EconomicoInformes {
+  coste_neumaticos: number;
+  coste_operaciones: number;
+  coste_reparaciones: number;
+  coste_sustituciones: number;
+  coste_montajes: number;
+  coste_total: number;
+  n_vehiculos: number;
+  km_flota: number;
+  ahorro_reparaciones: number;
+}
+
+export interface RankingVehiculo {
+  vehiculo_id: string;
+  matricula: string;
+  km: number;
+  coste_total: number;
+  coste_km: number | null;
+  n_pinchazos: number;
+  n_reparaciones: number;
+}
+
+export interface RankingMarca {
+  marca: string;
+  n_neumaticos: number;
+  coste_medio: number;
+  prof_media: number | null;
+  n_reparaciones: number;
+}
+
 export interface ProfundidadDistribucion {
   marca: string;
   r0_2: number;

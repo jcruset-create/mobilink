@@ -9,6 +9,7 @@ import { ROL_LABELS } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { EmpresaFormFields, EMPRESA_VACIA, DelegacionFormFields, delegacionVacia } from "../components/forms";
 import UmbralesEmpresa from "../components/UmbralesEmpresa";
+import PreciosMedida from "../components/PreciosMedida";
 
 export default function EmpresaDetalle() {
   const { id = "" } = useParams();
@@ -115,6 +116,11 @@ export default function EmpresaDetalle() {
       {/* Umbrales de profundidad */}
       <div className="mb-3">
         <UmbralesEmpresa empresaId={id} />
+      </div>
+
+      {/* Precios de referencia */}
+      <div className="mb-3">
+        <PreciosMedida empresaId={id} />
       </div>
 
       {/* Delegaciones */}

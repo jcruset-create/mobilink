@@ -7,7 +7,7 @@ import type {
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
-  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria,
+  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -759,6 +759,34 @@ export async function guardarUmbralCategoria(empresaId: string, categoria: strin
 
 export async function eliminarUmbralCategoria(empresaId: string, categoria: string): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales_categoria").delete().eq("empresa_id", empresaId).eq("categoria", categoria);
+  if (error) throw new Error(error.message);
+}
+
+// ── Precios de referencia por medida (para ahorros) ──────────
+export async function listarPreciosMedida(empresaId: string): Promise<PrecioMedida[]> {
+  const { data, error } = await supabase.from("tc_precios_medida").select("*").eq("empresa_id", empresaId).order("medida");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PrecioMedida[];
+}
+
+export async function guardarPrecioMedida(empresaId: string, medida: string, patch: {
+  precio_nuevo: number | null; precio_recauchutado: number | null;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_precios_medida")
+    .upsert({ empresa_id: empresaId, medida, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id,medida" });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarPrecioMedida(empresaId: string, medida: string): Promise<void> {
+  const { error } = await supabase.from("tc_precios_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
+  if (error) throw new Error(error.message);
+}
+
+// Coste de una operación (material + mano de obra)
+export async function actualizarCosteOperacion(id: string, patch: {
+  coste_material: number | null; coste_mano_obra: number | null;
+}): Promise<void> {
+  const { error } = await supabase.from("operaciones_neumaticos").update(patch).eq("id", id);
   if (error) throw new Error(error.message);
 }
 

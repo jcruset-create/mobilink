@@ -322,6 +322,8 @@ export interface OperacionNeumatico {
   estado_anterior?: string | null;
   estado_nuevo?: string | null;
   destino?: DestinoOperacion | null;
+  coste_material?: number | null;
+  coste_mano_obra?: number | null;
   almacen_movimiento_id?: string | null;
   tecnico_id?: string | null;
   observaciones?: string | null;
@@ -470,6 +472,14 @@ export type CategoriaNeumatico = (typeof CATEGORIAS_NEUMATICO)[number];
 export const CATEGORIA_NEUMATICO_LABELS: Record<CategoriaNeumatico, string> = {
   turismo: "Turismo", "4x4": "4x4", furgoneta: "Furgoneta", camion: "Camión", otros: "Otros",
 };
+
+// Precios de referencia por medida (para calcular ahorros).
+export interface PrecioMedida {
+  empresa_id: string;
+  medida: string;
+  precio_nuevo: number | null;
+  precio_recauchutado: number | null;
+}
 
 // Override de umbrales para una categoría dentro de una empresa.
 export interface UmbralCategoria {

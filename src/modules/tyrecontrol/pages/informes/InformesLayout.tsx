@@ -22,6 +22,8 @@ const TABS = [
   { to: "/tyrecontrol/informes/alertas", label: "Alertas" },
   { to: "/tyrecontrol/informes/estado-flota", label: "Estado de flota" },
   { to: "/tyrecontrol/informes/inventario", label: "Neumáticos controlados" },
+  { to: "/tyrecontrol/informes/economico", label: "Económico" },
+  { to: "/tyrecontrol/informes/rankings", label: "Rankings" },
   { to: "/tyrecontrol/informes/historial-neumatico", label: "Historial neumático" },
   { to: "/tyrecontrol/informes/historial-vehiculo", label: "Historial vehículo" },
 ];
