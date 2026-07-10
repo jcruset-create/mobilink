@@ -45,8 +45,9 @@ returns json language sql security invoker stable as $$
   reps as (
     select coalesce(o.coste_material,0) + coalesce(o.coste_mano_obra,0) as coste, pm.precio_nuevo
     from operaciones_neumaticos o
-    join tc_neumaticos n on n.id = o.neumatico_id, rango
+    join tc_neumaticos n on n.id = o.neumatico_id
     left join tc_precios_medida pm on pm.empresa_id = n.empresa_id and tc_norm_medida(pm.medida) = tc_norm_medida(n.medida)
+    cross join rango
     where o.tipo_operacion = 'reparacion' and o.fecha_operacion between rango.d1 and rango.d2
       and (p_empresa is null or o.empresa_id = p_empresa)
   )
