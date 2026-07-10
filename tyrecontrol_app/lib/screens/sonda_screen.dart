@@ -12,6 +12,10 @@ class SondaScreen extends StatefulWidget {
 }
 
 class _SondaScreenState extends State<SondaScreen> {
+  // La sonda entrega la presión en psi (comando UPP); la mostramos y
+  // guardamos en bar, que es lo que usa el resto de la app.
+  static const double _psiABar = 0.0689476;
+
   late final TlgxProbeService _probe;
   bool _conectada = false;
   bool _ocupado = false;
@@ -51,7 +55,7 @@ class _SondaScreenState extends State<SondaScreen> {
     setState(() {
       switch (r.tipo) {
         case LecturaTipo.profundidad: _profundidad = r.valor; break;
-        case LecturaTipo.presion: _presion = r.valor; break;
+        case LecturaTipo.presion: _presion = r.valor != null ? r.valor! * _psiABar : null; break;
         case LecturaTipo.rfid: _rfid = r.texto ?? ''; break;
         case LecturaTipo.info:
           if (r.clave == 'modelo') _modelo = r.texto ?? '';
@@ -89,7 +93,7 @@ class _SondaScreenState extends State<SondaScreen> {
       _addLog('Conectada: ${_probe.nombre}');
       // Configura unidades y pide info
       await _probe.enviar('UTM'); // profundidad mm
-      await _probe.enviar('UPP'); // presión psi
+      await _probe.enviar('UPP'); // presión psi (la convertimos a bar en la app)
       await _probe.enviar('MODSTR');
       await _probe.enviar('V');
       await _probe.enviar('BV');
@@ -112,12 +116,17 @@ class _SondaScreenState extends State<SondaScreen> {
               padding: EdgeInsets.all(16),
               child: Text('Elige la sonda', style: TextStyle(color: AppColors.textPrimary, fontSize: 17, fontWeight: FontWeight.w600)),
             ),
-            ...resultados.map((r) => ListTile(
-                  leading: const Icon(Icons.bluetooth, color: AppColors.primary),
-                  title: Text(r.device.platformName, style: const TextStyle(color: AppColors.textPrimary)),
-                  subtitle: Text('${r.device.remoteId.str}  ·  ${r.rssi} dBm', style: const TextStyle(color: AppColors.textSecondary)),
-                  onTap: () => Navigator.pop(ctx, r.device),
-                )),
+            ...resultados.map((r) {
+              final nombre = r.advertisementData.advName.isNotEmpty
+                  ? r.advertisementData.advName
+                  : (r.device.platformName.isNotEmpty ? r.device.platformName : '(sin nombre)');
+              return ListTile(
+                leading: const Icon(Icons.bluetooth, color: AppColors.primary),
+                title: Text(nombre, style: const TextStyle(color: AppColors.textPrimary)),
+                subtitle: Text('${r.device.remoteId.str}  ·  ${r.rssi} dBm', style: const TextStyle(color: AppColors.textSecondary)),
+                onTap: () => Navigator.pop(ctx, r.device),
+              );
+            }),
           ],
         ),
       ),
@@ -171,7 +180,7 @@ class _SondaScreenState extends State<SondaScreen> {
           Row(children: [
             Expanded(child: _lecturaCard('Profundidad', _profundidad != null ? '${_profundidad!.toStringAsFixed(2)} mm' : '—', AppColors.info, Icons.straighten, () => _enviar('T'))),
             const SizedBox(width: 8),
-            Expanded(child: _lecturaCard('Presión', _presion != null ? '${_presion!.toStringAsFixed(2)} psi' : '—', AppColors.success, Icons.speed, () => _enviar('P'))),
+            Expanded(child: _lecturaCard('Presión', _presion != null ? '${_presion!.toStringAsFixed(2)} bar' : '—', AppColors.success, Icons.speed, () => _enviar('P'))),
           ]),
           const SizedBox(height: 8),
           _lecturaCard('RFID (EPC)', _rfid.isEmpty ? '—' : _rfid, const Color(0xFFA78BFA), Icons.nfc, () => _enviar('GR'), mono: true),

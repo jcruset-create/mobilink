@@ -1,13 +1,21 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/models.dart';
+import '../models/umbrales.dart';
 import '../services/offline_store.dart';
+import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
+import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_schema.dart';
 import 'tire_detail_screen.dart';
 
 /// Pantalla 4: revision. Modo asistente automatico: el tecnico no
-/// decide que rueda toca ahora, simplemente avanza.
+/// decide que rueda toca ahora, simplemente avanza. Con la sonda TLGX3
+/// conectada (P0), la rueda resaltada recibe la medida y la app avanza
+/// sola cuando todo esta correcto (camino rapido); si hay anomalia abre
+/// la ficha para confirmar/fotografiar (camino de excepcion).
 class ReviewScreen extends StatefulWidget {
   final Vehiculo vehiculo;
   final RevisionVehiculo? revisionExistente;
@@ -23,15 +31,39 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   List<PosicionVehiculo> _posiciones = [];
   final Map<String, MontajeActual> _montajePorPosicion = {};
+  final Map<String, String> _posPorEpc = {}; // rfid_epc (mayúsculas) → posicionId
   final Map<String, RevisionDetalleDraft> _detalles = {};
   RevisionVehiculo? _revision;
   int _index = 0;
   bool _finalizando = false;
 
+  // ── Sonda / modo ruta ────────────────────────────────────────
+  final ProbeSession _sonda = ProbeSession.instance;
+  StreamSubscription<LecturaSonda>? _lecturaSub;
+  Timer? _commitTimer;
+  bool _modoRuta = true;
+  double? _liveProf; // medida en curso para la rueda activa
+  double? _livePres;
+
   @override
   void initState() {
     super.initState();
     _cargar();
+    _lecturaSub = _sonda.onLectura.listen(_onLectura);
+    _sonda.addListener(_onSonda);
+  }
+
+  @override
+  void dispose() {
+    _lecturaSub?.cancel();
+    _commitTimer?.cancel();
+    _sonda.removeListener(_onSonda);
+    // La sesion de sonda NO se desconecta: sigue viva para el siguiente vehiculo.
+    super.dispose();
+  }
+
+  void _onSonda() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _cargar() async {
@@ -48,8 +80,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
       final posiciones = await TyreControlApi.listarPosiciones(tipoId);
       final montajes = await TyreControlApi.listarMontajesVehiculo(widget.vehiculo.id);
       _montajePorPosicion.clear();
+      _posPorEpc.clear();
       for (final m in montajes) {
         _montajePorPosicion[m.posicionId] = m;
+        final epc = m.neumatico?.rfidEpc;
+        if (epc != null && epc.isNotEmpty) _posPorEpc[epc.toUpperCase()] = m.posicionId;
       }
 
       _revision = widget.revisionExistente ??
@@ -72,21 +107,135 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
+  // ── Estado visual de cada posicion ───────────────────────────
   TireStatus _statusDe(PosicionVehiculo p) {
-    final montado = _montajePorPosicion.containsKey(p.id);
-    final d = _detalles[p.id];
     if (p.id == _posiciones.elementAtOrNull(_index)?.id) return TireStatus.seleccionado;
-    if (!montado) return d != null && d.medido ? TireStatus.revisado : TireStatus.pendiente;
+    final d = _detalles[p.id];
     if (d == null || !d.medido) return TireStatus.pendiente;
-    if (d.noAccesible) return TireStatus.noAccesible;
-    if (d.estadoVisual != null && _esGrave(d.estadoVisual!)) return TireStatus.grave;
-    if (d.estadoVisual != null && d.estadoVisual != 'correcto') return TireStatus.advertencia;
-    return TireStatus.revisado;
+    return Umbrales.def.evaluar(d);
   }
 
-  bool _esGrave(String estado) => ['pinchazo', 'corte', 'objeto_clavado'].contains(estado);
-
   bool get _todoRevisado => _posiciones.every((p) => _detalles[p.id]?.medido ?? false);
+
+  // ── Sonda: cada lectura va a la rueda activa ─────────────────
+  void _onLectura(LecturaSonda r) {
+    if (!mounted) return;
+
+    // RFID: la sonda nos dice QUÉ rueda estamos midiendo → la seleccionamos
+    // sola. Así el técnico no tiene que tocar el plano.
+    if (r.tipo == LecturaTipo.rfid && r.texto != null) {
+      _autoPosicionarPorRfid(r.texto!);
+      return;
+    }
+
+    final activa = _posiciones.elementAtOrNull(_index);
+    if (activa == null) return;
+
+    bool nuevaProfundidad = false;
+    if (r.tipo == LecturaTipo.profundidad && r.valor != null) {
+      _liveProf = r.valor;
+      nuevaProfundidad = true;
+    } else if (r.tipo == LecturaTipo.presion && r.valor != null) {
+      _livePres = r.valor; // ya en bar
+    }
+    setState(() {});
+
+    // La profundidad es la accion deliberada (apoyar la sonda en la banda):
+    // dispara el guardado tras un breve margen para recoger tambien la presion.
+    if (_modoRuta && _sonda.conectada && nuevaProfundidad) {
+      _commitTimer?.cancel();
+      _commitTimer = Timer(const Duration(milliseconds: 700), () {
+        if (mounted) _commitActiva(activa);
+      });
+    }
+  }
+
+  /// Selecciona la posición cuyo neumático montado tiene este EPC. Si el tag
+  /// no corresponde a ninguna rueda de este vehículo, avisa sin cambiar nada.
+  void _autoPosicionarPorRfid(String epc) {
+    final posId = _posPorEpc[epc.toUpperCase()];
+    if (posId == null) {
+      HapticFeedback.selectionClick();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tag RFID no reconocido en este vehículo'), duration: Duration(seconds: 2)),
+      );
+      return;
+    }
+    final idx = _posiciones.indexWhere((p) => p.id == posId);
+    if (idx < 0 || idx == _index) return;
+
+    // Cambiamos de rueda: descartamos cualquier medida en curso de la anterior.
+    _commitTimer?.cancel();
+    _liveProf = null;
+    _livePres = null;
+    HapticFeedback.selectionClick();
+    setState(() => _index = idx);
+  }
+
+  Future<void> _commitActiva(PosicionVehiculo p) async {
+    final draft = _detalles[p.id];
+    if (draft == null) return;
+    final prof = _liveProf;
+    final pres = _livePres;
+    if (prof == null && pres == null) return;
+
+    draft
+      ..profundidadMm = prof ?? draft.profundidadMm
+      ..presionBar = pres ?? draft.presionBar
+      ..metodoProfundidad = prof != null ? 'sonda' : draft.metodoProfundidad
+      ..metodoPresion = pres != null ? 'sonda' : draft.metodoPresion;
+    _liveProf = null;
+    _livePres = null;
+
+    await _guardarDraft(p, draft);
+    if (!mounted) return;
+
+    if (Umbrales.def.esAnomalia(draft)) {
+      // Camino de excepcion: aviso fuerte y ficha para confirmar/fotografiar.
+      HapticFeedback.heavyImpact();
+      await _abrirNeumatico(p);
+    } else {
+      // Camino rapido: correcto, avanza solo.
+      HapticFeedback.mediumImpact();
+      setState(() {});
+      _avanzarSiguiente();
+    }
+  }
+
+  Future<void> _guardarDraft(PosicionVehiculo p, RevisionDetalleDraft draft) async {
+    final payload = draft.toJson(
+      revisionId: _revision!.id,
+      empresaId: widget.vehiculo.empresaId,
+      vehiculoId: widget.vehiculo.id,
+    );
+    try {
+      await TyreControlApi.guardarDetalleRevision(payload);
+      OfflineStore.offline.value = false;
+    } catch (_) {
+      OfflineStore.offline.value = true;
+      await OfflineStore.enqueueDetalle(payload);
+    }
+  }
+
+  int? _siguientePendiente() {
+    for (int i = 0; i < _posiciones.length; i++) {
+      if (!(_detalles[_posiciones[i].id]?.medido ?? false)) return i;
+    }
+    return null;
+  }
+
+  void _avanzarSiguiente() {
+    final next = _siguientePendiente();
+    setState(() {
+      if (next != null) _index = next;
+    });
+  }
+
+  void _saltar() {
+    setState(() {
+      if (_index < _posiciones.length - 1) _index++;
+    });
+  }
 
   Future<void> _abrirNeumatico(PosicionVehiculo p) async {
     final idx = _posiciones.indexOf(p);
@@ -106,7 +255,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
     );
     if (resultado != null) {
       setState(() => _detalles[p.id] = resultado);
-      if (_index < _posiciones.length - 1) setState(() => _index++);
+      _avanzarSiguiente();
+    }
+  }
+
+  Future<void> _conectarSonda() async {
+    await _sonda.conectar();
+    if (!mounted) return;
+    if (_sonda.error.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${_sonda.error}  (puedes elegirla en Herramientas)')),
+      );
     }
   }
 
@@ -157,6 +316,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
       ),
       body: Column(
         children: [
+          _SondaBar(
+            sonda: _sonda,
+            medidas: _posiciones.where((p) => _detalles[p.id]?.medido ?? false).length,
+            total: _posiciones.length,
+            modoRuta: _modoRuta,
+            onModoRuta: (v) => setState(() => _modoRuta = v),
+            onConectar: _conectarSonda,
+          ),
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -168,50 +335,214 @@ class _ReviewScreenState extends State<ReviewScreen> {
               ),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.cardBorder))),
-            child: Column(
-              children: [
-                if (actual != null)
-                  Text('${actual.nombre ?? actual.codigoPosicion} (${_index + 1} de ${_posiciones.length})',
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _index > 0 ? () => setState(() => _index--) : null,
-                        icon: const Icon(Icons.arrow_back),
-                        label: const Text('Anterior'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: actual == null ? null : () => _abrirNeumatico(actual),
-                        icon: const Icon(Icons.build_circle_outlined),
-                        label: const Text('Revisar'),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_todoRevisado) ...[
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    onPressed: _finalizando ? null : _finalizar,
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
-                    icon: _finalizando
-                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.check_circle),
-                    label: const Text('Finalizar revisión'),
-                  ),
-                ],
-              ],
-            ),
+          _PanelInferior(
+            actual: actual,
+            index: _index,
+            total: _posiciones.length,
+            sondaLista: _sonda.conectada && _modoRuta,
+            liveProf: _liveProf,
+            livePres: _livePres,
+            todoRevisado: _todoRevisado,
+            finalizando: _finalizando,
+            onAnterior: _index > 0 ? () => setState(() => _index--) : null,
+            onSaltar: _index < _posiciones.length - 1 ? _saltar : null,
+            onRevisar: actual == null ? null : () => _abrirNeumatico(actual),
+            onFinalizar: _finalizar,
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── Barra de estado de la sonda ────────────────────────────────
+class _SondaBar extends StatelessWidget {
+  final ProbeSession sonda;
+  final int medidas;
+  final int total;
+  final bool modoRuta;
+  final ValueChanged<bool> onModoRuta;
+  final VoidCallback onConectar;
+
+  const _SondaBar({
+    required this.sonda,
+    required this.medidas,
+    required this.total,
+    required this.modoRuta,
+    required this.onModoRuta,
+    required this.onConectar,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final conectada = sonda.conectada;
+    final texto = conectada
+        ? 'Sonda ${sonda.nombre}${sonda.bateria != null ? ' · ${sonda.bateria}V' : ''}'
+        : (sonda.conectando ? 'Conectando sonda…' : 'Sonda sin conectar');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.cardBorder)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            conectada ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+            size: 20,
+            color: conectada ? AppColors.success : AppColors.textSecondary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(texto, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis)),
+          Text('$medidas/$total', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          const SizedBox(width: 8),
+          if (conectada)
+            Row(
+              children: [
+                const Text('Ruta', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                Switch(value: modoRuta, onChanged: onModoRuta),
+              ],
+            )
+          else
+            TextButton(
+              onPressed: sonda.conectando ? null : onConectar,
+              child: const Text('Conectar'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Panel inferior: guia de la posicion activa + acciones ──────
+class _PanelInferior extends StatelessWidget {
+  final PosicionVehiculo? actual;
+  final int index;
+  final int total;
+  final bool sondaLista;
+  final double? liveProf;
+  final double? livePres;
+  final bool todoRevisado;
+  final bool finalizando;
+  final VoidCallback? onAnterior;
+  final VoidCallback? onSaltar;
+  final VoidCallback? onRevisar;
+  final VoidCallback onFinalizar;
+
+  const _PanelInferior({
+    required this.actual,
+    required this.index,
+    required this.total,
+    required this.sondaLista,
+    required this.liveProf,
+    required this.livePres,
+    required this.todoRevisado,
+    required this.finalizando,
+    required this.onAnterior,
+    required this.onSaltar,
+    required this.onRevisar,
+    required this.onFinalizar,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.cardBorder))),
+      child: Column(
+        children: [
+          if (actual != null)
+            Text('${actual!.nombre ?? actual!.codigoPosicion} (${index + 1} de $total)',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          if (sondaLista) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceVariant,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.cardBorder),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _LiveValor(icon: Icons.straighten, label: 'Profundidad', valor: liveProf != null ? '${liveProf!.toStringAsFixed(1)} mm' : '— mm'),
+                  _LiveValor(icon: Icons.speed, label: 'Presión', valor: livePres != null ? '${livePres!.toStringAsFixed(1)} bar' : '— bar'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text('Apoya la sonda: si la rueda lleva RFID, se selecciona sola.', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onAnterior,
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Anterior'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (onSaltar != null) ...[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onSaltar,
+                    icon: const Icon(Icons.skip_next),
+                    label: const Text('Saltar'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: onRevisar,
+                  icon: const Icon(Icons.build_circle_outlined),
+                  label: const Text('Revisar'),
+                ),
+              ),
+            ],
+          ),
+          if (todoRevisado) ...[
+            const SizedBox(height: 10),
+            ElevatedButton.icon(
+              onPressed: finalizando ? null : onFinalizar,
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+              icon: finalizando
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.check_circle),
+              label: const Text('Finalizar revisión'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveValor extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String valor;
+  const _LiveValor({required this.icon, required this.label, required this.valor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 14, color: AppColors.textSecondary),
+            const SizedBox(width: 4),
+            Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(valor, style: const TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }

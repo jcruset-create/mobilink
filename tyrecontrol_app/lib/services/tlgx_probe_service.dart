@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -24,19 +26,56 @@ class TlgxProbeService {
   String get nombre => _device?.platformName ?? '';
   bool get conectada => _device != null && _rx != null;
 
-  /// Pide permisos de Bluetooth/ubicación necesarios en Android.
+  /// Pide los permisos necesarios para escanear/conectar la sonda.
+  ///
+  /// En Android 12+ (API 31) el escaneo BLE NO necesita ubicación gracias al
+  /// flag `neverForLocation` del manifest: basta con BLUETOOTH_SCAN/CONNECT.
+  /// Solo en Android 11 o inferior el sistema operativo exige ubicación para
+  /// poder escanear, así que ahí sí se pide (y únicamente ahí).
   Future<bool> pedirPermisos() async {
-    final res = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.locationWhenInUse,
-    ].request();
-    return res.values.every((s) => s.isGranted || s.isLimited);
+    if (!Platform.isAndroid) {
+      final s = await Permission.bluetooth.request();
+      return s.isGranted || s.isLimited;
+    }
+
+    final sdk = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+
+    if (sdk >= 31) {
+      // Android 12+: sin ubicación.
+      final res = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+      return res.values.every((s) => s.isGranted);
+    }
+
+    // Android 11 o inferior: el escaneo BLE exige ubicación (limitación del SO).
+    final loc = await Permission.locationWhenInUse.request();
+    return loc.isGranted;
+  }
+
+  /// Nombre anunciado por el dispositivo. Durante el escaneo Android NO
+  /// rellena `platformName` (llega vacío hasta que conectas/emparejas); el
+  /// nombre real viaja en la publicidad BLE (`advName`). Por eso miramos
+  /// primero la publicidad y solo caemos a `platformName` como respaldo.
+  String _nombreDe(ScanResult r) {
+    final adv = r.advertisementData.advName;
+    return adv.isNotEmpty ? adv : r.device.platformName;
+  }
+
+  /// ¿Parece una sonda Translogik/Transense TLGX? La reconocemos por el
+  /// UUID de servicio UART que anuncia (lo más fiable) o por el nombre.
+  bool _pareceSonda(ScanResult r) {
+    if (r.advertisementData.serviceUuids.contains(serviceUuid)) return true;
+    final n = _nombreDe(r).toUpperCase();
+    return n.startsWith('TL') || n.contains('TRANS') || n.contains('GX');
   }
 
   /// Escanea sondas TLGX/Translogik durante [timeout] y devuelve los
-  /// resultados encontrados (para que el usuario elija).
-  Future<List<ScanResult>> escanear({Duration timeout = const Duration(seconds: 8)}) async {
+  /// resultados encontrados (para que el usuario elija). Si el filtro no
+  /// acierta con ninguna, devuelve todos los dispositivos con nombre para
+  /// que el técnico pueda elegir la sonda a mano.
+  Future<List<ScanResult>> escanear({Duration timeout = const Duration(seconds: 12)}) async {
     if (!(await FlutterBluePlus.isSupported)) {
       throw Exception('Este dispositivo no tiene Bluetooth LE.');
     }
@@ -44,20 +83,25 @@ class TlgxProbeService {
       throw Exception('Activa el Bluetooth para buscar la sonda.');
     }
 
-    final Map<String, ScanResult> encontrados = {};
+    final Map<String, ScanResult> sondas = {};     // coinciden con el filtro
+    final Map<String, ScanResult> conNombre = {};  // respaldo: cualquiera con nombre
     final sub = FlutterBluePlus.scanResults.listen((results) {
       for (final r in results) {
-        final n = r.device.platformName;
-        if (n.startsWith('TL') || n.startsWith('Trans')) {
-          encontrados[r.device.remoteId.str] = r;
+        if (_pareceSonda(r)) {
+          sondas[r.device.remoteId.str] = r;
+        } else if (_nombreDe(r).isNotEmpty) {
+          conNombre[r.device.remoteId.str] = r;
         }
       }
     });
 
-    await FlutterBluePlus.startScan(timeout: timeout);
+    // androidUsesFineLocation: false → no forzamos ubicación en Android 12+.
+    await FlutterBluePlus.startScan(timeout: timeout, androidUsesFineLocation: false);
     await FlutterBluePlus.isScanning.where((s) => s == false).first;
     await sub.cancel();
-    return encontrados.values.toList();
+
+    if (sondas.isNotEmpty) return sondas.values.toList();
+    return conNombre.values.toList();
   }
 
   /// Conecta con una sonda concreta y prepara la comunicación.

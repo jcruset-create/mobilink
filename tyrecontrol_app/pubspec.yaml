@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "SEA TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.2.0+2
+version: 0.3.1+7
 
 environment:
   sdk: ^3.8.1
@@ -28,6 +28,7 @@ dependencies:
   # Sonda Bluetooth Transense TLGX (profundidad, presión, RFID)
   flutter_blue_plus: ^1.32.12
   permission_handler: ^11.3.1
+  device_info_plus: ^11.1.0
 
 dev_dependencies:
   flutter_test:

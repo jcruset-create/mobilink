@@ -233,6 +233,8 @@ class RevisionDetalleDraft {
   String? neumaticoId;
   double? profundidadMm;
   double? presionBar;
+  String? metodoProfundidad; // 'sonda' | 'manual'
+  String? metodoPresion;     // 'sonda' | 'manual'
   String? estadoVisual;
   String? observaciones;
   bool noAccesible;
@@ -244,6 +246,8 @@ class RevisionDetalleDraft {
     this.neumaticoId,
     this.profundidadMm,
     this.presionBar,
+    this.metodoProfundidad,
+    this.metodoPresion,
     this.estadoVisual,
     this.observaciones,
     this.noAccesible = false,
@@ -261,8 +265,8 @@ class RevisionDetalleDraft {
         'neumatico_id': neumaticoId,
         'profundidad_mm': profundidadMm,
         'presion_bar': presionBar,
-        'metodo_profundidad': profundidadMm != null ? 'manual' : null,
-        'metodo_presion': presionBar != null ? 'manual' : null,
+        'metodo_profundidad': profundidadMm != null ? (metodoProfundidad ?? 'manual') : null,
+        'metodo_presion': presionBar != null ? (metodoPresion ?? 'manual') : null,
         'estado_visual': estadoVisual,
         'observaciones': observaciones,
         'no_accesible': noAccesible,
