@@ -10,6 +10,14 @@ import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 type Detalle = Partial<RevisionDetalle>;
 
+// Fecha + hora de la revisión. La fecha viene de fecha_revision (solo día) y
+// la hora del created_at (marca de tiempo real de creación).
+function fechaHora(r: RevisionVehiculoT): string {
+  const fecha = r.fecha_revision ?? "";
+  const hora = r.created_at ? new Date(r.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
+  return hora ? `${fecha} · ${hora}` : fecha;
+}
+
 export default function RevisionVehiculo() {
   const { perfil } = useTyreAuth();
   const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
@@ -237,7 +245,10 @@ export default function RevisionVehiculo() {
               <div className="flex flex-col gap-1">
                 {historialRevisiones.map((r) => (
                   <div key={r.id} className="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-[12px] text-slate-300">
-                    <span>{r.fecha_revision} · {r.km_vehiculo ?? "—"} km</span>
+                    <span>
+                      {fechaHora(r)} · {r.km_vehiculo ?? "—"} km
+                      {r.tecnico_nombre ? <span className="text-slate-500"> · {r.tecnico_nombre}</span> : ""}
+                    </span>
                     <div className="flex items-center gap-3">
                       <span className="text-slate-500">{r.estado_revision}</span>
                       <button onClick={() => verFichaRevision(r)} className="text-sky-300 hover:underline">Ver ficha</button>
@@ -319,9 +330,10 @@ export default function RevisionVehiculo() {
       )}
 
       {fichaRevision && (
-        <Modal title={`Revisión del ${fichaRevision.fecha_revision}`} onClose={() => setFichaRevision(null)}>
+        <Modal title={`Revisión del ${fechaHora(fichaRevision)}`} onClose={() => setFichaRevision(null)}>
           <div className="mb-2 text-[12px] text-slate-400">
             {fichaRevision.km_vehiculo ?? "—"} km · Estado: {fichaRevision.estado_revision}
+            {fichaRevision.tecnico_nombre ? ` · Técnico: ${fichaRevision.tecnico_nombre}` : ""}
             {fichaRevision.observaciones ? ` · ${fichaRevision.observaciones}` : ""}
           </div>
           <TableWrap>

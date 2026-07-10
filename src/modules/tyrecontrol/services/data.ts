@@ -462,11 +462,22 @@ export async function completarRevision(revisionId: string): Promise<void> {
 }
 
 export async function listarRevisiones(vehiculoId?: string): Promise<RevisionVehiculo[]> {
-  let q = supabase.from("revisiones_vehiculo").select("*, vehiculo:tc_vehiculos(*)").order("fecha_revision", { ascending: false });
+  let q = supabase.from("revisiones_vehiculo").select("*, vehiculo:tc_vehiculos(*)")
+    .order("fecha_revision", { ascending: false }).order("created_at", { ascending: false });
   if (vehiculoId) q = q.eq("vehiculo_id", vehiculoId);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
-  return (data ?? []) as unknown as RevisionVehiculo[];
+  const revisiones = (data ?? []) as unknown as RevisionVehiculo[];
+
+  // Nombre del técnico: consulta aparte (no join embebido, que puede fallar
+  // por RLS/relaciones). Best-effort: si no se puede leer, queda sin nombre.
+  const tecnicoIds = [...new Set(revisiones.map((r) => r.tecnico_id).filter(Boolean))] as string[];
+  if (tecnicoIds.length > 0) {
+    const { data: tecnicos } = await supabase.from("tc_usuarios").select("id, nombre").in("id", tecnicoIds);
+    const mapa = new Map((tecnicos ?? []).map((t: any) => [t.id as string, t.nombre as string]));
+    for (const r of revisiones) r.tecnico_nombre = r.tecnico_id ? (mapa.get(r.tecnico_id) ?? null) : null;
+  }
+  return revisiones;
 }
 
 // ── Fase 8: Autorizaciones ──────────────────────────────────────

@@ -337,7 +337,9 @@ export interface RevisionVehiculo {
   km_vehiculo?: number | null;
   origen_km?: string | null;
   fecha_revision: string;
+  created_at?: string | null;
   tecnico_id?: string | null;
+  tecnico_nombre?: string | null; // resuelto en listarRevisiones (best-effort)
   estado_revision: EstadoRevision;
   observaciones?: string | null;
   vehiculo?: Vehiculo | null;
