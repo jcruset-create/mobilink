@@ -35,9 +35,14 @@ export class TlgxProbe {
       throw new Error("Este navegador no soporta Bluetooth. Usa Chrome o Edge en ordenador o Android.");
     }
     const bt = (navigator as any).bluetooth;
-    // Los nombres van cambiando por versión: TLGX#, TL-GX#, Trans-Logik, Translogik, TLGI#
+    // Mostramos TODOS los dispositivos BLE en el selector del navegador en vez
+    // de filtrar por nombre: el nombre anunciado por la sonda varía por versión
+    // (TLGX#, TL-GX#, Translogik, TLGI#…) y a veces no viaja en la publicidad,
+    // así que filtrar hacía que "no se encontrara ningún dispositivo". El
+    // técnico elige la sonda de la lista; para hablar con ella declaramos su
+    // servicio en optionalServices.
     this.device = await bt.requestDevice({
-      filters: [{ namePrefix: "TL" }, { namePrefix: "Trans" }],
+      acceptAllDevices: true,
       optionalServices: [SERVICE_UUID],
     });
 
