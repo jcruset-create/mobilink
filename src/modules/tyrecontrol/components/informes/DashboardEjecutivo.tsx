@@ -1,10 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { useInformesFiltros } from "./InformesLayout";
 import { obtenerKpis, obtenerEstadoFlota, inventarioPor } from "../../services/informes";
-import type { KpisInformes, EstadoFlota, DimensionTotal } from "../../types/informes";
-import { KpiCard } from "../../components/informes/KpiCard";
-import { Donut, BarList } from "../../components/informes/charts";
+import type { KpisInformes, EstadoFlota, DimensionTotal, FiltrosInformes } from "../../types/informes";
+import { KpiCard } from "./KpiCard";
+import { Donut, BarList } from "./charts";
 
 function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) {
   return (
@@ -15,8 +14,10 @@ function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) 
   );
 }
 
-export default function InformesDashboard() {
-  const { filtros } = useInformesFiltros();
+// Cuerpo del dashboard ejecutivo (KPIs + gráficos). Recibe los filtros ya
+// resueltos, para poder usarse tanto en la landing (Dashboard) como en la
+// sección Informes sin duplicar lógica.
+export function DashboardEjecutivo({ filtros }: { filtros: FiltrosInformes }) {
   const navigate = useNavigate();
   const [kpis, setKpis] = useState<KpisInformes | null>(null);
   const [flota, setFlota] = useState<EstadoFlota | null>(null);
@@ -40,13 +41,14 @@ export default function InformesDashboard() {
 
   const irInventario = () => navigate("/tyrecontrol/informes/inventario");
   const irFlota = () => navigate("/tyrecontrol/informes/estado-flota");
+  const irAlertas = () => navigate("/tyrecontrol/informes/alertas");
 
   return (
     <div>
       <Seccion titulo="Flota">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard title="Vehículos activos" value={kpis.vehiculos_activos} onClick={irFlota} />
-          <KpiCard title="Pendientes de revisión" value={kpis.vehiculos_pendientes} tono={kpis.vehiculos_pendientes > 0 ? "warn" : "ok"} onClick={irFlota} />
+          <KpiCard title="Pendientes de revisión" value={kpis.vehiculos_pendientes} tono={kpis.vehiculos_pendientes > 0 ? "warn" : "ok"} onClick={irAlertas} />
           <KpiCard title="Revisados (periodo)" value={kpis.vehiculos_revisados} tono="info" onClick={irFlota} />
           <KpiCard title="Revisiones realizadas" value={kpis.revisiones_total} hint="En el periodo del filtro" />
         </div>
@@ -57,8 +59,8 @@ export default function InformesDashboard() {
           <KpiCard title="Total controlados" value={kpis.neumaticos_total} onClick={irInventario} />
           <KpiCard title="Montados" value={kpis.neumaticos_montados} tono="info" onClick={irInventario} />
           <KpiCard title="En almacén" value={kpis.neumaticos_almacen} onClick={irInventario} />
-          <KpiCard title="Bajo mínimo legal" value={kpis.neumaticos_bajo_minimo} tono={kpis.neumaticos_bajo_minimo > 0 ? "danger" : "ok"} hint="≤ 1,6 mm" onClick={irInventario} />
-          <KpiCard title="Próximos a sustituir" value={kpis.neumaticos_proximos} tono={kpis.neumaticos_proximos > 0 ? "warn" : "ok"} hint="≤ 3,0 mm" onClick={irInventario} />
+          <KpiCard title="Bajo mínimo legal" value={kpis.neumaticos_bajo_minimo} tono={kpis.neumaticos_bajo_minimo > 0 ? "danger" : "ok"} hint="≤ 1,6 mm" onClick={irAlertas} />
+          <KpiCard title="Próximos a sustituir" value={kpis.neumaticos_proximos} tono={kpis.neumaticos_proximos > 0 ? "warn" : "ok"} hint="≤ 3,0 mm" onClick={irAlertas} />
           <KpiCard title="En reparación" value={kpis.neumaticos_reparacion} />
           <KpiCard title="Descartados" value={kpis.neumaticos_descartados} />
           <KpiCard title="Técnicos activos" value={kpis.tecnicos_activos} />

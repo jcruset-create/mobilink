@@ -1,29 +1,24 @@
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import { useFiltrosInformes } from "../hooks/useFiltrosInformes";
+import { FiltroBarInformes } from "../components/informes/FiltroBarInformes";
+import { DashboardEjecutivo } from "../components/informes/DashboardEjecutivo";
 
-function Card({ title, value, hint }: { title: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-lg bg-slate-800 p-4">
-      <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{title}</div>
-      <div className="mt-1 text-3xl font-black text-slate-100">{value}</div>
-      {hint && <div className="text-[11px] text-slate-500">{hint}</div>}
-    </div>
-  );
-}
-
+// Landing tras el login: dashboard ejecutivo con KPIs reales (mismos datos
+// y filtros que la sección Informes). El detalle por informe vive en /informes.
 export default function Dashboard() {
   const { perfil } = useTyreAuth();
+  const { filtros, setFiltros, esCliente, empresas } = useFiltrosInformes();
+
   return (
     <div>
-      <h1 className="mb-1 text-lg font-black">Dashboard</h1>
-      <p className="mb-3 text-sm text-slate-400">
-        Bienvenido{perfil?.nombre ? `, ${perfil.nombre}` : ""}. Panel de SEA TyreControl.
-      </p>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <Card title="Vehículos" value="—" hint="Fase 2" />
-        <Card title="Neumáticos" value="—" hint="Fase 3" />
-        <Card title="Inspecciones" value="—" hint="Fase 4" />
-        <Card title="Alertas" value="—" hint="Fase 8" />
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-black">Dashboard</h1>
+          <p className="text-sm text-slate-400">Bienvenido{perfil?.nombre ? `, ${perfil.nombre}` : ""}. Panel de SEA TyreControl.</p>
+        </div>
+        <FiltroBarInformes filtros={filtros} setFiltros={setFiltros} esCliente={esCliente} empresas={empresas} />
       </div>
+      <DashboardEjecutivo filtros={filtros} />
     </div>
   );
 }

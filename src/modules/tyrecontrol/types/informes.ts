@@ -47,6 +47,18 @@ export interface MarcaMedidaTotal {
   total: number;
 }
 
+export interface Alerta {
+  tipo: "bajo_minimo" | "proximo_sustitucion" | "vehiculo_sin_revisar" | string;
+  severidad: "alta" | "media" | "baja" | string;
+  vehiculo_id: string | null;
+  matricula: string | null;
+  neumatico_id: string | null;
+  codigo: string | null;
+  posicion: string | null;
+  detalle: string;
+  valor: number | null;
+}
+
 export interface ProfundidadDistribucion {
   marca: string;
   r0_2: number;

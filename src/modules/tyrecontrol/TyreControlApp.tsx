@@ -27,7 +27,7 @@ import MisNeumaticos from "./pages/MisNeumaticos";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
 import InformesLayout from "./pages/informes/InformesLayout";
-import InformesDashboard from "./pages/informes/InformesDashboard";
+import InformeAlertas from "./pages/informes/InformeAlertas";
 import InformeInventario from "./pages/informes/InformeInventario";
 import InformeEstadoFlota from "./pages/informes/InformeEstadoFlota";
 
@@ -48,7 +48,8 @@ export default function TyreControlApp() {
 
             {/* Informes: admin y cliente (RLS acota los datos por empresa) */}
             <Route path="informes" element={<InformesLayout />}>
-              <Route index element={<InformesDashboard />} />
+              <Route index element={<Navigate to="/tyrecontrol/informes/alertas" replace />} />
+              <Route path="alertas" element={<InformeAlertas />} />
               <Route path="estado-flota" element={<InformeEstadoFlota />} />
               <Route path="inventario" element={<InformeInventario />} />
             </Route>

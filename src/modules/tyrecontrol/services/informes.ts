@@ -3,7 +3,7 @@
 // tyrecontrol_informes_kpis.sql); aquí solo tipamos y llamamos.
 import { supabase } from "./supabase";
 import type {
-  FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion,
+  FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -38,4 +38,10 @@ export async function distribucionProfundidad(f: FiltrosInformes): Promise<Profu
   const { data, error } = await supabase.rpc("tc_informes_profundidad_distribucion", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as ProfundidadDistribucion[];
+}
+
+export async function listarAlertas(f: FiltrosInformes): Promise<Alerta[]> {
+  const { data, error } = await supabase.rpc("tc_informes_alertas", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Alerta[];
 }
