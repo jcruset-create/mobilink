@@ -341,6 +341,39 @@ export async function historialNeumatico(neumaticoId: string): Promise<Historial
   return (data ?? []) as unknown as HistorialMontaje[];
 }
 
+// Mediciones (profundidad/presión) registradas para un neumático en las
+// revisiones de vehículo, con la fecha de cada revisión, para la línea
+// temporal del neumático.
+export interface MedicionNeumatico {
+  fecha_revision: string;
+  created_at?: string | null;
+  profundidad_mm: number | null;
+  presion_bar: number | null;
+  estado_visual: string | null;
+  km_vehiculo: number | null;
+  posicion?: string | null;
+  estado_revision?: string | null;
+}
+
+export async function medicionesNeumatico(neumaticoId: string): Promise<MedicionNeumatico[]> {
+  const { data, error } = await supabase.from("revisiones_neumaticos_detalle")
+    .select("profundidad_mm, presion_bar, estado_visual, posicion:tc_posiciones_vehiculo(codigo_posicion), revision:revisiones_vehiculo(fecha_revision, created_at, km_vehiculo, estado_revision)")
+    .eq("neumatico_id", neumaticoId);
+  if (error) throw new Error(error.message);
+  return (data ?? [])
+    .map((d: any): MedicionNeumatico => ({
+      fecha_revision: d.revision?.fecha_revision ?? "",
+      created_at: d.revision?.created_at ?? null,
+      profundidad_mm: d.profundidad_mm ?? null,
+      presion_bar: d.presion_bar ?? null,
+      estado_visual: d.estado_visual ?? null,
+      km_vehiculo: d.revision?.km_vehiculo ?? null,
+      posicion: d.posicion?.codigo_posicion ?? null,
+      estado_revision: d.revision?.estado_revision ?? null,
+    }))
+    .filter((m) => m.estado_revision !== "anulada" && (m.profundidad_mm != null || m.presion_bar != null));
+}
+
 export async function montajeActualDeNeumatico(neumaticoId: string): Promise<MontajeActual | null> {
   const { data, error } = await supabase.from("tc_montajes_actuales")
     .select("*, posicion:tc_posiciones_vehiculo(*)").eq("neumatico_id", neumaticoId).maybeSingle();
@@ -424,11 +457,12 @@ export async function descartarNeumaticoStd(neumaticoId: string, motivo: string,
 const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), neumatico:tc_neumaticos(*), posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(*), posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(*)";
 
 export async function listarOperaciones(filtros?: {
-  empresaId?: string; vehiculoId?: string; tipo?: TipoOperacion; desde?: string; hasta?: string;
+  empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; desde?: string; hasta?: string;
 }): Promise<OperacionNeumatico[]> {
   let q = supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200);
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
   if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
+  if (filtros?.neumaticoId) q = q.eq("neumatico_id", filtros.neumaticoId);
   if (filtros?.tipo) q = q.eq("tipo_operacion", filtros.tipo);
   if (filtros?.desde) q = q.gte("fecha_operacion", filtros.desde);
   if (filtros?.hasta) q = q.lte("fecha_operacion", filtros.hasta);

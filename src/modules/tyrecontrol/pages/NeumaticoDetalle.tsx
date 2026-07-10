@@ -1,12 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerNeumatico, historialNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo } from "../services/data";
-import type { HistorialMontaje, MontajeActual, Neumatico } from "../types";
-import { ESTADO_NEUMATICO_LABELS } from "../types";
-import { TableWrap, tdCls, thCls, Modal, Field, inputCls } from "../components/ui";
+import { obtenerNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo, listarOperaciones, medicionesNeumatico } from "../services/data";
+import type { MedicionNeumatico } from "../services/data";
+import type { MontajeActual, Neumatico, OperacionNeumatico } from "../types";
+import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS } from "../types";
+import { Modal, Field, inputCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 type CamposEditables = "dot" | "rfid_epc" | "marca" | "modelo" | "medida" | "indice_carga" | "indice_velocidad" | "proveedor" | "fecha_compra" | "coste_compra";
+
+// Un punto en la línea temporal del neumático.
+interface EventoNeumatico { ts: number; fecha: string; icono: string; titulo: string; detalle: string; km: number | null; }
+
+const ICONO_OPERACION: Record<string, string> = {
+  montaje: "▲", desmontaje: "▼", sustitucion: "♻", rotacion: "⇄", reparacion: "🔧",
+  descarte: "🗑", entrada_almacen: "📥", salida_almacen: "📤", revision_vehiculo: "✓",
+};
+
+function fmtFechaHora(fecha?: string | null, createdAt?: string | null): string {
+  const f = fecha || (createdAt ? createdAt.slice(0, 10) : "");
+  const h = createdAt ? new Date(createdAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
+  return h ? `${f} · ${h}` : f;
+}
 
 export default function NeumaticoDetalle() {
   const { perfil } = useTyreAuth();
@@ -15,7 +30,8 @@ export default function NeumaticoDetalle() {
   const navigate = useNavigate();
   const [n, setN] = useState<Neumatico | null>(null);
   const [montaje, setMontaje] = useState<MontajeActual | null>(null);
-  const [historial, setHistorial] = useState<HistorialMontaje[]>([]);
+  const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
+  const [mediciones, setMediciones] = useState<MedicionNeumatico[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [editando, setEditando] = useState(false);
@@ -55,7 +71,12 @@ export default function NeumaticoDetalle() {
     const neu = await obtenerNeumatico(id);
     setN(neu);
     setMontaje(await montajeActualDeNeumatico(id));
-    setHistorial(await historialNeumatico(id));
+    const [ops, meds] = await Promise.all([
+      listarOperaciones({ neumaticoId: id }).catch(() => [] as OperacionNeumatico[]),
+      medicionesNeumatico(id).catch(() => [] as MedicionNeumatico[]),
+    ]);
+    setOperaciones(ops);
+    setMediciones(meds);
 
     // Foto heredada del modelo de catálogo (se sube una vez en Catálogo de
     // neumáticos y sirve para todos los neumáticos de esa marca+modelo).
@@ -84,6 +105,54 @@ export default function NeumaticoDetalle() {
     try { await descartarNeumaticoStd(id, motivo); await cargar(); }
     catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
   }
+
+  // Línea temporal: operaciones (montaje inicial, rotaciones, reparaciones,
+  // sustituciones, descartes, entradas/salidas de almacén) + mediciones de
+  // revisión + alta del neumático con su profundidad inicial. Todo cronológico.
+  const eventos = useMemo<EventoNeumatico[]>(() => {
+    const ev: EventoNeumatico[] = [];
+
+    for (const op of operaciones) {
+      const posO = op.posicion_origen?.codigo_posicion;
+      const posD = op.posicion_destino?.codigo_posicion;
+      const ruta = posO && posD ? `${posO} → ${posD}` : posD ? `→ ${posD}` : posO ?? "";
+      const detalle = [op.vehiculo?.matricula, ruta, op.motivo ? MOTIVO_OPERACION_LABELS[op.motivo] : "", op.observaciones].filter(Boolean).join(" · ");
+      ev.push({
+        ts: new Date(op.created_at ?? op.fecha_operacion ?? 0).getTime(),
+        fecha: fmtFechaHora(op.fecha_operacion, op.created_at),
+        icono: ICONO_OPERACION[op.tipo_operacion] ?? "•",
+        titulo: TIPO_OPERACION_LABELS[op.tipo_operacion] ?? op.tipo_operacion,
+        detalle,
+        km: op.km_vehiculo ?? null,
+      });
+    }
+
+    for (const m of mediciones) {
+      const detalle = [m.posicion, m.profundidad_mm != null ? `${m.profundidad_mm} mm` : "", m.presion_bar != null ? `${m.presion_bar} bar` : "", m.estado_visual].filter(Boolean).join(" · ");
+      ev.push({
+        ts: new Date(m.created_at ?? m.fecha_revision ?? 0).getTime(),
+        fecha: fmtFechaHora(m.fecha_revision, m.created_at),
+        icono: "📏",
+        titulo: "Revisión",
+        detalle,
+        km: m.km_vehiculo ?? null,
+      });
+    }
+
+    if (n?.fecha_compra || n?.created_at) {
+      const prof = n?.profundidad_actual_mm;
+      ev.push({
+        ts: new Date(n?.fecha_compra ?? n?.created_at ?? 0).getTime(),
+        fecha: fmtFechaHora(n?.fecha_compra, n?.created_at),
+        icono: "🏭",
+        titulo: "Alta del neumático",
+        detalle: [n?.marca, n?.modelo, prof != null ? `${prof} mm iniciales` : ""].filter(Boolean).join(" · "),
+        km: null,
+      });
+    }
+
+    return ev.sort((a, b) => b.ts - a.ts);
+  }, [operaciones, mediciones, n]);
 
   const dato = (l: string, v?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{v || "—"}</div></div>
@@ -145,31 +214,26 @@ export default function NeumaticoDetalle() {
       </div>
 
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Historial de montajes ({historial.length})</div>
-        <TableWrap>
-          <thead className="bg-slate-900"><tr>
-            <th className={thCls}>Montaje</th><th className={thCls}>Km montaje</th><th className={thCls}>Desmontaje</th>
-            <th className={thCls}>Km desmontaje</th><th className={thCls}>Motivo</th>
-          </tr></thead>
-          <tbody>
-            {historial.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={5}>Sin historial.</td></tr>
-            : historial.map((h) => (
-              <tr key={h.id} className="border-t border-slate-700/60">
-                <td className={tdCls + " text-slate-400"}>{h.fecha_montaje ?? "—"}</td>
-                <td className={tdCls + " text-slate-400"}>{h.km_montaje ?? "—"}</td>
-                <td className={tdCls + " text-slate-400"}>{h.fecha_desmontaje ?? "—"}</td>
-                <td className={tdCls + " text-slate-400"}>{h.km_desmontaje ?? "—"}</td>
-                <td className={tdCls + " text-slate-400"}>{h.motivo_desmontaje ?? "—"}</td>
-              </tr>
+        <div className="mb-3 text-[11px] font-bold uppercase text-slate-400">Historial del neumático ({eventos.length})</div>
+        {eventos.length === 0 ? (
+          <div className="text-sm text-slate-500">Sin movimientos registrados todavía.</div>
+        ) : (
+          <div className="flex flex-col">
+            {eventos.map((e, i) => (
+              <div key={i} className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[13px]">{e.icono}</div>
+                  {i < eventos.length - 1 && <div className="w-px flex-1 bg-slate-700" />}
+                </div>
+                <div className="pb-4">
+                  <div className="text-[13px] font-semibold text-slate-100">{e.titulo}{e.km != null ? ` · ${e.km} km` : ""}</div>
+                  {e.detalle && <div className="text-[12px] text-slate-400">{e.detalle}</div>}
+                  <div className="text-[10px] text-slate-500">{e.fecha}</div>
+                </div>
+              </div>
             ))}
-          </tbody>
-        </TableWrap>
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        {["Inspecciones", "Mediciones", "Fotos"].map((t) => (
-          <div key={t} className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-6 text-center text-sm text-slate-500">{t}<div className="text-[11px]">Próximas fases</div></div>
-        ))}
+          </div>
+        )}
       </div>
 
       {editando && (
