@@ -215,6 +215,32 @@ export async function obtenerNeumatico(id: string): Promise<Neumatico | null> {
   return (data as unknown as Neumatico) ?? null;
 }
 
+// Búsqueda de neumáticos por nº de serie, código interno o RFID (para informes).
+export async function buscarNeumaticos(texto: string, empresaId?: string | null): Promise<Neumatico[]> {
+  const t = texto.trim();
+  if (t.length < 2) return [];
+  let q = supabase.from("tc_neumaticos").select(NEU_SELECT)
+    .or(`numero_serie.ilike.%${t}%,codigo_interno.ilike.%${t}%,numero_interno.ilike.%${t}%,rfid_epc.ilike.%${t}%`)
+    .order("codigo_interno").limit(20);
+  if (empresaId) q = q.eq("empresa_id", empresaId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
+}
+
+// Búsqueda de vehículos por matrícula o nº de unidad (para informes).
+export async function buscarVehiculos(texto: string, empresaId?: string | null): Promise<Vehiculo[]> {
+  const t = texto.trim();
+  if (t.length < 2) return [];
+  let q = supabase.from("tc_vehiculos").select(VEHICULO_SELECT)
+    .or(`matricula.ilike.%${t}%,numero_unidad.ilike.%${t}%`)
+    .order("matricula").limit(20);
+  if (empresaId) q = q.eq("empresa_id", empresaId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Vehiculo[];
+}
+
 export async function crearNeumatico(input: NeumaticoInput): Promise<void> {
   const { error } = await supabase.from("tc_neumaticos").insert(pick(input, COLS_NEUMATICO));
   if (error) throw new Error(error.message);
