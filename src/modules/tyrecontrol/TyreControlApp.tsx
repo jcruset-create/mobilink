@@ -26,6 +26,10 @@ import MisVehiculos from "./pages/MisVehiculos";
 import MisNeumaticos from "./pages/MisNeumaticos";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
+import InformesLayout from "./pages/informes/InformesLayout";
+import InformesDashboard from "./pages/informes/InformesDashboard";
+import InformeInventario from "./pages/informes/InformeInventario";
+import InformeEstadoFlota from "./pages/informes/InformeEstadoFlota";
 
 export default function TyreControlApp() {
   return (
@@ -41,6 +45,13 @@ export default function TyreControlApp() {
             <Route path="montajes" element={<MontajesActuales />} />
             <Route path="operaciones" element={<Operaciones />} />
             <Route path="revision-vehiculo" element={<RevisionVehiculo />} />
+
+            {/* Informes: admin y cliente (RLS acota los datos por empresa) */}
+            <Route path="informes" element={<InformesLayout />}>
+              <Route index element={<InformesDashboard />} />
+              <Route path="estado-flota" element={<InformeEstadoFlota />} />
+              <Route path="inventario" element={<InformeInventario />} />
+            </Route>
 
             {/* Cliente */}
             <Route element={<RoleRoute roles={["cliente"]} />}>
