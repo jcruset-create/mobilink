@@ -1,4 +1,5 @@
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
+import { Home } from "lucide-react";
 
 const LINKS = [
   { to: "/presencia",          label: "Dashboard" },
@@ -18,6 +19,13 @@ export default function PresenciaMenu() {
           {l.label}
         </NavLink>
       ))}
+      <Link
+        to="/inicio"
+        title="Volver al menú principal"
+        className="ml-auto flex items-center gap-1 rounded-lg px-4 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100"
+      >
+        <Home className="h-4 w-4" /> Inicio
+      </Link>
     </nav>
   );
 }

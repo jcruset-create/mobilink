@@ -3,7 +3,7 @@ import { useState } from "react";
 import {
   LayoutDashboard, Package, ArrowDownToLine, ArrowUpFromLine, Repeat, ClipboardList,
   PackageSearch, AlertTriangle, History, CircleDot, Users, Truck, Building2,
-  UserCog, ShieldCheck, Settings, Menu, LogOut,
+  UserCog, ShieldCheck, Settings, Menu, LogOut, Home,
 } from "lucide-react";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { cerrarSesion } from "../services/authAlmacen";
@@ -73,6 +73,9 @@ export default function AlmacenLayoutOscuro({ children }: { children: ReactNode 
               <div className="text-[10px] text-slate-400">{permisos.perfil.rol || ""}</div>
             </div>
           )}
+          <a href="/inicio" title="Volver al menú principal" className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
+            <Home className="h-4 w-4" /> Inicio
+          </a>
           <button onClick={salir} className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
             <LogOut className="h-4 w-4" /> Salir
           </button>

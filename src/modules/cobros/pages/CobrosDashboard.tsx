@@ -159,12 +159,21 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
             <h1 className="text-3xl font-black">Cobros</h1>
             <p className="text-slate-400 mt-1">Crear enlaces de paga y señal con Stripe.</p>
           </div>
-          <button
-            onClick={() => navigate("/")}
-            className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
-          >
-            ← Volver a Operativo
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate("/inicio")}
+              title="Volver al menú principal"
+              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
+            >
+              🏠 Inicio
+            </button>
+            <button
+              onClick={() => navigate("/")}
+              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
+            >
+              ← Volver a Operativo
+            </button>
+          </div>
         </div>
 
         {/* Formulario */}

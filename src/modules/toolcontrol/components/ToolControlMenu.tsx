@@ -1,4 +1,5 @@
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
+import { Home } from "lucide-react";
 
 const links = [
   { to: "/toolcontrol", label: "Dashboard", exact: true },
@@ -34,6 +35,13 @@ export default function ToolControlMenu() {
           {l.label}
         </NavLink>
       ))}
+      <Link
+        to="/inicio"
+        title="Volver al menú principal"
+        className="ml-auto flex items-center gap-1 rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-blue-50 hover:text-blue-700"
+      >
+        <Home className="h-4 w-4" /> Inicio
+      </Link>
     </nav>
   );
 }

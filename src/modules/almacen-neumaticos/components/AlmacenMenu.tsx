@@ -194,6 +194,14 @@ export default function AlmacenMenu() {
         </span>
       )}
 
+      <a
+        href="/inicio"
+        title="Volver al menú principal"
+        className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+      >
+        Inicio
+      </a>
+
       <button
         type="button"
         onClick={salir}
