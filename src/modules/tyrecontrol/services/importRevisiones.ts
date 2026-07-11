@@ -27,18 +27,22 @@ interface Grupo { matricula: string; fecha: string; rows: any[]; }
 export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<ReporteRev> {
   const errores: ReporteRev["errores"] = [];
   const avisos = new Set<string>();
+  const hoy = fechaISO(new Date())!;
+  let sinFecha = 0;
 
-  // 1. Agrupar por matrícula + fecha
+  // 1. Agrupar por matrícula + fecha (las filas sin fecha usan la de hoy)
   const grupos = new Map<string, Grupo>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const mat = String(r.matricula ?? "").trim().toUpperCase();
-    const fecha = fechaISO(r.fecha_revision);
-    if (!mat || !fecha) { errores.push({ fila: i + 2, matricula: mat, error: "Falta matrícula o fecha" }); continue; }
+    if (!mat) { errores.push({ fila: i + 2, matricula: "", error: "Falta matrícula" }); continue; }
+    let fecha = fechaISO(r.fecha_revision);
+    if (!fecha) { fecha = hoy; sinFecha++; }
     const key = `${mat}||${fecha}`;
     if (!grupos.has(key)) grupos.set(key, { matricula: mat, fecha, rows: [] });
     grupos.get(key)!.rows.push({ ...r, _fila: i + 2, posN: parseInt(String(r.posicion).trim(), 10) });
   }
+  if (sinFecha > 0) avisos.add(`${sinFecha} filas sin fecha: se usó la fecha de hoy (${hoy}). Cámbiala luego si conoces la real.`);
 
   // 2. Vehículos por matrícula
   const vehs = await listarVehiculos();
