@@ -1067,15 +1067,25 @@ app.post("/api/geocode", async (req, res) => {
   }
 });
 
-function buildWebfleetRequest(action: string, extra: Record<string, string> = {}): { url: string; headers: Record<string, string> } {
-  const account = process.env.WEBFLEET_ACCOUNT;
-  const username = process.env.WEBFLEET_USERNAME;
-  const password = process.env.WEBFLEET_PASSWORD;
-  const apiKey = process.env.WEBFLEET_API_KEY;
-  const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
+type WebfleetCreds = { account?: string | null; username?: string | null; password?: string | null; apikey?: string | null; baseUrl?: string | null };
+
+// Lee las credenciales Webfleet de una empresa (cliente) de Supabase.
+async function getWebfleetConfigForEmpresa(empresaId: string): Promise<WebfleetCreds | null> {
+  const { data, error } = await supabase.from("tc_webfleet_config").select("*").eq("empresa_id", empresaId).maybeSingle();
+  if (error || !data || !(data as any).activo || !(data as any).account) return null;
+  const d = data as any;
+  return { account: d.account, username: d.username, password: d.password, apikey: d.apikey, baseUrl: d.base_url };
+}
+
+function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
+  const account = creds?.account || process.env.WEBFLEET_ACCOUNT;
+  const username = creds?.username || process.env.WEBFLEET_USERNAME;
+  const password = creds?.password || process.env.WEBFLEET_PASSWORD;
+  const apiKey = creds?.apikey || process.env.WEBFLEET_API_KEY;
+  const baseUrl = creds?.baseUrl || process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
 
   if (!account || !username || !password) {
-    throw new Error("Variables de entorno Webfleet no configuradas (WEBFLEET_ACCOUNT, WEBFLEET_USERNAME, WEBFLEET_PASSWORD)");
+    throw new Error("Credenciales Webfleet no configuradas (cuenta, usuario y contraseña)");
   }
 
   const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
@@ -3011,6 +3021,53 @@ app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
     const noConfig = error?.message?.includes("no configuradas");
     res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error obteniendo posición Webfleet" });
   }
+});
+
+// ── TyreControl: Webfleet por empresa (cliente) ───────────────────────────────
+// Preparado para cuando cada cliente tenga sus credenciales (tc_webfleet_config).
+// Lista de objetos Webfleet de una empresa (para enlazar vehículos).
+app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
+  try {
+    const empresa = String(req.query.empresa || "");
+    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const creds = await getWebfleetConfigForEmpresa(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado para esta empresa" });
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
+    const r = await fetch(url, { headers });
+    if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
+    const data = await r.json();
+    if (data?.errorCode) return res.status(502).json({ error: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
+    const objs = Array.isArray(data) ? data : data?.data ?? [];
+    res.json(objs.map((v: any) => ({
+      objectno: v.objectno,
+      objectname: v.objectname ?? v.objectno,
+      odometer: v.odometer ?? null,
+      pos_time: v.pos_time ?? null,
+    })));
+  } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
+});
+
+// Odómetro / posición de un objeto de una empresa (para sincronizar km).
+app.get("/api/tyrecontrol/webfleet/odometer", async (req, res) => {
+  try {
+    const empresa = String(req.query.empresa || "");
+    const objectno = String(req.query.objectno || "");
+    if (!empresa || !objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    const creds = await getWebfleetConfigForEmpresa(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado para esta empresa" });
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
+    const r = await fetch(url, { headers });
+    if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
+    const data = await r.json();
+    if (data?.errorCode) return res.status(502).json({ error: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
+    const objs = Array.isArray(data) ? data : data?.data ?? [];
+    const o = objs.find((v: any) => String(v.objectno) === String(objectno)) ?? objs[0];
+    if (!o) return res.status(404).json({ error: "Objeto no encontrado en Webfleet" });
+    // El campo exacto de odómetro se confirmará con credenciales reales; se
+    // devuelve el objeto completo para inspeccionarlo la primera vez.
+    const raw = o.odometer ?? o.can_odometer ?? o.dashboard_odometer ?? null;
+    res.json({ objectno, odometer_raw: raw, objeto: o });
+  } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 
 app.post("/api/asistencias/:id/en-camino", async (req, res) => {

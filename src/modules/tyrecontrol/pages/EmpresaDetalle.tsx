@@ -10,6 +10,7 @@ import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { EmpresaFormFields, EMPRESA_VACIA, DelegacionFormFields, delegacionVacia } from "../components/forms";
 import UmbralesEmpresa from "../components/UmbralesEmpresa";
 import PreciosMedida from "../components/PreciosMedida";
+import WebfleetEmpresa from "../components/WebfleetEmpresa";
 
 export default function EmpresaDetalle() {
   const { id = "" } = useParams();
@@ -121,6 +122,11 @@ export default function EmpresaDetalle() {
       {/* Precios de referencia */}
       <div className="mb-3">
         <PreciosMedida empresaId={id} />
+      </div>
+
+      {/* Integración Webfleet */}
+      <div className="mb-3">
+        <WebfleetEmpresa empresaId={id} />
       </div>
 
       {/* Delegaciones */}

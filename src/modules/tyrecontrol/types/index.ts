@@ -473,6 +473,17 @@ export const CATEGORIA_NEUMATICO_LABELS: Record<CategoriaNeumatico, string> = {
   turismo: "Turismo", "4x4": "4x4", furgoneta: "Furgoneta", camion: "Camión", otros: "Otros",
 };
 
+// Configuración de Webfleet por empresa (credenciales del cliente).
+export interface WebfleetConfig {
+  empresa_id: string;
+  account: string | null;
+  username: string | null;
+  password: string | null;
+  apikey: string | null;
+  base_url: string | null;
+  activo: boolean;
+}
+
 // Precios de referencia por medida (para calcular ahorros).
 export interface PrecioMedida {
   empresa_id: string;

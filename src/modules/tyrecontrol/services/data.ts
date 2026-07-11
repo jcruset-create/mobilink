@@ -7,7 +7,7 @@ import type {
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
-  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida,
+  ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -787,6 +787,19 @@ export async function actualizarCosteOperacion(id: string, patch: {
   coste_material: number | null; coste_mano_obra: number | null;
 }): Promise<void> {
   const { error } = await supabase.from("operaciones_neumaticos").update(patch).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Webfleet: credenciales por empresa (cliente) ─────────────
+export async function obtenerWebfleetConfig(empresaId: string): Promise<WebfleetConfig | null> {
+  const { data, error } = await supabase.from("tc_webfleet_config").select("*").eq("empresa_id", empresaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as WebfleetConfig) ?? null;
+}
+
+export async function guardarWebfleetConfig(empresaId: string, patch: Partial<Omit<WebfleetConfig, "empresa_id">>): Promise<void> {
+  const { error } = await supabase.from("tc_webfleet_config")
+    .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
   if (error) throw new Error(error.message);
 }
 
