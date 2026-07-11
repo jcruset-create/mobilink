@@ -6,6 +6,8 @@ export interface ReporteRev {
   resumen: { filas: number; revisiones: number; detalles: number; neumaticosNuevos: number; errores: number };
   avisos: string[];
   errores: { fila: number; matricula: string; error: string }[];
+  noEncontrados: string[];
+  sinPosiciones: string[];
   empresa: string | null;
 }
 
@@ -86,15 +88,14 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
   // 5. Resolver por grupo: posiciones válidas + neumáticos a crear
   interface PlanRev { grupo: Grupo; vehiculo: Vehiculo; posiciones: Map<number, string>; }
   const planes: PlanRev[] = [];
+  const noEnc = new Set<string>();
+  const sinPos = new Set<string>();
   const neuCrear: { empresa_id: string; codigo_interno: string; marca: string | null; modelo: string | null; medida: string | null; estado: string; activo: boolean; vehiculo_id: string; posicion_id: string }[] = [];
 
   for (const g of grupos.values()) {
     const v = mapVeh.get(g.matricula);
-    if (!v) { errores.push({ fila: g.rows[0]._fila, matricula: g.matricula, error: "Vehículo no encontrado (impórtalo antes)" }); continue; }
-    if (!v.tipo_vehiculo_id || !posByTipo.get(v.tipo_vehiculo_id)?.length) {
-      errores.push({ fila: g.rows[0]._fila, matricula: g.matricula, error: "El vehículo no tiene tipo con posiciones definidas" });
-      continue;
-    }
+    if (!v) { noEnc.add(g.matricula); continue; }
+    if (!v.tipo_vehiculo_id || !posByTipo.get(v.tipo_vehiculo_id)?.length) { sinPos.add(g.matricula); continue; }
     const ps = posByTipo.get(v.tipo_vehiculo_id)!;
     const posMap = new Map<number, string>();
     for (const row of g.rows) {
@@ -120,8 +121,8 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
 
   if (!ejecutar) {
     return {
-      resumen: { filas: rows.length, revisiones: revisionesACrear, detalles: totalDetalles, neumaticosNuevos: neuCrear.length, errores: errores.length },
-      avisos: [...avisos], errores, empresa: empresaNombre,
+      resumen: { filas: rows.length, revisiones: revisionesACrear, detalles: totalDetalles, neumaticosNuevos: neuCrear.length, errores: errores.length + noEnc.size + sinPos.size },
+      avisos: [...avisos], errores, noEncontrados: [...noEnc], sinPosiciones: [...sinPos], empresa: empresaNombre,
     };
   }
 
@@ -192,7 +193,7 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
   }
 
   return {
-    resumen: { filas: rows.length, revisiones: gruposSinRev.length, detalles: detalles.length, neumaticosNuevos: neuCrear.length, errores: errores.length },
-    avisos: [...avisos], errores, empresa: empresaNombre,
+    resumen: { filas: rows.length, revisiones: gruposSinRev.length, detalles: detalles.length, neumaticosNuevos: neuCrear.length, errores: errores.length + noEnc.size + sinPos.size },
+    avisos: [...avisos], errores, noEncontrados: [...noEnc], sinPosiciones: [...sinPos], empresa: empresaNombre,
   };
 }

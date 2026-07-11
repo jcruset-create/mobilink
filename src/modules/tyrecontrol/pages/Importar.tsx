@@ -117,6 +117,18 @@ export default function Importar() {
             <Kpi t="Errores" v={repRev.resumen.errores} tono={repRev.resumen.errores ? "text-rose-300" : "text-emerald-300"} />
           </div>
           {repRev.empresa && <div className="mb-3 text-[12px] text-slate-400">Empresa: <b>{repRev.empresa}</b></div>}
+          {repRev.noEncontrados.length > 0 && (
+            <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-[12px] text-rose-200">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos NO encontrados ({repRev.noEncontrados.length}) — impórtalos antes con la plantilla de Vehículos</div>
+              <div className="font-mono text-[11px] text-rose-100">{repRev.noEncontrados.join(", ")}</div>
+            </div>
+          )}
+          {repRev.sinPosiciones.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos SIN tipo/posiciones ({repRev.sinPosiciones.length}) — asígnales un tipo con posiciones</div>
+              <div className="font-mono text-[11px] text-amber-100">{repRev.sinPosiciones.join(", ")}</div>
+            </div>
+          )}
           {repRev.avisos.length > 0 && (
             <div className="mb-3 rounded-lg bg-slate-800 p-3 text-[12px] text-amber-200">
               <div className="mb-1 font-bold uppercase text-[11px] text-slate-400">Avisos ({repRev.avisos.length})</div>
