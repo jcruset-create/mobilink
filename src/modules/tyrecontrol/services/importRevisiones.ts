@@ -133,8 +133,8 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     const nuevoNeuId = new Map<string, string>(); // codigo_interno -> id
     for (let i = 0; i < neuCrear.length; i += chunk) {
       const parte = neuCrear.slice(i, i + chunk).map((n) => ({
-        empresa_id: n.empresa_id, codigo_interno: n.codigo_interno, marca: n.marca, modelo: n.modelo, medida: n.medida,
-        estado: n.estado, activo: n.activo, origen: "importacion_excel",
+        empresa_id: n.empresa_id, numero_interno: `IMP-${n.codigo_interno}`, codigo_interno: n.codigo_interno,
+        marca: n.marca, modelo: n.modelo, medida: n.medida, estado: n.estado, activo: n.activo,
       }));
       const { data, error } = await supabase.from("tc_neumaticos").insert(parte).select("id, codigo_interno");
       if (error) throw new Error("Alta de neumáticos: " + error.message);
