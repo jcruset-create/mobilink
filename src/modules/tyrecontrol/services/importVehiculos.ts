@@ -73,7 +73,7 @@ export async function importVehiculos(rows: any[], ejecutar: boolean): Promise<R
   if (ejecutar && empresaId) {
     for (const b of delegacionesNuevas) await crearDelegacion({ ...delegacionVacia(empresaId), nombre: b });
     for (const c of configsNuevas) await crearConfigEjes(c);
-    for (const m of medidasNuevas) await crearMedida(m);
+    for (const m of medidasNuevas) await crearMedida(m.replace(/\s+/g, "").toUpperCase());
     delegaciones = await listarDelegaciones(empresaId);
     configs = await listarConfigEjes();
     medidas = await listarMedidas();

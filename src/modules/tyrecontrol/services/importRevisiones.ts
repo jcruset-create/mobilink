@@ -20,6 +20,7 @@ function fechaISO(v: any): string | null {
 }
 const numOrNull = (v: any) => { const s = String(v ?? "").trim().replace(",", "."); return s && !isNaN(Number(s)) ? Number(s) : null; };
 const txt = (v: any) => { const s = String(v ?? "").trim(); return s || null; };
+const medN = (v: any) => { const s = String(v ?? "").trim().replace(/\s+/g, "").toUpperCase(); return s || null; }; // medida sin espacios
 
 interface Grupo { matricula: string; fecha: string; rows: any[]; }
 
@@ -108,7 +109,7 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
       if (!mapMontaje.has(mk) && !neuCrear.some((x) => x.vehiculo_id === v.id && x.posicion_id === posId)) {
         neuCrear.push({
           empresa_id: v.empresa_id, codigo_interno: `${g.matricula}-P${n}`,
-          marca: txt(row.marca_neumatico), modelo: txt(row.modelo_neumatico), medida: txt(row.medida),
+          marca: txt(row.marca_neumatico), modelo: txt(row.modelo_neumatico), medida: medN(row.medida),
           estado: "montado", activo: true, vehiculo_id: v.id, posicion_id: posId,
         });
       }
