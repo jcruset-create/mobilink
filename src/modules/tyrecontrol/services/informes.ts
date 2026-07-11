@@ -5,7 +5,7 @@ import { supabase } from "./supabase";
 import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
-  PresionNeumatico, ProductividadTecnico,
+  PresionNeumatico, ProductividadTecnico, OperacionesInforme,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -88,4 +88,10 @@ export async function productividad(f: FiltrosInformes): Promise<ProductividadTe
   const { data, error } = await supabase.rpc("tc_informes_productividad", params(f));
   if (error) throw new Error(error.message);
   return (data ?? []) as ProductividadTecnico[];
+}
+
+export async function operacionesInforme(f: FiltrosInformes): Promise<OperacionesInforme> {
+  const { data, error } = await supabase.rpc("tc_informes_operaciones", params(f));
+  if (error) throw new Error(error.message);
+  return data as OperacionesInforme;
 }

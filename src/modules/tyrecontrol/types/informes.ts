@@ -91,6 +91,13 @@ export interface RankingMarca {
   coste_km_medio: number | null;
 }
 
+export interface OperacionesInforme {
+  total: number;
+  por_tipo: { tipo: string; n: number }[];
+  por_motivo: { motivo: string; n: number }[];
+  evolucion: { mes: string; n: number }[];
+}
+
 export interface PresionNeumatico {
   neumatico_id: string;
   codigo: string | null;
