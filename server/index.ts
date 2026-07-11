@@ -1077,6 +1077,22 @@ async function getWebfleetConfigForEmpresa(empresaId: string): Promise<WebfleetC
   return { account: d.account, username: d.username, password: d.password, apikey: d.apikey, baseUrl: d.base_url };
 }
 
+// Credenciales globales (variables de entorno) si están definidas.
+function globalWebfleetCreds(): WebfleetCreds | null {
+  if (!process.env.WEBFLEET_ACCOUNT || !process.env.WEBFLEET_USERNAME || !process.env.WEBFLEET_PASSWORD) return null;
+  return {
+    account: process.env.WEBFLEET_ACCOUNT, username: process.env.WEBFLEET_USERNAME,
+    password: process.env.WEBFLEET_PASSWORD, apikey: process.env.WEBFLEET_API_KEY,
+    baseUrl: process.env.WEBFLEET_BASE_URL,
+  };
+}
+
+// Credenciales a usar para una empresa: las suyas propias o, si no tiene, las
+// globales (con las que ya funciona el módulo de asistencia). null si no hay ninguna.
+async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
+  return (await getWebfleetConfigForEmpresa(empresaId)) ?? globalWebfleetCreds();
+}
+
 function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
   const account = creds?.account || process.env.WEBFLEET_ACCOUNT;
   const username = creds?.username || process.env.WEBFLEET_USERNAME;
@@ -3023,15 +3039,28 @@ app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
   }
 });
 
-// ── TyreControl: Webfleet por empresa (cliente) ───────────────────────────────
-// Preparado para cuando cada cliente tenga sus credenciales (tc_webfleet_config).
-// Lista de objetos Webfleet de una empresa (para enlazar vehículos).
+// ── TyreControl: Webfleet ─────────────────────────────────────────────────────
+// Usa las credenciales de la empresa (tc_webfleet_config) o, si aún no las tiene,
+// las globales del módulo de asistencia. Así los vehículos de la cuenta ya
+// disponible funcionan hoy y cada cliente se conecta al entregar su propia API.
+
+// Odómetro de Webfleet en km. showObjectReportExtern devuelve varios formatos
+// según la cuenta; se prueban los campos habituales (metros → km).
+function webfleetOdometerKm(o: any): number | null {
+  const cand = o?.odometer ?? o?.can_odometer ?? o?.dashboard_odometer ?? o?.milage ?? o?.mileage ?? null;
+  const n = Number(cand);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Webfleet suele darlo en metros; si el valor es enorme lo pasamos a km.
+  return n > 200000 ? Math.round(n / 1000) : Math.round(n);
+}
+
+// Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
   try {
     const empresa = String(req.query.empresa || "");
     if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
-    const creds = await getWebfleetConfigForEmpresa(empresa);
-    if (!creds) return res.status(503).json({ error: "Webfleet no configurado para esta empresa" });
+    const creds = await resolveWebfleetCreds(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
     const r = await fetch(url, { headers });
     if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
@@ -3041,20 +3070,20 @@ app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
     res.json(objs.map((v: any) => ({
       objectno: v.objectno,
       objectname: v.objectname ?? v.objectno,
-      odometer: v.odometer ?? null,
+      odometer_km: webfleetOdometerKm(v),
       pos_time: v.pos_time ?? null,
     })));
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 
-// Odómetro / posición de un objeto de una empresa (para sincronizar km).
+// Estado de un objeto: km (odómetro) + posición. Para sincronizar un vehículo.
 app.get("/api/tyrecontrol/webfleet/odometer", async (req, res) => {
   try {
     const empresa = String(req.query.empresa || "");
     const objectno = String(req.query.objectno || "");
     if (!empresa || !objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
-    const creds = await getWebfleetConfigForEmpresa(empresa);
-    if (!creds) return res.status(503).json({ error: "Webfleet no configurado para esta empresa" });
+    const creds = await resolveWebfleetCreds(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
     const r = await fetch(url, { headers });
     if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
@@ -3063,10 +3092,19 @@ app.get("/api/tyrecontrol/webfleet/odometer", async (req, res) => {
     const objs = Array.isArray(data) ? data : data?.data ?? [];
     const o = objs.find((v: any) => String(v.objectno) === String(objectno)) ?? objs[0];
     if (!o) return res.status(404).json({ error: "Objeto no encontrado en Webfleet" });
-    // El campo exacto de odómetro se confirmará con credenciales reales; se
-    // devuelve el objeto completo para inspeccionarlo la primera vez.
-    const raw = o.odometer ?? o.can_odometer ?? o.dashboard_odometer ?? null;
-    res.json({ objectno, odometer_raw: raw, objeto: o });
+    const lat = o.latitude_mdeg != null ? Number(o.latitude_mdeg) / 1e6 : (o.latitude != null ? Number(o.latitude) : null);
+    const lng = o.longitude_mdeg != null ? Number(o.longitude_mdeg) / 1e6 : (o.longitude != null ? Number(o.longitude) : null);
+    const speed = Number(o.speed);
+    res.json({
+      objectno,
+      objectname: o.objectname ?? objectno,
+      odometer_km: webfleetOdometerKm(o),
+      lat: Number.isFinite(lat as number) ? lat : null,
+      lng: Number.isFinite(lng as number) ? lng : null,
+      postext: o.postext ?? o.postext_short ?? null,
+      speed_kmh: Number.isFinite(speed) ? speed : null,
+      pos_time: o.pos_time ?? null,
+    });
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 

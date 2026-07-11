@@ -5,6 +5,7 @@ import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje
 import { ORIGEN_KM_LABELS, tipoLlantaLabel } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
+import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fecha + hora de una revisión: el día de fecha_revision y la hora del
@@ -90,6 +91,13 @@ export default function VehiculoDetalle() {
           <div className="mt-1 text-xs text-slate-500">Origen: {ORIGEN_KM_LABELS[v.origen_km]}</div>
         </div>
       </div>
+
+      {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
+      {!esCliente && (
+        <div className="mt-3">
+          <WebfleetVehiculo vehiculo={v} onUpdated={cargar} />
+        </div>
+      )}
 
       {/* Configuración de neumáticos */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
