@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import CoreMenu from "../components/CoreMenu";
+import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 
 type Empleado = {
@@ -24,7 +24,7 @@ type Empleado = {
 const ROLES = ["admin", "responsable", "operario", "prl", "almacen"];
 
 const ROL_BADGE: Record<string, string> = {
-  admin:       "bg-red-100 text-red-800",
+  admin:       "bg-red-500/20 text-red-800",
   responsable: "bg-orange-100 text-orange-800",
   operario:    "bg-blue-100 text-blue-800",
   prl:         "bg-purple-100 text-purple-800",
@@ -136,16 +136,15 @@ export default function Empleados() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <CoreMenu />
+    <CoreLayout>
 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Empleados</h1>
-          <p className="text-sm text-gray-500">{filtrados.length} empleados</p>
+          <p className="text-sm text-slate-400">{filtrados.length} empleados</p>
         </div>
         <button onClick={abrirNuevo}
-          className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900">
+          className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500">
           + Nuevo empleado
         </button>
       </div>
@@ -155,30 +154,30 @@ export default function Empleados() {
       {/* Filtros */}
       <div className="flex flex-wrap gap-2 items-center">
         <input value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)}
-          placeholder="Buscar nombre, email, código, DNI..." className="rounded-lg border px-3 py-2 text-sm w-64" />
-        <select value={filtroRol} onChange={(e) => setFiltroRol(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
+          placeholder="Buscar nombre, email, código, DNI..." className="rounded-lg border border-slate-700 px-3 py-2 text-sm w-64" />
+        <select value={filtroRol} onChange={(e) => setFiltroRol(e.target.value)} className="rounded-lg border border-slate-700 px-3 py-2 text-sm">
           <option value="">Todos los roles</option>
           {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
-        <div className="flex rounded-lg border overflow-hidden text-sm">
+        <div className="flex rounded-lg border border-slate-700 overflow-hidden text-sm">
           {(["activos","todos","inactivos"] as const).map((v) => (
             <button key={v} onClick={() => setFiltroActivo(v)}
-              className={`px-3 py-2 transition-colors ${filtroActivo === v ? "bg-gray-800 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+              className={`px-3 py-2 transition-colors ${filtroActivo === v ? "bg-slate-800 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700/50"}`}>
               {v.charAt(0).toUpperCase() + v.slice(1)}
             </button>
           ))}
         </div>
         {(filtroTexto || filtroRol) && (
           <button onClick={() => { setFiltroTexto(""); setFiltroRol(""); }}
-            className="rounded-lg border px-3 py-2 text-sm text-gray-500 hover:bg-gray-50">Limpiar</button>
+            className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-400 hover:bg-slate-700/50">Limpiar</button>
         )}
       </div>
 
       {/* Tabla */}
-      {cargando ? <div className="py-10 text-center text-gray-400">Cargando...</div> : (
-        <div className="overflow-auto rounded-xl border bg-white">
+      {cargando ? <div className="py-10 text-center text-slate-500">Cargando...</div> : (
+        <div className="overflow-auto rounded-xl border border-slate-700 bg-slate-800">
           <table className="w-full min-w-[800px] text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-slate-800 text-left">
               <tr>
                 <th className="p-3">Empleado</th>
                 <th className="p-3">Rol</th>
@@ -191,34 +190,34 @@ export default function Empleados() {
             </thead>
             <tbody>
               {filtrados.map((e) => (
-                <tr key={e.id} className="border-t hover:bg-gray-50">
+                <tr key={e.id} className="border-t border-slate-700 hover:bg-slate-700/50">
                   <td className="p-3">
                     <Link to={`/sea-core/empleados/${e.id}`} className="flex items-center gap-2 group">
-                      <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 shrink-0">
+                      <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
                         {e.nombre.charAt(0).toUpperCase()}
                       </div>
                       <div>
                         <div className="font-medium group-hover:text-blue-600">{e.nombre} {e.apellidos ?? ""}</div>
-                        {e.cargo && <div className="text-xs text-gray-400">{e.cargo}</div>}
+                        {e.cargo && <div className="text-xs text-slate-500">{e.cargo}</div>}
                       </div>
                     </Link>
                   </td>
                   <td className="p-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ROL_BADGE[e.rol] ?? "bg-gray-100 text-gray-600"}`}>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ROL_BADGE[e.rol] ?? "bg-slate-700 text-slate-300"}`}>
                       {e.rol}
                     </span>
                   </td>
-                  <td className="p-3 text-gray-500">
+                  <td className="p-3 text-slate-400">
                     <div>{(e.sea_companies as any)?.nombre ?? "—"}</div>
                     <div className="text-xs">{(e.sea_work_centers as any)?.nombre ?? ""}</div>
                   </td>
-                  <td className="p-3 text-gray-500">
+                  <td className="p-3 text-slate-400">
                     <div>{e.email ?? "—"}</div>
                     <div className="text-xs">{e.telefono ?? ""}</div>
                   </td>
-                  <td className="p-3 font-mono text-gray-500">{e.codigo_operario ?? "—"}</td>
+                  <td className="p-3 font-mono text-slate-400">{e.codigo_operario ?? "—"}</td>
                   <td className="p-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${e.activo ? "bg-green-100 text-green-800" : "bg-red-100 text-red-700"}`}>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${e.activo ? "bg-green-100 text-green-800" : "bg-red-500/20 text-red-300"}`}>
                       {e.activo ? "Activo" : "Inactivo"}
                     </span>
                   </td>
@@ -229,7 +228,7 @@ export default function Empleados() {
                         Ver ficha
                       </Link>
                       <button onClick={() => abrirEditar(e)}
-                        className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
+                        className="rounded-lg bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600">
                         Editar
                       </button>
                     </div>
@@ -237,7 +236,7 @@ export default function Empleados() {
                 </tr>
               ))}
               {filtrados.length === 0 && (
-                <tr><td colSpan={7} className="p-8 text-center text-gray-400">Sin empleados.</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-slate-500">Sin empleados.</td></tr>
               )}
             </tbody>
           </table>
@@ -247,71 +246,71 @@ export default function Empleados() {
       {/* Modal crear/editar */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-slate-800 p-6 shadow-xl">
             <h2 className="text-lg font-bold mb-5">{editId ? "Editar empleado" : "Nuevo empleado"}</h2>
 
             <div className="space-y-4">
               {/* Datos personales */}
               <div>
-                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Datos personales</h3>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Datos personales</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs font-medium text-gray-600">Nombre *</label>
+                  <div><label className="text-xs font-medium text-slate-300">Nombre *</label>
                     <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                  <div><label className="text-xs font-medium text-gray-600">Apellidos</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Apellidos</label>
                     <input value={form.apellidos} onChange={(e) => setForm({ ...form, apellidos: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                  <div><label className="text-xs font-medium text-gray-600">DNI / NIE</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">DNI / NIE</label>
                     <input value={form.dni_nie} onChange={(e) => setForm({ ...form, dni_nie: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                  <div><label className="text-xs font-medium text-gray-600">Teléfono</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Teléfono</label>
                     <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                  <div><label className="text-xs font-medium text-gray-600">Email</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Email</label>
                     <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                  <div><label className="text-xs font-medium text-gray-600">Fecha de alta</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Fecha de alta</label>
                     <input type="date" value={form.fecha_alta} onChange={(e) => setForm({ ...form, fecha_alta: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
                 </div>
               </div>
 
               {/* Puesto */}
               <div>
-                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Puesto y acceso</h3>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Puesto y acceso</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs font-medium text-gray-600">Cargo</label>
+                  <div><label className="text-xs font-medium text-slate-300">Cargo</label>
                     <input value={form.cargo} onChange={(e) => setForm({ ...form, cargo: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="Mecánico, Encargado..." /></div>
-                  <div><label className="text-xs font-medium text-gray-600">Departamento</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" placeholder="Mecánico, Encargado..." /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Departamento</label>
                     <input value={form.departamento} onChange={(e) => setForm({ ...form, departamento: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                  <div><label className="text-xs font-medium text-gray-600">Rol</label>
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Rol</label>
                     <select value={form.rol} onChange={(e) => setForm({ ...form, rol: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                       {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select></div>
-                  <div><label className="text-xs font-medium text-gray-600">Código operario</label>
+                  <div><label className="text-xs font-medium text-slate-300">Código operario</label>
                     <input value={form.codigo_operario}
                       onChange={(e) => setForm({ ...form, codigo_operario: e.target.value.replace(/\D/g, "").slice(0, 4) })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm font-mono"
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500 font-mono"
                       placeholder="1234" maxLength={4} inputMode="numeric" /></div>
                 </div>
               </div>
 
               {/* Empresa y centro */}
               <div>
-                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Organización</h3>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Organización</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><label className="text-xs font-medium text-gray-600">Empresa</label>
+                  <div><label className="text-xs font-medium text-slate-300">Empresa</label>
                     <select value={form.company_id} onChange={(e) => setForm({ ...form, company_id: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                       <option value="">Sin empresa</option>
                       {empresas.map((emp) => <option key={emp.id} value={emp.id}>{emp.nombre}</option>)}
                     </select></div>
-                  <div><label className="text-xs font-medium text-gray-600">Centro de trabajo</label>
+                  <div><label className="text-xs font-medium text-slate-300">Centro de trabajo</label>
                     <select value={form.work_center_id} onChange={(e) => setForm({ ...form, work_center_id: e.target.value })}
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                       <option value="">Sin centro</option>
                       {centros.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                     </select></div>
@@ -331,17 +330,17 @@ export default function Empleados() {
               </label>
             </div>
 
-            {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+            {error && <p className="mt-4 text-sm text-red-300">{error}</p>}
             <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setModal(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={() => setModal(false)} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={guardar} disabled={guardando}
-                className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
                 {guardando ? "Guardando..." : editId ? "Guardar cambios" : "Crear empleado"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </CoreLayout>
   );
 }

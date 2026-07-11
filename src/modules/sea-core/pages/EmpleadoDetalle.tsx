@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import CoreMenu from "../components/CoreMenu";
+import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 
 type Empleado = {
@@ -16,13 +16,13 @@ type Empleado = {
 const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario"];
 
 const ROL_BADGE: Record<string, string> = {
-  admin: "bg-red-100 text-red-800", responsable: "bg-orange-100 text-orange-800",
+  admin: "bg-red-500/20 text-red-800", responsable: "bg-orange-100 text-orange-800",
   operario: "bg-blue-100 text-blue-800", prl: "bg-purple-100 text-purple-800",
   almacen: "bg-green-100 text-green-800",
 };
 
 const NIVEL_BADGE: Record<string, string> = {
-  basico: "bg-gray-100 text-gray-700", medio: "bg-blue-100 text-blue-700",
+  basico: "bg-slate-700 text-slate-200", medio: "bg-blue-100 text-blue-700",
   avanzado: "bg-purple-100 text-purple-700", experto: "bg-orange-100 text-orange-700",
 };
 
@@ -330,55 +330,54 @@ export default function EmpleadoDetalle() {
   function BadgeCaducidad({ fecha }: { fecha: string | null }) {
     const dias = diasParaCaducidad(fecha);
     if (dias === null) return null;
-    if (dias < 0) return <span className="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-xs font-medium">Caducado</span>;
+    if (dias < 0) return <span className="rounded-full bg-red-500/20 text-red-300 px-2 py-0.5 text-xs font-medium">Caducado</span>;
     if (dias <= 30) return <span className="rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs font-medium">Caduca en {dias}d</span>;
     return <span className="rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-xs font-medium">Válido ({dias}d)</span>;
   }
 
-  if (cargando) return <div className="p-6"><CoreMenu /><div className="py-20 text-center text-gray-400">Cargando...</div></div>;
-  if (!empleado) return <div className="p-6"><CoreMenu /><div className="py-20 text-center text-gray-400">Empleado no encontrado.</div></div>;
+  if (cargando) return <CoreLayout><div className="py-20 text-center text-slate-500">Cargando...</div></CoreLayout>;
+  if (!empleado) return <CoreLayout><div className="py-20 text-center text-slate-500">Empleado no encontrado.</div></CoreLayout>;
 
   return (
-    <div className="p-6 space-y-4">
-      <CoreMenu />
+    <CoreLayout>
 
       {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
 
       {/* Header */}
       <div className="flex items-start gap-4">
-        <div className="h-14 w-14 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-600 shrink-0">
+        <div className="h-14 w-14 rounded-full bg-slate-700 flex items-center justify-center text-xl font-bold text-slate-300 shrink-0">
           {empleado.nombre.charAt(0).toUpperCase()}
         </div>
         <div className="flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold">{empleado.nombre} {empleado.apellidos ?? ""}</h1>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ROL_BADGE[empleado.rol] ?? "bg-gray-100"}`}>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ROL_BADGE[empleado.rol] ?? "bg-slate-700"}`}>
               {empleado.rol}
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${empleado.activo ? "bg-green-100 text-green-800" : "bg-red-100 text-red-700"}`}>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${empleado.activo ? "bg-green-100 text-green-800" : "bg-red-500/20 text-red-300"}`}>
               {empleado.activo ? "Activo" : "Inactivo"}
             </span>
           </div>
-          <div className="text-sm text-gray-500 mt-1">
+          <div className="text-sm text-slate-400 mt-1">
             {empleado.cargo ?? ""}{empleado.departamento ? ` · ${empleado.departamento}` : ""}
             {(empleado.sea_companies as any)?.nombre ? ` · ${(empleado.sea_companies as any).nombre}` : ""}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={exportarPDF}
-            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 flex items-center gap-1">
+            className="rounded-xl border border-slate-700 border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-700/50 flex items-center gap-1">
             ⬇ Exportar PDF
           </button>
-          <Link to="/sea-core/empleados" className="text-sm text-gray-500 hover:text-gray-700">← Volver</Link>
+          <Link to="/sea-core/empleados" className="text-sm text-slate-400 hover:text-slate-200">← Volver</Link>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="border-b flex gap-0 overflow-x-auto">
+      <div className="border-b border-slate-700 flex gap-0 overflow-x-auto">
         {TABS.map((tab, i) => (
           <button key={tab} onClick={() => setTabActiva(i)}
             className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-              tabActiva === i ? "border-gray-800 text-gray-800" : "border-transparent text-gray-500 hover:text-gray-700"
+              tabActiva === i ? "border-slate-700 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"
             }`}>
             {tab}
           </button>
@@ -388,8 +387,8 @@ export default function EmpleadoDetalle() {
       {/* Tab: Datos personales */}
       {tabActiva === 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="rounded-xl border bg-white p-5 space-y-3">
-            <h2 className="font-semibold text-gray-700">Datos personales</h2>
+          <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+            <h2 className="font-semibold text-slate-200">Datos personales</h2>
             {[
               { label: "Nombre completo", value: `${empleado.nombre} ${empleado.apellidos ?? ""}` },
               { label: "DNI / NIE", value: empleado.dni_nie },
@@ -397,14 +396,14 @@ export default function EmpleadoDetalle() {
               { label: "Teléfono", value: empleado.telefono },
               { label: "Fecha de alta", value: empleado.fecha_alta ? new Date(empleado.fecha_alta).toLocaleDateString("es-ES") : null },
             ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between text-sm border-b pb-2 last:border-0 last:pb-0">
-                <span className="text-gray-500">{label}</span>
+              <div key={label} className="flex justify-between text-sm border-b border-slate-700 pb-2 last:border-0 last:pb-0">
+                <span className="text-slate-400">{label}</span>
                 <span className="font-medium text-right">{value ?? "—"}</span>
               </div>
             ))}
           </div>
-          <div className="rounded-xl border bg-white p-5 space-y-3">
-            <h2 className="font-semibold text-gray-700">Puesto y organización</h2>
+          <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+            <h2 className="font-semibold text-slate-200">Puesto y organización</h2>
             {[
               { label: "Cargo", value: empleado.cargo },
               { label: "Departamento", value: empleado.departamento },
@@ -413,8 +412,8 @@ export default function EmpleadoDetalle() {
               { label: "Empresa", value: (empleado.sea_companies as any)?.nombre },
               { label: "Centro de trabajo", value: (empleado.sea_work_centers as any)?.nombre },
             ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between text-sm border-b pb-2 last:border-0 last:pb-0">
-                <span className="text-gray-500">{label}</span>
+              <div key={label} className="flex justify-between text-sm border-b border-slate-700 pb-2 last:border-0 last:pb-0">
+                <span className="text-slate-400">{label}</span>
                 <span className="font-medium text-right">{value ?? "—"}</span>
               </div>
             ))}
@@ -428,24 +427,24 @@ export default function EmpleadoDetalle() {
           <div className="flex justify-between items-center">
             <h2 className="font-semibold">{competencias.length} competencias</h2>
             <button onClick={() => setModalComp(true)}
-              className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-900">
+              className="rounded-xl bg-slate-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500">
               + Añadir competencia
             </button>
           </div>
           {competencias.length === 0 ? (
-            <div className="rounded-xl border bg-white p-8 text-center text-gray-400">Sin competencias registradas.</div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-500">Sin competencias registradas.</div>
           ) : (
-            <div className="rounded-xl border bg-white divide-y">
+            <div className="rounded-xl border border-slate-700 bg-slate-800 divide-y divide-slate-700">
               {competencias.map((c) => (
                 <div key={c.id} className="flex items-center justify-between p-3">
                   <div>
                     <div className="font-medium text-sm">{c.sea_competencies?.nombre}</div>
-                    <div className="text-xs text-gray-400">{c.sea_competencies?.categoria}</div>
-                    {c.notas && <div className="text-xs text-gray-500 mt-0.5">{c.notas}</div>}
+                    <div className="text-xs text-slate-500">{c.sea_competencies?.categoria}</div>
+                    {c.notas && <div className="text-xs text-slate-400 mt-0.5">{c.notas}</div>}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${NIVEL_BADGE[c.nivel] ?? "bg-gray-100"}`}>{c.nivel}</span>
-                    <button onClick={() => eliminarComp(c.id)} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${NIVEL_BADGE[c.nivel] ?? "bg-slate-700"}`}>{c.nivel}</span>
+                    <button onClick={() => eliminarComp(c.id)} className="text-xs text-red-400 hover:text-red-300">✕</button>
                   </div>
                 </div>
               ))}
@@ -460,24 +459,24 @@ export default function EmpleadoDetalle() {
           <div className="flex justify-between items-center">
             <h2 className="font-semibold">{certificaciones.length} certificaciones</h2>
             <button onClick={() => setModalCert(true)}
-              className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-900">
+              className="rounded-xl bg-slate-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500">
               + Añadir certificación
             </button>
           </div>
           {certificaciones.length === 0 ? (
-            <div className="rounded-xl border bg-white p-8 text-center text-gray-400">Sin certificaciones.</div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-500">Sin certificaciones.</div>
           ) : (
-            <div className="rounded-xl border bg-white divide-y">
+            <div className="rounded-xl border border-slate-700 bg-slate-800 divide-y divide-slate-700">
               {certificaciones.map((c) => (
                 <div key={c.id} className="flex items-center justify-between p-3">
                   <div>
                     <div className="font-medium text-sm">{c.nombre}</div>
-                    <div className="text-xs text-gray-400">{c.entidad_emisora ?? ""}{c.numero_certificado ? ` · ${c.numero_certificado}` : ""}</div>
-                    {c.fecha_obtencion && <div className="text-xs text-gray-400">Obtenido: {new Date(c.fecha_obtencion).toLocaleDateString("es-ES")}</div>}
+                    <div className="text-xs text-slate-500">{c.entidad_emisora ?? ""}{c.numero_certificado ? ` · ${c.numero_certificado}` : ""}</div>
+                    {c.fecha_obtencion && <div className="text-xs text-slate-500">Obtenido: {new Date(c.fecha_obtencion).toLocaleDateString("es-ES")}</div>}
                   </div>
                   <div className="flex items-center gap-2">
                     <BadgeCaducidad fecha={c.fecha_caducidad} />
-                    <button onClick={() => eliminarCert(c.id)} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                    <button onClick={() => eliminarCert(c.id)} className="text-xs text-red-400 hover:text-red-300">✕</button>
                   </div>
                 </div>
               ))}
@@ -492,25 +491,25 @@ export default function EmpleadoDetalle() {
           <div className="flex justify-between items-center">
             <h2 className="font-semibold">{autorizaciones.length} autorizaciones</h2>
             <button onClick={() => setModalAut(true)}
-              className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-900">
+              className="rounded-xl bg-slate-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500">
               + Añadir autorización
             </button>
           </div>
           {autorizaciones.length === 0 ? (
-            <div className="rounded-xl border bg-white p-8 text-center text-gray-400">Sin autorizaciones.</div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-500">Sin autorizaciones.</div>
           ) : (
-            <div className="rounded-xl border bg-white divide-y">
+            <div className="rounded-xl border border-slate-700 bg-slate-800 divide-y divide-slate-700">
               {autorizaciones.map((a) => (
                 <div key={a.id} className="flex items-center justify-between p-3">
                   <div>
                     <div className="font-medium text-sm">{a.sea_authorizations?.nombre}</div>
-                    {a.numero_autorizacion && <div className="text-xs text-gray-400">Nº {a.numero_autorizacion}</div>}
-                    {a.fecha_emision && <div className="text-xs text-gray-400">Emitida: {new Date(a.fecha_emision).toLocaleDateString("es-ES")}</div>}
-                    {a.notas && <div className="text-xs text-gray-500 mt-0.5">{a.notas}</div>}
+                    {a.numero_autorizacion && <div className="text-xs text-slate-500">Nº {a.numero_autorizacion}</div>}
+                    {a.fecha_emision && <div className="text-xs text-slate-500">Emitida: {new Date(a.fecha_emision).toLocaleDateString("es-ES")}</div>}
+                    {a.notas && <div className="text-xs text-slate-400 mt-0.5">{a.notas}</div>}
                   </div>
                   <div className="flex items-center gap-2">
                     <BadgeCaducidad fecha={a.fecha_caducidad} />
-                    <button onClick={() => eliminarAut(a.id)} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                    <button onClick={() => eliminarAut(a.id)} className="text-xs text-red-400 hover:text-red-300">✕</button>
                   </div>
                 </div>
               ))}
@@ -525,33 +524,33 @@ export default function EmpleadoDetalle() {
           <div className="flex justify-between items-center">
             <h2 className="font-semibold">{formaciones.length} cursos</h2>
             <button onClick={() => setModalForm(true)}
-              className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-900">
+              className="rounded-xl bg-slate-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500">
               + Añadir formación
             </button>
           </div>
           {formaciones.length === 0 ? (
-            <div className="rounded-xl border bg-white p-8 text-center text-gray-400">Sin registros de formación.</div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-500">Sin registros de formación.</div>
           ) : (
-            <div className="rounded-xl border bg-white divide-y">
+            <div className="rounded-xl border border-slate-700 bg-slate-800 divide-y divide-slate-700">
               {formaciones.map((f) => (
                 <div key={f.id} className="flex items-center justify-between p-3">
                   <div>
                     <div className="font-medium text-sm">{f.nombre_curso}</div>
-                    <div className="text-xs text-gray-400">
+                    <div className="text-xs text-slate-500">
                       {f.entidad_formadora ?? ""}
                       {f.horas ? ` · ${f.horas}h` : ""}
                       {f.fecha_inicio ? ` · ${new Date(f.fecha_inicio).toLocaleDateString("es-ES")}` : ""}
                     </div>
-                    {f.notas && <div className="text-xs text-gray-500 mt-0.5">{f.notas}</div>}
+                    {f.notas && <div className="text-xs text-slate-400 mt-0.5">{f.notas}</div>}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                       f.resultado === "superado" ? "bg-green-100 text-green-700"
-                      : f.resultado === "no_superado" ? "bg-red-100 text-red-700"
-                      : "bg-gray-100 text-gray-600"
+                      : f.resultado === "no_superado" ? "bg-red-500/20 text-red-300"
+                      : "bg-slate-700 text-slate-300"
                     }`}>{f.resultado}</span>
                     <BadgeCaducidad fecha={f.fecha_caducidad} />
-                    <button onClick={() => eliminarForm(f.id)} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                    <button onClick={() => eliminarForm(f.id)} className="text-xs text-red-400 hover:text-red-300">✕</button>
                   </div>
                 </div>
               ))}
@@ -562,10 +561,10 @@ export default function EmpleadoDetalle() {
 
       {/* Tab: Vestuario */}
       {tabActiva === 5 && (
-        <div className="rounded-xl border bg-white p-5 space-y-4 max-w-lg">
+        <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-4 max-w-lg">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-gray-700">Tallas de vestuario</h2>
-            {vestuarioId && <span className="text-xs text-gray-400">Última actualización guardada</span>}
+            <h2 className="font-semibold text-slate-200">Tallas de vestuario</h2>
+            {vestuarioId && <span className="text-xs text-slate-500">Última actualización guardada</span>}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -579,32 +578,32 @@ export default function EmpleadoDetalle() {
               { key: "chaleco",   label: "Chaleco",   placeholder: "S, M, L, XL..." },
             ].map(({ key, label, placeholder }) => (
               <div key={key}>
-                <label className="text-xs font-medium text-gray-500">{label}</label>
+                <label className="text-xs font-medium text-slate-400">{label}</label>
                 <input
                   value={(formVest as any)[key]}
                   onChange={(e) => setFormVest({ ...formVest, [key]: e.target.value })}
                   placeholder={placeholder}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
             ))}
           </div>
 
           <div>
-            <label className="text-xs font-medium text-gray-500">Observaciones</label>
+            <label className="text-xs font-medium text-slate-400">Observaciones</label>
             <textarea
               value={formVest.observaciones}
               onChange={(e) => setFormVest({ ...formVest, observaciones: e.target.value })}
               placeholder="Alergias a materiales, preferencias especiales..."
               rows={2}
-              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm resize-none"
+              className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500 resize-none"
             />
           </div>
 
           <button
             onClick={guardarVestuario}
             disabled={guardandoVest}
-            className="rounded-xl bg-gray-800 px-5 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+            className="rounded-xl bg-slate-800 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
             {guardandoVest ? "Guardando..." : "Guardar tallas"}
           </button>
         </div>
@@ -613,28 +612,28 @@ export default function EmpleadoDetalle() {
       {/* Modal: Competencia */}
       {modalComp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-sm rounded-2xl bg-slate-800 p-6 shadow-xl">
             <h2 className="text-lg font-bold mb-4">Añadir competencia</h2>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium text-gray-600">Competencia *</label>
+              <div><label className="text-xs font-medium text-slate-300">Competencia *</label>
                 <select value={formComp.competencia_id} onChange={(e) => setFormComp({ ...formComp, competencia_id: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                   <option value="">Seleccionar...</option>
                   {catCompetencias.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({c.categoria})</option>)}
                 </select></div>
-              <div><label className="text-xs font-medium text-gray-600">Nivel</label>
+              <div><label className="text-xs font-medium text-slate-300">Nivel</label>
                 <select value={formComp.nivel} onChange={(e) => setFormComp({ ...formComp, nivel: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                   {["basico", "medio", "avanzado", "experto"].map((n) => <option key={n} value={n}>{n}</option>)}
                 </select></div>
-              <div><label className="text-xs font-medium text-gray-600">Notas</label>
+              <div><label className="text-xs font-medium text-slate-300">Notas</label>
                 <input value={formComp.notas} onChange={(e) => setFormComp({ ...formComp, notas: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
             </div>
             <div className="mt-4 flex gap-2 justify-end">
-              <button onClick={() => setModalComp(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={() => setModalComp(false)} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={addCompetencia} disabled={guardando}
-                className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Añadir"}
               </button>
             </div>
@@ -645,31 +644,31 @@ export default function EmpleadoDetalle() {
       {/* Modal: Certificación */}
       {modalCert && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 shadow-xl">
             <h2 className="text-lg font-bold mb-4">Añadir certificación</h2>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium text-gray-600">Nombre *</label>
+              <div><label className="text-xs font-medium text-slate-300">Nombre *</label>
                 <input value={formCert.nombre} onChange={(e) => setFormCert({ ...formCert, nombre: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="PRL Nivel Básico, ISO 9001..." /></div>
-              <div><label className="text-xs font-medium text-gray-600">Entidad emisora</label>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" placeholder="PRL Nivel Básico, ISO 9001..." /></div>
+              <div><label className="text-xs font-medium text-slate-300">Entidad emisora</label>
                 <input value={formCert.entidad_emisora} onChange={(e) => setFormCert({ ...formCert, entidad_emisora: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Fecha obtención</label>
+                <div><label className="text-xs font-medium text-slate-300">Fecha obtención</label>
                   <input type="date" value={formCert.fecha_obtencion} onChange={(e) => setFormCert({ ...formCert, fecha_obtencion: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Fecha caducidad</label>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                <div><label className="text-xs font-medium text-slate-300">Fecha caducidad</label>
                   <input type="date" value={formCert.fecha_caducidad} onChange={(e) => setFormCert({ ...formCert, fecha_caducidad: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
               </div>
-              <div><label className="text-xs font-medium text-gray-600">Nº certificado</label>
+              <div><label className="text-xs font-medium text-slate-300">Nº certificado</label>
                 <input value={formCert.numero_certificado} onChange={(e) => setFormCert({ ...formCert, numero_certificado: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
             </div>
             <div className="mt-4 flex gap-2 justify-end">
-              <button onClick={() => setModalCert(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={() => setModalCert(false)} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={addCertificacion} disabled={guardando}
-                className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Añadir"}
               </button>
             </div>
@@ -680,34 +679,34 @@ export default function EmpleadoDetalle() {
       {/* Modal: Autorización */}
       {modalAut && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 shadow-xl">
             <h2 className="text-lg font-bold mb-4">Añadir autorización</h2>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium text-gray-600">Autorización *</label>
+              <div><label className="text-xs font-medium text-slate-300">Autorización *</label>
                 <select value={formAut.autorizacion_id} onChange={(e) => setFormAut({ ...formAut, autorizacion_id: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                   <option value="">Seleccionar...</option>
                   {catAutorizaciones.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                 </select></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Fecha emisión</label>
+                <div><label className="text-xs font-medium text-slate-300">Fecha emisión</label>
                   <input type="date" value={formAut.fecha_emision} onChange={(e) => setFormAut({ ...formAut, fecha_emision: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Fecha caducidad</label>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                <div><label className="text-xs font-medium text-slate-300">Fecha caducidad</label>
                   <input type="date" value={formAut.fecha_caducidad} onChange={(e) => setFormAut({ ...formAut, fecha_caducidad: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
               </div>
-              <div><label className="text-xs font-medium text-gray-600">Nº autorización</label>
+              <div><label className="text-xs font-medium text-slate-300">Nº autorización</label>
                 <input value={formAut.numero_autorizacion} onChange={(e) => setFormAut({ ...formAut, numero_autorizacion: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-              <div><label className="text-xs font-medium text-gray-600">Notas</label>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+              <div><label className="text-xs font-medium text-slate-300">Notas</label>
                 <input value={formAut.notas} onChange={(e) => setFormAut({ ...formAut, notas: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
             </div>
             <div className="mt-4 flex gap-2 justify-end">
-              <button onClick={() => setModalAut(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={() => setModalAut(false)} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={addAutorizacion} disabled={guardando}
-                className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Añadir"}
               </button>
             </div>
@@ -718,52 +717,52 @@ export default function EmpleadoDetalle() {
       {/* Modal: Formación */}
       {modalForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 shadow-xl">
             <h2 className="text-lg font-bold mb-4">Añadir formación</h2>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium text-gray-600">Nombre del curso *</label>
+              <div><label className="text-xs font-medium text-slate-300">Nombre del curso *</label>
                 <input value={formForm.nombre_curso} onChange={(e) => setFormForm({ ...formForm, nombre_curso: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-              <div><label className="text-xs font-medium text-gray-600">Entidad formadora</label>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+              <div><label className="text-xs font-medium text-slate-300">Entidad formadora</label>
                 <input value={formForm.entidad_formadora} onChange={(e) => setFormForm({ ...formForm, entidad_formadora: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
               <div className="grid grid-cols-3 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Inicio</label>
+                <div><label className="text-xs font-medium text-slate-300">Inicio</label>
                   <input type="date" value={formForm.fecha_inicio} onChange={(e) => setFormForm({ ...formForm, fecha_inicio: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Fin</label>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                <div><label className="text-xs font-medium text-slate-300">Fin</label>
                   <input type="date" value={formForm.fecha_fin} onChange={(e) => setFormForm({ ...formForm, fecha_fin: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Horas</label>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                <div><label className="text-xs font-medium text-slate-300">Horas</label>
                   <input type="number" value={formForm.horas} onChange={(e) => setFormForm({ ...formForm, horas: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Resultado</label>
+                <div><label className="text-xs font-medium text-slate-300">Resultado</label>
                   <select value={formForm.resultado} onChange={(e) => setFormForm({ ...formForm, resultado: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500">
                     <option value="superado">Superado</option>
                     <option value="no_superado">No superado</option>
                     <option value="en_progreso">En progreso</option>
                   </select></div>
-                <div><label className="text-xs font-medium text-gray-600">Caducidad</label>
+                <div><label className="text-xs font-medium text-slate-300">Caducidad</label>
                   <input type="date" value={formForm.fecha_caducidad} onChange={(e) => setFormForm({ ...formForm, fecha_caducidad: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                    className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
               </div>
-              <div><label className="text-xs font-medium text-gray-600">Notas</label>
+              <div><label className="text-xs font-medium text-slate-300">Notas</label>
                 <input value={formForm.notas} onChange={(e) => setFormForm({ ...formForm, notas: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
             </div>
             <div className="mt-4 flex gap-2 justify-end">
-              <button onClick={() => setModalForm(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+              <button onClick={() => setModalForm(false)} className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold">Cancelar</button>
               <button onClick={addFormacion} disabled={guardando}
-                className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Añadir"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </CoreLayout>
   );
 }
