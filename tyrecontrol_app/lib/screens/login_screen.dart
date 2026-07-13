@@ -77,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.asset('assets/logo_transparent.png', width: 240),
+                  Image.asset('assets/logo.png', width: 240),
                   const SizedBox(height: 12),
                   Text('SEA Tyre Check · Revisiones de neumáticos', style: tt.bodyMedium, textAlign: TextAlign.center),
                   const SizedBox(height: 44),
