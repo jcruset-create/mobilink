@@ -2,22 +2,25 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   listarPlanesMantenimiento, listarPlanEstado, listarVehiculos, listarEstadoWebfleet,
-  listarUsuarios, listarEmpresas, listarMantenimientoRealizadas,
+  listarUsuarios, listarEmpresas, listarMantenimientoRealizadas, listarPlantillas,
+  aplicarPlantilla, actualizarPlanesMasivo,
 } from "../services/data";
 import type {
   PlanMantenimiento, PlanEstado, Vehiculo, VehiculoWebfleetEstado, Perfil, Empresa,
-  EstadoPlan, PrioridadPlan, MantenimientoRealizada,
+  EstadoPlan, PrioridadPlan, MantenimientoRealizada, PlantillaMantenimiento,
 } from "../types";
 import { ESTADO_PLAN_LABELS, PRIORIDAD_PLAN_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 import { BadgePlan, ModalRegistrar } from "../components/PlanMantenimiento";
 
 type Fila = { plan: PlanMantenimiento; est: PlanEstado; v: Vehiculo; wf?: VehiculoWebfleetEstado };
-type Tab = "pendientes" | "hoy" | "semana" | "atrasadas" | "realizadas";
+type Tab = "pendientes" | "hoy" | "semana" | "atrasadas" | "realizadas" | "cliente" | "base";
 const TABS: { k: Tab; l: string }[] = [
   { k: "pendientes", l: "Pendientes" }, { k: "hoy", l: "Hoy" }, { k: "semana", l: "Esta semana" },
   { k: "atrasadas", l: "Atrasadas" }, { k: "realizadas", l: "Realizadas" },
+  { k: "cliente", l: "Por cliente" }, { k: "base", l: "Por base" },
 ];
+const esListaTab = (t: Tab) => t === "pendientes" || t === "hoy" || t === "semana" || t === "atrasadas";
 
 function fechaCorta(iso?: string | null) { return iso ? new Date(iso).toLocaleDateString("es-ES") : "—"; }
 function diasTexto(d?: number | null) { return d == null ? "—" : d < 0 ? `${Math.abs(d)} d retraso` : d === 0 ? "hoy" : `${d} d`; }
@@ -38,23 +41,47 @@ export default function PlanificacionRevisiones() {
   const [fEstado, setFEstado] = useState("");
   const [fPrioridad, setFPrioridad] = useState("");
   const [registrar, setRegistrar] = useState<null | PlanMantenimiento>(null);
+  const [plantillas, setPlantillas] = useState<PlantillaMantenimiento[]>([]);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [masiva, setMasiva] = useState("");
+  const [msg, setMsg] = useState("");
 
   async function cargar() {
     setLoading(true);
     try {
-      const [pl, est, vs, w, tec, emp] = await Promise.all([
+      const [pl, est, vs, w, tec, emp, plt] = await Promise.all([
         listarPlanesMantenimiento(), listarPlanEstado(), listarVehiculos(), listarEstadoWebfleet(),
-        listarUsuarios(), listarEmpresas(),
+        listarUsuarios(), listarEmpresas(), listarPlantillas(),
       ]);
       setPlanes(pl);
       setEstados(new Map(est.map((e) => [e.plan_id, e])));
       setVehiculos(new Map(vs.map((v) => [v.id, v])));
       setWf(new Map(w.map((x) => [x.vehiculo_id, x])));
-      setTecnicos(tec); setEmpresas(emp);
+      setTecnicos(tec); setEmpresas(emp); setPlantillas(plt);
+      setSel(new Set());
     } catch { /* módulo aún no migrado */ }
     finally { setLoading(false); }
   }
   useEffect(() => { void cargar(); }, []);
+
+  const toggleSel = (id: string) => setSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  async function bulkAsignarTecnico(tecnicoId: string) {
+    await actualizarPlanesMasivo(Array.from(sel), { tecnico_id: tecnicoId || null });
+    setMasiva(""); await cargar();
+  }
+  async function bulkActivo(activo: boolean) {
+    await actualizarPlanesMasivo(Array.from(sel), { activo });
+    await cargar();
+  }
+  async function bulkAplicarPlantilla(plantillaId: string) {
+    if (!plantillaId) return;
+    const vehIds = Array.from(new Set(Array.from(sel).map((pid) => planes.find((p) => p.id === pid)?.vehiculo_id).filter(Boolean) as string[]));
+    if (vehIds.length === 0) return;
+    const n = await aplicarPlantilla(plantillaId, vehIds);
+    setMasiva(""); await cargar();
+    setMsg(`✔ Plantilla aplicada: ${n} plan(es) creados`);
+  }
 
   // Realizadas del mes: se cargan aparte (todas, filtrando cliente/fecha en cliente).
   useEffect(() => {
@@ -113,11 +140,46 @@ export default function PlanificacionRevisiones() {
     }).sort((a, b) => (a.est.dias_restantes ?? 9999) - (b.est.dias_restantes ?? 9999));
   }, [filas, tab, q, fEmpresa, fEstado, fPrioridad]);
 
+  const porCliente = useMemo(() => {
+    const m = new Map<string, { nombre: string; total: number; vehiculos: Set<string>; pend: number; atras: number; semana: number; bases: Set<string>; empresaId: string }>();
+    for (const f of filas) {
+      const k = f.v.empresa_id;
+      let g = m.get(k);
+      if (!g) { g = { nombre: f.v.empresa?.nombre ?? "—", total: 0, vehiculos: new Set(), pend: 0, atras: 0, semana: 0, bases: new Set(), empresaId: k }; m.set(k, g); }
+      g.total++; g.vehiculos.add(f.v.id);
+      if (f.v.delegacion?.nombre) g.bases.add(f.v.delegacion.nombre);
+      const e = f.est.estado, dr = f.est.dias_restantes;
+      if (e === "proxima" || e === "vence_hoy" || e === "atrasada") g.pend++;
+      if (e === "atrasada") g.atras++;
+      if (dr != null && dr >= 0 && dr <= 7) g.semana++;
+    }
+    return Array.from(m.values()).sort((a, b) => b.atras - a.atras);
+  }, [filas]);
+
+  const porBase = useMemo(() => {
+    const m = new Map<string, { nombre: string; empresa?: string; total: number; presentes: number; pend: number; atras: number }>();
+    for (const f of filas) {
+      const k = f.v.delegacion_id ?? "sin";
+      let g = m.get(k);
+      if (!g) { g = { nombre: f.v.delegacion?.nombre ?? "Sin base", empresa: f.v.empresa?.nombre, total: 0, presentes: 0, pend: 0, atras: 0 }; m.set(k, g); }
+      g.total++;
+      if (f.wf?.estado === "en_base") g.presentes++;
+      const e = f.est.estado;
+      if (e === "proxima" || e === "vence_hoy" || e === "atrasada") g.pend++;
+      if (e === "atrasada") g.atras++;
+    }
+    return Array.from(m.values()).sort((a, b) => b.atras - a.atras);
+  }, [filas]);
+
   const tecNombre = (id?: string | null) => tecnicos.find((t) => t.id === id)?.nombre ?? "—";
 
   return (
     <div>
-      <h1 className="mb-3 text-lg font-black">Planificación de revisiones</h1>
+      <div className="mb-3 flex items-center justify-between">
+        <h1 className="text-lg font-black">Planificación de revisiones</h1>
+        <button onClick={() => navigate("/tyrecontrol/plantillas-mantenimiento")} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-800">📋 Plantillas</button>
+      </div>
+      {msg && <div className="mb-3 text-sm text-emerald-400">{msg}</div>}
 
       {/* KPIs */}
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
@@ -143,8 +205,27 @@ export default function PlanificacionRevisiones() {
         <span className="ml-auto text-[11px] text-slate-500 self-center">Vistas por cliente, por base y calendario: próxima fase</span>
       </div>
 
+      {/* Acciones masivas */}
+      {esListaTab(tab) && sel.size > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-sky-600/40 bg-sky-500/5 p-2">
+          <span className="text-[12px] font-bold text-sky-300">{sel.size} seleccionados</span>
+          <select className={`${inputCls} w-auto text-[12px]`} value={masiva} onChange={(e) => { const v = e.target.value; if (v.startsWith("tec:")) bulkAsignarTecnico(v.slice(4)); else if (v.startsWith("plt:")) bulkAplicarPlantilla(v.slice(4)); else setMasiva(v); }}>
+            <option value="">Acción…</option>
+            <optgroup label="Asignar técnico">
+              {tecnicos.map((t) => <option key={t.id} value={`tec:${t.id}`}>{t.nombre}</option>)}
+            </optgroup>
+            <optgroup label="Aplicar plantilla (a sus vehículos)">
+              {plantillas.map((p) => <option key={p.id} value={`plt:${p.id}`}>{p.nombre}</option>)}
+            </optgroup>
+          </select>
+          <button onClick={() => bulkActivo(false)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200 hover:bg-slate-700">Desactivar</button>
+          <button onClick={() => bulkActivo(true)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200 hover:bg-slate-700">Activar</button>
+          <button onClick={() => setSel(new Set())} className="text-[12px] text-slate-400 hover:underline">Deseleccionar</button>
+        </div>
+      )}
+
       {/* Filtros */}
-      {tab !== "realizadas" && (
+      {esListaTab(tab) && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <input className={`${inputCls} max-w-[200px]`} placeholder="Buscar matrícula o cliente…" value={q} onChange={(e) => setQ(e.target.value)} />
           <select className={`${inputCls} w-auto`} value={fEmpresa} onChange={(e) => setFEmpresa(e.target.value)}>
@@ -163,7 +244,40 @@ export default function PlanificacionRevisiones() {
         </div>
       )}
 
-      {loading ? <div className="text-slate-500">Cargando…</div> : tab === "realizadas" ? (
+      {loading ? <div className="text-slate-500">Cargando…</div> : tab === "cliente" ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {porCliente.map((g) => (
+            <button key={g.empresaId} onClick={() => { setFEmpresa(g.empresaId); setTab("pendientes"); }}
+              className="rounded-2xl border border-slate-700 bg-slate-800 p-4 text-left hover:border-sky-500/50">
+              <div className="text-base font-black text-slate-100">{g.nombre}</div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                <div><div className="text-xl font-black text-slate-100">{g.vehiculos.size}</div><div className="text-[10px] text-slate-500">Vehículos</div></div>
+                <div><div className="text-xl font-black text-amber-300">{g.pend}</div><div className="text-[10px] text-slate-500">Pendientes</div></div>
+                <div><div className="text-xl font-black text-rose-300">{g.atras}</div><div className="text-[10px] text-slate-500">Atrasadas</div></div>
+              </div>
+              <div className="mt-2 text-[11px] text-slate-500">Esta semana: {g.semana} · Cumplimiento: {g.total > 0 ? Math.round(((g.total - g.atras) / g.total) * 100) : 100}%</div>
+              {g.bases.size > 0 && <div className="mt-1 truncate text-[11px] text-slate-500">Bases: {Array.from(g.bases).join(", ")}</div>}
+            </button>
+          ))}
+          {porCliente.length === 0 && <div className="text-slate-500">Sin datos.</div>}
+        </div>
+      ) : tab === "base" ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {porBase.map((g, i) => (
+            <div key={i} className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+              <div className="text-base font-black text-slate-100">{g.nombre}</div>
+              <div className="text-[11px] text-slate-500">{g.empresa ?? ""}</div>
+              <div className="mt-2 grid grid-cols-4 gap-2 text-center">
+                <div><div className="text-lg font-black text-slate-100">{g.total}</div><div className="text-[10px] text-slate-500">Planes</div></div>
+                <div><div className="text-lg font-black text-emerald-300">{g.presentes}</div><div className="text-[10px] text-slate-500">En base</div></div>
+                <div><div className="text-lg font-black text-amber-300">{g.pend}</div><div className="text-[10px] text-slate-500">Pendientes</div></div>
+                <div><div className="text-lg font-black text-rose-300">{g.atras}</div><div className="text-[10px] text-slate-500">Atrasadas</div></div>
+              </div>
+            </div>
+          ))}
+          {porBase.length === 0 && <div className="text-slate-500">Sin datos.</div>}
+        </div>
+      ) : tab === "realizadas" ? (
         <TableWrap>
           <thead className="bg-slate-900"><tr>
             <th className={thCls}>Fecha</th><th className={thCls}>Operación</th><th className={thCls}>Técnico</th><th className={thCls}>Km</th><th className={thCls}>Resultado</th>
@@ -184,14 +298,16 @@ export default function PlanificacionRevisiones() {
       ) : (
         <TableWrap>
           <thead className="bg-slate-900"><tr>
+            <th className={thCls}><input type="checkbox" checked={visibles.length > 0 && visibles.every((f) => sel.has(f.plan.id))} onChange={(e) => setSel(e.target.checked ? new Set(visibles.map((f) => f.plan.id)) : new Set())} /></th>
             <th className={thCls}>Matrícula</th><th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Revisión</th>
             <th className={thCls}>Próxima</th><th className={thCls}>Días</th><th className={thCls}>Estado</th><th className={thCls}>Prioridad</th>
             <th className={thCls}>En base</th><th className={thCls}>Técnico</th><th className={thCls}>Acciones</th>
           </tr></thead>
           <tbody>
-            {visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin revisiones en esta pestaña.</td></tr>
+            {visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin revisiones en esta pestaña.</td></tr>
             : visibles.map((f) => (
               <tr key={f.plan.id} className={`border-t border-slate-700/60 ${f.est.estado === "atrasada" ? "bg-rose-500/5" : ""}`}>
+                <td className={tdCls}><input type="checkbox" checked={sel.has(f.plan.id)} onChange={() => toggleSel(f.plan.id)} /></td>
                 <td className={tdCls + " font-bold"}>{f.v.matricula}</td>
                 <td className={tdCls + " text-slate-400"}>{f.v.empresa?.nombre ?? "—"}</td>
                 <td className={tdCls + " text-slate-400"}>{f.v.delegacion?.nombre ?? "—"}</td>

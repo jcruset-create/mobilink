@@ -20,6 +20,7 @@ export const NAV: NavItem[] = [
   { key: "vehiculos", path: "vehiculos", label: "Vehículos", icon: Truck, roles: ["administrador"] },
   { key: "disponibles-revisar", path: "disponibles-revisar", label: "Disponibles para revisar", icon: CalendarCheck, roles: ["administrador"] },
   { key: "planificacion", path: "planificacion", label: "Planificación de revisiones", icon: ClipboardList, roles: ["administrador"] },
+  { key: "plantillas-mantenimiento", path: "plantillas-mantenimiento", label: "Plantillas de mantenimiento", icon: ClipboardCheck, roles: ["administrador"] },
   { key: "neumaticos", path: "neumaticos", label: "Neumáticos", icon: CircleDot, roles: ["administrador"] },
   { key: "montajes", path: "montajes", label: "Montajes actuales", icon: Wrench, roles: ["administrador"] },
   { key: "operaciones", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["administrador"] },

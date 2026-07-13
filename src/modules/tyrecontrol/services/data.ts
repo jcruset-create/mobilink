@@ -10,6 +10,7 @@ import type {
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
+  PlantillaMantenimiento, PlantillaItem,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -893,6 +894,13 @@ export async function eliminarPlanMantenimiento(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// Acción masiva sobre varios planes (asignar técnico, activar/desactivar…).
+export async function actualizarPlanesMasivo(ids: string[], patch: { tecnico_id?: string | null; activo?: boolean; delegacion_id?: string | null }): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await supabase.from("tc_planes_mantenimiento").update({ ...patch, updated_at: new Date().toISOString() }).in("id", ids);
+  if (error) throw new Error(error.message);
+}
+
 // Registra una revisión realizada y actualiza el plan (última fecha/km/horas;
 // se recalcula la próxima quitando el ajuste manual).
 export async function registrarMantenimiento(input: {
@@ -912,6 +920,55 @@ export async function registrarMantenimiento(input: {
     ajuste_manual: false, estado_manual: null, updated_at: new Date().toISOString(),
   }).eq("id", plan.id);
   if (upd.error) throw new Error(upd.error.message);
+}
+
+// ── Plantillas de mantenimiento ────────────────────────────────
+export async function listarPlantillas(): Promise<PlantillaMantenimiento[]> {
+  const { data, error } = await supabase.from("tc_plantillas_mantenimiento")
+    .select("*, items:tc_plantilla_items(*, operacion:tc_operaciones_mantenimiento(*))").eq("activo", true).order("nombre");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as PlantillaMantenimiento[];
+}
+
+export async function guardarPlantilla(p: { id?: string; nombre: string; descripcion?: string | null; tipo_vehiculo_id?: string | null }): Promise<string> {
+  if (p.id) {
+    const { error } = await supabase.from("tc_plantillas_mantenimiento").update({ nombre: p.nombre, descripcion: p.descripcion ?? null, tipo_vehiculo_id: p.tipo_vehiculo_id ?? null }).eq("id", p.id);
+    if (error) throw new Error(error.message);
+    return p.id;
+  }
+  const { data, error } = await supabase.from("tc_plantillas_mantenimiento").insert({ nombre: p.nombre, descripcion: p.descripcion ?? null, tipo_vehiculo_id: p.tipo_vehiculo_id ?? null }).select("id").single();
+  if (error) throw new Error(error.message);
+  return (data as any).id;
+}
+
+export async function eliminarPlantilla(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_plantillas_mantenimiento").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function guardarPlantillaItem(item: PlantillaItem & { plantilla_id: string }): Promise<void> {
+  const payload = {
+    plantilla_id: item.plantilla_id, operacion_id: item.operacion_id, nombre: item.nombre ?? null,
+    frecuencia_dias: item.frecuencia_dias ?? null, frecuencia_meses: item.frecuencia_meses ?? null,
+    frecuencia_km: item.frecuencia_km ?? null, frecuencia_horas: item.frecuencia_horas ?? null,
+    margen_aviso_dias: item.margen_aviso_dias ?? 15, tiempo_estimado_min: item.tiempo_estimado_min ?? null,
+  };
+  const { error } = item.id
+    ? await supabase.from("tc_plantilla_items").update(payload).eq("id", item.id)
+    : await supabase.from("tc_plantilla_items").insert(payload);
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarPlantillaItem(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_plantilla_items").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// Aplica una plantilla a varios vehículos (crea los planes). Devuelve nº creados.
+export async function aplicarPlantilla(plantillaId: string, vehiculoIds: string[]): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_aplicar_plantilla", { p_plantilla: plantillaId, p_vehiculos: vehiculoIds });
+  if (error) throw new Error(error.message);
+  return (data as number) ?? 0;
 }
 
 export async function listarMantenimientoRealizadas(vehiculoId: string): Promise<MantenimientoRealizada[]> {

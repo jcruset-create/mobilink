@@ -310,6 +310,30 @@ export interface MantenimientoRealizada {
   operacion?: OperacionMantenimiento | null;
 }
 
+export interface PlantillaItem {
+  id?: string;
+  plantilla_id?: string;
+  operacion_id: string;
+  nombre?: string | null;
+  frecuencia_dias?: number | null;
+  frecuencia_meses?: number | null;
+  frecuencia_km?: number | null;
+  frecuencia_horas?: number | null;
+  margen_aviso_dias?: number;
+  tiempo_estimado_min?: number | null;
+  orden?: number;
+  operacion?: OperacionMantenimiento | null;
+}
+
+export interface PlantillaMantenimiento {
+  id: string;
+  nombre: string;
+  descripcion?: string | null;
+  tipo_vehiculo_id?: string | null;
+  activo: boolean;
+  items?: PlantillaItem[];
+}
+
 export interface Vehiculo {
   id: string;
   empresa_id: string;
