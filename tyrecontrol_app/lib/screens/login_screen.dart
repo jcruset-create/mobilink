@@ -77,10 +77,8 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.asset('assets/logo.png', width: 240),
-                  const SizedBox(height: 12),
-                  Text('SEA Tyre Check · Revisiones de neumáticos', style: tt.bodyMedium, textAlign: TextAlign.center),
-                  const SizedBox(height: 44),
+                  Image.asset('assets/logo_login.png', width: 340, fit: BoxFit.contain),
+                  const SizedBox(height: 32),
 
                   TextField(
                     controller: _nameController,

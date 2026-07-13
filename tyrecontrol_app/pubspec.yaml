@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "SEA TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.3.9+15
+version: 0.3.10+16
 
 environment:
   sdk: ^3.8.1
@@ -41,13 +41,15 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/logo.png"
+  image_path: "assets/icono_app.png"
   min_sdk_android: 21
-  adaptive_icon_background: "#0F172A"
-  adaptive_icon_foreground: "assets/logo_transparent.png"
+  adaptive_icon_background: "#111111"
+  adaptive_icon_foreground: "assets/icono_app.png"
 
 flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
     - assets/logo_transparent.png
+    - assets/icono_app.png
+    - assets/logo_login.png

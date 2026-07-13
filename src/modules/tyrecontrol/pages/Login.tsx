@@ -55,8 +55,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-slate-900 p-6 text-slate-100">
       <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-800 p-8">
         <div className="mb-6 flex flex-col items-center text-center">
-          <img src="/sea-tyrecontrol-logo.png" alt="SEA TyreControl" className="mb-3 h-20 w-auto" />
-          <h1 className="text-lg font-black leading-tight">SEA TyreControl</h1>
+          <img src="/tyrecontrol-login.png" alt="TyreControl" className="mb-3 w-full max-w-[280px] rounded-lg" />
           <p className="text-xs text-slate-400">Acceso con enlace por email</p>
         </div>
 
