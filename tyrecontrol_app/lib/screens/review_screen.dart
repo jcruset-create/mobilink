@@ -9,6 +9,7 @@ import '../services/supabase_service.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_schema.dart';
+import '../widgets/vehicle_layout_image.dart';
 import 'tire_detail_screen.dart';
 
 /// Pantalla 4: revision. Modo asistente automatico: el tecnico no
@@ -33,10 +34,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
   final Map<String, MontajeActual> _montajePorPosicion = {};
   final Map<String, String> _posPorEpc = {}; // rfid_epc (mayúsculas) → posicionId
   Map<String, String> _fotosModelo = {}; // claveModeloCatalogo → url foto del catálogo
+  String? _imagenChasis; // foto/plano del vehículo (si está configurada)
   final Map<String, RevisionDetalleDraft> _detalles = {};
   RevisionVehiculo? _revision;
   int _index = 0;
   bool _finalizando = false;
+  bool _ofreciendoFinal = false; // hay un diálogo de finalizar abierto
+  bool _finalOfrecidoYa = false; // ya se ofreció auto-finalizar en esta tanda
 
   // ── Sonda / modo ruta ────────────────────────────────────────
   final ProbeSession _sonda = ProbeSession.instance;
@@ -79,6 +83,20 @@ class _ReviewScreenState extends State<ReviewScreen> {
         return;
       }
       final posiciones = await TyreControlApi.listarPosiciones(tipoId);
+      // Orden de revisión: si está configurado en el panel (orden_revision),
+      // se respeta; si no, recorrido físico alrededor del vehículo → lado
+      // derecho de delante hacia atrás, luego izquierdo de atrás hacia delante
+      // (1 Del. der, 2 Tra. der, 3 Tra. izq, 4 Del. izq).
+      final hayOrdenConfig = posiciones.any((p) => p.ordenRevision != null);
+      posiciones.sort((a, b) {
+        if (hayOrdenConfig) {
+          final oa = a.ordenRevision ?? 100000;
+          final ob = b.ordenRevision ?? 100000;
+          if (oa != ob) return oa.compareTo(ob);
+        }
+        return _ordenRevision(a).compareTo(_ordenRevision(b));
+      });
+      _imagenChasis = await TyreControlApi.obtenerImagenChasis(widget.vehiculo);
       final montajes = await TyreControlApi.listarMontajesVehiculo(widget.vehiculo.id);
       _montajePorPosicion.clear();
       _posPorEpc.clear();
@@ -129,6 +147,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   bool get _todoRevisado => _posiciones.every((p) => _detalles[p.id]?.medido ?? false);
+
+  // Orden de revisión (recorrido en circuito alrededor del vehículo):
+  // lado derecho de delante hacia atrás y lado izquierdo de atrás hacia
+  // delante. Exterior antes que interior en ruedas gemelas.
+  double _ordenRevision(PosicionVehiculo p) {
+    final eje = (p.eje ?? 0).toDouble();
+    final ext = p.interiorExterior == 'int' ? 0.5 : 0.0;
+    if (p.lado == 'der') return eje + ext; // 1..N: delante → atrás
+    if (p.lado == 'izq') return 1000 - eje + ext; // atrás → delante
+    return 500 + p.ordenVisual.toDouble(); // centro / sin lado
+  }
 
   // ── Sonda: cada lectura va a la rueda activa ─────────────────
   void _onLectura(LecturaSonda r) {
@@ -242,6 +271,59 @@ class _ReviewScreenState extends State<ReviewScreen> {
     setState(() {
       if (next != null) _index = next;
     });
+    // (A) Al medir la última rueda ya no queda pendiente: ofrecemos finalizar
+    // automáticamente (una sola vez por tanda, con confirmación). Si el técnico
+    // sigue midiendo o queda algo pendiente, se rearma para la próxima vez.
+    if (next == null && _todoRevisado) {
+      if (!_finalOfrecidoYa) {
+        _finalOfrecidoYa = true;
+        _ofrecerFinalizar();
+      }
+    } else {
+      _finalOfrecidoYa = false;
+    }
+  }
+
+  /// (A) Diálogo automático al completar todas las ruedas.
+  Future<void> _ofrecerFinalizar() async {
+    if (_ofreciendoFinal || _finalizando || !mounted) return;
+    _ofreciendoFinal = true;
+    HapticFeedback.mediumImpact();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Revisión completa'),
+        content: const Text('Has medido todas las ruedas. ¿Finalizar la revisión?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Seguir revisando')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Finalizar')),
+        ],
+      ),
+    );
+    _ofreciendoFinal = false;
+    if (ok == true) await _finalizar();
+  }
+
+  /// (B) Finalizar manual: si quedan posiciones sin medir, avisa y pide
+  /// confirmación antes de cerrar (repuesto, sin neumático, saltadas…).
+  Future<void> _finalizarConAviso() async {
+    final pendientes = _posiciones.where((p) => !(_detalles[p.id]?.medido ?? false)).toList();
+    if (pendientes.isNotEmpty) {
+      final nombres = pendientes.map((p) => p.nombre ?? p.codigoPosicion).join(', ');
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Quedan posiciones sin medir'),
+          content: Text('Faltan ${pendientes.length} de ${_posiciones.length}: $nombres.\n\n¿Finalizar la revisión de todos modos?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Seguir revisando')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Finalizar igualmente')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await _finalizar();
   }
 
   void _saltar() {
@@ -341,12 +423,24 @@ class _ReviewScreenState extends State<ReviewScreen> {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
-              child: VehicleSchema(
-                posiciones: _posiciones,
-                estados: estados,
-                seleccionadaId: actual?.id,
-                onTap: _abrirNeumatico,
-              ),
+              child: _imagenChasis != null
+                  ? VehicleLayoutImage(
+                      imagenUrl: _imagenChasis!,
+                      posiciones: _posiciones,
+                      montajePorPosicion: _montajePorPosicion,
+                      detalles: _detalles,
+                      estados: estados,
+                      seleccionadaId: actual?.id,
+                      liveProf: _liveProf,
+                      livePres: _livePres,
+                      onTap: _abrirNeumatico,
+                    )
+                  : VehicleSchema(
+                      posiciones: _posiciones,
+                      estados: estados,
+                      seleccionadaId: actual?.id,
+                      onTap: _abrirNeumatico,
+                    ),
             ),
           ),
           _PanelInferior(
@@ -356,12 +450,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
             sondaLista: _sonda.conectada && _modoRuta,
             liveProf: _liveProf,
             livePres: _livePres,
-            todoRevisado: _todoRevisado,
+            pendientes: _posiciones.where((p) => !(_detalles[p.id]?.medido ?? false)).length,
             finalizando: _finalizando,
             onAnterior: _index > 0 ? () => setState(() => _index--) : null,
             onSaltar: _index < _posiciones.length - 1 ? _saltar : null,
             onRevisar: actual == null ? null : () => _abrirNeumatico(actual),
-            onFinalizar: _finalizar,
+            onFinalizar: _finalizarConAviso,
           ),
         ],
       ),
@@ -437,7 +531,7 @@ class _PanelInferior extends StatelessWidget {
   final bool sondaLista;
   final double? liveProf;
   final double? livePres;
-  final bool todoRevisado;
+  final int pendientes;
   final bool finalizando;
   final VoidCallback? onAnterior;
   final VoidCallback? onSaltar;
@@ -451,7 +545,7 @@ class _PanelInferior extends StatelessWidget {
     required this.sondaLista,
     required this.liveProf,
     required this.livePres,
-    required this.todoRevisado,
+    required this.pendientes,
     required this.finalizando,
     required this.onAnterior,
     required this.onSaltar,
@@ -519,17 +613,30 @@ class _PanelInferior extends StatelessWidget {
               ),
             ],
           ),
-          if (todoRevisado) ...[
-            const SizedBox(height: 10),
-            ElevatedButton.icon(
+          const SizedBox(height: 10),
+          if (pendientes > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                'Quedan $pendientes ${pendientes == 1 ? 'posición' : 'posiciones'} sin medir',
+                style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w600),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
               onPressed: finalizando ? null : onFinalizar,
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: pendientes == 0 ? AppColors.success : AppColors.surfaceVariant,
+                foregroundColor: pendientes == 0 ? Colors.white : AppColors.textPrimary,
+              ),
               icon: finalizando
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.check_circle),
               label: const Text('Finalizar revisión'),
             ),
-          ],
+          ),
         ],
       ),
     );

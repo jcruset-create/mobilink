@@ -110,6 +110,7 @@ export interface PosicionVehiculo {
   lado?: string | null;
   interior_exterior?: string | null;
   orden_visual: number;
+  orden_revision?: number | null; // orden de revisión en la tablet (null = recorrido por defecto)
   activo: boolean;
   pos_x?: number | null;
   pos_y?: number | null;

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico,
-  actualizarImagenChasis, guardarCoordenadasPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
+  actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
   listarFotosCatalogoPorModelo, claveModeloCatalogo,
 } from "../services/data";
 import { inputCls } from "./ui";
@@ -62,6 +62,7 @@ export default function VehicleLayoutImage({
   const imagenBase = tipo?.imagen_chasis_url ?? imagenFallback ?? null;
   const containerRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<Record<string, Coords>>({});
+  const [ordenRev, setOrdenRev] = useState<Record<string, string>>({}); // posId → orden de revisión (texto)
   const [calibrando, setCalibrando] = useState(false);
   const [urlDraft, setUrlDraft] = useState(imagenBase ?? "");
   const [saving, setSaving] = useState(false);
@@ -97,8 +98,13 @@ export default function VehicleLayoutImage({
 
   useEffect(() => {
     const next: Record<string, Coords> = {};
-    posiciones.forEach((p, i) => { next[p.codigo_posicion] = coordsDe(p, i); });
+    const orden: Record<string, string> = {};
+    posiciones.forEach((p, i) => {
+      next[p.codigo_posicion] = coordsDe(p, i);
+      orden[p.id] = p.orden_revision != null ? String(p.orden_revision) : "";
+    });
     setCoords(next);
+    setOrdenRev(orden);
     setUrlDraft(imagenBase ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [posiciones, tipo?.id, imagenBase]);
@@ -189,8 +195,13 @@ export default function VehicleLayoutImage({
       if (tipo && urlDraft !== (imagenBase ?? "")) await actualizarImagenChasis(tipo.id, urlDraft || null);
       for (const p of posiciones) {
         const c = coords[p.codigo_posicion];
-        if (!c) continue;
-        await guardarCoordenadasPosicion(p.id, { pos_x: c.x, pos_y: c.y, pos_w: c.w, pos_h: c.h });
+        if (c) await guardarCoordenadasPosicion(p.id, { pos_x: c.x, pos_y: c.y, pos_w: c.w, pos_h: c.h });
+        // Orden de revisión: número o null si se deja vacío (recorrido por defecto).
+        const raw = (ordenRev[p.id] ?? "").trim();
+        const orden = raw === "" ? null : Number(raw);
+        if (orden === null || Number.isFinite(orden)) {
+          if ((p.orden_revision ?? null) !== orden) await guardarOrdenRevisionPosicion(p.id, orden);
+        }
       }
       setCalibrando(false); onTipoChanged?.();
     } catch (e: any) { setMsg(e?.message || "Error al guardar calibración"); } finally { setSaving(false); }
@@ -342,8 +353,32 @@ export default function VehicleLayoutImage({
 
       <div className="rounded-lg bg-slate-800 p-3">
         {calibrando ? (
-          <div className="text-sm text-slate-400">
-            Arrastra cada recuadro sobre la rueda correspondiente en la imagen. El tamaño por defecto es aproximado; ajusta la imagen para que encaje o pide una imagen recortada al chasis.
+          <div className="space-y-3">
+            <div className="text-sm text-slate-400">
+              Arrastra cada recuadro sobre la rueda correspondiente en la imagen. El tamaño por defecto es aproximado; ajusta la imagen para que encaje o pide una imagen recortada al chasis.
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Orden de revisión (tablet)</div>
+              <div className="mb-2 text-[11px] text-slate-500">
+                Número en que el técnico revisa cada rueda (1, 2, 3…). Déjalo vacío para usar el recorrido en círculo por defecto (derecha delante→atrás, izquierda atrás→delante).
+              </div>
+              <div className="space-y-1">
+                {[...posiciones]
+                  .sort((a, b) => (a.orden_revision ?? 9999) - (b.orden_revision ?? 9999) || a.orden_visual - b.orden_visual)
+                  .map((p) => (
+                    <div key={p.id} className="flex items-center gap-2">
+                      <input
+                        type="number" min={1} inputMode="numeric"
+                        className={`${inputCls} w-16 text-center text-[12px]`}
+                        value={ordenRev[p.id] ?? ""}
+                        onChange={(e) => setOrdenRev((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                        placeholder="—"
+                      />
+                      <span className="text-[12px] text-slate-200">{p.nombre ?? p.codigo_posicion}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
           </div>
         ) : !posSeleccionada ? (
           <div className="text-sm text-slate-500">Selecciona una posición del plano.</div>

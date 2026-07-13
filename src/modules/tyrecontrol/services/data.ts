@@ -145,6 +145,11 @@ export async function actualizarImagenChasis(tipoId: string, url: string | null)
   if (error) throw new Error(error.message);
 }
 
+export async function guardarOrdenRevisionPosicion(id: string, orden: number | null): Promise<void> {
+  const { error } = await supabase.from("tc_posiciones_vehiculo").update({ orden_revision: orden }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 export async function guardarCoordenadasPosicion(id: string, coords: { pos_x: number; pos_y: number; pos_w: number; pos_h: number }): Promise<void> {
   const { error } = await supabase.from("tc_posiciones_vehiculo").update(coords).eq("id", id);
   if (error) throw new Error(error.message);

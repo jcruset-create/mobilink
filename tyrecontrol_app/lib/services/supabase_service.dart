@@ -103,6 +103,23 @@ class TyreControlApi {
     return (data as List).map((e) => PosicionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
+  /// Imagen del plano del vehículo: la del tipo si la tiene; si no, la
+  /// heredada de la configuración de ejes del vehículo. null si no hay.
+  static Future<String?> obtenerImagenChasis(Vehiculo v) async {
+    final delTipo = v.tipo?.imagenChasisUrl;
+    if (delTipo != null && delTipo.isNotEmpty) return delTipo;
+    try {
+      final veh = await _db.from('tc_vehiculos').select('config_ejes_id').eq('id', v.id).maybeSingle();
+      final cid = veh?['config_ejes_id'];
+      if (cid == null) return null;
+      final ce = await _db.from('tc_config_ejes').select('imagen_chasis_url').eq('id', cid).maybeSingle();
+      final url = ce?['imagen_chasis_url'] as String?;
+      return (url != null && url.isNotEmpty) ? url : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<List<MontajeActual>> listarMontajesVehiculo(String vehiculoId) async {
     final data = await _db
         .from('tc_montajes_actuales')

@@ -23,6 +23,7 @@ class TipoVehiculo {
   final int numeroEjes;
   final int numeroRuedas;
   final String? configuracionEjes;
+  final String? imagenChasisUrl; // plano/foto del vehículo (heredable)
 
   TipoVehiculo({
     required this.id,
@@ -31,6 +32,7 @@ class TipoVehiculo {
     required this.numeroEjes,
     required this.numeroRuedas,
     this.configuracionEjes,
+    this.imagenChasisUrl,
   });
 
   factory TipoVehiculo.fromJson(Map<String, dynamic> j) => TipoVehiculo(
@@ -40,6 +42,7 @@ class TipoVehiculo {
         numeroEjes: j['numero_ejes'] ?? 2,
         numeroRuedas: j['numero_ruedas'] ?? 4,
         configuracionEjes: j['configuracion_ejes'],
+        imagenChasisUrl: j['imagen_chasis_url'],
       );
 }
 
@@ -98,6 +101,12 @@ class PosicionVehiculo {
   final String? lado; // 'izq' | 'der'
   final String? interiorExterior; // 'int' | 'ext' | null
   final int ordenVisual;
+  final int? ordenRevision; // orden de revisión configurado (null = recorrido por defecto)
+  // Coordenadas del plano (en % del contenedor) calibradas en el panel web.
+  final double? posX;
+  final double? posY;
+  final double? posW;
+  final double? posH;
 
   PosicionVehiculo({
     required this.id,
@@ -108,7 +117,14 @@ class PosicionVehiculo {
     this.lado,
     this.interiorExterior,
     required this.ordenVisual,
+    this.ordenRevision,
+    this.posX,
+    this.posY,
+    this.posW,
+    this.posH,
   });
+
+  static double? _d(dynamic v) => v == null ? null : (v as num).toDouble();
 
   factory PosicionVehiculo.fromJson(Map<String, dynamic> j) => PosicionVehiculo(
         id: j['id'],
@@ -119,6 +135,11 @@ class PosicionVehiculo {
         lado: j['lado'],
         interiorExterior: j['interior_exterior'],
         ordenVisual: j['orden_visual'] ?? 0,
+        ordenRevision: j['orden_revision'],
+        posX: _d(j['pos_x']),
+        posY: _d(j['pos_y']),
+        posW: _d(j['pos_w']),
+        posH: _d(j['pos_h']),
       );
 }
 
