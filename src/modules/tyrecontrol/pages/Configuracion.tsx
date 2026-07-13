@@ -4,7 +4,7 @@ import {
   listarModelos, crearModelo, actualizarModelo, eliminarModelo,
   listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
-  listarTiposVehiculo, actualizarConfiguracionEjes,
+  listarTiposVehiculo, actualizarConfiguracionEjes, actualizarIntervaloRevisionTipo,
   listarTiposDeMedida, fijarTiposDeMedida, actualizarMedidaCategoria,
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
@@ -319,11 +319,17 @@ function FilaMedidaCompatibilidad({ medida, tipos, puedeEditar }: { medida: Medi
 
 function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehiculo; puedeEditar: boolean; onGuardado: () => void }) {
   const [valor, setValor] = useState(tipo.configuracion_ejes ?? "");
+  const [dias, setDias] = useState(tipo.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "");
   const [saving, setSaving] = useState(false);
+  const cambiado = valor !== (tipo.configuracion_ejes ?? "") || dias !== (tipo.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "");
   async function guardar() {
     setSaving(true);
-    try { await actualizarConfiguracionEjes(tipo.id, valor.trim() || null); onGuardado(); }
-    finally { setSaving(false); }
+    try {
+      if (valor !== (tipo.configuracion_ejes ?? "")) await actualizarConfiguracionEjes(tipo.id, valor.trim() || null);
+      const nd = dias.trim() === "" ? null : Number(dias);
+      if (nd !== (tipo.revision_intervalo_dias ?? null)) await actualizarIntervaloRevisionTipo(tipo.id, nd);
+      onGuardado();
+    } finally { setSaving(false); }
   }
   return (
     <tr className="border-t border-slate-700/60">
@@ -333,9 +339,10 @@ function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehicul
       <td className={tdCls + " text-[11px]"}>{tipo.imagen_chasis_url ? <span className="text-emerald-400">Con imagen</span> : <span className="text-slate-500">Sin imagen</span>}</td>
       <td className={tdCls}>
         {puedeEditar ? (
-          <div className="flex gap-2">
-            <input className={`${inputCls} max-w-[140px] text-[12px]`} placeholder="Ej. 2x2x2" value={valor} onChange={(e) => setValor(e.target.value)} />
-            <button onClick={guardar} disabled={saving || valor === (tipo.configuracion_ejes ?? "")} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50">Guardar</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input className={`${inputCls} max-w-[120px] text-[12px]`} placeholder="Ej. 2x2x2" value={valor} onChange={(e) => setValor(e.target.value)} />
+            <input type="number" className={`${inputCls} max-w-[110px] text-[12px]`} placeholder="revisión (días)" value={dias} onChange={(e) => setDias(e.target.value)} title="Periodicidad de revisión en días" />
+            <button onClick={guardar} disabled={saving || !cambiado} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50">Guardar</button>
           </div>
         ) : (tipo.configuracion_ejes ?? "—")}
       </td>

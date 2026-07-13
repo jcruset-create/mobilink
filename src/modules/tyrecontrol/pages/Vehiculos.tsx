@@ -3,12 +3,12 @@ import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
-  listarEstadoWebfleet, sincronizarWebfleet,
+  listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
 } from "../services/data";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
   ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje,
-  EstadoWebfleet, VehiculoWebfleetEstado,
+  EstadoWebfleet, VehiculoWebfleetEstado, RevisionEstado,
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
@@ -34,6 +34,7 @@ const VACIO: VehiculoInput = {
   marca: "", modelo: "", bastidor: "", fecha_matriculacion: null, webfleet_vehicle_id: "",
   km_actual: 0, origen_km: "manual", activo: true,
   config_ejes_id: null, medida_id: null, tipo_llanta_id: null, medidas_por_eje: false,
+  revision_intervalo_dias: null, revision_intervalo_km: null,
 };
 
 // "2x2x2" → [2,2,2] (nº de ejes y ruedas por eje)
@@ -66,18 +67,25 @@ export default function Vehiculos() {
   const [modal, setModal] = useState<null | ModalState>(null);
   const [saving, setSaving] = useState(false);
 
-  // Webfleet: estado por vehículo, filtros y popup.
+  // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
+  const [revEstados, setRevEstados] = useState<Map<string, RevisionEstado>>(new Map());
   const [sincronizando, setSincronizando] = useState(false);
-  const [fWebfleet, setFWebfleet] = useState<"" | "en_base" | "en_ruta">("");
+  const [fWebfleet, setFWebfleet] = useState<"" | "en_base" | "en_ruta" | "pend_base" | "venc_base">("");
   const [popup, setPopup] = useState<null | { v: Vehiculo; est: VehiculoWebfleetEstado }>(null);
 
   async function refrescarWebfleet() {
     try {
-      const est = await listarEstadoWebfleet();
+      const [est, rev] = await Promise.all([listarEstadoWebfleet(), listarRevisionEstado()]);
       setEstados(new Map(est.map((e) => [e.vehiculo_id, e])));
+      setRevEstados(new Map(rev.map((r) => [r.vehiculo_id, r])));
     } catch { /* módulo Webfleet aún no migrado: se ignora */ }
   }
+
+  // Revisión pendiente = sin revisión, vencida o próxima. Vencida = sin revisión o vencida.
+  const esPendiente = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida" || e === "proxima"; };
+  const esVencida = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida"; };
+  const revisarEnBase = (id: string) => estadoDe(id) === "en_base" && esPendiente(id);
 
   async function cargar() {
     setLoading(true);
@@ -106,13 +114,22 @@ export default function Vehiculos() {
 
   const estadoDe = (id: string): EstadoWebfleet => estados.get(id)?.estado ?? "sin_dispositivo";
 
-  // KPIs: recuentos por estado sobre los vehículos visibles por empresa/tipo.
+  // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
   const kpis = useMemo(() => {
-    const base = { en_base: 0, otra_base: 0, en_ruta: 0, sin_conexion: 0, sin_dispositivo: 0 } as Record<EstadoWebfleet, number>;
-    for (const v of items) base[estadoDe(v.id)]++;
-    return base;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, estados]);
+    let en_base = 0, pend_base = 0, venc_base = 0, en_ruta = 0, sin_conexion = 0;
+    for (const v of items) {
+      const e = estados.get(v.id)?.estado ?? "sin_dispositivo";
+      if (e === "en_ruta") en_ruta++;
+      else if (e === "sin_conexion") sin_conexion++;
+      else if (e === "en_base") {
+        en_base++;
+        const r = revEstados.get(v.id)?.estado;
+        if (r === "sin_revision" || r === "vencida" || r === "proxima") pend_base++;
+        if (r === "sin_revision" || r === "vencida") venc_base++;
+      }
+    }
+    return { en_base, pend_base, venc_base, en_ruta, sin_conexion };
+  }, [items, estados, revEstados]);
 
   const visibles = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -122,12 +139,15 @@ export default function Vehiculos() {
       if (fTipo && v.tipo_vehiculo_id !== fTipo) return false;
       if (fEstado === "activos" && !v.activo) return false;
       if (fEstado === "inactivos" && v.activo) return false;
-      if (fWebfleet && estadoDe(v.id) !== fWebfleet) return false;
+      if (fWebfleet === "en_base" && estadoDe(v.id) !== "en_base") return false;
+      if (fWebfleet === "en_ruta" && estadoDe(v.id) !== "en_ruta") return false;
+      if (fWebfleet === "pend_base" && !revisarEnBase(v.id)) return false;
+      if (fWebfleet === "venc_base" && !(estadoDe(v.id) === "en_base" && esVencida(v.id))) return false;
       if (s && !v.matricula.toLowerCase().includes(s) && !(v.numero_unidad ?? "").toLowerCase().includes(s)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados]);
+  }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, revEstados]);
 
   const delegacionesForm = useMemo(
     () => delegaciones.filter((d) => !modal?.draft.empresa_id || d.empresa_id === modal.draft.empresa_id),
@@ -215,19 +235,19 @@ export default function Vehiculos() {
       </div>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
 
-      {/* KPIs de estado Webfleet */}
+      {/* KPIs (clicables para filtrar) */}
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {([
-          ["en_base", "En base", "border-emerald-500/30"],
-          ["otra_base", "Otra base", "border-sky-500/30"],
-          ["en_ruta", "En ruta", "border-amber-500/30"],
-          ["sin_conexion", "Sin conexión", "border-slate-500/30"],
-          ["sin_dispositivo", "Sin Webfleet", "border-slate-600/40"],
-        ] as [EstadoWebfleet, string, string][]).map(([k, label, br]) => (
-          <button key={k} onClick={() => { if (k === "en_base" || k === "en_ruta") setFWebfleet(fWebfleet === k ? "" : k); }}
+          ["en_base", "En base", kpis.en_base, "border-emerald-500/30", "🟢"],
+          ["pend_base", "Pendientes en base", kpis.pend_base, "border-amber-500/30", "🔧"],
+          ["venc_base", "Vencidas en base", kpis.venc_base, "border-rose-500/30", "⏰"],
+          ["en_ruta", "En ruta", kpis.en_ruta, "border-amber-500/30", "🟠"],
+          ["sin_conexion", "Sin conexión", kpis.sin_conexion, "border-slate-500/30", "⚪"],
+        ] as [typeof fWebfleet, string, number, string, string][]).map(([k, label, val, br, icon]) => (
+          <button key={k} onClick={() => setFWebfleet(fWebfleet === k ? "" : k)}
             className={`rounded-xl border ${br} bg-slate-800 p-3 text-left ${fWebfleet === k ? "ring-2 ring-sky-500" : ""}`}>
-            <div className="text-2xl font-black text-slate-100">{kpis[k]}</div>
-            <div className="text-[11px] text-slate-400">{ESTADO_WEBFLEET_PUNTO[k]} {label}</div>
+            <div className="text-2xl font-black text-slate-100">{val}</div>
+            <div className="text-[11px] text-slate-400">{icon} {label}</div>
           </button>
         ))}
       </div>
@@ -263,7 +283,7 @@ export default function Vehiculos() {
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
           : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin vehículos.</td></tr>
           : visibles.map((v) => (
-            <tr key={v.id} className="border-t border-slate-700/60">
+            <tr key={v.id} className={`border-t border-slate-700/60 ${revisarEnBase(v.id) ? "bg-amber-500/5" : ""}`}>
               <td className={tdCls + " text-slate-400"}>{v.empresa?.nombre ?? "—"}</td>
               <td className={tdCls + " font-bold"}>{v.matricula}</td>
               <td className={tdCls + " text-slate-400"}>{v.numero_unidad ?? "—"}</td>
@@ -276,14 +296,15 @@ export default function Vehiculos() {
                 {(() => {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
+                  const revisar = e === "en_base" && esPendiente(v.id);
                   return (
                     <button
                       onClick={() => est && setPopup({ v, est })}
                       disabled={!est}
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${ESTADO_WEBFLEET_BADGE[e]} ${est ? "cursor-pointer" : "cursor-default opacity-70"}`}
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]} ${est ? "cursor-pointer" : "cursor-default opacity-70"}`}
                       title={est ? "Ver detalle" : "Sin datos Webfleet"}
                     >
-                      {ESTADO_WEBFLEET_PUNTO[e]} {ESTADO_WEBFLEET_LABELS[e].toUpperCase()}
+                      {revisar ? `🟢 EN BASE · REVISAR` : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}`}
                     </button>
                   );
                 })()}
@@ -375,6 +396,9 @@ export default function Vehiculos() {
               </select>
             </Field>
             <TextField label="Webfleet Vehicle ID" value={modal.draft.webfleet_vehicle_id ?? ""} onChange={(v) => set({ webfleet_vehicle_id: v })} />
+            <Field label="Revisión cada (días)">
+              <input type="number" className={inputCls} value={modal.draft.revision_intervalo_dias ?? ""} onChange={(e) => set({ revision_intervalo_dias: e.target.value === "" ? null : Number(e.target.value) })} placeholder="por defecto del tipo" />
+            </Field>
             <Field label="Estado">
               <select className={inputCls} value={modal.draft.activo ? "1" : "0"} onChange={(e) => set({ activo: e.target.value === "1" })}>
                 <option value="1">Activo</option><option value="0">Inactivo</option>

@@ -105,6 +105,8 @@ export interface TipoVehiculo {
   activo: boolean;
   imagen_chasis_url?: string | null;
   configuracion_ejes?: string | null;
+  revision_intervalo_dias?: number | null; // periodicidad de revisión por defecto del tipo
+  revision_intervalo_km?: number | null;
 }
 
 export interface PosicionVehiculo {
@@ -174,6 +176,30 @@ export interface WebfleetSyncConfig {
   alertas_activas: boolean;
 }
 
+// ── Estado de revisión (periodicidad) ───────────────────────────
+export type EstadoPeriodicidad = "sin_revision" | "vencida" | "proxima" | "al_dia";
+
+export const ESTADO_PERIODICIDAD_LABELS: Record<EstadoPeriodicidad, string> = {
+  sin_revision: "Sin revisión", vencida: "Vencida", proxima: "Próxima", al_dia: "Al día",
+};
+
+export interface RevisionEstado {
+  vehiculo_id: string;
+  ultima_revision?: string | null;
+  intervalo_dias?: number | null;
+  proxima_revision?: string | null;
+  dias_vencido?: number | null;
+  estado: EstadoPeriodicidad;
+}
+
+export interface RevisionFlag {
+  vehiculo_id: string;
+  empresa_id: string;
+  pospuesta_hasta?: string | null;
+  no_disponible: boolean;
+  motivo?: string | null;
+}
+
 export interface Vehiculo {
   id: string;
   empresa_id: string;
@@ -194,6 +220,8 @@ export interface Vehiculo {
   medida_id?: string | null;
   tipo_llanta_id?: string | null;
   medidas_por_eje?: boolean;
+  revision_intervalo_dias?: number | null; // override de periodicidad por vehículo
+  revision_intervalo_km?: number | null;
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;

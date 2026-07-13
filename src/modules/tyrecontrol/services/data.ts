@@ -8,7 +8,7 @@ import type {
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
-  VehiculoWebfleetEstado, WebfleetSyncConfig,
+  VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -26,7 +26,7 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 
 const COLS_EMPRESA = ["nombre", "cif", "codigo_cliente", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
 const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo", "webfleet_lat", "webfleet_lng", "webfleet_radio_m", "webfleet_zona_nombre", "webfleet_genera_avisos"] as const;
-const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id", "tipo_llanta_id", "medidas_por_eje"] as const;
+const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id", "tipo_llanta_id", "medidas_por_eje", "revision_intervalo_dias", "revision_intervalo_km"] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
 // ── Empresas ─────────────────────────────────────────────────
@@ -824,6 +824,30 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 export async function sincronizarWebfleet(): Promise<{ actualizados?: number; error?: string }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, { method: "POST" });
   try { return await r.json(); } catch { return { error: `HTTP ${r.status}` }; }
+}
+
+// Estado de revisión (periodicidad) por vehículo.
+export async function listarRevisionEstado(): Promise<RevisionEstado[]> {
+  const { data, error } = await supabase.rpc("tc_revision_estado");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RevisionEstado[];
+}
+
+export async function actualizarIntervaloRevisionTipo(tipoId: string, dias: number | null): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_vehiculo").update({ revision_intervalo_dias: dias }).eq("id", tipoId);
+  if (error) throw new Error(error.message);
+}
+
+export async function listarRevisionFlags(): Promise<RevisionFlag[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_revision_flag").select("*");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RevisionFlag[];
+}
+
+export async function guardarRevisionFlag(vehiculoId: string, empresaId: string, patch: Partial<Omit<RevisionFlag, "vehiculo_id" | "empresa_id">>): Promise<void> {
+  const { error } = await supabase.from("tc_vehiculo_revision_flag")
+    .upsert({ vehiculo_id: vehiculoId, empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "vehiculo_id" });
+  if (error) throw new Error(error.message);
 }
 
 export async function obtenerWebfleetSyncConfig(): Promise<WebfleetSyncConfig | null> {

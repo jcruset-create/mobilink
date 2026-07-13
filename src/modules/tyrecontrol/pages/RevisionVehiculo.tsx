@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
-  listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo,
+  listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
   listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
 } from "../services/data";
@@ -43,8 +44,23 @@ export default function RevisionVehiculo() {
   const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
+  const [searchParams] = useSearchParams();
+
   useEffect(() => {
     listarPresionesCatalogoPorModelo().then(setPresionesCatalogo).catch(() => setPresionesCatalogo({}));
+  }, []);
+
+  // Deep-link desde "Vehículos disponibles para revisar": ?vehiculo=&empresa=
+  useEffect(() => {
+    const vid = searchParams.get("vehiculo");
+    const emp = searchParams.get("empresa");
+    if (!vid) return;
+    (async () => {
+      if (emp) { setEmpresaId(emp); await cargarVehiculos(emp); }
+      const veh = await obtenerVehiculo(vid);
+      if (veh) await cargarVehiculo(vid, veh);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function referenciasDePosicion(posicionId: string) {
