@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import {
   listarOperacionesMantenimiento, listarPlanesMantenimiento, listarPlanEstado,
   guardarPlanMantenimiento, eliminarPlanMantenimiento, registrarMantenimiento,
-  listarMantenimientoRealizadas, listarDelegaciones, listarUsuarios,
+  listarMantenimientoRealizadas, listarDelegaciones, listarUsuarios, listarRevisiones,
 } from "../services/data";
 import type {
   PlanMantenimiento, PlanEstado, OperacionMantenimiento, MantenimientoRealizada,
   Delegacion, Perfil, Vehiculo, EstadoPlan, PlanMantenimientoInput,
 } from "../types";
+
+type UltimaRev = { fecha: string | null; km: number | null };
 import { ESTADO_PLAN_LABELS, ESTADO_PLAN_BADGE, ESTADO_PLAN_ICONO, PRIORIDAD_PLAN_LABELS } from "../types";
 import { Modal, inputCls, Field, TextField } from "./ui";
 
@@ -89,14 +91,16 @@ export function ModalRegistrar({ plan, tecnicos, onClose, onDone }: {
 }
 
 // ── Modal: crear / editar plan ─────────────────────────────────
-function ModalPlan({ vehiculo, plan, operaciones, delegaciones, tecnicos, onClose, onDone }: {
+function ModalPlan({ vehiculo, plan, operaciones, delegaciones, tecnicos, ultimaRev, onClose, onDone }: {
   vehiculo: Vehiculo; plan: PlanMantenimiento | null;
   operaciones: OperacionMantenimiento[]; delegaciones: Delegacion[]; tecnicos: Perfil[];
-  onClose: () => void; onDone: () => void;
+  ultimaRev: UltimaRev; onClose: () => void; onDone: () => void;
 }) {
   const [d, setD] = useState<Partial<PlanMantenimientoInput>>(plan ?? {
     empresa_id: vehiculo.empresa_id, vehiculo_id: vehiculo.id, operacion_id: "",
     margen_aviso_dias: 15, delegacion_id: vehiculo.delegacion_id ?? null, activo: true,
+    // Precarga con la última inspección del vehículo (la que aparece en la ficha).
+    ultima_fecha: ultimaRev.fecha, ultima_km: ultimaRev.km,
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -172,17 +176,22 @@ export default function PlanMantenimientoVehiculo({ vehiculo, puedeEditar }: { v
   const [delegaciones, setDelegaciones] = useState<Delegacion[]>([]);
   const [tecnicos, setTecnicos] = useState<Perfil[]>([]);
   const [historial, setHistorial] = useState<MantenimientoRealizada[]>([]);
+  const [ultimaRev, setUltimaRev] = useState<UltimaRev>({ fecha: null, km: null });
   const [editar, setEditar] = useState<null | PlanMantenimiento | "nuevo">(null);
   const [registrar, setRegistrar] = useState<null | PlanMantenimiento>(null);
 
   async function cargar() {
-    const [pl, est, op, del, tec, hist] = await Promise.all([
+    const [pl, est, op, del, tec, hist, revs] = await Promise.all([
       listarPlanesMantenimiento(vehiculo.id), listarPlanEstado(), listarOperacionesMantenimiento(),
-      listarDelegaciones(), listarUsuarios(), listarMantenimientoRealizadas(vehiculo.id),
+      listarDelegaciones(), listarUsuarios(), listarMantenimientoRealizadas(vehiculo.id), listarRevisiones(vehiculo.id),
     ]);
     setPlanes(pl);
     setEstados(new Map(est.filter((e) => e.vehiculo_id === vehiculo.id).map((e) => [e.plan_id, e])));
     setOperaciones(op); setDelegaciones(del); setTecnicos(tec); setHistorial(hist);
+    // Última inspección completada del vehículo (la más reciente que sale en la ficha).
+    const ult = revs.filter((r) => r.estado_revision === "completada")
+      .sort((a, b) => (a.fecha_revision < b.fecha_revision ? 1 : -1))[0];
+    setUltimaRev({ fecha: ult?.fecha_revision ?? null, km: ult?.km_vehiculo ?? null });
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [vehiculo.id]);
 
@@ -248,7 +257,7 @@ export default function PlanMantenimientoVehiculo({ vehiculo, puedeEditar }: { v
 
       {editar && (
         <ModalPlan vehiculo={vehiculo} plan={editar === "nuevo" ? null : editar}
-          operaciones={operaciones} delegaciones={delegaciones} tecnicos={tecnicos}
+          operaciones={operaciones} delegaciones={delegaciones} tecnicos={tecnicos} ultimaRev={ultimaRev}
           onClose={() => setEditar(null)} onDone={() => { setEditar(null); cargar(); }} />
       )}
       {registrar && (
