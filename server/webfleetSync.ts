@@ -12,11 +12,9 @@
 import { supabase } from "./supabase.ts";
 
 type WfObject = Record<string, any>;
-type Base = {
-  id: string; empresa_id: string; centro_lat: number | null; centro_lng: number | null;
-  radio_m: number | null; poligono: [number, number][] | null; activa: boolean;
-};
-type EstadoPrevio = { estado: string; base_id: string | null; entrada_base_at: string | null };
+// La base es una DELEGACIÓN con geo-zona definida (webfleet_lat/lng + radio).
+type Base = { id: string; empresa_id: string; webfleet_lat: number | null; webfleet_lng: number | null; webfleet_radio_m: number | null };
+type EstadoPrevio = { estado: string; delegacion_id: string | null; entrada_base_at: string | null };
 
 // ── Petición a Webfleet (cuenta global por env; los vehículos viven ahí) ─────
 function buildReq(action: string, extra: Record<string, string> = {}): { url: string; headers: Record<string, string> } {
@@ -51,21 +49,9 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-function puntoEnPoligono(lat: number, lng: number, poly: [number, number][]): boolean {
-  let dentro = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [yi, xi] = poly[i]; // [lat, lng]
-    const [yj, xj] = poly[j];
-    const cruza = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
-    if (cruza) dentro = !dentro;
-  }
-  return dentro;
-}
-
 function baseContiene(b: Base, lat: number, lng: number): boolean {
-  if (b.poligono && Array.isArray(b.poligono) && b.poligono.length >= 3) return puntoEnPoligono(lat, lng, b.poligono);
-  if (b.centro_lat == null || b.centro_lng == null) return false;
-  return haversineM(lat, lng, b.centro_lat, b.centro_lng) <= (b.radio_m ?? 300);
+  if (b.webfleet_lat == null || b.webfleet_lng == null) return false;
+  return haversineM(lat, lng, b.webfleet_lat, b.webfleet_lng) <= (b.webfleet_radio_m ?? 300);
 }
 
 // Odómetro total en km: odometer_long en metros; odometer en hectómetros.
@@ -82,9 +68,10 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
   try {
     const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }] = await Promise.all([
       supabase.from("tc_webfleet_sync_config").select("*").eq("id", 1).maybeSingle(),
-      supabase.from("tc_bases_webfleet").select("*").eq("activa", true),
-      supabase.from("tc_vehiculos").select("id, empresa_id, webfleet_vehicle_id").eq("activo", true),
-      supabase.from("tc_vehiculo_webfleet_estado").select("vehiculo_id, estado, base_id, entrada_base_at"),
+      // Bases = delegaciones con geo-zona definida.
+      supabase.from("tc_delegaciones").select("id, empresa_id, webfleet_lat, webfleet_lng, webfleet_radio_m").not("webfleet_lat", "is", null),
+      supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, webfleet_vehicle_id").eq("activo", true),
+      supabase.from("tc_vehiculo_webfleet_estado").select("vehiculo_id, estado, delegacion_id, entrada_base_at"),
     ]);
 
     const antiguedadMaxMs = (cfg?.antiguedad_max_pos_min ?? 30) * 60 * 1000;
@@ -104,12 +91,12 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
       const wfId = (v.webfleet_vehicle_id ?? "").trim();
 
       if (!wfId) {
-        filas.push({ ...base, estado: "sin_dispositivo", base_id: null, lat: null, lng: null, postext: null, velocidad_kmh: null, odometro_km: null, pos_time: null, entrada_base_at: null });
+        filas.push({ ...base, estado: "sin_dispositivo", delegacion_id: null, lat: null, lng: null, postext: null, velocidad_kmh: null, odometro_km: null, pos_time: null, entrada_base_at: null });
         continue;
       }
       const o = porObjectno.get(wfId);
       if (!o) {
-        filas.push({ ...base, estado: "sin_conexion", base_id: null, entrada_base_at: null });
+        filas.push({ ...base, estado: "sin_conexion", delegacion_id: null, entrada_base_at: null });
         continue;
       }
 
@@ -128,34 +115,37 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
 
       // Posición demasiado antigua → sin conexión.
       if (!posTime || ahora - posTime.getTime() > antiguedadMaxMs || comun.lat == null || comun.lng == null) {
-        filas.push({ ...base, ...comun, estado: "sin_conexion", base_id: null, entrada_base_at: null });
+        filas.push({ ...base, ...comun, estado: "sin_conexion", delegacion_id: null, entrada_base_at: null });
         continue;
       }
 
-      // ¿En alguna base? Prioriza una base de su propia empresa (en_base).
+      // ¿En alguna base (delegación)? "en_base" = está en SU base asignada
+      // (su delegación) o, si no tiene delegación, en una base de su empresa.
       const contenedoras = bases.filter((b) => baseContiene(b, comun.lat as number, comun.lng as number));
-      const propia = contenedoras.find((b) => b.empresa_id === v.empresa_id);
-      const baseDetectada = propia ?? contenedoras[0] ?? null;
+      const suBase = v.delegacion_id
+        ? contenedoras.find((b) => b.id === v.delegacion_id)
+        : contenedoras.find((b) => b.empresa_id === v.empresa_id);
+      const baseDetectada = suBase ?? contenedoras[0] ?? null;
 
       let estado: string;
-      let baseId: string | null = null;
+      let delegId: string | null = null;
       if (baseDetectada) {
-        estado = baseDetectada.empresa_id === v.empresa_id ? "en_base" : "otra_base";
-        baseId = baseDetectada.id;
+        estado = suBase ? "en_base" : "otra_base";
+        delegId = baseDetectada.id;
       } else {
         estado = "en_ruta";
       }
 
       // entrada_base_at: se conserva mientras siga en la MISMA base.
       let entrada: string | null = null;
-      if (baseId) {
+      if (delegId) {
         const prev = previos.get(v.id);
-        entrada = prev && prev.base_id === baseId && (prev.estado === "en_base" || prev.estado === "otra_base")
+        entrada = prev && prev.delegacion_id === delegId && (prev.estado === "en_base" || prev.estado === "otra_base")
           ? prev.entrada_base_at ?? comun.pos_time
           : comun.pos_time;
       }
 
-      filas.push({ ...base, ...comun, estado, base_id: baseId, entrada_base_at: entrada });
+      filas.push({ ...base, ...comun, estado, delegacion_id: delegId, entrada_base_at: entrada });
     }
 
     if (filas.length > 0) {

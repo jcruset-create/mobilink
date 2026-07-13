@@ -8,7 +8,7 @@ import type {
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
-  BaseWebfleet, VehiculoWebfleetEstado, WebfleetSyncConfig,
+  VehiculoWebfleetEstado, WebfleetSyncConfig,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -815,7 +815,7 @@ const WF_API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> {
   const { data, error } = await supabase
     .from("tc_vehiculo_webfleet_estado")
-    .select("*, base:tc_bases_webfleet(*)");
+    .select("*, delegacion:tc_delegaciones(id, nombre)");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as VehiculoWebfleetEstado[];
 }
@@ -824,25 +824,6 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 export async function sincronizarWebfleet(): Promise<{ actualizados?: number; error?: string }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, { method: "POST" });
   try { return await r.json(); } catch { return { error: `HTTP ${r.status}` }; }
-}
-
-export async function listarBasesWebfleet(): Promise<BaseWebfleet[]> {
-  const { data, error } = await supabase.from("tc_bases_webfleet").select("*").order("nombre");
-  if (error) throw new Error(error.message);
-  return (data ?? []) as BaseWebfleet[];
-}
-
-export async function guardarBaseWebfleet(base: Partial<BaseWebfleet> & { empresa_id: string; nombre: string }): Promise<void> {
-  const payload = { ...base, updated_at: new Date().toISOString() };
-  const { error } = base.id
-    ? await supabase.from("tc_bases_webfleet").update(payload).eq("id", base.id)
-    : await supabase.from("tc_bases_webfleet").insert(payload);
-  if (error) throw new Error(error.message);
-}
-
-export async function eliminarBaseWebfleet(id: string): Promise<void> {
-  const { error } = await supabase.from("tc_bases_webfleet").delete().eq("id", id);
-  if (error) throw new Error(error.message);
 }
 
 export async function obtenerWebfleetSyncConfig(): Promise<WebfleetSyncConfig | null> {

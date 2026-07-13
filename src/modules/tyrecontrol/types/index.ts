@@ -52,6 +52,12 @@ export interface Delegacion {
   telefono?: string | null;
   email?: string | null;
   activo: boolean;
+  // Geo-zona de la base (Webfleet "vehículos en base")
+  webfleet_lat?: number | null;
+  webfleet_lng?: number | null;
+  webfleet_radio_m?: number | null;
+  webfleet_zona_nombre?: string | null;
+  webfleet_genera_avisos?: boolean;
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
@@ -144,25 +150,11 @@ export const ESTADO_WEBFLEET_PUNTO: Record<EstadoWebfleet, string> = {
   en_base: "🟢", otra_base: "🔵", en_ruta: "🟠", sin_conexion: "⚪", sin_dispositivo: "⚫",
 };
 
-export interface BaseWebfleet {
-  id: string;
-  empresa_id: string;
-  nombre: string;
-  webfleet_area_id?: string | null;
-  webfleet_area_nombre?: string | null;
-  centro_lat?: number | null;
-  centro_lng?: number | null;
-  radio_m?: number | null;
-  poligono?: [number, number][] | null;
-  genera_avisos: boolean;
-  activa: boolean;
-}
-
 export interface VehiculoWebfleetEstado {
   vehiculo_id: string;
   empresa_id: string;
   estado: EstadoWebfleet;
-  base_id?: string | null;
+  delegacion_id?: string | null;
   lat?: number | null;
   lng?: number | null;
   postext?: string | null;
@@ -171,7 +163,7 @@ export interface VehiculoWebfleetEstado {
   pos_time?: string | null;
   entrada_base_at?: string | null;
   updated_at?: string | null;
-  base?: BaseWebfleet | null;
+  delegacion?: { id: string; nombre: string } | null; // base detectada
 }
 
 export interface WebfleetSyncConfig {

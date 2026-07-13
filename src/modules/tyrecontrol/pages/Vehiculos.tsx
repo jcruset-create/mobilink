@@ -3,12 +3,12 @@ import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
-  listarEstadoWebfleet, sincronizarWebfleet, listarBasesWebfleet, guardarBaseWebfleet, eliminarBaseWebfleet,
+  listarEstadoWebfleet, sincronizarWebfleet,
 } from "../services/data";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
   ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje,
-  EstadoWebfleet, VehiculoWebfleetEstado, BaseWebfleet,
+  EstadoWebfleet, VehiculoWebfleetEstado,
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
@@ -66,19 +66,16 @@ export default function Vehiculos() {
   const [modal, setModal] = useState<null | ModalState>(null);
   const [saving, setSaving] = useState(false);
 
-  // Webfleet: estado por vehículo, bases, filtros y popup.
+  // Webfleet: estado por vehículo, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
-  const [bases, setBases] = useState<BaseWebfleet[]>([]);
   const [sincronizando, setSincronizando] = useState(false);
   const [fWebfleet, setFWebfleet] = useState<"" | "en_base" | "en_ruta">("");
   const [popup, setPopup] = useState<null | { v: Vehiculo; est: VehiculoWebfleetEstado }>(null);
-  const [basesModal, setBasesModal] = useState(false);
 
   async function refrescarWebfleet() {
     try {
-      const [est, bs] = await Promise.all([listarEstadoWebfleet(), listarBasesWebfleet()]);
+      const est = await listarEstadoWebfleet();
       setEstados(new Map(est.map((e) => [e.vehiculo_id, e])));
-      setBases(bs);
     } catch { /* módulo Webfleet aún no migrado: se ignora */ }
   }
 
@@ -209,7 +206,7 @@ export default function Vehiculos() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-black">Vehículos</h1>
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => setBasesModal(true)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800">📍 Bases</button>
+          <button onClick={() => navigate("/tyrecontrol/delegaciones")} className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800" title="Las bases se definen en cada delegación">📍 Bases</button>
           <button onClick={sincronizar} disabled={sincronizando} className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
             {sincronizando ? "Sincronizando…" : "↻ Sincronizar Webfleet"}
           </button>
@@ -424,7 +421,7 @@ export default function Vehiculos() {
           </div>
           <div className="grid gap-2 text-sm sm:grid-cols-2">
             {[
-              ["Base detectada", popup.est.base?.nombre ?? "—"],
+              ["Base detectada", popup.est.delegacion?.nombre ?? "—"],
               ["Hora de entrada", fechaHoraCorta(popup.est.entrada_base_at)],
               ["Tiempo en la base", popup.est.entrada_base_at ? duracionDesde(popup.est.entrada_base_at) : "—"],
               ["Última posición", popup.est.postext ?? (popup.est.lat != null ? `${popup.est.lat.toFixed(5)}, ${popup.est.lng?.toFixed(5)}` : "—")],
@@ -440,88 +437,6 @@ export default function Vehiculos() {
         </Modal>
       )}
 
-      {basesModal && (
-        <BasesModal
-          bases={bases}
-          empresas={empresas}
-          onClose={() => setBasesModal(false)}
-          onChanged={refrescarWebfleet}
-        />
-      )}
     </div>
-  );
-}
-
-// ── Gestión de bases (base ↔ zona Webfleet) ────────────────────
-function BasesModal({ bases, empresas, onClose, onChanged }: {
-  bases: BaseWebfleet[]; empresas: Empresa[]; onClose: () => void; onChanged: () => Promise<void>;
-}) {
-  const VACIA: Partial<BaseWebfleet> = { empresa_id: "", nombre: "", centro_lat: null, centro_lng: null, radio_m: 300, genera_avisos: true, activa: true };
-  const [draft, setDraft] = useState<Partial<BaseWebfleet>>(VACIA);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-  const set = (p: Partial<BaseWebfleet>) => setDraft({ ...draft, ...p });
-
-  async function guardar() {
-    if (!draft.empresa_id || !draft.nombre?.trim()) { setErr("Empresa y nombre son obligatorios"); return; }
-    setSaving(true); setErr("");
-    try {
-      await guardarBaseWebfleet({ ...draft, empresa_id: draft.empresa_id!, nombre: draft.nombre!.trim() } as any);
-      setDraft(VACIA); await onChanged();
-    } catch (e: any) { setErr(e?.message || "Error"); } finally { setSaving(false); }
-  }
-  async function borrar(id: string) {
-    setSaving(true);
-    try { await eliminarBaseWebfleet(id); await onChanged(); } catch (e: any) { setErr(e?.message || "Error"); } finally { setSaving(false); }
-  }
-
-  const nombreEmpresa = (id: string) => empresas.find((e) => e.id === id)?.nombre ?? "—";
-
-  return (
-    <Modal title="Bases (zonas Webfleet)" onClose={onClose}
-      footer={<div className="flex justify-end"><button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cerrar</button></div>}>
-      <div className="mb-3 text-[12px] text-slate-500">
-        Cada base se define por su centro (latitud/longitud) y un radio en metros. El estado «en base» se calcula comparando la posición del vehículo con estas zonas. Las coordenadas puedes copiarlas de Google Maps.
-      </div>
-
-      {/* Alta / edición rápida */}
-      <div className="mb-3 grid gap-2 rounded-lg border border-slate-700 p-3 sm:grid-cols-2">
-        <Field label="Empresa (cliente) *">
-          <select className={inputCls} value={draft.empresa_id ?? ""} onChange={(e) => set({ empresa_id: e.target.value })}>
-            <option value="">Selecciona…</option>
-            {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-          </select>
-        </Field>
-        <TextField label="Nombre de la base *" value={draft.nombre ?? ""} onChange={(v) => set({ nombre: v })} placeholder="Ej. Autocares Plana - Reus" />
-        <Field label="Latitud"><input className={inputCls} type="number" value={draft.centro_lat ?? ""} onChange={(e) => set({ centro_lat: e.target.value === "" ? null : Number(e.target.value) })} placeholder="41.1549" /></Field>
-        <Field label="Longitud"><input className={inputCls} type="number" value={draft.centro_lng ?? ""} onChange={(e) => set({ centro_lng: e.target.value === "" ? null : Number(e.target.value) })} placeholder="1.1067" /></Field>
-        <Field label="Radio (m)"><input className={inputCls} type="number" value={draft.radio_m ?? 300} onChange={(e) => set({ radio_m: Number(e.target.value) || 0 })} /></Field>
-        <Field label="Zona Webfleet (opcional)"><input className={inputCls} value={draft.webfleet_area_nombre ?? ""} onChange={(e) => set({ webfleet_area_nombre: e.target.value })} placeholder="nombre de la zona en Webfleet" /></Field>
-        <label className="flex items-center gap-2 text-[12px] text-slate-300"><input type="checkbox" checked={draft.genera_avisos ?? true} onChange={(e) => set({ genera_avisos: e.target.checked })} /> Genera avisos</label>
-        <label className="flex items-center gap-2 text-[12px] text-slate-300"><input type="checkbox" checked={draft.activa ?? true} onChange={(e) => set({ activa: e.target.checked })} /> Activa</label>
-        <div className="sm:col-span-2 flex items-center gap-3">
-          <button onClick={guardar} disabled={saving} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">{draft.id ? "Guardar cambios" : "+ Añadir base"}</button>
-          {draft.id && <button onClick={() => setDraft(VACIA)} className="text-[12px] text-slate-400 hover:underline">Cancelar edición</button>}
-          {err && <span className="text-[12px] text-rose-300">{err}</span>}
-        </div>
-      </div>
-
-      {/* Listado */}
-      <div className="flex flex-col gap-1">
-        {bases.length === 0 ? <div className="text-[12px] text-slate-500">Aún no hay bases definidas.</div>
-        : bases.map((b) => (
-          <div key={b.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-800 px-3 py-2">
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold text-slate-100">{b.nombre} {!b.activa && <span className="text-[10px] text-slate-500">(inactiva)</span>}</div>
-              <div className="truncate text-[11px] text-slate-500">{nombreEmpresa(b.empresa_id)} · {b.centro_lat?.toFixed(4) ?? "—"}, {b.centro_lng?.toFixed(4) ?? "—"} · r {b.radio_m ?? "—"} m</div>
-            </div>
-            <div className="flex shrink-0 gap-2 text-[12px]">
-              <button onClick={() => setDraft(b)} className="text-slate-300 hover:underline">Editar</button>
-              <button onClick={() => borrar(b.id)} className="text-rose-300 hover:underline">Borrar</button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </Modal>
   );
 }
