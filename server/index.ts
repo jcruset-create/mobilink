@@ -3044,14 +3044,18 @@ app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
 // las globales del módulo de asistencia. Así los vehículos de la cuenta ya
 // disponible funcionan hoy y cada cliente se conecta al entregar su propia API.
 
-// Odómetro de Webfleet en km. showObjectReportExtern devuelve varios formatos
-// según la cuenta; se prueban los campos habituales (metros → km).
+// Odómetro TOTAL del vehículo en km. Webfleet (showObjectReportExtern) da:
+//   odometer_long → metros (preciso)
+//   odometer      → hectómetros (0,1 km)
+// Ambos son el cuentakilómetros real del vehículo, no un parcial.
 function webfleetOdometerKm(o: any): number | null {
-  const cand = o?.odometer ?? o?.can_odometer ?? o?.dashboard_odometer ?? o?.milage ?? o?.mileage ?? null;
-  const n = Number(cand);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  // Webfleet suele darlo en metros; si el valor es enorme lo pasamos a km.
-  return n > 200000 ? Math.round(n / 1000) : Math.round(n);
+  const long = Number(o?.odometer_long);
+  if (Number.isFinite(long) && long > 0) return Math.round(long / 1000); // metros → km
+  const hm = Number(o?.odometer);
+  if (Number.isFinite(hm) && hm > 0) return Math.round(hm / 10); // hectómetros → km
+  const cand = Number(o?.can_odometer ?? o?.dashboard_odometer ?? o?.mileage ?? o?.milage);
+  if (Number.isFinite(cand) && cand > 0) return cand > 200000 ? Math.round(cand / 1000) : Math.round(cand);
+  return null;
 }
 
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
