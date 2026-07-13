@@ -12,7 +12,7 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
-import { startWebfleetSync, syncWebfleetOnce } from "./webfleetSync.ts";
+import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import OpenAI, { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -11834,6 +11834,7 @@ initDb()
       startWorkshopAutoStandbyChecker();
       startRecobrosNotifierChecker();
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
+      startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
     });
   })
   .catch((error) => {

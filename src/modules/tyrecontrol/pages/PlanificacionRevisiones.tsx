@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import * as XLSX from "xlsx";
 import {
   listarPlanesMantenimiento, listarPlanEstado, listarVehiculos, listarEstadoWebfleet,
   listarUsuarios, listarEmpresas, listarMantenimientoRealizadas, listarPlantillas,
@@ -14,11 +15,12 @@ import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 import { BadgePlan, ModalRegistrar } from "../components/PlanMantenimiento";
 
 type Fila = { plan: PlanMantenimiento; est: PlanEstado; v: Vehiculo; wf?: VehiculoWebfleetEstado };
-type Tab = "pendientes" | "hoy" | "semana" | "atrasadas" | "realizadas" | "cliente" | "base" | "calendario";
+type Tab = "pendientes" | "hoy" | "semana" | "atrasadas" | "realizadas" | "cliente" | "base" | "calendario" | "indicadores";
 const TABS: { k: Tab; l: string }[] = [
   { k: "pendientes", l: "Pendientes" }, { k: "hoy", l: "Hoy" }, { k: "semana", l: "Esta semana" },
   { k: "atrasadas", l: "Atrasadas" }, { k: "realizadas", l: "Realizadas" },
   { k: "cliente", l: "Por cliente" }, { k: "base", l: "Por base" }, { k: "calendario", l: "Calendario" },
+  { k: "indicadores", l: "Indicadores" },
 ];
 const esListaTab = (t: Tab) => t === "pendientes" || t === "hoy" || t === "semana" || t === "atrasadas";
 
@@ -198,11 +200,45 @@ export default function PlanificacionRevisiones() {
 
   const tecNombre = (id?: string | null) => tecnicos.find((t) => t.id === id)?.nombre ?? "—";
 
+  const indicadores = useMemo(() => {
+    const total = filas.length;
+    const controlados = new Set(filas.map((f) => f.v.id)).size;
+    const sinPlan = Math.max(0, vehiculos.size - controlados);
+    let previstas = 0, atras = 0;
+    for (const f of filas) { const e = f.est.estado; if (e === "proxima" || e === "vence_hoy") previstas++; if (e === "atrasada") atras++; }
+    const cumplimiento = total > 0 ? Math.round(((total - atras) / total) * 100) : 100;
+    const cli = new Map<string, { nombre: string; planes: number; atras: number }>();
+    for (const f of filas) { const k = f.v.empresa_id; let g = cli.get(k); if (!g) { g = { nombre: f.v.empresa?.nombre ?? "—", planes: 0, atras: 0 }; cli.set(k, g); } g.planes++; if (f.est.estado === "atrasada") g.atras++; }
+    const porCli = Array.from(cli.values()).map((g) => ({ ...g, pct: g.planes > 0 ? Math.round(((g.planes - g.atras) / g.planes) * 100) : 100 })).sort((a, b) => a.pct - b.pct);
+    const tec = new Map<string, { nombre: string; planes: number; atras: number }>();
+    for (const f of filas) { const k = f.plan.tecnico_id ?? "sin"; let g = tec.get(k); if (!g) { g = { nombre: k === "sin" ? "Sin asignar" : (tecnicos.find((t) => t.id === k)?.nombre ?? "—"), planes: 0, atras: 0 }; tec.set(k, g); } g.planes++; if (f.est.estado === "atrasada") g.atras++; }
+    const porTec = Array.from(tec.values()).sort((a, b) => b.atras - a.atras);
+    const topRetraso = filas.filter((f) => f.est.estado === "atrasada").sort((a, b) => (a.est.dias_restantes ?? 0) - (b.est.dias_restantes ?? 0)).slice(0, 8);
+    return { total, controlados, sinPlan, previstas, atras, cumplimiento, porCli, porTec, topRetraso, realizadasMes: realizadas.length };
+  }, [filas, vehiculos, tecnicos, realizadas]);
+
+  function exportarExcel() {
+    const rows = filas.map((f) => ({
+      Matrícula: f.v.matricula, Cliente: f.v.empresa?.nombre ?? "", Base: f.v.delegacion?.nombre ?? "",
+      Revisión: f.plan.nombre || f.plan.operacion?.nombre || "", Última: f.plan.ultima_fecha ?? "",
+      Próxima: f.est.proxima_fecha_efec ?? "", "Km objetivo": f.est.proxima_km_efec ?? "",
+      "Días restantes": f.est.dias_restantes ?? "", Estado: ESTADO_PLAN_LABELS[f.est.estado],
+      Prioridad: PRIORIDAD_PLAN_LABELS[f.est.prioridad], "En base": f.wf?.estado === "en_base" ? "Sí" : "", Técnico: tecNombre(f.plan.tecnico_id),
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Revisiones");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(indicadores.porCli.map((g) => ({ Cliente: g.nombre, Planes: g.planes, Atrasadas: g.atras, "Cumplimiento %": g.pct }))), "Cumplimiento cliente");
+    XLSX.writeFile(wb, `planificacion_revisiones_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
         <h1 className="text-lg font-black">Planificación de revisiones</h1>
-        <button onClick={() => navigate("/tyrecontrol/plantillas-mantenimiento")} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-800">📋 Plantillas</button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportarExcel} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-800">⬇ Excel</button>
+          <button onClick={() => navigate("/tyrecontrol/plantillas-mantenimiento")} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-800">📋 Plantillas</button>
+        </div>
       </div>
       {msg && <div className="mb-3 text-sm text-emerald-400">{msg}</div>}
 
@@ -299,6 +335,56 @@ export default function PlanificacionRevisiones() {
             })}
           </div>
           <div className="mt-2 text-[11px] text-slate-500">Muestra la próxima revisión de cada plan en su fecha. Arrastrar/soltar para reprogramar llegará más adelante.</div>
+        </div>
+      ) : tab === "indicadores" ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {([
+              ["Vehículos controlados", indicadores.controlados], ["Sin planificación", indicadores.sinPlan],
+              ["Revisiones previstas", indicadores.previstas], ["Atrasadas", indicadores.atras],
+              ["Realizadas (mes)", indicadores.realizadasMes], ["% Cumplimiento", `${indicadores.cumplimiento}%`],
+            ] as [string, number | string][]).map(([l, v]) => (
+              <div key={l} className="rounded-xl border border-slate-700 bg-slate-800 p-3">
+                <div className="text-2xl font-black text-slate-100">{v}</div>
+                <div className="text-[11px] text-slate-400">{l}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-700 bg-slate-800 p-3">
+              <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Cumplimiento por cliente</div>
+              {indicadores.porCli.length === 0 ? <div className="text-[12px] text-slate-500">Sin datos.</div> : indicadores.porCli.map((g) => (
+                <div key={g.nombre} className="flex items-center gap-2 border-t border-slate-700/50 py-1 text-[12px]">
+                  <span className="flex-1 truncate text-slate-200">{g.nombre}</span>
+                  <span className="text-slate-500">{g.planes} planes</span>
+                  <span className="text-rose-300">{g.atras} atras.</span>
+                  <span className={`w-12 text-right font-bold ${g.pct >= 90 ? "text-emerald-300" : g.pct >= 70 ? "text-amber-300" : "text-rose-300"}`}>{g.pct}%</span>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-800 p-3">
+              <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Carga por técnico</div>
+              {indicadores.porTec.length === 0 ? <div className="text-[12px] text-slate-500">Sin datos.</div> : indicadores.porTec.map((g) => (
+                <div key={g.nombre} className="flex items-center gap-2 border-t border-slate-700/50 py-1 text-[12px]">
+                  <span className="flex-1 truncate text-slate-200">{g.nombre}</span>
+                  <span className="text-slate-500">{g.planes} planes</span>
+                  <span className="text-rose-300">{g.atras} atras.</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-700 bg-slate-800 p-3">
+            <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Vehículos con más retraso</div>
+            {indicadores.topRetraso.length === 0 ? <div className="text-[12px] text-slate-500">Ninguno.</div> : indicadores.topRetraso.map((f) => (
+              <div key={f.plan.id} className="flex items-center gap-2 border-t border-slate-700/50 py-1 text-[12px]">
+                <span className="w-24 font-bold text-slate-100">{f.v.matricula}</span>
+                <span className="flex-1 truncate text-slate-400">{f.v.empresa?.nombre} · {f.plan.nombre || f.plan.operacion?.nombre}</span>
+                <span className="font-bold text-rose-300">{Math.abs(f.est.dias_restantes ?? 0)} d</span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : tab === "cliente" ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

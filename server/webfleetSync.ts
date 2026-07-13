@@ -211,6 +211,55 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
   }
 }
 
+// ── Avisos automáticos por tiempo (30/15/7 días y vencidas) ─────────────────
+// Recorre los planes y crea avisos internos "próxima"/"vencida" sin depender
+// de que el vehículo entre en base. No se repiten (índice único por plan+tipo+
+// fecha de vencimiento). Reutiliza el centro de alertas (campana).
+export async function checkMantenimientoAvisos(): Promise<{ creados: number } | { error: string }> {
+  try {
+    const { data: cfg } = await supabase.from("tc_webfleet_sync_config").select("alertas_activas").eq("id", 1).maybeSingle();
+    if (cfg && cfg.alertas_activas === false) return { creados: 0 };
+
+    const [{ data: planEst }, { data: ops }, { data: vehs }] = await Promise.all([
+      supabase.rpc("tc_plan_estado"),
+      supabase.from("tc_operaciones_mantenimiento").select("id, nombre"),
+      supabase.from("tc_vehiculos").select("id, matricula"),
+    ]);
+    const opNombre = new Map<string, string>((ops ?? []).map((o: any) => [o.id, o.nombre]));
+    const matricula = new Map<string, string>((vehs ?? []).map((v: any) => [v.id, v.matricula]));
+
+    const avisos: any[] = [];
+    for (const p of (planEst ?? []) as any[]) {
+      const op = opNombre.get(p.operacion_id) ?? "Revisión";
+      const mat = matricula.get(p.vehiculo_id) ?? "vehículo";
+      const dr: number | null = p.dias_restantes;
+      if (p.estado === "atrasada") {
+        avisos.push({ empresa_id: p.empresa_id, vehiculo_id: p.vehiculo_id, plan_id: p.plan_id, tipo: "vencida",
+          entrada_base_at: p.proxima_fecha_efec, delegacion_id: null,
+          mensaje: `${mat}: ${op} VENCIDA${dr != null && dr < 0 ? ` hace ${Math.abs(dr)} días` : ""}.` });
+      } else if (p.estado === "proxima" || p.estado === "vence_hoy") {
+        avisos.push({ empresa_id: p.empresa_id, vehiculo_id: p.vehiculo_id, plan_id: p.plan_id, tipo: "proxima",
+          entrada_base_at: p.proxima_fecha_efec, delegacion_id: null,
+          mensaje: `${mat}: ${op} próxima${dr != null ? (dr === 0 ? " (vence hoy)" : ` (en ${dr} días)`) : ""}.` });
+      }
+    }
+    if (avisos.length > 0) {
+      await supabase.from("tc_webfleet_alertas").upsert(avisos, { onConflict: "vehiculo_id,plan_id,tipo,entrada_base_at", ignoreDuplicates: true });
+    }
+    return { creados: avisos.length };
+  } catch (e: any) {
+    return { error: e?.message || "Error avisos mantenimiento" };
+  }
+}
+
+let avisosTimer: ReturnType<typeof setInterval> | null = null;
+export function startMantenimientoAvisos(): void {
+  if (avisosTimer) clearInterval(avisosTimer);
+  // Primer chequeo a los 60s y luego cada 12h (idempotente por el índice único).
+  setTimeout(() => { checkMantenimientoAvisos().then((r) => console.log("[mant-avisos]", "creados" in r ? `${r.creados} avisos` : r.error)); }, 60000);
+  avisosTimer = setInterval(() => { checkMantenimientoAvisos(); }, 12 * 60 * 60 * 1000);
+}
+
 // ── Arranque del bucle periódico (intervalo configurable) ────────────────────
 let timer: ReturnType<typeof setTimeout> | null = null;
 
