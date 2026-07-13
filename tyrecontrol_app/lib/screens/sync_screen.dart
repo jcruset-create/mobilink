@@ -13,6 +13,7 @@ class SyncScreen extends StatefulWidget {
 
 class _SyncScreenState extends State<SyncScreen> {
   bool _sincronizando = false;
+  bool _reintentando = false;
   String? _ultimaSync;
 
   @override
@@ -37,6 +38,15 @@ class _SyncScreenState extends State<SyncScreen> {
       setState(() => _ultimaSync = texto);
     } finally {
       if (mounted) setState(() => _sincronizando = false);
+    }
+  }
+
+  Future<void> _reintentarErrores() async {
+    setState(() => _reintentando = true);
+    try {
+      await OfflineStore.reintentarFallidos();
+    } finally {
+      if (mounted) setState(() => _reintentando = false);
     }
   }
 
@@ -90,9 +100,53 @@ class _SyncScreenState extends State<SyncScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'La app guarda todo en el dispositivo antes de nada. Si no hay cobertura, '
-            'los datos se envían solos en cuanto vuelva la conexión.',
+            'La app trabaja online siempre que hay cobertura. Si no la hay, guarda '
+            'los cambios en el dispositivo y los envía solos en cuanto vuelve la conexión.',
             style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+
+          // Buzón de errores: items que el servidor rechazó (no se reintentan
+          // en bucle para no bloquear). Recuperables una vez corregida la causa.
+          ValueListenableBuilder<int>(
+            valueListenable: OfflineStore.failedCount,
+            builder: (_, n, __) {
+              if (n == 0) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: Card(
+                  color: AppColors.warning.withValues(alpha: 0.12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.error_outline, color: AppColors.warning),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text('$n dato(s) rechazados por el servidor',
+                                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text('No se han podido guardar en el servidor. Reintenta cuando el problema esté resuelto.',
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _reintentando ? null : _reintentarErrores,
+                          icon: _reintentando
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.refresh),
+                          label: Text(_reintentando ? 'Reintentando…' : 'Reintentar errores'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),

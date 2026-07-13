@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../models/models.dart';
 import '../models/umbrales.dart';
 import '../services/offline_store.dart';
@@ -251,9 +252,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
       vehiculoId: widget.vehiculo.id,
     );
     try {
+      // Online primero: si hay cobertura, se guarda directo en el servidor.
       await TyreControlApi.guardarDetalleRevision(payload);
       OfflineStore.offline.value = false;
+    } on PostgrestException catch (e) {
+      // El servidor respondió y rechazó el dato (no es falta de cobertura):
+      // se aparta al buzón de errores para no bloquear y seguimos online.
+      await OfflineStore.parkFailed({'type': 'detalle', 'payload': payload}, e.message);
     } catch (_) {
+      // Sin cobertura: a la cola, se enviará solo al recuperar la conexión.
       OfflineStore.offline.value = true;
       await OfflineStore.enqueueDetalle(payload);
     }
@@ -368,17 +375,31 @@ class _ReviewScreenState extends State<ReviewScreen> {
   Future<void> _finalizar() async {
     setState(() => _finalizando = true);
     try {
-      if (OfflineStore.offline.value) {
+      if (OfflineStore.pendingCount.value > 0) {
+        // Hay detalles en cola (no había cobertura al medirlos): encolamos el
+        // completar para que suba DESPUÉS de ellos e intentamos vaciar ya
+        // (si hay cobertura, se sube todo ahora → online).
         await OfflineStore.enqueueCompletar(_revision!.id);
+        await OfflineStore.flush();
       } else {
+        // Todo guardado online: completamos directo en el servidor.
         try {
           await TyreControlApi.completarRevision(_revision!.id);
+          OfflineStore.offline.value = false;
+        } on PostgrestException {
+          await OfflineStore.enqueueCompletar(_revision!.id);
+          await OfflineStore.flush();
         } catch (_) {
+          OfflineStore.offline.value = true;
           await OfflineStore.enqueueCompletar(_revision!.id);
         }
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Revisión finalizada')));
+      final pendientesTrasSync = OfflineStore.pendingCount.value;
+      final msg = pendientesTrasSync == 0
+          ? 'Revisión finalizada y sincronizada'
+          : 'Revisión guardada; se enviará al recuperar la conexión';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       Navigator.of(context).popUntil((r) => r.isFirst);
     } finally {
       if (mounted) setState(() => _finalizando = false);
