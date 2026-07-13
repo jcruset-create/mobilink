@@ -10,7 +10,7 @@ import type {
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
-  PlantillaMantenimiento, PlantillaItem,
+  PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -969,6 +969,62 @@ export async function aplicarPlantilla(plantillaId: string, vehiculoIds: string[
   const { data, error } = await supabase.rpc("tc_aplicar_plantilla", { p_plantilla: plantillaId, p_vehiculos: vehiculoIds });
   if (error) throw new Error(error.message);
   return (data as number) ?? 0;
+}
+
+// ── Lotes de revisión (visitas conjuntas) ──────────────────────
+export async function listarLotes(): Promise<LoteRevision[]> {
+  const { data, error } = await supabase.from("tc_lotes_revision")
+    .select("*, empresa:tc_empresas(*), delegacion:tc_delegaciones(*)")
+    .order("fecha_prevista", { ascending: false, nullsFirst: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as LoteRevision[];
+}
+
+export async function crearLote(input: {
+  empresa_id: string; delegacion_id?: string | null; fecha_prevista?: string | null; hora_prevista?: string | null;
+  tecnico_id?: string | null; observaciones?: string | null;
+  vehiculos: { vehiculo_id: string; plan_id?: string | null }[];
+}): Promise<string> {
+  const ins = await supabase.from("tc_lotes_revision").insert({
+    empresa_id: input.empresa_id, delegacion_id: input.delegacion_id ?? null, fecha_prevista: input.fecha_prevista ?? null,
+    hora_prevista: input.hora_prevista ?? null, tecnico_id: input.tecnico_id ?? null, estado: "planificado",
+    observaciones: input.observaciones ?? null,
+  }).select("id").single();
+  if (ins.error) throw new Error(ins.error.message);
+  const loteId = (ins.data as any).id as string;
+  if (input.vehiculos.length > 0) {
+    const filas = input.vehiculos.map((v, i) => ({ lote_id: loteId, vehiculo_id: v.vehiculo_id, plan_id: v.plan_id ?? null, orden: i }));
+    const { error } = await supabase.from("tc_lote_vehiculos").insert(filas);
+    if (error) throw new Error(error.message);
+  }
+  return loteId;
+}
+
+export async function listarLoteVehiculos(loteId: string): Promise<LoteVehiculo[]> {
+  const { data, error } = await supabase.from("tc_lote_vehiculos")
+    .select("*, vehiculo:tc_vehiculos(*)").eq("lote_id", loteId).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as LoteVehiculo[];
+}
+
+export async function actualizarLoteVehiculoEstado(loteId: string, vehiculoId: string, estado: LoteVehiculo["estado"]): Promise<void> {
+  const { error } = await supabase.from("tc_lote_vehiculos").update({ estado }).eq("lote_id", loteId).eq("vehiculo_id", vehiculoId);
+  if (error) throw new Error(error.message);
+}
+
+export async function quitarLoteVehiculo(loteId: string, vehiculoId: string): Promise<void> {
+  const { error } = await supabase.from("tc_lote_vehiculos").delete().eq("lote_id", loteId).eq("vehiculo_id", vehiculoId);
+  if (error) throw new Error(error.message);
+}
+
+export async function actualizarLote(id: string, patch: Partial<Pick<LoteRevision, "fecha_prevista" | "hora_prevista" | "tecnico_id" | "estado" | "observaciones">>): Promise<void> {
+  const { error } = await supabase.from("tc_lotes_revision").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function finalizarLote(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_finalizar_lote", { p_lote: id });
+  if (error) throw new Error(error.message);
 }
 
 export async function listarMantenimientoRealizadas(vehiculoId: string): Promise<MantenimientoRealizada[]> {

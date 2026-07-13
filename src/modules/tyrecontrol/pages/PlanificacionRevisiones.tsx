@@ -14,11 +14,11 @@ import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 import { BadgePlan, ModalRegistrar } from "../components/PlanMantenimiento";
 
 type Fila = { plan: PlanMantenimiento; est: PlanEstado; v: Vehiculo; wf?: VehiculoWebfleetEstado };
-type Tab = "pendientes" | "hoy" | "semana" | "atrasadas" | "realizadas" | "cliente" | "base";
+type Tab = "pendientes" | "hoy" | "semana" | "atrasadas" | "realizadas" | "cliente" | "base" | "calendario";
 const TABS: { k: Tab; l: string }[] = [
   { k: "pendientes", l: "Pendientes" }, { k: "hoy", l: "Hoy" }, { k: "semana", l: "Esta semana" },
   { k: "atrasadas", l: "Atrasadas" }, { k: "realizadas", l: "Realizadas" },
-  { k: "cliente", l: "Por cliente" }, { k: "base", l: "Por base" },
+  { k: "cliente", l: "Por cliente" }, { k: "base", l: "Por base" }, { k: "calendario", l: "Calendario" },
 ];
 const esListaTab = (t: Tab) => t === "pendientes" || t === "hoy" || t === "semana" || t === "atrasadas";
 
@@ -45,6 +45,7 @@ export default function PlanificacionRevisiones() {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [masiva, setMasiva] = useState("");
   const [msg, setMsg] = useState("");
+  const [mesRef, setMesRef] = useState(() => { const d = new Date(); d.setDate(1); return d; });
 
   async function cargar() {
     setLoading(true);
@@ -171,6 +172,30 @@ export default function PlanificacionRevisiones() {
     return Array.from(m.values()).sort((a, b) => b.atras - a.atras);
   }, [filas]);
 
+  // Calendario: por día del mes, planes cuya próxima cae ese día.
+  const porDia = useMemo(() => {
+    const m = new Map<string, Fila[]>();
+    for (const f of filas) {
+      const d = f.est.proxima_fecha_efec;
+      if (!d) continue;
+      const k = d.slice(0, 10);
+      (m.get(k) ?? m.set(k, []).get(k)!).push(f);
+    }
+    return m;
+  }, [filas]);
+
+  const diasMes = useMemo(() => {
+    const y = mesRef.getFullYear(), mo = mesRef.getMonth();
+    const primero = new Date(y, mo, 1);
+    const offset = (primero.getDay() + 6) % 7; // lunes = 0
+    const total = new Date(y, mo + 1, 0).getDate();
+    const celdas: (Date | null)[] = [];
+    for (let i = 0; i < offset; i++) celdas.push(null);
+    for (let d = 1; d <= total; d++) celdas.push(new Date(y, mo, d));
+    while (celdas.length % 7 !== 0) celdas.push(null);
+    return celdas;
+  }, [mesRef]);
+
   const tecNombre = (id?: string | null) => tecnicos.find((t) => t.id === id)?.nombre ?? "—";
 
   return (
@@ -244,7 +269,38 @@ export default function PlanificacionRevisiones() {
         </div>
       )}
 
-      {loading ? <div className="text-slate-500">Cargando…</div> : tab === "cliente" ? (
+      {loading ? <div className="text-slate-500">Cargando…</div> : tab === "calendario" ? (
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <button onClick={() => setMesRef(new Date(mesRef.getFullYear(), mesRef.getMonth() - 1, 1))} className="rounded-lg border border-slate-600 px-3 py-1 text-sm text-slate-200 hover:bg-slate-800">←</button>
+            <div className="text-sm font-bold text-slate-100">{mesRef.toLocaleDateString("es-ES", { month: "long", year: "numeric" })}</div>
+            <button onClick={() => setMesRef(new Date(mesRef.getFullYear(), mesRef.getMonth() + 1, 1))} className="rounded-lg border border-slate-600 px-3 py-1 text-sm text-slate-200 hover:bg-slate-800">→</button>
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {["L", "M", "X", "J", "V", "S", "D"].map((d) => <div key={d} className="py-1 text-center text-[11px] font-bold text-slate-500">{d}</div>)}
+            {diasMes.map((d, i) => {
+              if (!d) return <div key={i} className="min-h-[68px] rounded-lg bg-slate-900/30" />;
+              const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+              const fs = porDia.get(k) ?? [];
+              const atras = fs.filter((f) => f.est.estado === "atrasada").length;
+              const hoyKey = new Date().toISOString().slice(0, 10) === k;
+              return (
+                <div key={i} className={`min-h-[68px] rounded-lg border p-1 ${hoyKey ? "border-sky-500/60" : "border-slate-700/60"} bg-slate-800`}>
+                  <div className="text-[11px] font-bold text-slate-400">{d.getDate()}</div>
+                  {fs.length > 0 && (
+                    <div className="mt-0.5 flex flex-col gap-0.5">
+                      <span className={`rounded px-1 text-[10px] font-bold ${atras > 0 ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/15 text-amber-300"}`}>{fs.length} revisión{fs.length === 1 ? "" : "es"}</span>
+                      {fs.slice(0, 2).map((f) => <span key={f.plan.id} className="truncate text-[10px] text-slate-400">{f.v.matricula}</span>)}
+                      {fs.length > 2 && <span className="text-[10px] text-slate-500">+{fs.length - 2}</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-2 text-[11px] text-slate-500">Muestra la próxima revisión de cada plan en su fecha. Arrastrar/soltar para reprogramar llegará más adelante.</div>
+        </div>
+      ) : tab === "cliente" ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {porCliente.map((g) => (
             <button key={g.empresaId} onClick={() => { setFEmpresa(g.empresaId); setTab("pendientes"); }}

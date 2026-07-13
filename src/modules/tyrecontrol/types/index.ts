@@ -334,6 +334,44 @@ export interface PlantillaMantenimiento {
   items?: PlantillaItem[];
 }
 
+export type EstadoLote = "borrador" | "planificado" | "confirmado" | "en_curso" | "finalizado" | "parcial" | "cancelado";
+export const ESTADO_LOTE_LABELS: Record<EstadoLote, string> = {
+  borrador: "Borrador", planificado: "Planificado", confirmado: "Confirmado", en_curso: "En curso",
+  finalizado: "Finalizado", parcial: "Parcial", cancelado: "Cancelado",
+};
+export const ESTADO_LOTE_BADGE: Record<EstadoLote, string> = {
+  borrador: "bg-slate-500/15 text-slate-300 ring-1 ring-slate-500/30",
+  planificado: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  confirmado: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  en_curso: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  finalizado: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+  parcial: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  cancelado: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
+};
+
+export interface LoteRevision {
+  id: string;
+  empresa_id: string;
+  delegacion_id?: string | null;
+  fecha_prevista?: string | null;
+  hora_prevista?: string | null;
+  estado: EstadoLote;
+  tecnico_id?: string | null;
+  tiempo_estimado_min?: number | null;
+  observaciones?: string | null;
+  empresa?: Empresa | null;
+  delegacion?: Delegacion | null;
+}
+
+export interface LoteVehiculo {
+  lote_id: string;
+  vehiculo_id: string;
+  plan_id?: string | null;
+  orden: number;
+  estado: "pendiente" | "realizada" | "no_disponible";
+  vehiculo?: Vehiculo | null;
+}
+
 export interface Vehiculo {
   id: string;
   empresa_id: string;
