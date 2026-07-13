@@ -108,15 +108,20 @@ class _ReviewScreenState extends State<ReviewScreen> {
         if (epc != null && epc.isNotEmpty) _posPorEpc[epc.toUpperCase()] = m.posicionId;
       }
 
-      // Km automáticos de Webfleet: si el vehículo está enlazado, se leen los
-      // km reales al empezar la revisión y quedan registrados en ella.
-      _kmRevision = widget.vehiculo.kmActual;
-      final wfId = widget.vehiculo.webfleetVehicleId;
-      if (widget.revisionExistente == null && wfId != null && wfId.isNotEmpty) {
-        final kmWf = await TyreControlApi.obtenerKmWebfleet(widget.vehiculo.empresaId, wfId);
-        if (kmWf != null) {
-          _kmRevision = kmWf;
-          await TyreControlApi.actualizarKmVehiculo(widget.vehiculo.id, kmWf);
+      // Km de la revisión: si el vehículo está enlazado con Webfleet se leen
+      // los km reales del odómetro. Si NO está enlazado, empieza a 0 (no se
+      // arrastra el km antiguo). Una revisión ya existente conserva su km.
+      if (widget.revisionExistente != null) {
+        _kmRevision = widget.revisionExistente!.kmVehiculo ?? 0;
+      } else {
+        _kmRevision = 0;
+        final wfId = widget.vehiculo.webfleetVehicleId;
+        if (wfId != null && wfId.isNotEmpty) {
+          final kmWf = await TyreControlApi.obtenerKmWebfleet(widget.vehiculo.empresaId, wfId);
+          if (kmWf != null) {
+            _kmRevision = kmWf;
+            await TyreControlApi.actualizarKmVehiculo(widget.vehiculo.id, kmWf);
+          }
         }
       }
 
