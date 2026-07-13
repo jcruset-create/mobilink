@@ -12,6 +12,7 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import { startWebfleetSync, syncWebfleetOnce } from "./webfleetSync.ts";
 import OpenAI, { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -3057,6 +3058,14 @@ function webfleetOdometerKm(o: any): number | null {
   if (Number.isFinite(cand) && cand > 0) return cand > 200000 ? Math.round(cand / 1000) : Math.round(cand);
   return null;
 }
+
+// Fuerza un ciclo de sincronización de "vehículos en base" y devuelve el nº
+// de vehículos actualizados. Para el botón "Sincronizar ahora" de la config.
+app.post("/api/tyrecontrol/webfleet/sync", async (_req, res) => {
+  const r = await syncWebfleetOnce();
+  if ("error" in r) return res.status(502).json(r);
+  res.json(r);
+});
 
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
@@ -11824,6 +11833,7 @@ initDb()
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
       startRecobrosNotifierChecker();
+      startWebfleetSync(); // sincronización periódica de "vehículos en base"
     });
   })
   .catch((error) => {
