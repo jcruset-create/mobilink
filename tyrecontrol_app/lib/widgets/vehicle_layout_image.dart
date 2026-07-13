@@ -4,8 +4,9 @@ import '../theme/app_theme.dart';
 
 /// Plano del vehículo con la FOTO real de fondo y una tarjeta por posición,
 /// colocada en las coordenadas calibradas en el panel web (pos_x/y/w/h, en %).
-/// Réplica en la tablet de la vista "Plano del vehículo" del panel.
-class VehicleLayoutImage extends StatelessWidget {
+/// La foto se ajusta al área disponible (ancho Y alto) para que el vehículo
+/// entero quepa en la tablet sin necesidad de hacer scroll.
+class VehicleLayoutImage extends StatefulWidget {
   final String imagenUrl;
   final List<PosicionVehiculo> posiciones;
   final Map<String, MontajeActual> montajePorPosicion;
@@ -29,6 +30,50 @@ class VehicleLayoutImage extends StatelessWidget {
     required this.onTap,
   });
 
+  @override
+  State<VehicleLayoutImage> createState() => _VehicleLayoutImageState();
+}
+
+class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
+  double? _aspect; // ancho/alto real de la imagen
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolver();
+  }
+
+  @override
+  void didUpdateWidget(VehicleLayoutImage old) {
+    super.didUpdateWidget(old);
+    if (old.imagenUrl != widget.imagenUrl) {
+      _aspect = null;
+      _resolver();
+    }
+  }
+
+  void _resolver() {
+    _stream?.removeListener(_listener!);
+    final img = NetworkImage(widget.imagenUrl);
+    _stream = img.resolve(ImageConfiguration.empty);
+    _listener = ImageStreamListener((info, _) {
+      final w = info.image.width.toDouble();
+      final h = info.image.height.toDouble();
+      if (h > 0 && mounted) setState(() => _aspect = w / h);
+    }, onError: (_, __) {
+      if (mounted) setState(() => _aspect = 0.62); // fallback vertical
+    });
+    _stream!.addListener(_listener!);
+  }
+
+  @override
+  void dispose() {
+    if (_stream != null && _listener != null) _stream!.removeListener(_listener!);
+    super.dispose();
+  }
+
   // Coordenadas por defecto (%) si una posición aún no está calibrada.
   ({double x, double y, double w, double h}) _coords(PosicionVehiculo p, int i) {
     if (p.posX != null && p.posY != null && p.posW != null && p.posH != null) {
@@ -41,49 +86,44 @@ class VehicleLayoutImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (_aspect == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final aspect = _aspect!;
     return LayoutBuilder(
-      builder: (context, constraints) {
-        final ancho = constraints.maxWidth;
-        return Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Image.network(
-                imagenUrl,
-                width: ancho,
-                fit: BoxFit.fitWidth,
-                errorBuilder: (_, __, ___) => Container(
-                  width: ancho,
-                  height: ancho * 1.4,
-                  color: AppColors.surface,
-                  child: const Center(child: Icon(Icons.directions_car, size: 48, color: AppColors.textHint)),
+      builder: (context, c) {
+        // Ajustar la imagen dentro del área disponible manteniendo su aspecto:
+        // primero por ancho y, si se pasa de alto, se recorta por alto.
+        double w = c.maxWidth;
+        double h = w / aspect;
+        if (c.maxHeight.isFinite && h > c.maxHeight) {
+          h = c.maxHeight;
+          w = h * aspect;
+        }
+        return Center(
+          child: SizedBox(
+            width: w,
+            height: h,
+            child: Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.network(
+                    widget.imagenUrl,
+                    width: w,
+                    height: h,
+                    fit: BoxFit.fill, // la caja ya respeta el aspecto real
+                    errorBuilder: (_, __, ___) => Container(
+                      color: AppColors.surface,
+                      child: const Center(child: Icon(Icons.directions_car, size: 48, color: AppColors.textHint)),
+                    ),
+                  ),
                 ),
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return Container(
-                    width: ancho,
-                    height: ancho * 1.4,
-                    color: AppColors.surface,
-                    child: const Center(child: CircularProgressIndicator()),
-                  );
-                },
-              ),
+                for (int i = 0; i < widget.posiciones.length; i++)
+                  _cardPositioned(widget.posiciones[i], i, w, h),
+              ],
             ),
-            Positioned.fill(
-              child: LayoutBuilder(
-                builder: (context, c) {
-                  final w = c.maxWidth;
-                  final h = c.maxHeight;
-                  return Stack(
-                    children: [
-                      for (int i = 0; i < posiciones.length; i++)
-                        _cardPositioned(posiciones[i], i, w, h),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ],
+          ),
         );
       },
     );
@@ -91,20 +131,20 @@ class VehicleLayoutImage extends StatelessWidget {
 
   Widget _cardPositioned(PosicionVehiculo p, int i, double w, double h) {
     final co = _coords(p, i);
-    final cardW = (co.w / 100 * w).clamp(96.0, 220.0);
+    final cardW = (co.w / 100 * w).clamp(88.0, 200.0);
     return Positioned(
       left: (co.x / 100 * w).clamp(0.0, w - cardW),
-      top: (co.y / 100 * h).clamp(0.0, h - 40),
+      top: (co.y / 100 * h).clamp(0.0, h - 36),
       width: cardW,
       child: _TarjetaPosicion(
         p: p,
-        neumatico: montajePorPosicion[p.id]?.neumatico,
-        draft: detalles[p.id],
-        status: estados[p.id] ?? TireStatus.pendiente,
-        seleccionada: p.id == seleccionadaId,
-        liveProf: p.id == seleccionadaId ? liveProf : null,
-        livePres: p.id == seleccionadaId ? livePres : null,
-        onTap: () => onTap(p),
+        neumatico: widget.montajePorPosicion[p.id]?.neumatico,
+        draft: widget.detalles[p.id],
+        status: widget.estados[p.id] ?? TireStatus.pendiente,
+        seleccionada: p.id == widget.seleccionadaId,
+        liveProf: p.id == widget.seleccionadaId ? widget.liveProf : null,
+        livePres: p.id == widget.seleccionadaId ? widget.livePres : null,
+        onTap: () => widget.onTap(p),
       ),
     );
   }
@@ -149,7 +189,7 @@ class _TarjetaPosicion extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
           decoration: BoxDecoration(
             color: AppColors.surface.withValues(alpha: 0.92),
             border: Border.all(color: color, width: seleccionada ? 3 : 2),
@@ -166,7 +206,7 @@ class _TarjetaPosicion extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 1),
               if (neumatico != null) ...[
                 Text(
                   neumatico!.marca ?? '—',
@@ -187,13 +227,13 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     medida,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                    style: const TextStyle(fontSize: 9, color: AppColors.textSecondary),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
               ] else
                 const Text('Sin neumático', style: TextStyle(fontSize: 10, color: AppColors.textHint)),
-              const SizedBox(height: 2),
+              const SizedBox(height: 1),
               Text(
                 '$profTxt · $presTxt',
                 textAlign: TextAlign.center,

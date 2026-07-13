@@ -36,6 +36,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   final Map<String, String> _posPorEpc = {}; // rfid_epc (mayúsculas) → posicionId
   Map<String, String> _fotosModelo = {}; // claveModeloCatalogo → url foto del catálogo
   String? _imagenChasis; // foto/plano del vehículo (si está configurada)
+  num _kmRevision = 0; // km del vehículo para esta revisión (Webfleet si está enlazado)
   final Map<String, RevisionDetalleDraft> _detalles = {};
   RevisionVehiculo? _revision;
   int _index = 0;
@@ -107,11 +108,23 @@ class _ReviewScreenState extends State<ReviewScreen> {
         if (epc != null && epc.isNotEmpty) _posPorEpc[epc.toUpperCase()] = m.posicionId;
       }
 
+      // Km automáticos de Webfleet: si el vehículo está enlazado, se leen los
+      // km reales al empezar la revisión y quedan registrados en ella.
+      _kmRevision = widget.vehiculo.kmActual;
+      final wfId = widget.vehiculo.webfleetVehicleId;
+      if (widget.revisionExistente == null && wfId != null && wfId.isNotEmpty) {
+        final kmWf = await TyreControlApi.obtenerKmWebfleet(widget.vehiculo.empresaId, wfId);
+        if (kmWf != null) {
+          _kmRevision = kmWf;
+          await TyreControlApi.actualizarKmVehiculo(widget.vehiculo.id, kmWf);
+        }
+      }
+
       _revision = widget.revisionExistente ??
           await TyreControlApi.crearRevision(
             empresaId: widget.vehiculo.empresaId,
             vehiculoId: widget.vehiculo.id,
-            kmVehiculo: widget.vehiculo.kmActual,
+            kmVehiculo: _kmRevision,
           );
 
       for (final p in posiciones) {
@@ -427,7 +440,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(widget.vehiculo.matricula, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            Text('${widget.vehiculo.empresa?.nombre ?? ''} · ${widget.vehiculo.kmActual} km', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            Text('${widget.vehiculo.empresa?.nombre ?? ''} · ${_kmRevision.round()} km', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
           ],
         ),
       ),
@@ -442,10 +455,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
             onConectar: _conectarSonda,
           ),
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: _imagenChasis != null
-                  ? VehicleLayoutImage(
+            child: _imagenChasis != null
+                ? Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: VehicleLayoutImage(
                       imagenUrl: _imagenChasis!,
                       posiciones: _posiciones,
                       montajePorPosicion: _montajePorPosicion,
@@ -455,14 +468,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
                       liveProf: _liveProf,
                       livePres: _livePres,
                       onTap: _abrirNeumatico,
-                    )
-                  : VehicleSchema(
+                    ),
+                  )
+                : SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: VehicleSchema(
                       posiciones: _posiciones,
                       estados: estados,
                       seleccionadaId: actual?.id,
                       onTap: _abrirNeumatico,
                     ),
-            ),
+                  ),
           ),
           _PanelInferior(
             actual: actual,

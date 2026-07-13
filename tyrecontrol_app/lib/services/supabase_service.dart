@@ -103,6 +103,29 @@ class TyreControlApi {
     return (data as List).map((e) => PosicionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
+  /// Km actuales del vehículo según Webfleet (odómetro real). Devuelve null si
+  /// no está enlazado o no hay cobertura; no bloquea la revisión.
+  static Future<int?> obtenerKmWebfleet(String empresaId, String objectno) async {
+    try {
+      final uri = Uri.parse('$kBackendUrl/api/tyrecontrol/webfleet/odometer?empresa=$empresaId&objectno=${Uri.encodeComponent(objectno)}');
+      final r = await http.get(uri).timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) return null;
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      final km = j['odometer_km'];
+      return km is num ? km.round() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Actualiza el kilometraje del vehículo (best-effort; si RLS no lo permite
+  /// no pasa nada, el km ya queda en la propia revisión).
+  static Future<void> actualizarKmVehiculo(String vehiculoId, int km) async {
+    try {
+      await _db.from('tc_vehiculos').update({'km_actual': km, 'origen_km': 'webfleet'}).eq('id', vehiculoId);
+    } catch (_) {}
+  }
+
   /// Imagen del plano del vehículo: la del tipo si la tiene; si no, la
   /// heredada de la configuración de ejes del vehículo. null si no hay.
   static Future<String?> obtenerImagenChasis(Vehiculo v) async {
