@@ -231,6 +231,8 @@ class RevisionVehiculo {
   final String fechaRevision;
   final String estadoRevision; // borrador | completada | enviada | anulada
   final String? observaciones;
+  final String? createdAt; // marca de tiempo real (para la hora en el historial)
+  final String? matricula; // del vehículo, si viene en el join
 
   RevisionVehiculo({
     required this.id,
@@ -240,6 +242,8 @@ class RevisionVehiculo {
     required this.fechaRevision,
     required this.estadoRevision,
     this.observaciones,
+    this.createdAt,
+    this.matricula,
   });
 
   factory RevisionVehiculo.fromJson(Map<String, dynamic> j) => RevisionVehiculo(
@@ -250,6 +254,8 @@ class RevisionVehiculo {
         fechaRevision: j['fecha_revision'] ?? '',
         estadoRevision: j['estado_revision'] ?? 'borrador',
         observaciones: j['observaciones'],
+        createdAt: j['created_at'],
+        matricula: j['vehiculo'] is Map ? j['vehiculo']['matricula'] : null,
       );
 }
 

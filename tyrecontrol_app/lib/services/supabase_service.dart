@@ -185,6 +185,21 @@ class TyreControlApi {
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
+  /// Historial: últimas revisiones completadas por el técnico (con la matrícula
+  /// del vehículo embebida para no hacer una consulta por cada una).
+  static Future<List<RevisionVehiculo>> listarRevisionesCompletadasDelTecnico({int limite = 30}) async {
+    final uid = _db.auth.currentUser?.id;
+    if (uid == null) return [];
+    final data = await _db
+        .from('revisiones_vehiculo')
+        .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)')
+        .eq('tecnico_id', uid)
+        .eq('estado_revision', 'completada')
+        .order('created_at', ascending: false)
+        .limit(limite);
+    return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
+  }
+
   // ── Fotos (Supabase Storage) ─────────────────────────────────
   static const _bucketFotos = 'tc-revisiones-fotos';
 
