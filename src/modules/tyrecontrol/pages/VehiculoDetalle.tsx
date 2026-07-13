@@ -6,6 +6,7 @@ import { ORIGEN_KM_LABELS, tipoLlantaLabel } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
+import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fecha + hora de una revisión: el día de fecha_revision y la hora del
@@ -98,6 +99,9 @@ export default function VehiculoDetalle() {
           <WebfleetVehiculo vehiculo={v} onUpdated={cargar} />
         </div>
       )}
+
+      {/* Plan de mantenimiento (revisiones periódicas) + historial */}
+      <PlanMantenimientoVehiculo vehiculo={v} puedeEditar={!esCliente} />
 
       {/* Configuración de neumáticos */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">

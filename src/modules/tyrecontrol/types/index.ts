@@ -211,6 +211,105 @@ export interface WebfleetAlerta {
   created_at?: string | null;
 }
 
+// ── Planificación de revisiones periódicas (mantenimiento) ──────
+export type EstadoPlan =
+  | "correcta" | "proxima" | "vence_hoy" | "atrasada" | "planificada"
+  | "en_curso" | "realizada" | "cancelada" | "no_aplicable" | "vehiculo_no_disponible";
+
+export const ESTADO_PLAN_LABELS: Record<EstadoPlan, string> = {
+  correcta: "Correcta", proxima: "Próxima", vence_hoy: "Vence hoy", atrasada: "Atrasada",
+  planificada: "Planificada", en_curso: "En curso", realizada: "Realizada",
+  cancelada: "Cancelada", no_aplicable: "No aplicable", vehiculo_no_disponible: "No disponible",
+};
+
+// Badge (tema slate) con color + se acompaña de texto/icono (no solo color).
+export const ESTADO_PLAN_BADGE: Record<EstadoPlan, string> = {
+  correcta: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+  proxima: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  vence_hoy: "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40",
+  atrasada: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
+  planificada: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  en_curso: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  realizada: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+  cancelada: "bg-slate-500/15 text-slate-400 ring-1 ring-slate-500/30",
+  no_aplicable: "bg-slate-700/40 text-slate-400 ring-1 ring-slate-600/40",
+  vehiculo_no_disponible: "bg-slate-500/15 text-slate-400 ring-1 ring-slate-500/30",
+};
+
+export const ESTADO_PLAN_ICONO: Record<EstadoPlan, string> = {
+  correcta: "✅", proxima: "🟡", vence_hoy: "🟠", atrasada: "🔴", planificada: "🔵",
+  en_curso: "🔧", realizada: "✔️", cancelada: "⛔", no_aplicable: "⚫", vehiculo_no_disponible: "🚫",
+};
+
+export type PrioridadPlan = "critica" | "alta" | "media" | "baja" | "sin";
+export const PRIORIDAD_PLAN_LABELS: Record<PrioridadPlan, string> = {
+  critica: "Crítica", alta: "Alta", media: "Media", baja: "Baja", sin: "—",
+};
+
+export interface OperacionMantenimiento {
+  id: string; nombre: string; descripcion?: string | null; orden: number; activo: boolean;
+}
+
+export interface PlanMantenimiento {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  operacion_id: string;
+  nombre?: string | null;
+  descripcion?: string | null;
+  frecuencia_dias?: number | null;
+  frecuencia_meses?: number | null;
+  frecuencia_km?: number | null;
+  frecuencia_horas?: number | null;
+  fecha_fija?: string | null;
+  ultima_fecha?: string | null;
+  ultima_km?: number | null;
+  ultima_horas?: number | null;
+  proxima_fecha?: string | null;
+  proxima_km?: number | null;
+  proxima_horas?: number | null;
+  ajuste_manual?: boolean;
+  margen_aviso_dias?: number;
+  prioridad_manual?: PrioridadPlan | null;
+  estado_manual?: EstadoPlan | null;
+  delegacion_id?: string | null;
+  tecnico_id?: string | null;
+  observaciones?: string | null;
+  activo?: boolean;
+  operacion?: OperacionMantenimiento | null;
+}
+
+export type PlanMantenimientoInput = Omit<PlanMantenimiento, "id" | "operacion">;
+
+export interface PlanEstado {
+  plan_id: string;
+  vehiculo_id: string;
+  empresa_id: string;
+  operacion_id: string;
+  proxima_fecha_efec?: string | null;
+  proxima_km_efec?: number | null;
+  dias_restantes?: number | null;
+  km_restantes?: number | null;
+  estado: EstadoPlan;
+  prioridad: PrioridadPlan;
+}
+
+export interface MantenimientoRealizada {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  plan_id?: string | null;
+  operacion_id?: string | null;
+  fecha: string;
+  tecnico_id?: string | null;
+  km?: number | null;
+  horas?: number | null;
+  resultado?: string | null;
+  observaciones?: string | null;
+  created_at?: string | null;
+  operacion?: OperacionMantenimiento | null;
+}
+
 export interface Vehiculo {
   id: string;
   empresa_id: string;

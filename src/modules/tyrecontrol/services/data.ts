@@ -9,6 +9,7 @@ import type {
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
+  OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -848,6 +849,76 @@ export async function guardarRevisionFlag(vehiculoId: string, empresaId: string,
   const { error } = await supabase.from("tc_vehiculo_revision_flag")
     .upsert({ vehiculo_id: vehiculoId, empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "vehiculo_id" });
   if (error) throw new Error(error.message);
+}
+
+// ── Planificación de revisiones periódicas (mantenimiento) ──────
+const COLS_PLAN = [
+  "empresa_id", "vehiculo_id", "operacion_id", "nombre", "descripcion",
+  "frecuencia_dias", "frecuencia_meses", "frecuencia_km", "frecuencia_horas", "fecha_fija",
+  "ultima_fecha", "ultima_km", "ultima_horas", "proxima_fecha", "proxima_km", "proxima_horas",
+  "ajuste_manual", "margen_aviso_dias", "prioridad_manual", "estado_manual",
+  "delegacion_id", "tecnico_id", "observaciones", "activo",
+] as const;
+
+export async function listarOperacionesMantenimiento(): Promise<OperacionMantenimiento[]> {
+  const { data, error } = await supabase.from("tc_operaciones_mantenimiento").select("*").eq("activo", true).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as OperacionMantenimiento[];
+}
+
+export async function listarPlanesMantenimiento(vehiculoId?: string): Promise<PlanMantenimiento[]> {
+  let q = supabase.from("tc_planes_mantenimiento").select("*, operacion:tc_operaciones_mantenimiento(*)").eq("activo", true);
+  if (vehiculoId) q = q.eq("vehiculo_id", vehiculoId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as PlanMantenimiento[];
+}
+
+export async function listarPlanEstado(): Promise<PlanEstado[]> {
+  const { data, error } = await supabase.rpc("tc_plan_estado");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PlanEstado[];
+}
+
+export async function guardarPlanMantenimiento(plan: Partial<PlanMantenimientoInput> & { id?: string }): Promise<void> {
+  const payload = pick(plan as any, COLS_PLAN);
+  const { error } = plan.id
+    ? await supabase.from("tc_planes_mantenimiento").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", plan.id)
+    : await supabase.from("tc_planes_mantenimiento").insert(payload);
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarPlanMantenimiento(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_planes_mantenimiento").update({ activo: false, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// Registra una revisión realizada y actualiza el plan (última fecha/km/horas;
+// se recalcula la próxima quitando el ajuste manual).
+export async function registrarMantenimiento(input: {
+  plan: PlanMantenimiento;
+  fecha: string; tecnicoId?: string | null; km?: number | null; horas?: number | null;
+  resultado?: string | null; observaciones?: string | null;
+}): Promise<void> {
+  const { plan } = input;
+  const ins = await supabase.from("tc_mantenimiento_realizadas").insert({
+    empresa_id: plan.empresa_id, vehiculo_id: plan.vehiculo_id, plan_id: plan.id, operacion_id: plan.operacion_id,
+    fecha: input.fecha, tecnico_id: input.tecnicoId ?? null, km: input.km ?? null, horas: input.horas ?? null,
+    resultado: input.resultado ?? null, observaciones: input.observaciones ?? null,
+  });
+  if (ins.error) throw new Error(ins.error.message);
+  const upd = await supabase.from("tc_planes_mantenimiento").update({
+    ultima_fecha: input.fecha, ultima_km: input.km ?? plan.ultima_km, ultima_horas: input.horas ?? plan.ultima_horas,
+    ajuste_manual: false, estado_manual: null, updated_at: new Date().toISOString(),
+  }).eq("id", plan.id);
+  if (upd.error) throw new Error(upd.error.message);
+}
+
+export async function listarMantenimientoRealizadas(vehiculoId: string): Promise<MantenimientoRealizada[]> {
+  const { data, error } = await supabase.from("tc_mantenimiento_realizadas")
+    .select("*, operacion:tc_operaciones_mantenimiento(*)").eq("vehiculo_id", vehiculoId).order("fecha", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as MantenimientoRealizada[];
 }
 
 // Alertas internas de "vehículos en base".

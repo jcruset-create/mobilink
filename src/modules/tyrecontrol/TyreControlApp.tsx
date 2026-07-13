@@ -11,6 +11,7 @@ import Delegaciones from "./pages/Delegaciones";
 import Vehiculos from "./pages/Vehiculos";
 import VehiculoDetalle from "./pages/VehiculoDetalle";
 import DisponiblesRevisar from "./pages/DisponiblesRevisar";
+import PlanificacionRevisiones from "./pages/PlanificacionRevisiones";
 import Neumaticos from "./pages/Neumaticos";
 import NeumaticoDetalle from "./pages/NeumaticoDetalle";
 import MontajesActuales from "./pages/MontajesActuales";
@@ -89,6 +90,7 @@ export default function TyreControlApp() {
               <Route path="vehiculos" element={<Vehiculos />} />
               <Route path="vehiculos/:id" element={<VehiculoDetalle />} />
               <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
+              <Route path="planificacion" element={<PlanificacionRevisiones />} />
               <Route path="neumaticos" element={<Neumaticos />} />
               <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
               <Route path="autorizaciones" element={<Autorizaciones />} />
