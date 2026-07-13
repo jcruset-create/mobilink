@@ -120,6 +120,68 @@ export interface PosicionVehiculo {
 
 export type OrigenKm = "manual" | "webfleet" | "importacion_excel";
 
+// ── Webfleet: vehículos en base ─────────────────────────────────
+export type EstadoWebfleet = "en_base" | "otra_base" | "en_ruta" | "sin_conexion" | "sin_dispositivo";
+
+export const ESTADO_WEBFLEET_LABELS: Record<EstadoWebfleet, string> = {
+  en_base: "En base",
+  otra_base: "Otra base",
+  en_ruta: "En ruta",
+  sin_conexion: "Sin conexión",
+  sin_dispositivo: "Sin Webfleet",
+};
+
+// Clases de badge (tema slate), coherentes con el resto de la app.
+export const ESTADO_WEBFLEET_BADGE: Record<EstadoWebfleet, string> = {
+  en_base: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+  otra_base: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  en_ruta: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  sin_conexion: "bg-slate-500/15 text-slate-300 ring-1 ring-slate-500/30",
+  sin_dispositivo: "bg-slate-700/40 text-slate-400 ring-1 ring-slate-600/40",
+};
+
+export const ESTADO_WEBFLEET_PUNTO: Record<EstadoWebfleet, string> = {
+  en_base: "🟢", otra_base: "🔵", en_ruta: "🟠", sin_conexion: "⚪", sin_dispositivo: "⚫",
+};
+
+export interface BaseWebfleet {
+  id: string;
+  empresa_id: string;
+  nombre: string;
+  webfleet_area_id?: string | null;
+  webfleet_area_nombre?: string | null;
+  centro_lat?: number | null;
+  centro_lng?: number | null;
+  radio_m?: number | null;
+  poligono?: [number, number][] | null;
+  genera_avisos: boolean;
+  activa: boolean;
+}
+
+export interface VehiculoWebfleetEstado {
+  vehiculo_id: string;
+  empresa_id: string;
+  estado: EstadoWebfleet;
+  base_id?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  postext?: string | null;
+  velocidad_kmh?: number | null;
+  odometro_km?: number | null;
+  pos_time?: string | null;
+  entrada_base_at?: string | null;
+  updated_at?: string | null;
+  base?: BaseWebfleet | null;
+}
+
+export interface WebfleetSyncConfig {
+  id: number;
+  intervalo_min: number;
+  min_tiempo_base_min: number;
+  antiguedad_max_pos_min: number;
+  alertas_activas: boolean;
+}
+
 export interface Vehiculo {
   id: string;
   empresa_id: string;

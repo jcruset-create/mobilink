@@ -8,6 +8,7 @@ import type {
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
+  BaseWebfleet, VehiculoWebfleetEstado, WebfleetSyncConfig,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -805,6 +806,54 @@ export async function obtenerWebfleetConfig(empresaId: string): Promise<Webfleet
 export async function guardarWebfleetConfig(empresaId: string, patch: Partial<Omit<WebfleetConfig, "empresa_id">>): Promise<void> {
   const { error } = await supabase.from("tc_webfleet_config")
     .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
+  if (error) throw new Error(error.message);
+}
+
+// ── Webfleet: vehículos en base ─────────────────────────────────
+const WF_API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
+
+export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> {
+  const { data, error } = await supabase
+    .from("tc_vehiculo_webfleet_estado")
+    .select("*, base:tc_bases_webfleet(*)");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as VehiculoWebfleetEstado[];
+}
+
+// Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.
+export async function sincronizarWebfleet(): Promise<{ actualizados?: number; error?: string }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, { method: "POST" });
+  try { return await r.json(); } catch { return { error: `HTTP ${r.status}` }; }
+}
+
+export async function listarBasesWebfleet(): Promise<BaseWebfleet[]> {
+  const { data, error } = await supabase.from("tc_bases_webfleet").select("*").order("nombre");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as BaseWebfleet[];
+}
+
+export async function guardarBaseWebfleet(base: Partial<BaseWebfleet> & { empresa_id: string; nombre: string }): Promise<void> {
+  const payload = { ...base, updated_at: new Date().toISOString() };
+  const { error } = base.id
+    ? await supabase.from("tc_bases_webfleet").update(payload).eq("id", base.id)
+    : await supabase.from("tc_bases_webfleet").insert(payload);
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarBaseWebfleet(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_bases_webfleet").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function obtenerWebfleetSyncConfig(): Promise<WebfleetSyncConfig | null> {
+  const { data, error } = await supabase.from("tc_webfleet_sync_config").select("*").eq("id", 1).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as WebfleetSyncConfig) ?? null;
+}
+
+export async function guardarWebfleetSyncConfig(patch: Partial<Omit<WebfleetSyncConfig, "id">>): Promise<void> {
+  const { error } = await supabase.from("tc_webfleet_sync_config")
+    .upsert({ id: 1, ...patch, updated_at: new Date().toISOString() }, { onConflict: "id" });
   if (error) throw new Error(error.message);
 }
 
