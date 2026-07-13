@@ -16,6 +16,7 @@ import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, Ind
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
+import ConfigWebfleet from "../components/ConfigWebfleet";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fila de configuración de ejes con su imagen de chasis asociada: la imagen
@@ -466,6 +467,8 @@ export default function Configuracion() {
       <h1 className="mb-1 text-lg font-black">Configuración</h1>
       <p className="mb-3 text-sm text-slate-400">Ajustes de la empresa y la plataforma.</p>
       {msg && <div className="mb-3 text-sm text-red-300">{msg}</div>}
+
+      {puedeEditar && <ConfigWebfleet />}
 
       <div className="mb-4 rounded-lg bg-slate-800 p-3">
         <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Fabricantes ({fabricantes.length})</div>

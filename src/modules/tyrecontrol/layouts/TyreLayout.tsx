@@ -4,6 +4,7 @@ import { Menu, LogOut, Truck, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { NAV, navVisible } from "../config/navigation";
 import { ROL_LABELS } from "../types";
+import AlertasWebfleet from "../components/AlertasWebfleet";
 
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
@@ -39,6 +40,7 @@ export default function TyreLayout() {
           <span className="text-sm font-black">SEA TyreControl</span>
         </div>
         <div className="flex items-center gap-3">
+          <AlertasWebfleet />
           <div className="hidden text-right sm:block">
             <div className="text-[12px] font-semibold leading-tight">👤 {perfil?.nombre}</div>
             <div className="text-[10px] text-slate-400">

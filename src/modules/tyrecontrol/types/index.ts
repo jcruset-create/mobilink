@@ -200,6 +200,17 @@ export interface RevisionFlag {
   motivo?: string | null;
 }
 
+export interface WebfleetAlerta {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  delegacion_id?: string | null;
+  entrada_base_at?: string | null;
+  mensaje: string;
+  leida: boolean;
+  created_at?: string | null;
+}
+
 export interface Vehiculo {
   id: string;
   empresa_id: string;

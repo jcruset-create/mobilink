@@ -8,7 +8,7 @@ import type {
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
-  VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag,
+  VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -847,6 +847,25 @@ export async function listarRevisionFlags(): Promise<RevisionFlag[]> {
 export async function guardarRevisionFlag(vehiculoId: string, empresaId: string, patch: Partial<Omit<RevisionFlag, "vehiculo_id" | "empresa_id">>): Promise<void> {
   const { error } = await supabase.from("tc_vehiculo_revision_flag")
     .upsert({ vehiculo_id: vehiculoId, empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "vehiculo_id" });
+  if (error) throw new Error(error.message);
+}
+
+// Alertas internas de "vehículos en base".
+export async function listarAlertasWebfleet(soloNoLeidas = true, limite = 50): Promise<WebfleetAlerta[]> {
+  let q = supabase.from("tc_webfleet_alertas").select("*").order("created_at", { ascending: false }).limit(limite);
+  if (soloNoLeidas) q = q.eq("leida", false);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as WebfleetAlerta[];
+}
+
+export async function marcarAlertaLeida(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_webfleet_alertas").update({ leida: true }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function marcarAlertasLeidas(): Promise<void> {
+  const { error } = await supabase.from("tc_webfleet_alertas").update({ leida: true }).eq("leida", false);
   if (error) throw new Error(error.message);
 }
 

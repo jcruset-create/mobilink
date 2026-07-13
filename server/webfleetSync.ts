@@ -13,7 +13,7 @@ import { supabase } from "./supabase.ts";
 
 type WfObject = Record<string, any>;
 // La base es una DELEGACIÓN con geo-zona definida (webfleet_lat/lng + radio).
-type Base = { id: string; empresa_id: string; webfleet_lat: number | null; webfleet_lng: number | null; webfleet_radio_m: number | null };
+type Base = { id: string; empresa_id: string; nombre: string; webfleet_lat: number | null; webfleet_lng: number | null; webfleet_radio_m: number | null; webfleet_genera_avisos: boolean };
 type EstadoPrevio = { estado: string; delegacion_id: string | null; entrada_base_at: string | null };
 
 // ── Petición a Webfleet (cuenta global por env; los vehículos viven ahí) ─────
@@ -66,18 +66,25 @@ function odometroKm(o: WfObject): number | null {
 // ── Un ciclo de sincronización ───────────────────────────────────────────────
 export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { error: string }> {
   try {
-    const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }] = await Promise.all([
+    const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }, { data: revRaw }] = await Promise.all([
       supabase.from("tc_webfleet_sync_config").select("*").eq("id", 1).maybeSingle(),
       // Bases = delegaciones con geo-zona definida.
-      supabase.from("tc_delegaciones").select("id, empresa_id, webfleet_lat, webfleet_lng, webfleet_radio_m").not("webfleet_lat", "is", null),
-      supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, webfleet_vehicle_id").eq("activo", true),
+      supabase.from("tc_delegaciones").select("id, empresa_id, nombre, webfleet_lat, webfleet_lng, webfleet_radio_m, webfleet_genera_avisos").not("webfleet_lat", "is", null),
+      supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, matricula, webfleet_vehicle_id").eq("activo", true),
       supabase.from("tc_vehiculo_webfleet_estado").select("vehiculo_id, estado, delegacion_id, entrada_base_at"),
+      supabase.rpc("tc_revision_estado"),
     ]);
 
     const antiguedadMaxMs = (cfg?.antiguedad_max_pos_min ?? 30) * 60 * 1000;
+    const alertasActivas = cfg?.alertas_activas ?? true;
     const bases = (basesRaw ?? []) as Base[];
+    const basePorId = new Map<string, Base>(bases.map((b) => [b.id, b]));
     const previos = new Map<string, EstadoPrevio>();
     for (const e of estadosRaw ?? []) previos.set(e.vehiculo_id, e as EstadoPrevio);
+    // Estado de revisión por vehículo (para las alertas de "entra con revisión pendiente").
+    const revPorVeh = new Map<string, { estado: string; dias_vencido: number | null }>();
+    for (const r of (revRaw ?? []) as any[]) revPorVeh.set(r.vehiculo_id, { estado: r.estado, dias_vencido: r.dias_vencido });
+    const alertas: any[] = [];
 
     const objetos = await fetchObjetos();
     const porObjectno = new Map<string, WfObject>();
@@ -138,19 +145,39 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
 
       // entrada_base_at: se conserva mientras siga en la MISMA base.
       let entrada: string | null = null;
+      let esNuevaEntrada = false;
       if (delegId) {
         const prev = previos.get(v.id);
-        entrada = prev && prev.delegacion_id === delegId && (prev.estado === "en_base" || prev.estado === "otra_base")
-          ? prev.entrada_base_at ?? comun.pos_time
-          : comun.pos_time;
+        const mismaEstancia = prev && prev.delegacion_id === delegId && (prev.estado === "en_base" || prev.estado === "otra_base");
+        entrada = mismaEstancia ? prev!.entrada_base_at ?? comun.pos_time : comun.pos_time;
+        esNuevaEntrada = !mismaEstancia; // acaba de entrar en esta base
       }
 
       filas.push({ ...base, ...comun, estado, delegacion_id: delegId, entrada_base_at: entrada });
+
+      // Alerta: acaba de entrar en SU base y tiene revisión pendiente/vencida.
+      if (esNuevaEntrada && estado === "en_base" && delegId && alertasActivas && basePorId.get(delegId)?.webfleet_genera_avisos) {
+        const rev = revPorVeh.get(v.id);
+        if (rev && (rev.estado === "vencida" || rev.estado === "sin_revision")) {
+          const baseNom = basePorId.get(delegId)?.nombre ?? "la base";
+          const detalle = rev.estado === "sin_revision"
+            ? "y nunca se ha revisado"
+            : `y tiene una revisión vencida desde hace ${rev.dias_vencido ?? 0} días`;
+          alertas.push({
+            empresa_id: v.empresa_id, vehiculo_id: v.id, delegacion_id: delegId, entrada_base_at: entrada,
+            mensaje: `El vehículo ${v.matricula} acaba de entrar en la base de ${baseNom} ${detalle}.`,
+          });
+        }
+      }
     }
 
     if (filas.length > 0) {
       const { error } = await supabase.from("tc_vehiculo_webfleet_estado").upsert(filas, { onConflict: "vehiculo_id" });
       if (error) return { error: error.message };
+    }
+    // Alertas nuevas: no se repiten por estancia (índice único vehículo+base+entrada).
+    if (alertas.length > 0) {
+      await supabase.from("tc_webfleet_alertas").upsert(alertas, { onConflict: "vehiculo_id,delegacion_id,entrada_base_at", ignoreDuplicates: true });
     }
     return { actualizados: filas.length };
   } catch (e: any) {
