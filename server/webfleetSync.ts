@@ -66,13 +66,13 @@ function odometroKm(o: WfObject): number | null {
 // ── Un ciclo de sincronización ───────────────────────────────────────────────
 export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { error: string }> {
   try {
-    const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }, { data: revRaw }] = await Promise.all([
+    const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }, { data: opsRaw }] = await Promise.all([
       supabase.from("tc_webfleet_sync_config").select("*").eq("id", 1).maybeSingle(),
       // Bases = delegaciones con geo-zona definida.
       supabase.from("tc_delegaciones").select("id, empresa_id, nombre, webfleet_lat, webfleet_lng, webfleet_radio_m, webfleet_genera_avisos").not("webfleet_lat", "is", null),
-      supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, matricula, webfleet_vehicle_id").eq("activo", true),
+      supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, matricula, km_actual, webfleet_vehicle_id").eq("activo", true),
       supabase.from("tc_vehiculo_webfleet_estado").select("vehiculo_id, estado, delegacion_id, entrada_base_at"),
-      supabase.rpc("tc_revision_estado"),
+      supabase.from("tc_operaciones_mantenimiento").select("id, nombre"),
     ]);
 
     const antiguedadMaxMs = (cfg?.antiguedad_max_pos_min ?? 30) * 60 * 1000;
@@ -81,10 +81,10 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
     const basePorId = new Map<string, Base>(bases.map((b) => [b.id, b]));
     const previos = new Map<string, EstadoPrevio>();
     for (const e of estadosRaw ?? []) previos.set(e.vehiculo_id, e as EstadoPrevio);
-    // Estado de revisión por vehículo (para las alertas de "entra con revisión pendiente").
-    const revPorVeh = new Map<string, { estado: string; dias_vencido: number | null }>();
-    for (const r of (revRaw ?? []) as any[]) revPorVeh.set(r.vehiculo_id, { estado: r.estado, dias_vencido: r.dias_vencido });
-    const alertas: any[] = [];
+    const opNombre = new Map<string, string>((opsRaw ?? []).map((o: any) => [o.id, o.nombre]));
+    // Vehículos que acaban de entrar en su base (para decidir alertas después).
+    const entradas: { vehiculo_id: string; empresa_id: string; delegacion_id: string; entrada: string | null; matricula: string; baseNom: string }[] = [];
+    const kmUpdates: { id: string; km: number }[] = [];
 
     const objetos = await fetchObjetos();
     const porObjectno = new Map<string, WfObject>();
@@ -155,19 +155,14 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
 
       filas.push({ ...base, ...comun, estado, delegacion_id: delegId, entrada_base_at: entrada });
 
-      // Alerta: acaba de entrar en SU base y tiene revisión pendiente/vencida.
+      // Km desde el odómetro Webfleet → se actualizará en el vehículo (planes por km).
+      if (comun.odometro_km != null && comun.odometro_km !== Number(v.km_actual)) {
+        kmUpdates.push({ id: v.id, km: comun.odometro_km });
+      }
+      // Entrada nueva en SU base → candidata a alerta (se decide tras calcular planes).
       if (esNuevaEntrada && estado === "en_base" && delegId && alertasActivas && basePorId.get(delegId)?.webfleet_genera_avisos) {
-        const rev = revPorVeh.get(v.id);
-        if (rev && (rev.estado === "vencida" || rev.estado === "sin_revision")) {
-          const baseNom = basePorId.get(delegId)?.nombre ?? "la base";
-          const detalle = rev.estado === "sin_revision"
-            ? "y nunca se ha revisado"
-            : `y tiene una revisión vencida desde hace ${rev.dias_vencido ?? 0} días`;
-          alertas.push({
-            empresa_id: v.empresa_id, vehiculo_id: v.id, delegacion_id: delegId, entrada_base_at: entrada,
-            mensaje: `El vehículo ${v.matricula} acaba de entrar en la base de ${baseNom} ${detalle}.`,
-          });
-        }
+        entradas.push({ vehiculo_id: v.id, empresa_id: v.empresa_id, delegacion_id: delegId, entrada,
+          matricula: v.matricula, baseNom: basePorId.get(delegId)?.nombre ?? "la base" });
       }
     }
 
@@ -175,7 +170,38 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
       const { error } = await supabase.from("tc_vehiculo_webfleet_estado").upsert(filas, { onConflict: "vehiculo_id" });
       if (error) return { error: error.message };
     }
-    // Alertas nuevas: no se repiten por estancia (índice único vehículo+base+entrada).
+
+    // Km desde Webfleet → tc_vehiculos (origen webfleet). Solo los que cambian.
+    for (const u of kmUpdates) {
+      await supabase.from("tc_vehiculos").update({ km_actual: u.km, origen_km: "webfleet" }).eq("id", u.id);
+    }
+
+    // Alertas: vehículo que acaba de entrar en su base con un plan atrasado/vence hoy.
+    // Se calcula DESPUÉS de actualizar los km (para que los planes por km sean fieles).
+    const alertas: any[] = [];
+    if (entradas.length > 0) {
+      const { data: planEst } = await supabase.rpc("tc_plan_estado");
+      const pendPorVeh = new Map<string, { op: string; dias: number | null }[]>();
+      for (const p of (planEst ?? []) as any[]) {
+        if (p.estado === "atrasada" || p.estado === "vence_hoy") {
+          const arr = pendPorVeh.get(p.vehiculo_id) ?? [];
+          arr.push({ op: opNombre.get(p.operacion_id) ?? "Revisión", dias: p.dias_restantes });
+          pendPorVeh.set(p.vehiculo_id, arr);
+        }
+      }
+      for (const en of entradas) {
+        const pend = pendPorVeh.get(en.vehiculo_id);
+        if (!pend || pend.length === 0) continue;
+        const peor = pend.slice().sort((a, b) => (a.dias ?? 0) - (b.dias ?? 0))[0];
+        const detalle = peor.dias != null && peor.dias < 0 ? `${peor.op} (vencida hace ${Math.abs(peor.dias)} días)` : `${peor.op} (vence hoy)`;
+        const extra = pend.length > 1 ? ` y ${pend.length - 1} más` : "";
+        alertas.push({
+          empresa_id: en.empresa_id, vehiculo_id: en.vehiculo_id, delegacion_id: en.delegacion_id, entrada_base_at: en.entrada,
+          mensaje: `El vehículo ${en.matricula} acaba de entrar en la base de ${en.baseNom} con revisión pendiente: ${detalle}${extra}.`,
+        });
+      }
+    }
+    // No se repiten por estancia (índice único vehículo+base+entrada).
     if (alertas.length > 0) {
       await supabase.from("tc_webfleet_alertas").upsert(alertas, { onConflict: "vehiculo_id,delegacion_id,entrada_base_at", ignoreDuplicates: true });
     }
