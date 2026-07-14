@@ -7,6 +7,7 @@ import 'identify_vehicle_screen.dart';
 import 'login_screen.dart';
 import 'planificacion_screen.dart';
 import 'revisions_screen.dart';
+import 'vehiculos_screen.dart';
 import 'tools_screen.dart';
 import 'sync_screen.dart';
 import 'profile_screen.dart';
@@ -80,11 +81,26 @@ class _InicioTab extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          _BigTile(
-            icon: Icons.event_note,
-            label: 'Planificación de revisiones',
-            small: true,
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
+          Row(
+            children: [
+              Expanded(
+                child: _BigTile(
+                  icon: Icons.event_note,
+                  label: 'Planificación',
+                  small: true,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: _BigTile(
+                  icon: Icons.local_shipping,
+                  label: 'Vehículos',
+                  small: true,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const VehiculosScreen())),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           Row(

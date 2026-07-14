@@ -279,4 +279,135 @@ class TyreControlApi {
       return {};
     }
   }
+
+  // ── Vehículos (lista + ficha, réplica del panel web) ─────────
+  /// Todos los vehículos (activos e inactivos, como el panel) con los joins
+  /// que la tabla necesita: empresa, delegación, tipo y config de ejes.
+  static Future<List<Map<String, dynamic>>> listarVehiculosCompleto() async {
+    final data = await _db
+        .from('tc_vehiculos')
+        .select(
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)')
+        .order('matricula');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Un vehículo con todos los campos y joins (para la ficha de solo lectura).
+  static Future<Map<String, dynamic>?> obtenerVehiculoCompleto(String id) async {
+    final data = await _db
+        .from('tc_vehiculos')
+        .select(
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)')
+        .eq('id', id)
+        .maybeSingle();
+    return data == null ? null : Map<String, dynamic>.from(data);
+  }
+
+  /// Estado Webfleet con detalle (estado + pos_time) para el badge de la
+  /// tabla de vehículos (sufijo "POS. ANT."). Best-effort.
+  static Future<Map<String, Map<String, dynamic>>> estadoWebfleetDetalle() async {
+    try {
+      final data = await _db
+          .from('tc_vehiculo_webfleet_estado')
+          .select('vehiculo_id, estado, pos_time');
+      final m = <String, Map<String, dynamic>>{};
+      for (final e in (data as List)) {
+        final r = Map<String, dynamic>.from(e as Map);
+        final id = r['vehiculo_id'] as String?;
+        if (id != null) m[id] = r;
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Estado de la periodicidad de revisión por vehículo (mismo RPC que el
+  /// panel): sin_revision | vencida | proxima | al_dia. Best-effort.
+  static Future<Map<String, String>> revisionEstadoPorVehiculo() async {
+    try {
+      final data = await _db.rpc('tc_revision_estado');
+      final m = <String, String>{};
+      for (final e in (data as List)) {
+        final r = Map<String, dynamic>.from(e as Map);
+        final id = r['vehiculo_id'] as String?;
+        if (id != null) m[id] = (r['estado'] as String?) ?? '';
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Catálogo de medidas id→valor (p. ej. "385/65R22.5").
+  static Future<Map<String, String>> mapaMedidas() async {
+    try {
+      final data = await _db.from('tc_cat_medidas_neumatico').select('id, valor');
+      final m = <String, String>{};
+      for (final e in (data as List)) {
+        final r = Map<String, dynamic>.from(e as Map);
+        if (r['id'] != null) m[r['id'] as String] = (r['valor'] as String?) ?? '—';
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Tipos de llanta (para etiquetas legibles en la ficha). Best-effort.
+  static Future<List<Map<String, dynamic>>> listarTiposLlantaCat() async {
+    try {
+      final data = await _db.from('tc_tipos_llanta').select('*').eq('activo', true);
+      return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Medida/llanta por eje del vehículo (si usa medidas por eje).
+  static Future<List<Map<String, dynamic>>> listarEjesDeVehiculo(String vehiculoId) async {
+    try {
+      final data = await _db
+          .from('tc_vehiculo_ejes')
+          .select('eje, ruedas, medida_id, tipo_llanta_id')
+          .eq('vehiculo_id', vehiculoId)
+          .order('eje');
+      return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Inspecciones (revisiones) del vehículo, más recientes primero.
+  static Future<List<Map<String, dynamic>>> listarRevisionesDeVehiculo(String vehiculoId) async {
+    try {
+      final data = await _db
+          .from('revisiones_vehiculo')
+          .select()
+          .eq('vehiculo_id', vehiculoId)
+          .order('fecha_revision', ascending: false)
+          .order('created_at', ascending: false)
+          .limit(30);
+      return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Lanza la sincronización Webfleet en el backend (misma llamada que el
+  /// botón del panel web).
+  static Future<String?> sincronizarWebfleet() async {
+    try {
+      final r = await http
+          .post(Uri.parse('$kBackendUrl/api/tyrecontrol/webfleet/sync'))
+          .timeout(const Duration(seconds: 60));
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      if (r.statusCode != 200 || j['error'] != null) {
+        return (j['error'] as String?) ?? 'Error al sincronizar';
+      }
+      return null; // sin error
+    } catch (e) {
+      return '$e';
+    }
+  }
 }
