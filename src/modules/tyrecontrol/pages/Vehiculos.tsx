@@ -297,14 +297,18 @@ export default function Vehiculos() {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
                   const revisar = e === "en_base" && esPendiente(v.id);
+                  // Posición con más de 30 min (GPS dormido, típico aparcado en
+                  // base): se sigue mostrando en base, con aviso de antigüedad.
+                  const posAntigua = (e === "en_base" || e === "otra_base") && est?.pos_time != null
+                    && Date.now() - new Date(est.pos_time).getTime() > 30 * 60 * 1000;
                   return (
                     <button
                       onClick={() => est && setPopup({ v, est })}
                       disabled={!est}
                       className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]} ${est ? "cursor-pointer" : "cursor-default opacity-70"}`}
-                      title={est ? "Ver detalle" : "Sin datos Webfleet"}
+                      title={est ? (posAntigua ? "Última posición con más de 30 min (GPS dormido) · Ver detalle" : "Ver detalle") : "Sin datos Webfleet"}
                     >
-                      {revisar ? `🟢 EN BASE · REVISAR` : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}`}
+                      {revisar ? `🟢 EN BASE · REVISAR` : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}${posAntigua ? " · POS. ANT." : ""}`}
                     </button>
                   );
                 })()}

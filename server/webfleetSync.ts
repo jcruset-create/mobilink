@@ -120,11 +120,16 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
         pos_time: posTime ? posTime.toISOString() : null,
       };
 
-      // Posición demasiado antigua → sin conexión.
-      if (!posTime || ahora - posTime.getTime() > antiguedadMaxMs || comun.lat == null || comun.lng == null) {
+      // Sin posición utilizable → sin conexión.
+      if (comun.lat == null || comun.lng == null) {
         filas.push({ ...base, ...comun, estado: "sin_conexion", delegacion_id: null, entrada_base_at: null });
         continue;
       }
+
+      // Posición antigua: pasada la ventana ya no vale para "en ruta", pero si
+      // la última conocida cae dentro de una base asumimos que sigue allí
+      // (camión aparcado con el contacto quitado y el GPS dormido).
+      const posAntigua = !posTime || ahora - posTime.getTime() > antiguedadMaxMs;
 
       // ¿En alguna base (delegación)? "en_base" = está en SU base asignada
       // (su delegación) o, si no tiene delegación, en una base de su empresa.
@@ -133,6 +138,12 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
         ? contenedoras.find((b) => b.id === v.delegacion_id)
         : contenedoras.find((b) => b.empresa_id === v.empresa_id);
       const baseDetectada = suBase ?? contenedoras[0] ?? null;
+
+      // Posición antigua y fuera de toda base → sin conexión (como antes).
+      if (posAntigua && !baseDetectada) {
+        filas.push({ ...base, ...comun, estado: "sin_conexion", delegacion_id: null, entrada_base_at: null });
+        continue;
+      }
 
       let estado: string;
       let delegId: string | null = null;
@@ -150,7 +161,10 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
         const prev = previos.get(v.id);
         const mismaEstancia = prev && prev.delegacion_id === delegId && (prev.estado === "en_base" || prev.estado === "otra_base");
         entrada = mismaEstancia ? prev!.entrada_base_at ?? comun.pos_time : comun.pos_time;
-        esNuevaEntrada = !mismaEstancia; // acaba de entrar en esta base
+        // Con posición antigua no sabemos cuándo entró de verdad: no cuenta
+        // como entrada nueva (evita alertas falsas cuando un GPS dormido
+        // "reaparece" en base al desplegar este cambio o tras horas parado).
+        esNuevaEntrada = !mismaEstancia && !posAntigua;
       }
 
       filas.push({ ...base, ...comun, estado, delegacion_id: delegId, entrada_base_at: entrada });
