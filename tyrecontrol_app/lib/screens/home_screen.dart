@@ -5,6 +5,7 @@ import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
 import 'identify_vehicle_screen.dart';
 import 'login_screen.dart';
+import 'planificacion_screen.dart';
 import 'revisions_screen.dart';
 import 'tools_screen.dart';
 import 'sync_screen.dart';
@@ -77,6 +78,13 @@ class _InicioTab extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 14),
+          _BigTile(
+            icon: Icons.event_note,
+            label: 'Planificación de revisiones',
+            small: true,
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
           ),
           const SizedBox(height: 14),
           Row(

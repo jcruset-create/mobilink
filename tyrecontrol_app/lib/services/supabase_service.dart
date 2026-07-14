@@ -232,4 +232,32 @@ class TyreControlApi {
     await _db.storage.from(_bucketFotos).upload(path, file);
     return _db.storage.from(_bucketFotos).getPublicUrl(path);
   }
+
+  // ── Planificación de revisiones ──────────────────────────────
+  /// Estado calculado de cada plan (próxima fecha/km, días restantes, estado,
+  /// prioridad). Reusa el mismo RPC que el panel web; no reimplementa lógica.
+  static Future<List<Map<String, dynamic>>> listarPlanEstado() async {
+    final data = await _db.rpc('tc_plan_estado');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Planes de mantenimiento activos con el nombre de su operación.
+  static Future<List<Map<String, dynamic>>> listarPlanesMantenimiento() async {
+    final data = await _db
+        .from('tc_planes_mantenimiento')
+        .select('*, operacion:tc_operaciones_mantenimiento(nombre)')
+        .eq('activo', true);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Vehículos activos con cliente (empresa) y base (delegación) para la
+  /// planificación. Ligero: solo los campos que la lista necesita.
+  static Future<List<Map<String, dynamic>>> listarVehiculosPlanificacion() async {
+    final data = await _db
+        .from('tc_vehiculos')
+        .select(
+            'id, matricula, numero_unidad, empresa_id, delegacion_id, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)')
+        .eq('activo', true);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
 }
