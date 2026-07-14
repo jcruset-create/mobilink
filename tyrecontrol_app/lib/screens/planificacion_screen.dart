@@ -74,9 +74,7 @@ const double _wCheck = 44,
     _wDias = 108,
     _wEstado = 120,
     _wPrioridad = 92,
-    _wEnBase = 76,
-    _wTecnico = 96,
-    _wAcciones = 128;
+    _wEnBase = 76;
 const double _tableWidth = _wCheck +
     _wMatricula +
     _wCliente +
@@ -87,9 +85,7 @@ const double _tableWidth = _wCheck +
     _wDias +
     _wEstado +
     _wPrioridad +
-    _wEnBase +
-    _wTecnico +
-    _wAcciones;
+    _wEnBase;
 
 class _PlanFila {
   final String planId;
@@ -105,7 +101,7 @@ class _PlanFila {
   final int? diasRestantes;
   final String estado;
   final String prioridad;
-  final String? tecnicoId;
+  final bool enBase;
 
   _PlanFila({
     required this.planId,
@@ -121,7 +117,7 @@ class _PlanFila {
     required this.diasRestantes,
     required this.estado,
     required this.prioridad,
-    required this.tecnicoId,
+    required this.enBase,
   });
 }
 
@@ -129,12 +125,12 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
   bool _loading = true;
   String? _error;
   List<_PlanFila> _filas = [];
-  Map<String, String> _tecnicos = {};
   _Tab _tab = _Tab.pendientes;
   String _q = '';
   String _fCliente = '';
   String _fEstado = '';
   String _fPrioridad = '';
+  bool _fEnBase = false;
   final Set<String> _sel = {};
 
   @override
@@ -154,7 +150,7 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
         TyreControlApi.listarPlanEstado(),
         TyreControlApi.listarVehiculosPlanificacion(),
       ]);
-      final tecnicos = await TyreControlApi.mapaTecnicos();
+      final wf = await TyreControlApi.estadoWebfleetPorVehiculo();
       final planes = results[0];
       final estados = {for (final e in results[1]) e['plan_id'] as String: e};
       final vehiculos = {for (final v in results[2]) v['id'] as String: v};
@@ -181,16 +177,13 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
           diasRestantes: (est['dias_restantes'] as num?)?.toInt(),
           estado: (est['estado'] as String?) ?? 'correcta',
           prioridad: (est['prioridad'] as String?) ?? 'sin',
-          tecnicoId: p['tecnico_id'] as String?,
+          enBase: wf[v['id']] == 'en_base',
         ));
       }
       filas.sort((a, b) =>
           (a.diasRestantes ?? 9999).compareTo(b.diasRestantes ?? 9999));
       if (!mounted) return;
-      setState(() {
-        _filas = filas;
-        _tecnicos = tecnicos;
-      });
+      setState(() => _filas = filas);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -228,6 +221,7 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
       if (_fCliente.isNotEmpty && f.empresaId != _fCliente) return false;
       if (_fEstado.isNotEmpty && e != _fEstado) return false;
       if (_fPrioridad.isNotEmpty && f.prioridad != _fPrioridad) return false;
+      if (_fEnBase && !f.enBase) return false;
       if (s.isNotEmpty &&
           !f.matricula.toLowerCase().contains(s) &&
           !f.cliente.toLowerCase().contains(s)) {
@@ -239,7 +233,7 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
 
   _Kpis get _kpis {
     final veh = <String>{};
-    int pend = 0, hoy = 0, semana = 0, atras = 0;
+    int pend = 0, hoy = 0, semana = 0, atras = 0, enBasePend = 0;
     for (final f in _filas) {
       veh.add(f.vehiculoId);
       final e = f.estado, dr = f.diasRestantes;
@@ -247,10 +241,11 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
       if (e == 'vence_hoy') hoy++;
       if (dr != null && dr >= 0 && dr <= 7) semana++;
       if (e == 'atrasada') atras++;
+      if (f.enBase && _esPendiente(e)) enBasePend++;
     }
     final total = _filas.length;
     final cumpl = total > 0 ? (((total - atras) / total) * 100).round() : 100;
-    return _Kpis(veh.length, pend, hoy, semana, atras, cumpl);
+    return _Kpis(veh.length, pend, hoy, semana, atras, enBasePend, cumpl);
   }
 
   bool get _esFaseFutura =>
@@ -303,7 +298,7 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
               _kpi('${k.hoy}', 'Hoy'),
               _kpi('${k.semana}', 'Esta semana'),
               _kpi('${k.atrasadas}', 'Atrasadas'),
-              _kpi('0', 'En base pend.'),
+              _kpi('${k.enBasePend}', 'En base pend.'),
               _kpi('0', 'Realizadas mes'),
               _kpi('${k.cumplimiento}%', 'Cumplimiento'),
             ],
@@ -340,6 +335,24 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
               _filtroEstado(),
               const SizedBox(height: 8),
               _filtroPrioridad(),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilterChip(
+                  label: const Text('🟢 Solo en base'),
+                  selected: _fEnBase,
+                  onSelected: (v) => setState(() => _fEnBase = v),
+                  showCheckmark: false,
+                  labelStyle: TextStyle(
+                    color: _fEnBase ? AppColors.onPrimary : AppColors.textSecondary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                  selectedColor: AppColors.success,
+                  backgroundColor: AppColors.surface,
+                  side: const BorderSide(color: AppColors.cardBorder),
+                ),
+              ),
             ],
           ),
         ),
@@ -430,8 +443,6 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
           h('Estado', _wEstado),
           h('Prioridad', _wPrioridad),
           h('En base', _wEnBase),
-          h('Técnico', _wTecnico),
-          h('Acciones', _wAcciones),
         ],
       ),
     );
@@ -439,7 +450,6 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
 
   Widget _dataRow(_PlanFila f) {
     final atrasada = f.estado == 'atrasada';
-    final tec = f.tecnicoId != null ? (_tecnicos[f.tecnicoId] ?? '—') : '—';
     Widget c(String t, double w,
             {Color? color, FontWeight weight = FontWeight.w500}) =>
         SizedBox(
@@ -485,29 +495,13 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
           SizedBox(width: _wEstado, child: _EstadoBadge(estado: f.estado)),
           c(_prioridadLabels[f.prioridad] ?? '—', _wPrioridad,
               color: AppColors.textSecondary),
-          c('—', _wEnBase, color: AppColors.textHint),
-          c(tec, _wTecnico, color: AppColors.textSecondary),
-          SizedBox(
-            width: _wAcciones,
-            child: Row(
-              children: [
-                _accion('Registrar', AppColors.success),
-                const SizedBox(width: 10),
-                _accion('Ficha', AppColors.info),
-              ],
-            ),
-          ),
+          c(f.enBase ? '🟢 Sí' : '—', _wEnBase,
+              color: f.enBase ? AppColors.success : AppColors.textHint,
+              weight: f.enBase ? FontWeight.w700 : FontWeight.w500),
         ],
       ),
     );
   }
-
-  Widget _accion(String label, Color color) => InkWell(
-        onTap: () => _avisoWeb(label),
-        child: Text(label,
-            style: TextStyle(
-                color: color, fontSize: 12, fontWeight: FontWeight.w700)),
-      );
 
   // ── Piezas de UI ─────────────────────────────────────────────
   Widget _headerBtn(IconData icon, String label) => InkWell(
@@ -708,9 +702,10 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
 }
 
 class _Kpis {
-  final int controlados, pendientes, hoy, semana, atrasadas, cumplimiento;
+  final int controlados, pendientes, hoy, semana, atrasadas, enBasePend,
+      cumplimiento;
   _Kpis(this.controlados, this.pendientes, this.hoy, this.semana,
-      this.atrasadas, this.cumplimiento);
+      this.atrasadas, this.enBasePend, this.cumplimiento);
 }
 
 class _EstadoBadge extends StatelessWidget {
