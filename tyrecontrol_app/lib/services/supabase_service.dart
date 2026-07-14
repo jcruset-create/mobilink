@@ -287,7 +287,7 @@ class TyreControlApi {
     final data = await _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)')
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)')
         .order('matricula');
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
@@ -297,7 +297,7 @@ class TyreControlApi {
     final data = await _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)')
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)')
         .eq('id', id)
         .maybeSingle();
     return data == null ? null : Map<String, dynamic>.from(data);
