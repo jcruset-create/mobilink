@@ -442,11 +442,11 @@ export default function PlanificacionRevisiones() {
           <thead className="bg-slate-900"><tr>
             <th className={thCls}><input type="checkbox" checked={visibles.length > 0 && visibles.every((f) => sel.has(f.plan.id))} onChange={(e) => setSel(e.target.checked ? new Set(visibles.map((f) => f.plan.id)) : new Set())} /></th>
             <th className={thCls}>Matrícula</th><th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Revisión</th>
-            <th className={thCls}>Próxima</th><th className={thCls}>Días</th><th className={thCls}>Estado</th><th className={thCls}>Prioridad</th>
+            <th className={thCls}>Última</th><th className={thCls}>Próxima</th><th className={thCls}>Días</th><th className={thCls}>Estado</th><th className={thCls}>Prioridad</th>
             <th className={thCls}>En base</th><th className={thCls}>Técnico</th><th className={thCls}>Acciones</th>
           </tr></thead>
           <tbody>
-            {visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin revisiones en esta pestaña.</td></tr>
+            {visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Sin revisiones en esta pestaña.</td></tr>
             : visibles.map((f) => (
               <tr key={f.plan.id} className={`border-t border-slate-700/60 ${f.est.estado === "atrasada" ? "bg-rose-500/5" : ""}`}>
                 <td className={tdCls}><input type="checkbox" checked={sel.has(f.plan.id)} onChange={() => toggleSel(f.plan.id)} /></td>
@@ -454,6 +454,7 @@ export default function PlanificacionRevisiones() {
                 <td className={tdCls + " text-slate-400"}>{f.v.empresa?.nombre ?? "—"}</td>
                 <td className={tdCls + " text-slate-400"}>{f.v.delegacion?.nombre ?? "—"}</td>
                 <td className={tdCls + " text-slate-300"}>{f.plan.nombre || f.plan.operacion?.nombre}</td>
+                <td className={tdCls + " text-slate-400"}>{fechaCorta(f.plan.ultima_fecha)}{f.plan.ultima_km != null ? ` · ${Number(f.plan.ultima_km).toLocaleString("es-ES")} km` : ""}</td>
                 <td className={tdCls + " text-slate-400"}>{fechaCorta(f.est.proxima_fecha_efec)}{f.est.proxima_km_efec != null ? ` · ${Number(f.est.proxima_km_efec).toLocaleString("es-ES")} km` : ""}</td>
                 <td className={tdCls + " text-slate-400"}>{diasTexto(f.est.dias_restantes)}</td>
                 <td className={tdCls}><BadgePlan estado={f.est.estado} /></td>
