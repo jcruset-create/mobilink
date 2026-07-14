@@ -10,7 +10,7 @@ import type {
   PlanMantenimiento, PlanEstado, Vehiculo, VehiculoWebfleetEstado, Perfil, Empresa,
   EstadoPlan, PrioridadPlan, MantenimientoRealizada, PlantillaMantenimiento,
 } from "../types";
-import { ESTADO_PLAN_LABELS, PRIORIDAD_PLAN_LABELS } from "../types";
+import { ESTADO_PLAN_LABELS, PRIORIDAD_PLAN_LABELS, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 import { BadgePlan, ModalRegistrar } from "../components/PlanMantenimiento";
 
@@ -223,7 +223,7 @@ export default function PlanificacionRevisiones() {
       Revisión: f.plan.nombre || f.plan.operacion?.nombre || "", Última: f.plan.ultima_fecha ?? "",
       Próxima: f.est.proxima_fecha_efec ?? "", "Km objetivo": f.est.proxima_km_efec ?? "",
       "Días restantes": f.est.dias_restantes ?? "", Estado: ESTADO_PLAN_LABELS[f.est.estado],
-      Prioridad: PRIORIDAD_PLAN_LABELS[f.est.prioridad], "En base": f.wf?.estado === "en_base" ? "Sí" : "", Técnico: tecNombre(f.plan.tecnico_id),
+      Prioridad: PRIORIDAD_PLAN_LABELS[f.est.prioridad], Webfleet: ESTADO_WEBFLEET_LABELS[f.wf?.estado ?? "sin_dispositivo"], Técnico: tecNombre(f.plan.tecnico_id),
     }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Revisiones");
@@ -443,7 +443,7 @@ export default function PlanificacionRevisiones() {
             <th className={thCls}><input type="checkbox" checked={visibles.length > 0 && visibles.every((f) => sel.has(f.plan.id))} onChange={(e) => setSel(e.target.checked ? new Set(visibles.map((f) => f.plan.id)) : new Set())} /></th>
             <th className={thCls}>Matrícula</th><th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Revisión</th>
             <th className={thCls}>Última</th><th className={thCls}>Próxima</th><th className={thCls}>Días</th><th className={thCls}>Estado</th><th className={thCls}>Prioridad</th>
-            <th className={thCls}>En base</th><th className={thCls}>Técnico</th><th className={thCls}>Acciones</th>
+            <th className={thCls}>Webfleet</th><th className={thCls}>Técnico</th><th className={thCls}>Acciones</th>
           </tr></thead>
           <tbody>
             {visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Sin revisiones en esta pestaña.</td></tr>
@@ -459,7 +459,17 @@ export default function PlanificacionRevisiones() {
                 <td className={tdCls + " text-slate-400"}>{diasTexto(f.est.dias_restantes)}</td>
                 <td className={tdCls}><BadgePlan estado={f.est.estado} /></td>
                 <td className={tdCls + " text-slate-400"}>{PRIORIDAD_PLAN_LABELS[f.est.prioridad]}</td>
-                <td className={tdCls}>{f.wf?.estado === "en_base" ? <span className="text-[11px] font-bold text-emerald-300">🟢 Sí</span> : <span className="text-[11px] text-slate-500">—</span>}</td>
+                <td className={tdCls}>{(() => {
+                  // Mismo badge Webfleet que la pantalla Vehículos.
+                  const e = f.wf?.estado ?? "sin_dispositivo";
+                  const posAntigua = (e === "en_base" || e === "otra_base") && f.wf?.pos_time != null
+                    && Date.now() - new Date(f.wf.pos_time).getTime() > 30 * 60 * 1000;
+                  return (
+                    <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold ${ESTADO_WEBFLEET_BADGE[e]}`}>
+                      {ESTADO_WEBFLEET_PUNTO[e]} {ESTADO_WEBFLEET_LABELS[e].toUpperCase()}{posAntigua ? " · POS. ANT." : ""}
+                    </span>
+                  );
+                })()}</td>
                 <td className={tdCls + " text-slate-400"}>{tecNombre(f.plan.tecnico_id)}</td>
                 <td className={tdCls}>
                   <div className="flex gap-2 text-[12px]">

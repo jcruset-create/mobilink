@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/webfleet_badge.dart';
 import 'vehiculo_ficha_screen.dart';
 
 /// Vehículos — réplica de la pantalla del panel web.
@@ -40,29 +41,6 @@ const double _tableWidth = _wEmpresa +
     _wWebfleet +
     _wEstado +
     _wAcciones;
-
-const _wfLabels = {
-  'en_base': 'EN BASE',
-  'otra_base': 'OTRA BASE',
-  'en_ruta': 'EN RUTA',
-  'sin_conexion': 'SIN CONEXIÓN',
-  'sin_dispositivo': 'SIN WEBFLEET',
-};
-
-Color _wfColor(String e) {
-  switch (e) {
-    case 'en_base':
-      return AppColors.success;
-    case 'otra_base':
-      return AppColors.info;
-    case 'en_ruta':
-      return AppColors.warning;
-    case 'sin_conexion':
-      return AppColors.textSecondary;
-    default:
-      return AppColors.textHint; // sin_dispositivo
-  }
-}
 
 class _VehiculosScreenState extends State<VehiculosScreen> {
   bool _loading = true;
@@ -435,49 +413,10 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
   Widget _wfBadge(String id) {
     final est = _wf[id];
     final e = (est?['estado'] as String?) ?? 'sin_dispositivo';
-    final color = _wfColor(e);
-    // Posición con más de 30 min: se sigue mostrando en base, con aviso.
-    bool posAntigua = false;
-    final pt = est?['pos_time'] as String?;
-    if ((e == 'en_base' || e == 'otra_base') && pt != null) {
-      final d = DateTime.tryParse(pt);
-      posAntigua =
-          d != null && DateTime.now().difference(d).inMinutes > 30;
-    }
-    final revisar = e == 'en_base' && _revisarPend(id);
-    final label = revisar
-        ? 'EN BASE · REVISAR'
-        : '${_wfLabels[e] ?? e}${posAntigua ? ' · POS. ANT.' : ''}';
-    final c = revisar ? AppColors.warning : color;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: c.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: c.withValues(alpha: 0.4)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
-            const SizedBox(width: 5),
-            Flexible(
-              child: Text(label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      color: c,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.3)),
-            ),
-          ],
-        ),
-      ),
+    return WebfleetBadge(
+      estado: e,
+      posTime: est?['pos_time'] as String?,
+      revisar: _revisarPend(id),
     );
   }
 

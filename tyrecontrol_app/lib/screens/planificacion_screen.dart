@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/webfleet_badge.dart';
 
 /// Planificación de revisiones — réplica de la pantalla del panel web.
 ///
@@ -74,7 +75,7 @@ const double _wCheck = 44,
     _wDias = 108,
     _wEstado = 120,
     _wPrioridad = 92,
-    _wEnBase = 76;
+    _wEnBase = 150;
 const double _tableWidth = _wCheck +
     _wMatricula +
     _wCliente +
@@ -101,7 +102,10 @@ class _PlanFila {
   final int? diasRestantes;
   final String estado;
   final String prioridad;
-  final bool enBase;
+  final String wfEstado; // estado Webfleet (en_base, en_ruta, …)
+  final String? wfPosTime;
+
+  bool get enBase => wfEstado == 'en_base';
 
   _PlanFila({
     required this.planId,
@@ -117,7 +121,8 @@ class _PlanFila {
     required this.diasRestantes,
     required this.estado,
     required this.prioridad,
-    required this.enBase,
+    required this.wfEstado,
+    required this.wfPosTime,
   });
 }
 
@@ -150,7 +155,7 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
         TyreControlApi.listarPlanEstado(),
         TyreControlApi.listarVehiculosPlanificacion(),
       ]);
-      final wf = await TyreControlApi.estadoWebfleetPorVehiculo();
+      final wf = await TyreControlApi.estadoWebfleetDetalle();
       final planes = results[0];
       final estados = {for (final e in results[1]) e['plan_id'] as String: e};
       final vehiculos = {for (final v in results[2]) v['id'] as String: v};
@@ -177,7 +182,8 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
           diasRestantes: (est['dias_restantes'] as num?)?.toInt(),
           estado: (est['estado'] as String?) ?? 'correcta',
           prioridad: (est['prioridad'] as String?) ?? 'sin',
-          enBase: wf[v['id']] == 'en_base',
+          wfEstado: (wf[v['id']]?['estado'] as String?) ?? 'sin_dispositivo',
+          wfPosTime: wf[v['id']]?['pos_time'] as String?,
         ));
       }
       filas.sort((a, b) =>
@@ -442,7 +448,7 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
           h('Días', _wDias),
           h('Estado', _wEstado),
           h('Prioridad', _wPrioridad),
-          h('En base', _wEnBase),
+          h('Webfleet', _wEnBase),
         ],
       ),
     );
@@ -495,9 +501,10 @@ class _PlanificacionScreenState extends State<PlanificacionScreen> {
           SizedBox(width: _wEstado, child: _EstadoBadge(estado: f.estado)),
           c(_prioridadLabels[f.prioridad] ?? '—', _wPrioridad,
               color: AppColors.textSecondary),
-          c(f.enBase ? '🟢 Sí' : '—', _wEnBase,
-              color: f.enBase ? AppColors.success : AppColors.textHint,
-              weight: f.enBase ? FontWeight.w700 : FontWeight.w500),
+          SizedBox(
+            width: _wEnBase,
+            child: WebfleetBadge(estado: f.wfEstado, posTime: f.wfPosTime),
+          ),
         ],
       ),
     );
