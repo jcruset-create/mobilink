@@ -4,6 +4,7 @@ export type AppView =
   | "operativo"
   | "operativo2"
   | "agenda"
+  | "agenda2"
   | "asistencias"
   | "asistencias_config"
   | "entradas"
@@ -22,6 +23,7 @@ export const VIEW_LABELS: Record<AppView, string> = {
   operativo: "Operativo",
   operativo2: "Operativo 2",
   agenda: "Agenda",
+  agenda2: "Agenda 2",
   asistencias: "Asistencias",
   asistencias_config: "Config. asistencia",
   entradas: "Entradas rápidas",
@@ -41,6 +43,7 @@ export const ALL_VIEWS: AppView[] = [
   "operativo",
   "operativo2",
   "agenda",
+  "agenda2",
   "asistencias",
   "asistencias_config",
   "entradas",
@@ -75,6 +78,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "operativo",
     "operativo2",
     "agenda",
+    "agenda2",
     "asistencias",
     "asistencias_config",
     "entradas",
@@ -93,6 +97,7 @@ export const VIEWS_BY_ROLE: Record<UserRole, AppView[]> = {
     "operativo",
     "operativo2",
     "agenda",
+    "agenda2",
     "asistencias",
     "entradas",
     "entradas2",

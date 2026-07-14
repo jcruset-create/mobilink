@@ -192,6 +192,9 @@ type Props = {
   embeddedModalOnly?: boolean;
   /** Se llama al cerrar/guardar la cita en modo embeddedModalOnly. */
   onClose?: () => void;
+
+  /** Aplica el "chrome" oscuro estilo Operativo 2 (usado por la pestaña Agenda 2). */
+  dark?: boolean;
 };
 
 const SLOT_MINUTES = 15;
@@ -540,9 +543,50 @@ export default function AgendaView({
   queueJobs = [],
   embeddedModalOnly = false,
   onClose,
+  dark = false,
 }: Props) {
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
+
+  // ── Tema "chrome" oscuro estilo Operativo 2 (solo Agenda 2) ──────────────
+  // La ruta clara (dark=false) devuelve exactamente las clases originales, de
+  // modo que la Agenda existente queda intacta.
+  const th = {
+    page: dark
+      ? "h-screen overflow-hidden bg-slate-900 p-3 text-slate-100"
+      : "h-screen overflow-hidden bg-slate-50 p-3 text-slate-900",
+    header: dark
+      ? "sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-800/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between"
+      : "sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between",
+    subtitle: dark ? "text-sm text-slate-400" : "text-sm text-slate-500",
+    infoBar: dark
+      ? "mt-2 rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-300"
+      : "mt-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600",
+    primaryBtn: dark
+      ? "rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
+      : "rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white",
+    cleanBtn: dark
+      ? "rounded-2xl border border-rose-800 bg-rose-950/40 px-4 py-2 text-sm font-medium text-rose-300 hover:bg-rose-900/40"
+      : "rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100",
+    neutralBtn: dark
+      ? "rounded-2xl border border-slate-600 bg-slate-700 px-4 py-2 text-sm font-medium text-slate-100 hover:bg-slate-600"
+      : "rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium",
+    calBox: dark
+      ? "h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-sm"
+      : "h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm",
+    gridHead: dark ? "bg-slate-800" : "bg-white",
+    gridBorder: dark ? "border-slate-700" : "border-slate-200",
+    gridBorderSoft: dark ? "border-slate-800" : "border-slate-100",
+    headText: dark ? "text-slate-300" : "text-slate-500",
+    hourText: dark ? "text-slate-500" : "text-slate-400",
+    todoDia: dark
+      ? "z-10 border-r border-slate-700 bg-slate-800 p-2 text-[11px] font-bold text-slate-400"
+      : "z-10 border-r border-slate-200 bg-white p-2 text-[11px] font-bold text-slate-500",
+    allDayBg: dark
+      ? "border-l border-slate-700 bg-slate-800/60"
+      : "border-l border-slate-200 bg-slate-50/80",
+    dayCol: dark ? "relative border-l border-slate-700" : "relative border-l border-slate-200",
+  };
 
   function getItemWorkshopId(item: { workshopId?: string | null }) {
     return normalizeWorkshopId(item.workshopId ?? DEFAULT_WORKSHOP_ID);
@@ -1411,14 +1455,14 @@ appendLog(
   const allDayReminderRows = Math.max(1, visibleDateReminders.length);
 
   return (
-    <div className={embeddedModalOnly ? "" : "h-screen overflow-hidden bg-slate-50 p-3 text-slate-900"}>
+    <div className={embeddedModalOnly ? "" : th.page}>
       <div className={embeddedModalOnly ? "" : "w-full space-y-4"}>
         {!embeddedModalOnly && (<>
-        <div className="sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+        <div className={th.header}>
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
   <div>
     <h1 className="text-2xl font-semibold">Agenda semanal</h1>
-    <p className="text-sm text-slate-500">
+    <p className={th.subtitle}>
       Vista tipo Calendar · lunes a sábado
     </p>
   </div>
@@ -1434,7 +1478,7 @@ appendLog(
   </div>
 </div>
 
-          <div className="mt-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+          <div className={th.infoBar}>
             Taller: {selectedWorkshop.shortName} · Citas cargadas:{" "}
             {scheduledJobsForSelectedWorkshop.length} · Semana: {days[0]?.date} a{" "}
             {days[5]?.date}
@@ -1444,7 +1488,7 @@ appendLog(
             <button
               type="button"
               onClick={openNewAppointmentFromHeader}
-              className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              className={th.primaryBtn}
             >
               + Nueva cita
             </button>
@@ -1460,7 +1504,7 @@ appendLog(
             <button
               type="button"
               onClick={cleanExpiredScheduledJobs}
-              className="rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+              className={th.cleanBtn}
             >
               Limpiar vencidas
             </button>
@@ -1468,7 +1512,7 @@ appendLog(
             <button
               type="button"
               onClick={() => setWeekOffset((v) => v - 1)}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+              className={th.neutralBtn}
             >
               ← Semana anterior
             </button>
@@ -1479,7 +1523,7 @@ appendLog(
                 setWeekOffset(0);
                 setSelectedDayDate(getTodayKey());
               }}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+              className={th.neutralBtn}
             >
               Hoy
             </button>
@@ -1494,7 +1538,7 @@ appendLog(
                   setCalendarMode("week");
                 }
               }}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+              className={th.neutralBtn}
             >
               {calendarMode === "week" ? "Vista día" : "Vista semana"}
             </button>
@@ -1503,7 +1547,7 @@ appendLog(
               <select
                 value={selectedDayDate || getTodayKey()}
                 onChange={(e) => setSelectedDayDate(e.target.value)}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+                className={th.neutralBtn}
               >
                 {days.map((day) => (
                   <option key={day.date} value={day.date}>
@@ -1516,7 +1560,7 @@ appendLog(
             <button
               type="button"
               onClick={() => setWeekOffset((v) => v + 1)}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+              className={th.neutralBtn}
             >
               Semana siguiente →
             </button>
@@ -1524,27 +1568,27 @@ appendLog(
             <button
               type="button"
               onClick={onBack}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium"
+              className={th.neutralBtn}
             >
               Volver a operativo
             </button>
           </div>
         </div>
 
-<div className="h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+<div className={th.calBox}>
           <div
-            className={`sticky top-0 z-40 grid border-b border-slate-200 bg-white ${
+            className={`sticky top-0 z-40 grid border-b ${th.gridBorder} ${th.gridHead} ${
               calendarMode === "day"
                 ? "min-w-[900px] grid-cols-[70px_1fr]"
                 : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
             }`}
           >
-            <div className="p-3 text-xs font-medium text-slate-500">Hora</div>
+            <div className={`p-3 text-xs font-medium ${th.headText}`}>Hora</div>
 
             {finalVisibleDays.map((day) => (
               <div
                 key={day.date}
-                className="border-l border-slate-200 p-3 text-sm font-semibold capitalize"
+                className={`border-l ${th.gridBorder} p-3 text-sm font-semibold capitalize`}
               >
                 {day.label}
               </div>
@@ -1552,7 +1596,7 @@ appendLog(
           </div>
 
           <div
-            className={`sticky top-[45px] z-30 grid border-b border-slate-200 bg-white ${
+            className={`sticky top-[45px] z-30 grid border-b ${th.gridBorder} ${th.gridHead} ${
               calendarMode === "day"
                 ? "min-w-[900px] grid-cols-[70px_1fr]"
                 : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
@@ -1562,7 +1606,7 @@ appendLog(
             }}
           >
             <div
-              className="z-10 border-r border-slate-200 bg-white p-2 text-[11px] font-bold text-slate-500"
+              className={th.todoDia}
               style={{ gridColumn: "1 / 2", gridRow: `1 / ${allDayReminderRows + 1}` }}
             >
               Todo el día
@@ -1571,7 +1615,7 @@ appendLog(
             {finalVisibleDays.map((day, index) => (
               <div
                 key={`all-day-bg-${day.date}`}
-                className="border-l border-slate-200 bg-slate-50/80"
+                className={th.allDayBg}
                 style={{
                   gridColumn: `${index + 2} / ${index + 3}`,
                   gridRow: `1 / ${allDayReminderRows + 1}`,
@@ -1630,7 +1674,7 @@ appendLog(
                 <div
                   key={slot}
                   style={{ height: SLOT_HEIGHT }}
-                  className="border-b border-slate-100 p-2 text-xs text-slate-400"
+                  className={`border-b ${th.gridBorderSoft} p-2 text-xs ${th.hourText}`}
                 >
                   {slot}
                 </div>
@@ -1684,7 +1728,7 @@ appendLog(
               return (
                 <div
                   key={day.date}
-                  className="relative border-l border-slate-200"
+                  className={th.dayCol}
                   style={{ height: dayHeight }}
                 >
                   {slots.map((slot) => {
@@ -1692,15 +1736,16 @@ appendLog(
                     const past = isPastDateTime(day.date, slot);
                     const disabled = !working || past;
 
-                    let cellClass = "bg-slate-200/70";
+                    let cellClass = dark ? "bg-slate-800/50" : "bg-slate-200/70";
 
                     if (working && !past) {
-                      cellClass =
-                        "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
+                      cellClass = dark
+                        ? "cursor-pointer bg-slate-800 hover:bg-slate-700"
+                        : "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
                     }
 
                     if (working && past) {
-                      cellClass = "bg-red-50";
+                      cellClass = dark ? "bg-rose-950/30" : "bg-red-50";
                     }
 
                     return (
@@ -1711,9 +1756,9 @@ appendLog(
                           if (disabled || !isWorkingTime(day.index, slot)) return;
                           openNewAppointment(day.date, slot);
                         }}
-                        className={`relative border-b border-slate-100 ${
+                        className={`relative border-b ${th.gridBorderSoft} ${
                           !isWorkingTime(day.index, slot)
-                            ? "cursor-not-allowed bg-slate-200"
+                            ? (dark ? "cursor-not-allowed bg-slate-950" : "cursor-not-allowed bg-slate-200")
                             : cellClass
                         }`}
                       />

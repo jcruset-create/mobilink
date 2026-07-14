@@ -4449,6 +4449,29 @@ if (view === "agenda" && canView("agenda")) {
 />
   );
 }
+if (view === "agenda2" && (canView("agenda2") || canView("agenda"))) {
+  return (
+    <AgendaView
+  dark
+  scheduledJobs={agenda.scheduledJobs}
+  setScheduledJobs={agenda.setScheduledJobsAndSave}
+  quickTemplates={visibleQuickTemplates}
+  selectedWorkshopId={selectedWorkshopId}
+  customExtraTasks={customExtraTasks}
+  linkedTemplates={visibleLinkedTemplates}
+  AREA_META={AREA_META}
+  onBack={() => setView("operativo")}
+  appendLog={appendLog}
+  confirmScheduledArrival={agenda.confirmScheduledArrival}
+  cancelScheduledJob={agenda.cancelScheduledJob}
+  deleteScheduledJobFromBackend={deleteScheduledJobFromBackend}
+  techs={visibleTechs}
+  scheduledTechStatuses={scheduledTechStatuses}
+  setScheduledTechStatuses={setScheduledTechStatuses}
+  queueJobs={visibleJobs.filter((j) => j.status === "espera" || j.status === "validacion")}
+/>
+  );
+}
 
 if (view === "asistencias" && canView("asistencias")) {
   return (
@@ -4735,6 +4758,20 @@ return (
 </button>
 
 
+  )}
+
+  {(canView("agenda2") || canView("agenda")) && (
+    <button
+  type="button"
+  onClick={() => setView("agenda2")}
+  className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+    view === "agenda2"
+      ? "border border-slate-600 bg-slate-800 text-slate-100 shadow-sm"
+      : "border border-slate-300 bg-slate-900 text-slate-100 hover:bg-slate-800"
+  }`}
+>
+  Agenda 2
+</button>
   )}
 
   {canView("asistencias") && (
@@ -6890,6 +6927,9 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => { setView("operarios"); void reloadMaintenanceAvailabilityFromBackend(); }} className="rounded bg-sky-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-sky-600">Técnicos</button>
           <button type="button" onClick={() => setView("entradas2")} className="rounded bg-emerald-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-emerald-600">ER</button>
+          {(canView("agenda2") || canView("agenda")) && (
+            <button type="button" onClick={() => setView("agenda2")} className="rounded bg-amber-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-amber-500">Agenda 2</button>
+          )}
           <button type="button" onClick={() => { window.location.href = "/administracion"; }} className="rounded bg-indigo-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-indigo-600">Administración</button>
           <button type="button" onClick={() => setView("operativo")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200 hover:bg-slate-700">← Volver</button>
         </div>
