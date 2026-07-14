@@ -260,4 +260,21 @@ class TyreControlApi {
         .eq('activo', true);
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
+
+  /// Mapa id→nombre de técnicos, para la columna Técnico de la planificación.
+  /// Best-effort: si RLS no lo permite devuelve vacío (se mostrará "—").
+  static Future<Map<String, String>> mapaTecnicos() async {
+    try {
+      final data = await _db.from('tc_usuarios').select('id, nombre');
+      final m = <String, String>{};
+      for (final e in (data as List)) {
+        final r = Map<String, dynamic>.from(e as Map);
+        final id = r['id'] as String?;
+        if (id != null) m[id] = (r['nombre'] as String?) ?? '—';
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
 }
