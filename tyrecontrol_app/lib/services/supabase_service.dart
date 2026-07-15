@@ -306,7 +306,7 @@ class TyreControlApi {
   /// [estados] filtra por estado (vacío = todas).
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {
     var q = _db.from('tc_incidencias').select(
-        '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion), problemas:tc_incidencia_problemas(tipo, estado)');
+        '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion), problemas:tc_incidencia_problemas(tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))');
     if (estados.isNotEmpty) q = q.inFilter('estado', estados);
     final data = await q.order('detectada_at', ascending: false);
     final lista = (data as List)

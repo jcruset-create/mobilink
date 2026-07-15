@@ -137,7 +137,15 @@ class Incidencia {
   final String detectadaAt;
   final String? fotoUrl;
   final String? motivoPendiente;
+  final String? accionRecomendada;
   final List<String> tipos; // problemas abiertos
+
+  // Revisión de origen (para agrupar: una tarjeta por revisión).
+  final String? revisionId;
+  final String? revisionFecha; // fecha_revision (yyyy-MM-dd)
+  final String? revisionCreatedAt; // hora real de la revisión
+  final String? revisionEstado;
+  final String? tecnicoNombre;
 
   Incidencia({
     required this.id,
@@ -153,11 +161,19 @@ class Incidencia {
     required this.fotoUrl,
     required this.motivoPendiente,
     required this.tipos,
+    this.accionRecomendada,
+    this.revisionId,
+    this.revisionFecha,
+    this.revisionCreatedAt,
+    this.revisionEstado,
+    this.tecnicoNombre,
   });
 
   factory Incidencia.fromJson(Map<String, dynamic> j) {
     final v = j['vehiculo'];
     final pos = j['posicion'];
+    final rev = j['revision'];
+    final tec = rev is Map ? rev['tecnico'] : null;
     final problemas = (j['problemas'] as List?) ?? const [];
     return Incidencia(
       id: j['id'] as String,
@@ -172,10 +188,16 @@ class Incidencia {
       detectadaAt: (j['detectada_at'] as String?) ?? '',
       fotoUrl: j['foto_url'] as String?,
       motivoPendiente: j['motivo_pendiente'] as String?,
+      accionRecomendada: j['accion_recomendada'] as String?,
       tipos: problemas
           .map((p) => (p as Map)['tipo'] as String?)
           .whereType<String>()
           .toList(),
+      revisionId: j['revision_id'] as String?,
+      revisionFecha: rev is Map ? rev['fecha_revision'] as String? : null,
+      revisionCreatedAt: rev is Map ? rev['created_at'] as String? : null,
+      revisionEstado: rev is Map ? rev['estado_revision'] as String? : null,
+      tecnicoNombre: tec is Map ? tec['nombre'] as String? : null,
     );
   }
 
@@ -184,4 +206,14 @@ class Incidencia {
     if (d == null) return 0;
     return DateTime.now().difference(d).inDays;
   }
+
+  /// "Hoy", "1 día", "N días" — desde la detección de la incidencia.
+  String get diasTexto {
+    final n = diasPendiente;
+    if (n <= 0) return 'Hoy';
+    return n == 1 ? '1 día' : '$n días';
+  }
+
+  /// Posición legible; las incidencias sin posición son generales.
+  String get posicionTexto => posicionNombre ?? 'Incidencia general del vehículo';
 }
