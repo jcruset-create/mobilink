@@ -4,6 +4,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
 import 'identify_vehicle_screen.dart';
+import 'incidencias_screen.dart';
 import 'login_screen.dart';
 import 'planificacion_screen.dart';
 import 'revisions_screen.dart';
@@ -21,6 +22,13 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _tab = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresca el contador de incidencias para el badge de Inicio.
+    TyreControlApi.contarIncidenciasPendientes();
+  }
 
   final _tabs = const [
     _InicioTab(),
@@ -79,6 +87,18 @@ class _InicioTab extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 14),
+          ValueListenableBuilder<int>(
+            valueListenable: TyreControlApi.incidenciasPendientesCount,
+            builder: (_, n, __) => _BigTile(
+              icon: Icons.warning_amber,
+              label: n > 0 ? 'Incidencias ($n)' : 'Incidencias',
+              onTap: () async {
+                await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IncidenciasScreen()));
+                await TyreControlApi.contarIncidenciasPendientes();
+              },
+            ),
           ),
           const SizedBox(height: 14),
           Row(

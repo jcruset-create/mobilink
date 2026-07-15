@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config.dart';
 import '../models/models.dart';
+import '../models/incidencias.dart';
 
 /// Capa fina sobre supabase_flutter. No reimplementa reglas de negocio:
 /// las mismas RLS y RPCs que usa el panel web protegen y validan aqui.
@@ -192,8 +194,8 @@ class TyreControlApi {
         );
   }
 
-  static Future<void> completarRevision(String revisionId) async {
-    await _db.from('revisiones_vehiculo').update({'estado_revision': 'completada'}).eq('id', revisionId);
+  static Future<void> completarRevision(String revisionId, {String estado = 'completada'}) async {
+    await _db.from('revisiones_vehiculo').update({'estado_revision': estado}).eq('id', revisionId);
   }
 
   static Future<List<RevisionVehiculo>> listarRevisionesPendientesDelTecnico() async {
@@ -231,6 +233,101 @@ class TyreControlApi {
     final path = 'revisiones/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.$ext';
     await _db.storage.from(_bucketFotos).upload(path, file);
     return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  }
+
+  // ── Incidencias (Fase 1: detección + pendientes) ─────────────
+  /// Contador de incidencias pendientes (para el badge de Inicio). Se
+  /// actualiza al llamar a [listarIncidencias] o [contarIncidenciasPendientes].
+  static final ValueNotifier<int> incidenciasPendientesCount = ValueNotifier<int>(0);
+
+  /// Sube la foto (obligatoria en las incidencias graves) al bucket de fotos.
+  static Future<String> subirFotoIncidencia(File file) async {
+    final ext = file.path.split('.').last;
+    final path = 'incidencias/${DateTime.now().microsecondsSinceEpoch}.$ext';
+    await _db.storage.from(_bucketFotos).upload(path, file);
+    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  }
+
+  /// Crea una incidencia con sus problemas. Devuelve el id de la incidencia.
+  /// Estado inicial: si trae [motivoPendiente] → según el motivo; si no,
+  /// 'detectada'. La foto ya debe estar subida ([fotoUrl]).
+  static Future<String> crearIncidencia({
+    required String empresaId,
+    required String vehiculoId,
+    String? posicionId,
+    String? neumaticoId,
+    String? revisionId,
+    required List<String> tipos,
+    required String gravedad,
+    String? gravedadAuto,
+    required String estado,
+    String? motivoPendiente,
+    String? motivoObservacion,
+    String? accionRecomendada,
+    String? fechaRecomendada,
+    String? autorizaPersona,
+    Map<String, dynamic>? medicionInicial,
+    String? fotoUrl,
+  }) async {
+    final uid = _db.auth.currentUser?.id;
+    final inc = await _db
+        .from('tc_incidencias')
+        .insert({
+          'empresa_id': empresaId,
+          'vehiculo_id': vehiculoId,
+          'posicion_id': posicionId,
+          'neumatico_id': neumaticoId,
+          'revision_id': revisionId,
+          'gravedad': gravedad,
+          'gravedad_auto': gravedadAuto,
+          'estado': estado,
+          'detectada_por': uid,
+          'motivo_pendiente': motivoPendiente,
+          'motivo_observacion': motivoObservacion,
+          'accion_recomendada': accionRecomendada,
+          'fecha_recomendada': fechaRecomendada,
+          'autoriza_persona': autorizaPersona,
+          'medicion_inicial': medicionInicial,
+          'foto_url': fotoUrl,
+        })
+        .select('id')
+        .single();
+    final incidenciaId = inc['id'] as String;
+
+    if (tipos.isNotEmpty) {
+      await _db.from('tc_incidencia_problemas').insert(
+            tipos.map((t) => {'incidencia_id': incidenciaId, 'tipo': t}).toList(),
+          );
+    }
+    return incidenciaId;
+  }
+
+  /// Lista de incidencias con vehículo/posición/problemas embebidos.
+  /// [estados] filtra por estado (vacío = todas).
+  static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {
+    var q = _db.from('tc_incidencias').select(
+        '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion), problemas:tc_incidencia_problemas(tipo, estado)');
+    if (estados.isNotEmpty) q = q.inFilter('estado', estados);
+    final data = await q.order('detectada_at', ascending: false);
+    final lista = (data as List)
+        .map((e) => Incidencia.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    return lista;
+  }
+
+  /// Refresca el contador de pendientes (no solucionadas/canceladas).
+  static Future<int> contarIncidenciasPendientes() async {
+    try {
+      final data = await _db
+          .from('tc_incidencias')
+          .select('id')
+          .not('estado', 'in', '(solucionada,cancelada,no_procede)');
+      final n = (data as List).length;
+      incidenciasPendientesCount.value = n;
+      return n;
+    } catch (_) {
+      return incidenciasPendientesCount.value;
+    }
   }
 
   // ── Planificación de revisiones ──────────────────────────────

@@ -11,6 +11,7 @@ import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_schema.dart';
 import '../widgets/vehicle_layout_image.dart';
+import 'incidencia_flow_screen.dart';
 import 'tire_detail_screen.dart';
 
 /// Pantalla 4: revision. Modo asistente automatico: el tecnico no
@@ -351,6 +352,27 @@ class _ReviewScreenState extends State<ReviewScreen> {
     await _finalizar();
   }
 
+  /// Abre el flujo "⚠ Revisión con incidencia". Si se registran incidencias
+  /// pendientes, finaliza la revisión con ese estado (no como "correcta").
+  Future<void> _abrirIncidencias() async {
+    final res = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => IncidenciaFlowScreen(
+          vehiculo: widget.vehiculo,
+          revisionId: _revision!.id,
+          posiciones: _posiciones,
+          montajePorPosicion: _montajePorPosicion,
+          detalles: _detalles,
+          imagenChasis: _imagenChasis,
+        ),
+      ),
+    );
+    if (!mounted || res == null) return;
+    if (res == 'pendiente') {
+      await _finalizar(estado: 'completada_incidencia_pendiente');
+    }
+  }
+
   void _saltar() {
     setState(() {
       if (_index < _posiciones.length - 1) _index++;
@@ -390,7 +412,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
-  Future<void> _finalizar() async {
+  Future<void> _finalizar({String estado = 'completada'}) async {
     setState(() => _finalizando = true);
     try {
       if (OfflineStore.pendingCount.value > 0) {
@@ -402,7 +424,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
       } else {
         // Todo guardado online: completamos directo en el servidor.
         try {
-          await TyreControlApi.completarRevision(_revision!.id);
+          await TyreControlApi.completarRevision(_revision!.id, estado: estado);
           OfflineStore.offline.value = false;
         } on PostgrestException {
           await OfflineStore.enqueueCompletar(_revision!.id);
@@ -498,6 +520,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
             onSaltar: _index < _posiciones.length - 1 ? _saltar : null,
             onRevisar: actual == null ? null : () => _abrirNeumatico(actual),
             onFinalizar: _finalizarConAviso,
+            onIncidencia: _abrirIncidencias,
           ),
         ],
       ),
@@ -579,6 +602,7 @@ class _PanelInferior extends StatelessWidget {
   final VoidCallback? onSaltar;
   final VoidCallback? onRevisar;
   final VoidCallback onFinalizar;
+  final VoidCallback onIncidencia;
 
   const _PanelInferior({
     required this.actual,
@@ -593,6 +617,7 @@ class _PanelInferior extends StatelessWidget {
     required this.onSaltar,
     required this.onRevisar,
     required this.onFinalizar,
+    required this.onIncidencia,
   });
 
   @override
@@ -665,19 +690,36 @@ class _PanelInferior extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
             ),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: finalizando ? null : onFinalizar,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: pendientes == 0 ? AppColors.success : AppColors.surfaceVariant,
-                foregroundColor: pendientes == 0 ? Colors.white : AppColors.textPrimary,
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: finalizando ? null : onFinalizar,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  icon: finalizando
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.check_circle),
+                  label: const Text('Finalizar revisión'),
+                ),
               ),
-              icon: finalizando
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.check_circle),
-              label: const Text('Finalizar revisión'),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: finalizando ? null : onIncidencia,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.warning,
+                    foregroundColor: AppColors.background,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  icon: const Icon(Icons.warning_amber),
+                  label: const Text('Con incidencia'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
