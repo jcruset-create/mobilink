@@ -205,8 +205,8 @@ export async function deleteScheduledJobFromBackend(id: number) {
     throw new Error(text || "No se pudo eliminar la cita programada");
   }
 }
-export async function loadJobsFromBackend() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/jobs`);
+export async function loadJobsFromBackend(scope: "live" | "all" = "live") {
+  const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=${scope}`);
 
   if (!response.ok) {
     throw new Error(`Error cargando trabajos. Código ${response.status}.`);

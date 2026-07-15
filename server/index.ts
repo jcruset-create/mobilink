@@ -1940,9 +1940,26 @@ app.post(
    JOBS
 ========================================================= */
 
-app.get("/api/jobs", async (_req, res) => {
+app.get("/api/jobs", async (req, res) => {
   try {
-    const result = await db.query(`SELECT * FROM jobs ORDER BY id DESC`);
+    // scope=live (por defecto para el operativo y su auto-sync): solo trabajos
+    // no cerrados + cerrados de los últimos 3 días (cubre las estadísticas del
+    // día). El histórico/ranking piden ?scope=all para el listado completo.
+    // Esto evita descargar cientos de trabajos cerrados en cada refresco.
+    const scope = String((req.query?.scope as string) || "live");
+    let result;
+    if (scope === "all") {
+      result = await db.query(`SELECT * FROM jobs ORDER BY id DESC`);
+    } else {
+      const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+      result = await db.query(
+        `SELECT * FROM jobs
+         WHERE status <> 'cerrado'
+            OR COALESCE("closedAtMs", "createdAtMs", 0) > $1
+         ORDER BY id DESC`,
+        [cutoff]
+      );
+    }
     res.json(result.rows.map(normalizeJobRow));
   } catch (error) {
     console.error("GET /api/jobs error:", error);

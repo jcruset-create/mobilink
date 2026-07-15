@@ -537,7 +537,11 @@ const autoSyncPaused =
   formOpen ||
   quickEntryOpen ||
   resetConfirmOpen ||
-  editingQuickTemplateKey !== null;
+  editingQuickTemplateKey !== null ||
+  // En histórico/ranking no hace falta refrescar: se cargan una vez con el
+  // listado completo y no se sondea (ahorra egress mientras se consultan).
+  view === "historico" ||
+  view === "ranking";
 
 const {
   maintenanceAvailability,
@@ -726,7 +730,7 @@ useEffect(() => {
 useEffect(() => {
   async function loadJobs() {
     try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/jobs`);
+      const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=live`);
       const data = await response.json();
       const normalized = Array.isArray(data) ? data.map(normalizeJobFromApi) : [];
       setJobs(normalized);
@@ -745,6 +749,22 @@ useEffect(() => {
 
   loadJobs();
 }, []);
+
+// Histórico / Ranking necesitan TODOS los trabajos (no solo los recientes):
+// se cargan una vez al abrir la vista (el auto-sync está pausado ahí).
+useEffect(() => {
+  if (view !== "historico" && view !== "ranking") return;
+  let cancelled = false;
+  (async () => {
+    try {
+      const data = await loadJobsFromBackend("all");
+      if (!cancelled) setJobs(normalizeJobsV2Fields(Array.isArray(data) ? data : []));
+    } catch (error) {
+      console.error("Error cargando histórico de trabajos:", error);
+    }
+  })();
+  return () => { cancelled = true; };
+}, [view]);
 
 useEffect(() => {
   if (!techs.length) return;
@@ -1128,7 +1148,7 @@ useEffect(() => {
 useAutoSync({
   enabled: isAuthenticated,
   paused: autoSyncPaused,
-  intervalMs: 5000,
+  intervalMs: 15000,
   onSync: async () => {
     await reloadJobsFromBackend();
     await reloadQuickTemplatesFromBackend();
