@@ -121,12 +121,12 @@ class _IncidenciaFlowScreenState extends State<IncidenciaFlowScreen> {
   }
 
   Future<void> _dejarPendiente() async {
-    final requiereFoto = _drafts.values.any((d) => d.gravedad != Gravedad.leve);
     final form = await Navigator.of(context).push<_PendienteForm>(
       MaterialPageRoute(
         builder: (_) => _PendienteFormScreen(
           numIncidencias: _drafts.length,
-          requiereFoto: requiereFoto,
+          // La foto es siempre opcional (decisión del usuario, 2026-07-16).
+          requiereFoto: false,
         ),
       ),
     );

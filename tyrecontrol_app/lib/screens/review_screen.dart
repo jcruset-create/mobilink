@@ -310,24 +310,35 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
-  /// (A) Diálogo automático al completar todas las ruedas.
+  /// (A) Diálogo automático al completar todas las ruedas. Dos cierres:
+  /// todo correcto → Finalizar; anomalía → Finalizar con incidencia (abre
+  /// directamente el panel de incidencias).
   Future<void> _ofrecerFinalizar() async {
     if (_ofreciendoFinal || _finalizando || !mounted) return;
     _ofreciendoFinal = true;
     HapticFeedback.mediumImpact();
-    final ok = await showDialog<bool>(
+    final res = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Revisión completa'),
         content: const Text('Has medido todas las ruedas. ¿Finalizar la revisión?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Seguir revisando')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Finalizar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'seguir'), child: const Text('Seguir revisando')),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.warning.withValues(alpha: 0.2),
+              foregroundColor: AppColors.warning,
+            ),
+            onPressed: () => Navigator.pop(ctx, 'incidencia'),
+            child: const Text('⚠ Finalizar con incidencia'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'finalizar'), child: const Text('Finalizar')),
         ],
       ),
     );
     _ofreciendoFinal = false;
-    if (ok == true) await _finalizar();
+    if (res == 'finalizar') await _finalizar();
+    if (res == 'incidencia') await _abrirIncidencias();
   }
 
   /// (B) Finalizar manual: si quedan posiciones sin medir, avisa y pide

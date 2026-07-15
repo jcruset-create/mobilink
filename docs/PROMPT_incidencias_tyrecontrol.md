@@ -52,7 +52,7 @@ Campos propuestos:
 - `estado text` → `detectada | pendiente_autorizacion | autorizada | planificada | pendiente_material | pendiente_vehiculo | en_curso | solucionada | cancelada | no_procede`.
 - `detectada_por` (tecnico_id), `detectada_at`, `fecha_recomendada` (nullable), `autoriza_persona` (nullable).
 - `medicion_inicial jsonb` (profundidad/presión/estado visual al detectar), `medicion_final jsonb` (al solucionar).
-- `motivo_pendiente text` (enum de motivos rápidos, nullable), `motivo_observacion text`, `foto_url text` (obligatoria según gravedad).
+- `motivo_pendiente text` (enum de motivos rápidos, nullable), `motivo_observacion text`, `foto_url text` (opcional — decisión usuario 2026-07-16).
 - `resuelta_at`, `resuelta_por`, `tiempo_intervencion_seg` (nullable).
 - `seguimiento_revision_id` (nullable, para la revisión de comprobación posterior).
 - `created_at`, `updated_at`.
@@ -115,7 +115,7 @@ Si `umbrales.esAnomalia()` marcó alguna rueda, **preseleccionar** ese botón / 
 - **Quedan problemas** → crear incidencia(s) pendiente(s); revisión "finalizada con incidencia pendiente".
 
 ### F. Formulario "Dejar pendiente" (corto)
-Campos: incidencia (ya seleccionada), posición, gravedad, acción recomendada, **motivo** (rápidos: falta autorización cliente, falta neumático, falta material, no hay tiempo, vehículo debe salir, requiere taller, pendiente presupuesto, pendiente unidad móvil, no se puede acceder, otro), **foto obligatoria según gravedad**, observación, fecha recomendada, persona que autoriza (si aplica).
+Campos: incidencia (ya seleccionada), posición, gravedad, acción recomendada, **motivo** (rápidos: falta autorización cliente, falta neumático, falta material, no hay tiempo, vehículo debe salir, requiere taller, pendiente presupuesto, pendiente unidad móvil, no se puede acceder, otro), **foto opcional** (decisión usuario 2026-07-16), observación, fecha recomendada, persona que autoriza (si aplica).
 
 ---
 
@@ -157,7 +157,7 @@ La app de asistencias tiene cola persistente (Hive outbox); **`tyrecontrol_app` 
 ## Decisiones tomadas (fijadas — "tú decide", 2026-07-15)
 
 1. **`estado_revision`** → **Se añaden dos estados nuevos**: `completada_con_incidencias` y `completada_incidencia_pendiente` (además de `borrador`/`completada`). Motivo: una revisión con incidencia **no** debe constar como "correcta"; queda trazabilidad para informes. La UI y los informes derivan el matiz del propio estado, no de un conteo.
-2. **Offline** → **Fase 1 escribe directo a Supabase** con manejo de error visible y reintento manual, **sin bloquear el cierre** de la revisión (la incidencia/medición ya quedan en local si falla el envío). La **foto obligatoria del pendiente** se sube con reintento ligero (persistir archivo + reintentar), no con cola completa. **La cola outbox completa (idempotencia por `clientActionId`, reintentos automáticos) se porta en Fase 2**, cuando entran operaciones y más fotos. Rationale: no frenar la fase 1 con infraestructura que rinde más en el flujo de "solucionar".
+2. **Offline** → **Fase 1 escribe directo a Supabase** con manejo de error visible y reintento manual, **sin bloquear el cierre** de la revisión (la incidencia/medición ya quedan en local si falla el envío). La **foto del pendiente (opcional)** se sube con reintento ligero (persistir archivo + reintentar), no con cola completa. **La cola outbox completa (idempotencia por `clientActionId`, reintentos automáticos) se porta en Fase 2**, cuando entran operaciones y más fotos. Rationale: no frenar la fase 1 con infraestructura que rinde más en el flujo de "solucionar".
 3. **Autorización** → **La incidencia se autogestiona con su propio `estado`** (`pendiente_autorizacion`, `autorizada`, …) en fases 1-2. La integración con `autorizaciones_operaciones` (flujo de autorización de operaciones ya existente) se hace en **Fase 3**, solo para operaciones que la requieran. Evita acoplar de más al principio.
 4. **Umbrales de gravedad** → **Globales fijos** de `umbrales.dart` (1,6 / 3,0 mm) en fases 1-2. La configuración por empresa/eje (tabla de umbrales) se pospone (fase futura, no bloqueante).
 5. **Presión objetivo** → **No se autodetecta presión en fase 1**. Como hoy no hay presión objetivo por vehículo/posición, los problemas `presion_baja`/`presion_alta` los **marca el técnico manualmente** (con la presión medida guardada). Añadir "presión objetivo por eje/posición" (para autodetección y para la operación "corregir presión" con objetivo) se hace en **Fase 2** junto al flujo de solucionar. La gravedad automática de fase 1 se calcula sobre **profundidad + tipo de problema + estado visual**, no sobre presión.
@@ -170,7 +170,7 @@ La app de asistencias tiene cola persistente (Hive outbox); **`tyrecontrol_app` 
 
 ## Plan por fases (propuesto)
 
-- **Fase 1 — Detección y pendientes**: migración `tc_incidencias` + `tc_incidencia_problemas` + 2 estados nuevos de `estado_revision` + `operaciones_neumaticos.incidencia_id`; bifurcación de botones en `review_screen`; selección posición+problemas+gravedad (auto sobre profundidad+visual, decisión 5); "Dejar pendiente" con formulario y foto obligatoria (envío directo + reintento, decisión 2); cierre con incidencia pendiente; menú "Incidencias" (pestaña Pendientes + tarjeta + contador). **Sin "solucionar ahora".**
+- **Fase 1 — Detección y pendientes**: migración `tc_incidencias` + `tc_incidencia_problemas` + 2 estados nuevos de `estado_revision` + `operaciones_neumaticos.incidencia_id`; bifurcación de botones en `review_screen`; selección posición+problemas+gravedad (auto sobre profundidad+visual, decisión 5); "Dejar pendiente" con formulario y foto opcional (envío directo + reintento, decisión 2); cierre con incidencia pendiente; menú "Incidencias" (pestaña Pendientes + tarjeta + contador). **Sin "solucionar ahora".**
 - **Fase 2 — Solucionar**: "Solucionar ahora" en la revisión y desde el menú (operaciones filtradas, registro en `operaciones_neumaticos` con `incidencia_id`, medición inicial/final, fotos, tiempo); solución parcial; cierre "con incidencias solucionadas". Incluye: **presión objetivo por eje/posición** (decisión 5) y **cola outbox** portada de asistencias (decisión 2).
 - **Fase 3 — Estados avanzados y panel**: autorización (integración con `autorizaciones_operaciones`, decisión 3), planificación, pendiente material/vehículo; orden por prioridad + Webfleet en base; **revisión de seguimiento** como plan (decisión 6); página Incidencias en el panel web y sección en la ficha del vehículo.
 - **Transversal**: versionar `pubspec.yaml` y generar APK versionado en cada entrega (norma del repo).

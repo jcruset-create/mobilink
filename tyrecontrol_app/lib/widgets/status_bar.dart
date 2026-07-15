@@ -4,13 +4,14 @@ import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
-/// Cabecera de la app: logo TyreControl + usuario y versión, con la franja
-/// de estado (conexión / pendientes) debajo. Nunca bloquea: informa.
+/// Cabecera de la app: mismas dimensiones que la app de asistencias
+/// (alto 108, logo a la izquierda a 50 de alto, con el nombre del técnico
+/// y la versión debajo). A la derecha, el estado (conexión / pendientes).
 class TopStatusBar extends StatefulWidget implements PreferredSizeWidget {
   const TopStatusBar({super.key});
 
   @override
-  Size get preferredSize => const Size.fromHeight(72);
+  Size get preferredSize => const Size.fromHeight(108);
 
   @override
   State<TopStatusBar> createState() => _TopStatusBarState();
@@ -44,45 +45,52 @@ class _TopStatusBarState extends State<TopStatusBar> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Image.asset('assets/logo_cabecera.png', height: 34),
-                const Spacer(),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
+    return Container(
+      color: AppColors.background,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              // Logo + técnico + versión (mismo patrón que asistencias)
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Image.asset(
+                      'assets/logo_cabecera.png',
+                      height: 50,
+                      fit: BoxFit.contain,
+                      alignment: Alignment.centerLeft,
+                    ),
                     if (_nombre != null && _nombre!.isNotEmpty)
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.person, size: 14, color: AppColors.textSecondary),
-                          const SizedBox(width: 4),
-                          Text(_nombre!,
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textPrimary)),
-                        ],
+                      Padding(
+                        padding: const EdgeInsets.only(left: 2, top: 2),
+                        child: Text(
+                          _nombre!,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary),
+                        ),
                       ),
                     if (_version.isNotEmpty)
-                      Text(_version,
+                      Padding(
+                        padding: const EdgeInsets.only(left: 2, top: 1),
+                        child: Text(
+                          _version,
                           style: const TextStyle(
-                              fontSize: 11, color: AppColors.textHint)),
+                              fontSize: 11, color: AppColors.textHint),
+                        ),
+                      ),
                   ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            SizedBox(
-              height: 22,
-              child: Row(
+              ),
+              // Estado del sistema, a la derecha
+              Column(
                 mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   ValueListenableBuilder<bool>(
                     valueListenable: OfflineStore.offline,
@@ -92,19 +100,25 @@ class _TopStatusBarState extends State<TopStatusBar> {
                       label: isOffline ? 'Sin conexión' : 'Conectado',
                     ),
                   ),
-                  const SizedBox(width: 8),
                   ValueListenableBuilder<int>(
                     valueListenable: OfflineStore.pendingCount,
                     builder: (_, n, __) => n == 0
                         ? const SizedBox.shrink()
-                        : _Pill(icon: Icons.sync, color: AppColors.info, label: '$n por sincronizar'),
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: _Pill(
+                                icon: Icons.sync,
+                                color: AppColors.info,
+                                label: '$n por sincronizar'),
+                          ),
                   ),
                 ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      );
+      ),
+    );
   }
 }
 
