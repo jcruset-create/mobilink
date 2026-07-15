@@ -477,6 +477,45 @@ export async function sustituirNeumatico(params: {
   return data as string;
 }
 
+// ── Incidencias de neumático (Fase 2/3) ───────────────────────
+const INCIDENCIA_SELECT =
+  "*, vehiculo:tc_vehiculos(id, matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje), problemas:tc_incidencia_problemas(id, tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))";
+
+export async function listarIncidencias(): Promise<any[]> {
+  const { data, error } = await supabase
+    .from("tc_incidencias")
+    .select(INCIDENCIA_SELECT)
+    .order("detectada_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function resolverIncidencia(params: {
+  incidenciaId: string;
+  problemaIds: string[];
+  tipo: string;
+  medicionFinal?: Record<string, unknown> | null;
+  material?: string | null;
+  resultado?: string | null;
+  observaciones?: string | null;
+  fotoUrl?: string | null;
+  tiempoSeg?: number | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_resolver_incidencia_parcial", {
+    p_incidencia_id: params.incidenciaId,
+    p_problema_ids: params.problemaIds,
+    p_tipo: params.tipo,
+    p_medicion_final: params.medicionFinal ?? null,
+    p_material: params.material ?? null,
+    p_resultado: params.resultado ?? null,
+    p_observaciones: params.observaciones ?? null,
+    p_foto_url: params.fotoUrl ?? null,
+    p_tiempo_seg: params.tiempoSeg ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
 export async function repararNeumatico(neumaticoId: string, motivo: string, observaciones?: string | null): Promise<void> {
   const { error } = await supabase.rpc("tc_reparar_neumatico", { p_neumatico: neumaticoId, p_motivo: motivo, p_obs: observaciones ?? null });
   if (error) throw new Error(error.message);
