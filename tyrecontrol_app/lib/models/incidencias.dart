@@ -109,6 +109,76 @@ const kEstadoIncidenciaLabels = {
   'no_procede': 'No procede',
 };
 
+// ── Operaciones de resolución (Fase 2) ───────────────────────
+class OperacionTipo {
+  final String key;
+  final String label;
+  final IconData icon;
+  /// false → cambia el neumático montado; llega en el siguiente incremento.
+  final bool disponible;
+  const OperacionTipo(this.key, this.label, this.icon, {this.disponible = true});
+}
+
+const kOperaciones = <OperacionTipo>[
+  OperacionTipo('corregir_presion', 'Corregir presión', Icons.speed),
+  OperacionTipo('reparar_pinchazo', 'Reparar pinchazo', Icons.tire_repair),
+  OperacionTipo('cambiar_valvula', 'Cambiar válvula', Icons.air),
+  OperacionTipo('equilibrar', 'Equilibrar', Icons.balance),
+  OperacionTipo('solicitar_alineacion', 'Solicitar alineación', Icons.linear_scale),
+  OperacionTipo('reapretar', 'Reapretar rueda', Icons.build_circle),
+  OperacionTipo('actualizar_neumatico', 'Actualizar neumático instalado', Icons.rule),
+  OperacionTipo('sustituir_neumatico', 'Sustituir neumático', Icons.autorenew, disponible: false),
+  OperacionTipo('cambiar_posicion', 'Cambiar posición', Icons.swap_vert, disponible: false),
+  OperacionTipo('intercambiar', 'Intercambiar neumáticos', Icons.swap_horiz, disponible: false),
+  OperacionTipo('otra', 'Otra operación', Icons.more_horiz),
+];
+
+OperacionTipo operacionPorKey(String key) => kOperaciones.firstWhere(
+    (o) => o.key == key,
+    orElse: () => OperacionTipo(key, key, Icons.build));
+
+/// Operaciones sugeridas para un conjunto de problemas (las más relevantes
+/// primero; el técnico puede elegir cualquiera del catálogo).
+List<String> operacionesSugeridas(Set<String> tipos) {
+  final orden = <String>[];
+  void add(String k) {
+    if (!orden.contains(k)) orden.add(k);
+  }
+  for (final t in tipos) {
+    switch (t) {
+      case 'presion_baja':
+      case 'presion_alta':
+        add('corregir_presion');
+      case 'pinchazo':
+      case 'objeto_clavado':
+        add('reparar_pinchazo');
+      case 'valvula_danada':
+        add('cambiar_valvula');
+      case 'diferencia_gemelos':
+      case 'necesita_equilibrado':
+        add('equilibrar');
+      case 'necesita_alineacion':
+      case 'desgaste_irregular':
+      case 'desgaste_interior':
+      case 'desgaste_exterior':
+        add('solicitar_alineacion');
+      case 'corte_grieta':
+      case 'necesita_reparacion':
+        add('reparar_pinchazo');
+      case 'profundidad_baja':
+      case 'necesita_sustitucion':
+      case 'dano_flanco':
+      case 'deformacion':
+        add('sustituir_neumatico');
+      case 'no_coincide_ficha':
+      case 'cambiado_posicion':
+      case 'no_identificado':
+        add('actualizar_neumatico');
+    }
+  }
+  return orden;
+}
+
 // ── Motivos rápidos para "dejar pendiente" ───────────────────
 const kMotivosPendiente = <MapEntry<String, String>>[
   MapEntry('falta_autorizacion', 'Falta autorización del cliente'),
@@ -123,11 +193,21 @@ const kMotivosPendiente = <MapEntry<String, String>>[
   MapEntry('otro', 'Otro motivo'),
 ];
 
+/// Un problema concreto dentro de una incidencia (con su id para resolver).
+class ProblemaInc {
+  final String id;
+  final String tipo;
+  final String estado; // abierto | solucionado
+  ProblemaInc({required this.id, required this.tipo, required this.estado});
+  bool get abierto => estado != 'solucionado';
+}
+
 /// Una incidencia leída del servidor (para el menú "Incidencias").
 class Incidencia {
   final String id;
   final String vehiculoId;
   final String? posicionId;
+  final int? posicionEje;
   final String? matricula;
   final String? cliente;
   final String? base;
@@ -138,7 +218,8 @@ class Incidencia {
   final String? fotoUrl;
   final String? motivoPendiente;
   final String? accionRecomendada;
-  final List<String> tipos; // problemas abiertos
+  final List<String> tipos; // tipos de los problemas abiertos (para mostrar)
+  final List<ProblemaInc> problemas; // todos, con id (para resolver)
 
   // Revisión de origen (para agrupar: una tarjeta por revisión).
   final String? revisionId;
@@ -151,6 +232,7 @@ class Incidencia {
     required this.id,
     required this.vehiculoId,
     required this.posicionId,
+    this.posicionEje,
     required this.matricula,
     required this.cliente,
     required this.base,
@@ -161,6 +243,7 @@ class Incidencia {
     required this.fotoUrl,
     required this.motivoPendiente,
     required this.tipos,
+    this.problemas = const [],
     this.accionRecomendada,
     this.revisionId,
     this.revisionFecha,
@@ -174,11 +257,21 @@ class Incidencia {
     final pos = j['posicion'];
     final rev = j['revision'];
     final tec = rev is Map ? rev['tecnico'] : null;
-    final problemas = (j['problemas'] as List?) ?? const [];
+    final problemasRaw = (j['problemas'] as List?) ?? const [];
+    final problemas = problemasRaw
+        .map((p) => Map<String, dynamic>.from(p as Map))
+        .where((p) => p['id'] != null)
+        .map((p) => ProblemaInc(
+              id: p['id'] as String,
+              tipo: (p['tipo'] as String?) ?? 'otra',
+              estado: (p['estado'] as String?) ?? 'abierto',
+            ))
+        .toList();
     return Incidencia(
       id: j['id'] as String,
       vehiculoId: j['vehiculo_id'] as String,
       posicionId: j['posicion_id'] as String?,
+      posicionEje: pos is Map ? (pos['eje'] as num?)?.toInt() : null,
       matricula: v is Map ? v['matricula'] as String? : null,
       cliente: v is Map && v['empresa'] is Map ? v['empresa']['nombre'] as String? : null,
       base: v is Map && v['delegacion'] is Map ? v['delegacion']['nombre'] as String? : null,
@@ -189,10 +282,8 @@ class Incidencia {
       fotoUrl: j['foto_url'] as String?,
       motivoPendiente: j['motivo_pendiente'] as String?,
       accionRecomendada: j['accion_recomendada'] as String?,
-      tipos: problemas
-          .map((p) => (p as Map)['tipo'] as String?)
-          .whereType<String>()
-          .toList(),
+      tipos: problemas.where((p) => p.abierto).map((p) => p.tipo).toList(),
+      problemas: problemas,
       revisionId: j['revision_id'] as String?,
       revisionFecha: rev is Map ? rev['fecha_revision'] as String? : null,
       revisionCreatedAt: rev is Map ? rev['created_at'] as String? : null,

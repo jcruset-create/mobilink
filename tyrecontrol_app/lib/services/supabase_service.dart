@@ -306,13 +306,58 @@ class TyreControlApi {
   /// [estados] filtra por estado (vacío = todas).
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {
     var q = _db.from('tc_incidencias').select(
-        '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion), problemas:tc_incidencia_problemas(tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))');
+        '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje), problemas:tc_incidencia_problemas(id, tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))');
     if (estados.isNotEmpty) q = q.inFilter('estado', estados);
     final data = await q.order('detectada_at', ascending: false);
     final lista = (data as List)
         .map((e) => Incidencia.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
     return lista;
+  }
+
+  /// Presión objetivo (bar) y margen para una posición, o null si no está
+  /// configurada. Reusa el RPC con precedencia vehículo > tipo, eje concreto
+  /// antes que "todos".
+  static Future<({num presion, num margen})?> presionObjetivo(String vehiculoId, int? eje) async {
+    try {
+      final data = await _db.rpc('tc_presion_objetivo', params: {'p_vehiculo': vehiculoId, 'p_eje': eje});
+      if (data is List && data.isNotEmpty) {
+        final r = Map<String, dynamic>.from(data.first as Map);
+        return (presion: r['presion'] as num, margen: (r['margen'] as num?) ?? 0.5);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Resuelve (total o parcialmente) una incidencia: marca los problemas
+  /// indicados como solucionados, registra la operación y cascada el estado
+  /// de la incidencia y de la revisión. Todo en una transacción en el
+  /// servidor (RPC). Devuelve el nuevo estado de la incidencia.
+  static Future<String> resolverIncidencia({
+    required String incidenciaId,
+    required List<String> problemaIds,
+    required String tipoOperacion,
+    Map<String, dynamic>? medicionFinal,
+    String? material,
+    String? resultado,
+    String? observaciones,
+    String? fotoUrl,
+    int? tiempoSeg,
+  }) async {
+    final data = await _db.rpc('tc_resolver_incidencia_parcial', params: {
+      'p_incidencia_id': incidenciaId,
+      'p_problema_ids': problemaIds,
+      'p_tipo': tipoOperacion,
+      'p_medicion_final': medicionFinal,
+      'p_material': material,
+      'p_resultado': resultado,
+      'p_observaciones': observaciones,
+      'p_foto_url': fotoUrl,
+      'p_tiempo_seg': tiempoSeg,
+    });
+    return data as String;
   }
 
   /// Refresca el contador de pendientes (no solucionadas/canceladas).

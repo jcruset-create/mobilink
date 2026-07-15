@@ -3,6 +3,7 @@ import '../models/incidencias.dart';
 import '../models/incidencias_grupos.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import 'resolver_incidencias_screen.dart';
 import 'vehiculo_ficha_screen.dart';
 
 /// Menú "Incidencias": una tarjeta por REVISIÓN (no por incidencia), con
@@ -129,6 +130,7 @@ class _IncidenciasScreenState extends State<IncidenciasScreen> {
                 onIncidencia: _detalleIncidencia,
                 onVerVehiculo: () => Navigator.of(context).push(MaterialPageRoute(
                     builder: (_) => VehiculoFichaScreen(vehiculoId: grupos[i].vehiculoId))),
+                onResolver: () => _resolver(grupos[i]),
                 onAccionFutura: _avisoFase2,
               ),
             ),
@@ -138,6 +140,19 @@ class _IncidenciasScreenState extends State<IncidenciasScreen> {
   void _avisoFase2(String accion) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('"$accion" llegará en la próxima versión.')));
+  }
+
+  Future<void> _resolver(GrupoRevision g) async {
+    final cambios = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ResolverIncidenciasScreen(
+          matricula: g.matricula ?? '—',
+          fechaRevision: fechaCortaIncidencia(g.fechaRevision),
+          incidencias: g.incidencias,
+        ),
+      ),
+    );
+    if (cambios == true) await _cargar();
   }
 
   void _detalleIncidencia(Incidencia inc) {
@@ -185,17 +200,27 @@ class _IncidenciasScreenState extends State<IncidenciasScreen> {
               ),
             ],
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _avisoFase2('Solucionar');
-                },
-                icon: const Icon(Icons.build),
-                label: const Text('Solucionar'),
+            if (inc.problemas.any((p) => p.abierto))
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    final cambios = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) => ResolverIncidenciasScreen(
+                          matricula: inc.matricula ?? '—',
+                          fechaRevision: fechaCortaIncidencia(inc.revisionFecha ?? inc.detectadaAt),
+                          incidencias: [inc],
+                        ),
+                      ),
+                    );
+                    if (cambios == true) await _cargar();
+                  },
+                  icon: const Icon(Icons.build),
+                  label: const Text('Solucionar'),
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -227,6 +252,7 @@ class _TarjetaRevision extends StatelessWidget {
   final VoidCallback onToggleExpandir;
   final void Function(Incidencia) onIncidencia;
   final VoidCallback onVerVehiculo;
+  final VoidCallback onResolver;
   final void Function(String accion) onAccionFutura;
 
   const _TarjetaRevision({
@@ -236,6 +262,7 @@ class _TarjetaRevision extends StatelessWidget {
     required this.onToggleExpandir,
     required this.onIncidencia,
     required this.onVerVehiculo,
+    required this.onResolver,
     required this.onAccionFutura,
   });
 
@@ -367,22 +394,29 @@ class _TarjetaRevision extends StatelessWidget {
   }
 
   List<Widget> _botonesTab() {
-    List<(String, IconData)> defs = switch (tab) {
-      1 => [('Iniciar trabajo', Icons.play_arrow), ('Cambiar planificación', Icons.edit_calendar)],
-      2 => [('Continuar', Icons.play_arrow)],
-      3 => [('Ver solución', Icons.task_alt)],
-      _ => [('Solucionar ahora', Icons.build), ('Planificar', Icons.event)],
+    // (label, icono, ¿acción real disponible en Fase 2a?)
+    List<(String, IconData, bool)> defs = switch (tab) {
+      1 => [('Iniciar trabajo', Icons.play_arrow, false), ('Cambiar planificación', Icons.edit_calendar, false)],
+      2 => [('Continuar', Icons.play_arrow, false)],
+      3 => [('Ver solución', Icons.task_alt, false)],
+      _ => [('Solucionar ahora', Icons.build, true), ('Planificar', Icons.event, false)],
     };
     final out = <Widget>[];
     for (var i = 0; i < defs.length; i++) {
       if (i > 0) out.add(const SizedBox(width: 8));
-      final (label, icon) = defs[i];
+      final (label, icon, real) = defs[i];
       out.add(Expanded(
-        child: OutlinedButton.icon(
-          onPressed: () => onAccionFutura(label),
-          icon: Icon(icon, size: 18),
-          label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
+        child: real
+            ? FilledButton.icon(
+                onPressed: onResolver,
+                icon: Icon(icon, size: 18),
+                label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              )
+            : OutlinedButton.icon(
+                onPressed: () => onAccionFutura(label),
+                icon: Icon(icon, size: 18),
+                label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
       ));
     }
     return out;
