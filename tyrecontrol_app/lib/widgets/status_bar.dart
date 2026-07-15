@@ -4,14 +4,14 @@ import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
-/// Cabecera de la app: mismas dimensiones que la app de asistencias
-/// (alto 108, logo a la izquierda a 50 de alto, con el nombre del técnico
-/// y la versión debajo). A la derecha, el estado (conexión / pendientes).
+/// Cabecera de la app: logo a 4 cm de ancho (252 px lógicos), con el nombre
+/// del técnico y la versión al lado (siempre visibles; el nombre se cachea
+/// para que salga también sin cobertura). A la derecha, el estado.
 class TopStatusBar extends StatefulWidget implements PreferredSizeWidget {
   const TopStatusBar({super.key});
 
   @override
-  Size get preferredSize => const Size.fromHeight(108);
+  Size get preferredSize => const Size.fromHeight(184);
 
   @override
   State<TopStatusBar> createState() => _TopStatusBarState();
@@ -30,17 +30,23 @@ class _TopStatusBarState extends State<TopStatusBar> {
   Future<void> _cargar() async {
     try {
       final info = await PackageInfo.fromPlatform();
-      String? nombre;
-      try {
-        final perfil = await TyreControlApi.obtenerMiPerfil();
-        nombre = perfil?['nombre'] as String?;
-      } catch (_) {/* sin red: solo versión */}
-      if (!mounted) return;
-      setState(() {
-        _nombre = nombre;
-        _version = 'v${info.version}';
-      });
+      if (mounted) setState(() => _version = 'v${info.version}');
     } catch (_) {/* ignore */}
+
+    // Nombre del técnico: primero el cacheado (instantáneo, funciona sin
+    // red) y después el del servidor, que refresca la caché.
+    final cacheado = OfflineStore.cachedJson('perfil_nombre');
+    if (cacheado is String && cacheado.isNotEmpty && mounted) {
+      setState(() => _nombre = cacheado);
+    }
+    try {
+      final perfil = await TyreControlApi.obtenerMiPerfil();
+      final nombre = perfil?['nombre'] as String?;
+      if (nombre != null && nombre.isNotEmpty) {
+        await OfflineStore.cacheJson('perfil_nombre', nombre);
+        if (mounted) setState(() => _nombre = nombre);
+      }
+    } catch (_) {/* sin red: se queda el cacheado */}
   }
 
   @override
@@ -49,39 +55,46 @@ class _TopStatusBarState extends State<TopStatusBar> {
       color: AppColors.background,
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           child: Row(
             children: [
-              // Logo + técnico + versión (mismo patrón que asistencias)
+              // Logo a 4 cm de ancho (252 px lógicos)
+              Image.asset(
+                'assets/logo_cabecera.png',
+                width: 252,
+                fit: BoxFit.contain,
+                alignment: Alignment.centerLeft,
+              ),
+              const SizedBox(width: 14),
+              // Técnico + versión, al lado del logo (siempre visibles)
               Expanded(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Image.asset(
-                      'assets/logo_cabecera.png',
-                      height: 50,
-                      fit: BoxFit.contain,
-                      alignment: Alignment.centerLeft,
-                    ),
-                    if (_nombre != null && _nombre!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 2, top: 2),
-                        child: Text(
-                          _nombre!,
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary),
+                    Row(
+                      children: [
+                        const Icon(Icons.person, size: 20, color: AppColors.textSecondary),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            _nombre ?? '—',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary),
+                          ),
                         ),
-                      ),
+                      ],
+                    ),
                     if (_version.isNotEmpty)
                       Padding(
-                        padding: const EdgeInsets.only(left: 2, top: 1),
+                        padding: const EdgeInsets.only(left: 25, top: 2),
                         child: Text(
                           _version,
                           style: const TextStyle(
-                              fontSize: 11, color: AppColors.textHint),
+                              fontSize: 13, color: AppColors.textHint),
                         ),
                       ),
                   ],

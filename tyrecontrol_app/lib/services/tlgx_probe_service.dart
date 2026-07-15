@@ -25,6 +25,7 @@ class TlgxProbeService {
 
   String get nombre => _device?.platformName ?? '';
   bool get conectada => _device != null && _rx != null;
+  BluetoothDevice? get device => _device;
 
   /// Pide los permisos necesarios para escanear/conectar la sonda.
   ///
@@ -104,7 +105,8 @@ class TlgxProbeService {
     return conNombre.values.toList();
   }
 
-  /// Conecta con una sonda concreta y prepara la comunicación.
+  /// Conecta con una sonda concreta y prepara la comunicación (conexión
+  /// manual: espera a que conecte y descubre servicios de inmediato).
   Future<void> conectar(BluetoothDevice device) async {
     _device = device;
 
@@ -117,7 +119,37 @@ class TlgxProbeService {
     });
 
     await device.connect(timeout: const Duration(seconds: 15));
+    await _prepararComunicacion(device);
+  }
 
+  /// Conexión AUTOMÁTICA: con `autoConnect` el sistema operativo reconecta
+  /// solo cuando la sonda se enciende o vuelve al alcance, sin escanear ni
+  /// tocar nada. El descubrimiento de servicios se hace cuando el estado
+  /// pasa a "conectado" (puede tardar: ocurre al encender la sonda).
+  Future<void> conectarAuto(BluetoothDevice device) async {
+    _device = device;
+
+    _connSub?.cancel();
+    _connSub = device.connectionState.listen((state) async {
+      if (state == BluetoothConnectionState.connected) {
+        try {
+          await _prepararComunicacion(device);
+        } catch (_) {
+          // Si falla el descubrimiento, esperamos al próximo ciclo de conexión.
+        }
+      } else if (state == BluetoothConnectionState.disconnected) {
+        _rx = null;
+        onState(false);
+      }
+    });
+
+    // mtu debe ser null con autoConnect (requisito de flutter_blue_plus).
+    await device.connect(autoConnect: true, mtu: null);
+  }
+
+  /// Descubre servicios/características y activa las notificaciones. Común a
+  /// la conexión manual y a la automática (tras conectar).
+  Future<void> _prepararComunicacion(BluetoothDevice device) async {
     final services = await device.discoverServices();
     final service = services.firstWhere(
       (s) => s.uuid == serviceUuid,

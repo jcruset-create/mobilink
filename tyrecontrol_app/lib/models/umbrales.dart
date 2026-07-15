@@ -53,8 +53,10 @@ class Umbrales {
   }
 
   /// ¿Hay que abrir la ficha para que el técnico confirme? (camino de excepción)
-  bool esAnomalia(RevisionDetalleDraft d) {
-    final s = evaluar(d);
+  /// Si se pasan [presionObjetivo]/[margenPresion], una presión fuera de rango
+  /// también cuenta como anomalía (abre la ficha).
+  bool esAnomalia(RevisionDetalleDraft d, {num? presionObjetivo, num? margenPresion}) {
+    final s = evaluar(d, presionObjetivo: presionObjetivo, margenPresion: margenPresion);
     return s == TireStatus.grave || s == TireStatus.advertencia;
   }
 }

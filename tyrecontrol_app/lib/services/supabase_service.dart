@@ -198,6 +198,12 @@ class TyreControlApi {
     await _db.from('revisiones_vehiculo').update({'estado_revision': estado}).eq('id', revisionId);
   }
 
+  /// Cancela una revisión pendiente (borrador). Queda como 'anulada' en el
+  /// historial: no se borra nada.
+  static Future<void> anularRevision(String revisionId) async {
+    await _db.from('revisiones_vehiculo').update({'estado_revision': 'anulada'}).eq('id', revisionId);
+  }
+
   static Future<List<RevisionVehiculo>> listarRevisionesPendientesDelTecnico() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
@@ -210,8 +216,9 @@ class TyreControlApi {
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
-  /// Historial: últimas revisiones completadas por el técnico (con la matrícula
-  /// del vehículo embebida para no hacer una consulta por cada una).
+  /// Historial: últimas revisiones cerradas por el técnico (completadas, con
+  /// incidencias y anuladas; la matrícula viene embebida para no hacer una
+  /// consulta por cada una).
   static Future<List<RevisionVehiculo>> listarRevisionesCompletadasDelTecnico({int limite = 30}) async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
@@ -219,7 +226,12 @@ class TyreControlApi {
         .from('revisiones_vehiculo')
         .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)')
         .eq('tecnico_id', uid)
-        .eq('estado_revision', 'completada')
+        .inFilter('estado_revision', [
+          'completada',
+          'completada_con_incidencias',
+          'completada_incidencia_pendiente',
+          'anulada',
+        ])
         .order('created_at', ascending: false)
         .limit(limite);
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();

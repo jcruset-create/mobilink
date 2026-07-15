@@ -28,6 +28,9 @@ class TireDetailScreen extends StatefulWidget {
   final RevisionDetalleDraft draft;
   final RevisionVehiculo revision;
   final Vehiculo vehiculo;
+  /// Si es true, no se puede guardar sin profundidad Y presión (salvo que la
+  /// rueda esté marcada como no accesible / sin neumático).
+  final bool exigirPresion;
 
   const TireDetailScreen({
     super.key,
@@ -37,6 +40,7 @@ class TireDetailScreen extends StatefulWidget {
     required this.draft,
     required this.revision,
     required this.vehiculo,
+    this.exigirPresion = false,
   });
 
   @override
@@ -131,6 +135,18 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
   }
 
   Future<void> _guardar({required bool volver}) async {
+    // Con "verificar presiones" activo, una rueda accesible necesita ambas
+    // medidas antes de guardar y avanzar.
+    if (widget.exigirPresion && !_noAccesible && !_neumaticoAusente) {
+      final prof = double.tryParse(_profundidad.text.replaceAll(',', '.'));
+      final pres = double.tryParse(_presion.text.replaceAll(',', '.'));
+      if (prof == null || pres == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Introduce profundidad Y presión (o marca la rueda como no accesible).'),
+        ));
+        return;
+      }
+    }
     setState(() => _guardando = true);
     try {
       final draft = await _construirYGuardar();

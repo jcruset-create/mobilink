@@ -6,7 +6,9 @@ import 'review_screen.dart';
 
 class RevisionsScreen extends StatefulWidget {
   final bool embedded;
-  const RevisionsScreen({super.key, this.embedded = false});
+  /// Pestaña inicial: 0 = Pendientes, 1 = Historial.
+  final int initialTab;
+  const RevisionsScreen({super.key, this.embedded = false, this.initialTab = 0});
 
   @override
   State<RevisionsScreen> createState() => _RevisionsScreenState();
@@ -51,6 +53,7 @@ class _RevisionsScreenState extends State<RevisionsScreen> {
   Widget build(BuildContext context) {
     final content = DefaultTabController(
       length: 2,
+      initialIndex: widget.initialTab,
       child: Column(
         children: [
           const TabBar(
@@ -67,7 +70,43 @@ class _RevisionsScreenState extends State<RevisionsScreen> {
       ),
     );
     if (widget.embedded) return content;
-    return Scaffold(appBar: AppBar(title: const Text('Revisiones')), body: content);
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.initialTab == 1 ? 'Histórico de revisiones' : 'Revisiones')),
+      body: content,
+    );
+  }
+
+  /// Cancela una revisión pendiente, con confirmación. Queda en el
+  /// historial como "cancelada"; no se borra nada.
+  Future<void> _cancelarRevision(RevisionVehiculo r, String matricula) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancelar revisión'),
+        content: Text('¿Cancelar la revisión de $matricula? Quedará en el historial como cancelada.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sí, cancelar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await TyreControlApi.anularRevision(r.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Revisión de $matricula cancelada')));
+      await _cargar();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('No se pudo cancelar: ${e.toString().replaceFirst('Exception: ', '')}'),
+        backgroundColor: AppColors.danger,
+      ));
+    }
   }
 
   Widget _pendientesView() {
@@ -81,20 +120,63 @@ class _RevisionsScreenState extends State<RevisionsScreen> {
               itemBuilder: (_, i) {
                 final r = _pendientes[i];
                 final v = _vehiculos[r.vehiculoId];
+                final matricula = v?.matricula ?? '—';
                 return Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.directions_car, color: AppColors.primary),
-                    title: Text(v?.matricula ?? '—', style: const TextStyle(fontWeight: FontWeight.w700)),
-                    subtitle: Text('${r.fechaRevision} · ${r.kmVehiculo ?? '—'} km · borrador'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: v == null
-                        ? null
-                        : () async {
-                            await Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => ReviewScreen(vehiculo: v, revisionExistente: r)),
-                            );
-                            _cargar(); // al volver, refresca (puede haber pasado a completada)
-                          },
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.directions_car, color: AppColors.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(matricula, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                                  Text('${r.fechaRevision} · ${r.kmVehiculo ?? '—'} km · borrador',
+                                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _cancelarRevision(r, matricula),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.danger,
+                                  side: BorderSide(color: AppColors.danger.withValues(alpha: 0.5)),
+                                  minimumSize: const Size(0, 44),
+                                ),
+                                icon: const Icon(Icons.close, size: 18),
+                                label: const Text('Cancelar'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: v == null
+                                    ? null
+                                    : () async {
+                                        await Navigator.of(context).push(
+                                          MaterialPageRoute(builder: (_) => ReviewScreen(vehiculo: v, revisionExistente: r)),
+                                        );
+                                        _cargar(); // al volver, refresca (puede haber pasado a completada)
+                                      },
+                                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                                icon: const Icon(Icons.play_arrow, size: 18),
+                                label: const Text('Continuar'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },
@@ -113,11 +195,26 @@ class _RevisionsScreenState extends State<RevisionsScreen> {
               itemBuilder: (_, i) {
                 final r = _completadas[i];
                 final matricula = r.matricula ?? _vehiculos[r.vehiculoId]?.matricula ?? '—';
+                final (etiqueta, color, icono) = switch (r.estadoRevision) {
+                  'anulada' => ('Cancelada', AppColors.danger, Icons.cancel),
+                  'completada_con_incidencias' => ('Con incidencias solucionadas', AppColors.warning, Icons.build_circle),
+                  'completada_incidencia_pendiente' => ('Con incidencia pendiente', AppColors.warning, Icons.warning_amber),
+                  _ => ('Completada', AppColors.success, Icons.check_circle),
+                };
                 return Card(
                   child: ListTile(
-                    leading: const Icon(Icons.check_circle, color: AppColors.success),
+                    leading: Icon(icono, color: color),
                     title: Text(matricula, style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text('${_fechaHora(r)} · ${r.kmVehiculo ?? '—'} km'),
+                    trailing: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(etiqueta,
+                          style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
+                    ),
                   ),
                 );
               },

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../services/probe_session.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
 
@@ -28,17 +29,47 @@ class _SondaScreenState extends State<SondaScreen> {
   double? _presion;
   String _rfid = '';
   final List<String> _log = [];
+  final _serieCtrl = TextEditingController();
+  Map<String, dynamic>? _predeterminada;
 
   @override
   void initState() {
     super.initState();
     _probe = TlgxProbeService(onLine: _onLine, onState: _onState);
+    _predeterminada = ProbeSession.instance.sondaPredeterminada();
+    _serieCtrl.text = (_predeterminada?['serie'] as String?) ?? '';
   }
 
   @override
   void dispose() {
     _probe.desconectar();
+    _serieCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _guardarPredeterminada() async {
+    final dev = _probe.device;
+    if (dev == null) return;
+    await ProbeSession.instance.guardarPredeterminada(dev, _probe.nombre, serie: _serieCtrl.text);
+    setState(() => _predeterminada = ProbeSession.instance.sondaPredeterminada());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Sonda guardada. Se conectará sola al encenderla.')));
+    }
+  }
+
+  Future<void> _guardarSerie() async {
+    await ProbeSession.instance.guardarSerieEsperada(_serieCtrl.text);
+    setState(() => _predeterminada = ProbeSession.instance.sondaPredeterminada());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Serie guardada.')));
+    }
+  }
+
+  Future<void> _olvidar() async {
+    await ProbeSession.instance.olvidarPredeterminada();
+    _serieCtrl.clear();
+    setState(() => _predeterminada = null);
   }
 
   void _addLog(String txt) {
@@ -153,6 +184,60 @@ class _SondaScreenState extends State<SondaScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ── Sonda predeterminada (autoconexión) ──
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.cardBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.bluetooth_connected, size: 18, color: AppColors.primary),
+                  const SizedBox(width: 6),
+                  const Expanded(child: Text('Sonda predeterminada', style: TextStyle(fontWeight: FontWeight.w700))),
+                  if (_predeterminada != null)
+                    GestureDetector(onTap: _olvidar, child: const Text('Olvidar', style: TextStyle(color: AppColors.danger, fontSize: 12))),
+                ]),
+                const SizedBox(height: 4),
+                Text(
+                  _predeterminada == null
+                      ? 'Ninguna guardada. Conecta una sonda y pulsa "Guardar como predeterminada"; se conectará sola al encenderla.'
+                      : 'Guardada: ${_predeterminada!['nombre'] ?? _predeterminada!['serie'] ?? _predeterminada!['remoteId']}. Se conecta automáticamente al encenderla.',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _serieCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Serie / nombre (p. ej. TLGX4 2550090)',
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(onPressed: _guardarSerie, child: const Text('Guardar')),
+                ]),
+                if (_conectada) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _guardarPredeterminada,
+                      icon: const Icon(Icons.push_pin, size: 18),
+                      label: const Text('Guardar esta sonda como predeterminada'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
           if (_error.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(bottom: 12),

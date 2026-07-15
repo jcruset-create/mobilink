@@ -22,7 +22,10 @@ import 'tire_detail_screen.dart';
 class ReviewScreen extends StatefulWidget {
   final Vehiculo vehiculo;
   final RevisionVehiculo? revisionExistente;
-  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente});
+  /// Si es true, cada posición necesita profundidad Y presión para contar
+  /// como completa (no avanza ni finaliza hasta tener ambas).
+  final bool verificarPresiones;
+  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false});
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -168,16 +171,27 @@ class _ReviewScreenState extends State<ReviewScreen> {
   // Objetivos de presión por eje (para autodetección de presión baja/alta).
   Map<int, ({num presion, num margen})> _objetivosPresion = {};
 
+  /// ¿La posición está completa? Con "verificar presiones" activo exige
+  /// profundidad Y presión; si no, basta con haber medido algo (como antes).
+  bool _completo(RevisionDetalleDraft? d) {
+    if (d == null) return false;
+    if (d.noAccesible || d.neumaticoAusente) return true;
+    if (widget.verificarPresiones) {
+      return d.profundidadMm != null && d.presionBar != null;
+    }
+    return d.medido;
+  }
+
   // ── Estado visual de cada posicion ───────────────────────────
   TireStatus _statusDe(PosicionVehiculo p) {
     if (p.id == _posiciones.elementAtOrNull(_index)?.id) return TireStatus.seleccionado;
     final d = _detalles[p.id];
-    if (d == null || !d.medido) return TireStatus.pendiente;
+    if (!_completo(d)) return TireStatus.pendiente;
     final obj = p.eje == null ? null : _objetivosPresion[p.eje];
-    return Umbrales.def.evaluar(d, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+    return Umbrales.def.evaluar(d!, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
   }
 
-  bool get _todoRevisado => _posiciones.every((p) => _detalles[p.id]?.medido ?? false);
+  bool get _todoRevisado => _posiciones.every((p) => _completo(_detalles[p.id]));
 
   // Orden de revisión (recorrido en circuito alrededor del vehículo):
   // lado derecho de delante hacia atrás y lado izquierdo de atrás hacia
@@ -263,12 +277,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
     await _guardarDraft(p, draft);
     if (!mounted) return;
 
-    if (Umbrales.def.esAnomalia(draft)) {
-      // Camino de excepcion: aviso fuerte y ficha para confirmar/fotografiar.
+    final obj = p.eje == null ? null : _objetivosPresion[p.eje];
+    final anomalia = Umbrales.def.esAnomalia(draft, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+    if (!_completo(draft) || anomalia) {
+      // Falta algún dato (p. ej. la presión con "verificar" activo) o hay
+      // anomalía: se abre la ficha para completar/confirmar. No avanza.
       HapticFeedback.heavyImpact();
       await _abrirNeumatico(p);
     } else {
-      // Camino rapido: correcto, avanza solo.
+      // Camino rapido: correcto y completo, avanza solo.
       HapticFeedback.mediumImpact();
       setState(() {});
       _avanzarSiguiente();
@@ -298,7 +315,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   int? _siguientePendiente() {
     for (int i = 0; i < _posiciones.length; i++) {
-      if (!(_detalles[_posiciones[i].id]?.medido ?? false)) return i;
+      if (!_completo(_detalles[_posiciones[i].id])) return i;
     }
     return null;
   }
@@ -355,7 +372,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   /// (B) Finalizar manual: si quedan posiciones sin medir, avisa y pide
   /// confirmación antes de cerrar (repuesto, sin neumático, saltadas…).
   Future<void> _finalizarConAviso() async {
-    final pendientes = _posiciones.where((p) => !(_detalles[p.id]?.medido ?? false)).toList();
+    final pendientes = _posiciones.where((p) => !_completo(_detalles[p.id])).toList();
     if (pendientes.isNotEmpty) {
       final nombres = pendientes.map((p) => p.nombre ?? p.codigoPosicion).join(', ');
       final ok = await showDialog<bool>(
@@ -417,6 +434,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           draft: draft,
           revision: _revision!,
           vehiculo: widget.vehiculo,
+          exigirPresion: widget.verificarPresiones,
         ),
       ),
     );
@@ -499,7 +517,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         children: [
           _SondaBar(
             sonda: _sonda,
-            medidas: _posiciones.where((p) => _detalles[p.id]?.medido ?? false).length,
+            medidas: _posiciones.where((p) => _completo(_detalles[p.id])).length,
             total: _posiciones.length,
             modoRuta: _modoRuta,
             onModoRuta: (v) => setState(() => _modoRuta = v),
@@ -538,7 +556,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
             sondaLista: _sonda.conectada && _modoRuta,
             liveProf: _liveProf,
             livePres: _livePres,
-            pendientes: _posiciones.where((p) => !(_detalles[p.id]?.medido ?? false)).length,
+            pendientes: _posiciones.where((p) => !_completo(_detalles[p.id])).length,
             finalizando: _finalizando,
             onAnterior: _index > 0 ? () => setState(() => _index--) : null,
             onSaltar: _index < _posiciones.length - 1 ? _saltar : null,

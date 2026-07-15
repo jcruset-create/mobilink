@@ -19,6 +19,7 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
   bool _cargando = false;
   RevisionVehiculo? _ultimaRevision;
   int _numNeumaticos = 0;
+  bool _verificarPresiones = true;
 
   @override
   void initState() {
@@ -56,7 +57,8 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
         'activo': true,
       });
       if (!mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReviewScreen(vehiculo: widget.vehiculo)));
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ReviewScreen(vehiculo: widget.vehiculo, verificarPresiones: _verificarPresiones)));
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
@@ -97,6 +99,19 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
                     _Fila('Última revisión', _ultimaRevision?.fechaRevision),
                   ],
                 ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: SwitchListTile(
+                value: _verificarPresiones,
+                onChanged: (v) => setState(() => _verificarPresiones = v),
+                title: const Text('Verificar presiones', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text(
+                    'Si está activo, cada rueda necesita profundidad Y presión para avanzar automáticamente a la siguiente.',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                secondary: const Icon(Icons.speed, color: AppColors.primary),
+                activeColor: AppColors.primary,
               ),
             ),
             const Spacer(),

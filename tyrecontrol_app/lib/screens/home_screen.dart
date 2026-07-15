@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/offline_store.dart';
+import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
@@ -28,6 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     // Refresca el contador de incidencias para el badge de Inicio.
     TyreControlApi.contarIncidenciasPendientes();
+    // Intenta reconectar la sonda guardada en segundo plano (autoConnect):
+    // el técnico no tiene que conectarla a mano, se enlaza al encenderla.
+    ProbeSession.instance.autoReconectar();
   }
 
   final _tabs = const [
@@ -74,16 +77,14 @@ class _InicioTab extends StatelessWidget {
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IdentifyVehicleScreen())),
           ),
           const SizedBox(height: 14),
+          // Planificación arriba (antes estaba abajo con Vehículos)
           Row(
             children: [
               Expanded(
-                child: ValueListenableBuilder<int>(
-                  valueListenable: OfflineStore.pendingCount,
-                  builder: (_, n, __) => _BigTile(
-                    icon: Icons.fact_check,
-                    label: n > 0 ? 'Revisiones pendientes ($n)' : 'Revisiones pendientes',
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RevisionsScreen())),
-                  ),
+                child: _BigTile(
+                  icon: Icons.event_note,
+                  label: 'Planificación',
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
                 ),
               ),
             ],
@@ -105,10 +106,12 @@ class _InicioTab extends StatelessWidget {
             children: [
               Expanded(
                 child: _BigTile(
-                  icon: Icons.event_note,
-                  label: 'Planificación',
+                  icon: Icons.history,
+                  label: 'Histórico de revisiones',
                   small: true,
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
+                  // Abre directamente la pestaña Historial (decisión usuario).
+                  onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const RevisionsScreen(initialTab: 1))),
                 ),
               ),
               const SizedBox(width: 14),
