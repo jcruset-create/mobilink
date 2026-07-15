@@ -67,8 +67,22 @@ class ApiService {
     }
   }
 
+  /// Evita que dos flushOutbox simultáneos suban dos veces el mismo elemento
+  /// (p. ej. el disparo tras encolar una foto y el refresco de la lista).
+  bool _flushing = false;
+
   /// Envía a servidor las acciones encoladas (offline) en orden. Best-effort.
   Future<void> flushOutbox() async {
+    if (_flushing) return;
+    _flushing = true;
+    try {
+      await _flushOutboxInner();
+    } finally {
+      _flushing = false;
+    }
+  }
+
+  Future<void> _flushOutboxInner() async {
     for (final entry in OfflineStore.pending()) {
       final item = entry.value;
       final id = item['assistanceId'] as int;
@@ -626,6 +640,17 @@ class ApiService {
       }
       rethrow;
     }
+  }
+
+  /// Sube una foto EN SEGUNDO PLANO: la guarda en almacenamiento persistente,
+  /// la encola en el outbox (con reintentos e idempotencia) y dispara la
+  /// subida sin bloquear. El operario puede seguir con el siguiente paso.
+  Future<void> uploadFileInBackground(int id, File file, String kind) async {
+    final persisted = await _persistFile(file, kind);
+    await OfflineStore.enqueueUpload(assistanceId: id, kind: kind, localPath: persisted);
+    // Dispara la subida ya (sin esperar). Si falla, reintenta en el próximo
+    // refresco de la lista (getAssistances → flushOutbox).
+    unawaited(flushOutbox());
   }
 
   // Copia un archivo a un directorio permanente (sobrevive hasta subirse)

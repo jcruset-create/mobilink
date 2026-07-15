@@ -5628,6 +5628,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           foto_averia: "Avería (antes de reparar)",
           foto_extra: "Foto adicional",
           foto_reparacion: "Reparación finalizada",
+          foto_or: "OR manual (técnico)",
         };
 
         const maxW = 480;

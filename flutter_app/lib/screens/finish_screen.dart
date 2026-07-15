@@ -31,11 +31,13 @@ class _FinishScreenState extends State<FinishScreen> {
   final _obsCtrl = TextEditingController();
 
   File? _photoReparacion;
+  File? _photoOr;
   bool _uploading = false;
   String? _uploadingLabel;
 
   bool get _canConfirm =>
       _photoReparacion != null &&
+      _photoOr != null &&
       !_sigController.isEmpty &&
       _nombreCtrl.text.trim().isNotEmpty &&
       _dniCtrl.text.trim().isNotEmpty &&
@@ -50,18 +52,24 @@ class _FinishScreenState extends State<FinishScreen> {
     super.dispose();
   }
 
-  Future<File> _normalizeImage(XFile xfile) async {
+  /// Normaliza la foto. La OR manual mantiene más resolución (hay que poder
+  /// leer lo escrito a mano); la de reparación se comprime más para que la
+  /// subida sea ligera con cobertura mala.
+  Future<File> _normalizeImage(XFile xfile, {bool document = false}) async {
     final tmpDir = await getTemporaryDirectory();
     final outPath = '${tmpDir.path}/norm_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final result = await FlutterImageCompress.compressAndGetFile(
       xfile.path, outPath,
-      quality: 85, minWidth: 1920, minHeight: 1080, keepExif: false,
+      quality: document ? 85 : 70,
+      minWidth: document ? 1920 : 1600,
+      minHeight: document ? 1080 : 900,
+      keepExif: false,
     );
     return result == null ? File(xfile.path) : File(result.path);
   }
 
   Future<void> _pickPhoto() async {
-    final source = await _showSourceDialog();
+    final source = await _showSourceDialog('Foto de la reparación');
     if (source == null) return;
     final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
     if (xfile == null) return;
@@ -69,7 +77,16 @@ class _FinishScreenState extends State<FinishScreen> {
     setState(() => _photoReparacion = file);
   }
 
-  Future<ImageSource?> _showSourceDialog() {
+  Future<void> _pickPhotoOr() async {
+    final source = await _showSourceDialog('Foto de la OR manual');
+    if (source == null) return;
+    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
+    if (xfile == null) return;
+    final file = await _normalizeImage(xfile, document: true);
+    setState(() => _photoOr = file);
+  }
+
+  Future<ImageSource?> _showSourceDialog(String title) {
     return showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: const Color(0xFF16213e),
@@ -79,10 +96,10 @@ class _FinishScreenState extends State<FinishScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Foto de la reparación',
-                  style: TextStyle(
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(title,
+                  style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 16)),
@@ -114,8 +131,13 @@ class _FinishScreenState extends State<FinishScreen> {
     });
 
     try {
-      await widget.api.uploadFile(
+      // Fotos (reparación + OR manual): en segundo plano, con cola y
+      // reintentos. La firma y los datos del conductor sí se envían en el
+      // momento: son ligeros y el parte los necesita al cerrar.
+      await widget.api.uploadFileInBackground(
           widget.assistanceId, _photoReparacion!, 'foto_reparacion');
+      await widget.api.uploadFileInBackground(
+          widget.assistanceId, _photoOr!, 'foto_or');
 
       setState(() => _uploadingLabel = 'Guardando firma...');
       final Uint8List? sigBytes =
@@ -183,47 +205,13 @@ class _FinishScreenState extends State<FinishScreen> {
                       children: [
                         _label('Foto de la reparación *'),
                         const SizedBox(height: 8),
-                        GestureDetector(
-                          onTap: _pickPhoto,
-                          child: Container(
-                            height: 180,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: _photoReparacion != null
-                                    ? Colors.green
-                                    : Colors.black26,
-                                width: 1.5,
-                              ),
-                            ),
-                            child: _photoReparacion != null
-                                ? Stack(fit: StackFit.expand, children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(11),
-                                      child: Image.file(_photoReparacion!, fit: BoxFit.cover),
-                                    ),
-                                    Positioned(
-                                      top: 8, right: 8,
-                                      child: Container(
-                                        padding: const EdgeInsets.all(4),
-                                        decoration: const BoxDecoration(
-                                            color: Colors.green, shape: BoxShape.circle),
-                                        child: const Icon(Icons.check, color: Colors.white, size: 16),
-                                      ),
-                                    ),
-                                  ])
-                                : const Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.add_a_photo_outlined, color: Colors.black45, size: 40),
-                                      SizedBox(height: 10),
-                                      Text('Toca para fotografiar',
-                                          style: TextStyle(color: Colors.black54, fontSize: 14, fontWeight: FontWeight.w500)),
-                                    ],
-                                  ),
-                          ),
-                        ),
+                        _photoBox(_photoReparacion, _pickPhoto,
+                            'Toca para fotografiar'),
+                        const SizedBox(height: 20),
+                        _label('Foto de la OR manual *'),
+                        const SizedBox(height: 8),
+                        _photoBox(_photoOr, _pickPhotoOr,
+                            'Fotografía la OR rellenada por el técnico'),
                         const SizedBox(height: 20),
                         _label('Datos del conductor *'),
                         const SizedBox(height: 8),
@@ -346,6 +334,53 @@ class _FinishScreenState extends State<FinishScreen> {
             fontWeight: FontWeight.w600,
             letterSpacing: 0.8),
       );
+
+  Widget _photoBox(File? photo, VoidCallback onTap, String hint) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 180,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: photo != null ? Colors.green : Colors.black26,
+            width: 1.5,
+          ),
+        ),
+        child: photo != null
+            ? Stack(fit: StackFit.expand, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(11),
+                  child: Image.file(photo, fit: BoxFit.cover),
+                ),
+                Positioned(
+                  top: 8, right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                        color: Colors.green, shape: BoxShape.circle),
+                    child: const Icon(Icons.check, color: Colors.white, size: 16),
+                  ),
+                ),
+              ])
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.add_a_photo_outlined, color: Colors.black45, size: 40),
+                  const SizedBox(height: 10),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(hint,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            color: Colors.black54, fontSize: 14, fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
 }
 
 class _TextField extends StatelessWidget {

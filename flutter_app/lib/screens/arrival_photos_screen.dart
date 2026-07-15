@@ -47,26 +47,29 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
         (!_hasRemolque || _photoRemolque != null);
   }
 
-  Future<File> _normalizeImage(XFile xfile) async {
+  /// Normaliza la foto. Las de matrícula mantienen más resolución (el OCR
+  /// del servidor necesita detalle); el resto se comprime más para que la
+  /// subida sea 3-4 veces más ligera con cobertura mala.
+  Future<File> _normalizeImage(XFile xfile, {bool plate = false}) async {
     final tmpDir = await getTemporaryDirectory();
     final outPath = '${tmpDir.path}/norm_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final result = await FlutterImageCompress.compressAndGetFile(
       xfile.path,
       outPath,
-      quality: 85,
-      minWidth: 1920,
-      minHeight: 1080,
+      quality: plate ? 85 : 70,
+      minWidth: plate ? 1920 : 1600,
+      minHeight: plate ? 1080 : 900,
       keepExif: false, // elimina EXIF — la foto queda ya rotada correctamente
     );
     return result == null ? File(xfile.path) : File(result.path);
   }
 
-  Future<void> _pickPhoto(String label, void Function(File) onPicked) async {
+  Future<void> _pickPhoto(String label, void Function(File) onPicked, {bool plate = false}) async {
     final source = await _showSourceDialog(label);
     if (source == null) return;
     final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
     if (xfile == null) return;
-    final file = await _normalizeImage(xfile);
+    final file = await _normalizeImage(xfile, plate: plate);
     setState(() => onPicked(file));
   }
 
@@ -295,27 +298,27 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
 
     try {
       if (!widget.extraMode) {
-        setState(() => _uploadingLabel = 'Subiendo matrícula camión...');
+        // La matrícula del camión se sube EN EL MOMENTO: el servidor hace OCR
+        // y puede pedir confirmación al operario (matrícula distinta,
+        // remolque detectado). El resto de fotos no bloquea.
+        setState(() => _uploadingLabel = 'Verificando matrícula camión...');
         final plateResult = await widget.api.uploadFile(
             widget.assistanceId, _photoCamion!, 'matricula_camion');
         await _handlePlateResult(plateResult);
 
+        // Remolque y avería: en segundo plano (cola con reintentos).
         if (_hasRemolque && _photoRemolque != null) {
-          setState(() => _uploadingLabel = 'Subiendo matrícula remolque...');
-          await widget.api.uploadFile(
+          await widget.api.uploadFileInBackground(
               widget.assistanceId, _photoRemolque!, 'matricula_remolque');
         }
-
-        setState(() => _uploadingLabel = 'Subiendo foto avería...');
-        await widget.api
-            .uploadFile(widget.assistanceId, _photoAveria!, 'foto_averia');
+        await widget.api.uploadFileInBackground(
+            widget.assistanceId, _photoAveria!, 'foto_averia');
       }
 
-      for (int i = 0; i < _extraPhotos.length; i++) {
-        setState(() =>
-            _uploadingLabel = 'Subiendo foto extra ${i + 1}/${_extraPhotos.length}...');
-        await widget.api.uploadFile(
-            widget.assistanceId, _extraPhotos[i], 'foto_extra');
+      // Fotos extra: siempre en segundo plano.
+      for (final photo in _extraPhotos) {
+        await widget.api
+            .uploadFileInBackground(widget.assistanceId, photo, 'foto_extra');
       }
 
       // Callback de estado (p.ej. inicio_reparacion)
@@ -402,7 +405,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                       label: 'Matrícula del camión *',
                       photo: _photoCamion,
                       onTap: () => _pickPhoto('Matrícula del camión',
-                          (f) => _photoCamion = f),
+                          (f) => _photoCamion = f, plate: true),
                     ),
                     const SizedBox(height: 16),
                     _RemolqueToggle(
@@ -419,7 +422,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                         label: 'Matrícula del remolque *',
                         photo: _photoRemolque,
                         onTap: () => _pickPhoto('Matrícula del remolque',
-                            (f) => _photoRemolque = f),
+                            (f) => _photoRemolque = f, plate: true),
                       ),
                     ],
                     const SizedBox(height: 16),

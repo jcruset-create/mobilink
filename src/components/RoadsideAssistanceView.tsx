@@ -2296,7 +2296,11 @@ export default function RoadsideAssistanceView({
                     { kind: "matricula_camion", label: "Matrícula camión" },
                     { kind: "matricula_remolque", label: "Matrícula remolque" },
                     { kind: "averia", label: "Avería" },
+                    { kind: "foto_averia", label: "Avería (antes de reparar)" },
                     { kind: "trabajo_realizado", label: "Trabajo realizado" },
+                    { kind: "foto_reparacion", label: "Reparación finalizada" },
+                    { kind: "foto_or", label: "OR manual (técnico)" },
+                    { kind: "foto_extra", label: "Fotos adicionales" },
                     { kind: "firma", label: "Firma cliente" },
                     { kind: "foto", label: "Otras fotos" },
                   ].map(({ kind, label }) => {
