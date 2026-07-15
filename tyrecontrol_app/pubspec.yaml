@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "SEA TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.3.16+22
+version: 0.3.17+23
 
 environment:
   sdk: ^3.8.1
@@ -53,3 +53,4 @@ flutter:
     - assets/logo_transparent.png
     - assets/icono_app.png
     - assets/logo_login.png
+    - assets/logo_cabecera.png
