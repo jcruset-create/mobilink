@@ -379,8 +379,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
       ),
     );
     if (!mounted || res == null) return;
-    if (res == 'pendiente') {
-      await _finalizar(estado: 'completada_incidencia_pendiente');
+    // El flujo devuelve el estado con el que cerrar la revisión:
+    // 'completada_incidencia_pendiente' o 'completada_con_incidencias'.
+    if (res == 'completada_incidencia_pendiente' || res == 'completada_con_incidencias') {
+      await _finalizar(estado: res);
     }
   }
 

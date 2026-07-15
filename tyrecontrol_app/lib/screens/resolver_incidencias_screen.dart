@@ -69,8 +69,9 @@ class _ResolverIncidenciasScreenState extends State<ResolverIncidenciasScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(widget.matricula, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-              Text('Revisión: ${widget.fechaRevision}',
-                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+              if (widget.fechaRevision.isNotEmpty)
+                Text('Revisión: ${widget.fechaRevision}',
+                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
             ],
           ),
         ),

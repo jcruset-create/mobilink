@@ -9,6 +9,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_layout_image.dart';
 import '../widgets/vehicle_schema.dart';
+import 'resolver_incidencias_screen.dart';
 
 /// Flujo "⚠ Revisión con incidencia" (Fase 1).
 /// El técnico marca posición → problemas → gravedad, y decide dejarlas
@@ -113,13 +114,56 @@ class _IncidenciaFlowScreenState extends State<IncidenciaFlowScreen> {
     );
     if (!mounted || accion == null) return;
     if (accion == 'ahora') {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Solucionar en el momento llegará en la próxima versión. De momento, déjalas pendientes.')));
-      return;
+      await _solucionarAhora();
+    } else {
+      await _dejarPendiente();
     }
-    await _dejarPendiente();
   }
 
+  /// Crea las incidencias de los drafts. [form] null → estado 'detectada'
+  /// (para resolver en caliente); si viene → estado según el motivo.
+  Future<void> _crearIncidencias({_PendienteForm? form}) async {
+    String? fotoUrl;
+    if (form?.foto != null) {
+      fotoUrl = await TyreControlApi.subirFotoIncidencia(form!.foto!);
+    }
+    final estado = form == null ? 'detectada' : _estadoDesdeMotivo(form.motivo);
+    for (final entry in _drafts.entries) {
+      final posId = entry.key;
+      final d = entry.value;
+      final det = widget.detalles[posId];
+      await TyreControlApi.crearIncidencia(
+        empresaId: widget.vehiculo.empresaId,
+        vehiculoId: widget.vehiculo.id,
+        posicionId: posId,
+        neumaticoId: widget.montajePorPosicion[posId]?.neumaticoId ?? det?.neumaticoId,
+        revisionId: widget.revisionId,
+        tipos: d.tipos.toList(),
+        gravedad: gravedadKey(d.gravedad),
+        gravedadAuto: gravedadKey(gravedadAuto(
+          tipos: d.tipos,
+          profundidadMm: det?.profundidadMm,
+        )),
+        estado: estado,
+        motivoPendiente: form?.motivo,
+        motivoObservacion: form?.observacion,
+        accionRecomendada: form?.accion,
+        fechaRecomendada: form?.fecha,
+        autorizaPersona: form?.autoriza,
+        medicionInicial: det == null
+            ? null
+            : {
+                'profundidad_mm': det.profundidadMm,
+                'presion_bar': det.presionBar,
+                'estado_visual': det.estadoVisual,
+              },
+        fotoUrl: fotoUrl,
+      );
+    }
+  }
+
+  /// "Dejar pendiente": crea las incidencias con motivo y cierra la revisión
+  /// como pendiente.
   Future<void> _dejarPendiente() async {
     final form = await Navigator.of(context).push<_PendienteForm>(
       MaterialPageRoute(
@@ -134,54 +178,55 @@ class _IncidenciaFlowScreenState extends State<IncidenciaFlowScreen> {
 
     setState(() => _guardando = true);
     try {
-      String? fotoUrl;
-      if (form.foto != null) {
-        fotoUrl = await TyreControlApi.subirFotoIncidencia(form.foto!);
-      }
-      final estado = _estadoDesdeMotivo(form.motivo);
-      for (final entry in _drafts.entries) {
-        final posId = entry.key;
-        final d = entry.value;
-        final det = widget.detalles[posId];
-        await TyreControlApi.crearIncidencia(
-          empresaId: widget.vehiculo.empresaId,
-          vehiculoId: widget.vehiculo.id,
-          posicionId: posId,
-          neumaticoId: widget.montajePorPosicion[posId]?.neumaticoId ?? det?.neumaticoId,
-          revisionId: widget.revisionId,
-          tipos: d.tipos.toList(),
-          gravedad: gravedadKey(d.gravedad),
-          gravedadAuto: gravedadKey(gravedadAuto(
-            tipos: d.tipos,
-            profundidadMm: det?.profundidadMm,
-          )),
-          estado: estado,
-          motivoPendiente: form.motivo,
-          motivoObservacion: form.observacion,
-          accionRecomendada: form.accion,
-          fechaRecomendada: form.fecha,
-          autorizaPersona: form.autoriza,
-          medicionInicial: det == null
-              ? null
-              : {
-                  'profundidad_mm': det.profundidadMm,
-                  'presion_bar': det.presionBar,
-                  'estado_visual': det.estadoVisual,
-                },
-          fotoUrl: fotoUrl,
-        );
-      }
+      await _crearIncidencias(form: form);
       await TyreControlApi.contarIncidenciasPendientes();
       if (!mounted) return;
-      Navigator.of(context).pop('pendiente');
+      Navigator.of(context).pop('completada_incidencia_pendiente');
     } catch (e) {
       if (!mounted) return;
       setState(() => _guardando = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('No se pudo guardar: ${e.toString().replaceFirst('Exception: ', '')}'),
-        backgroundColor: AppColors.danger,
-      ));
+      _errorGuardar(e);
     }
+  }
+
+  /// "Solucionar ahora": crea las incidencias como detectadas, abre la
+  /// resolución al momento y cierra la revisión según lo que quede pendiente.
+  Future<void> _solucionarAhora() async {
+    setState(() => _guardando = true);
+    try {
+      await _crearIncidencias();
+      final incidencias = await TyreControlApi.listarIncidenciasDeRevision(widget.revisionId);
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => ResolverIncidenciasScreen(
+            matricula: widget.vehiculo.matricula,
+            fechaRevision: '',
+            incidencias: incidencias,
+          ),
+        ),
+      );
+      // Recalcular qué queda pendiente tras resolver.
+      final tras = await TyreControlApi.listarIncidenciasDeRevision(widget.revisionId);
+      final quedanAbiertas = tras.any((i) =>
+          !['solucionada', 'cancelada', 'no_procede'].contains(i.estado));
+      await TyreControlApi.contarIncidenciasPendientes();
+      if (!mounted) return;
+      Navigator.of(context).pop(
+          quedanAbiertas ? 'completada_incidencia_pendiente' : 'completada_con_incidencias');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      _errorGuardar(e);
+    }
+  }
+
+  void _errorGuardar(Object e) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('No se pudo guardar: ${e.toString().replaceFirst('Exception: ', '')}'),
+      backgroundColor: AppColors.danger,
+    ));
   }
 
   String _estadoDesdeMotivo(String motivo) => switch (motivo) {

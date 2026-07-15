@@ -11,6 +11,7 @@ import {
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
   listarConfigEjes, crearConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
+  listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
 } from "../services/data";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
@@ -392,6 +393,11 @@ export default function Configuracion() {
   const [nuevoMotivo, setNuevoMotivo] = useState("");
   const [configEjes, setConfigEjes] = useState<ConfigEjes[]>([]);
   const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
+  const [presiones, setPresiones] = useState<PresionObjetivo[]>([]);
+  const [presTipo, setPresTipo] = useState("");
+  const [presEje, setPresEje] = useState("");
+  const [presBar, setPresBar] = useState("");
+  const [presMargen, setPresMargen] = useState("0.5");
   const [nuevaConfig, setNuevaConfig] = useState("");
   const [nuevaConfigDesc, setNuevaConfigDesc] = useState("");
   const [nuevaLlantaMat, setNuevaLlantaMat] = useState("aluminio");
@@ -407,13 +413,28 @@ export default function Configuracion() {
   const [msg, setMsg] = useState("");
 
   async function cargar() {
-    const [m, med, ic, iv, t, f, c, mf, ce, tl] = await Promise.all([
+    const [m, med, ic, iv, t, f, c, mf, ce, tl, po] = await Promise.all([
       listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
       listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
-      listarConfigEjes(), listarTiposLlanta(),
+      listarConfigEjes(), listarTiposLlanta(), listarPresionesObjetivo().catch(() => []),
     ]);
     setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
-    setConfigEjes(ce); setTiposLlanta(tl);
+    setConfigEjes(ce); setTiposLlanta(tl); setPresiones(po);
+  }
+
+  async function guardarPresion() {
+    if (!presTipo || !presBar.trim()) { setMsg("Selecciona tipo y presión"); return; }
+    setMsg("");
+    try {
+      await guardarPresionObjetivo({
+        tipo_vehiculo_id: presTipo,
+        eje: presEje ? parseInt(presEje, 10) : null,
+        presion_objetivo_bar: parseFloat(presBar.replace(",", ".")),
+        margen_bar: presMargen ? parseFloat(presMargen.replace(",", ".")) : 0.5,
+      });
+      setPresBar(""); setPresEje("");
+      await cargar();
+    } catch (e: any) { setMsg(e?.message || "Error"); }
   }
   async function guardarConfig() {
     if (!nuevaConfig.trim()) return;
@@ -499,6 +520,55 @@ export default function Configuracion() {
         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
           {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} />)}
         </div>
+      </div>
+
+      {/* Presiones objetivo */}
+      <div className="mb-4 rounded-lg bg-slate-800 p-3">
+        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Presiones objetivo ({presiones.length})</div>
+        <div className="mb-3 text-[11px] text-slate-500">Presión de referencia (bar) por tipo de vehículo y eje. La usa la APK para detectar presión baja/alta y para la operación "corregir presión". Un eje vacío aplica a todos. El override por vehículo se hace desde la ficha (próximamente).</div>
+        {puedeEditar && (
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <label className="flex flex-col text-[10px] text-slate-500">Tipo de vehículo
+              <select className={`${inputCls} max-w-[200px]`} value={presTipo} onChange={(e) => setPresTipo(e.target.value)}>
+                <option value="">— Selecciona —</option>
+                {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col text-[10px] text-slate-500">Eje (vacío = todos)
+              <input type="number" className={`${inputCls} max-w-[110px]`} placeholder="2" value={presEje} onChange={(e) => setPresEje(e.target.value)} />
+            </label>
+            <label className="flex flex-col text-[10px] text-slate-500">Presión (bar)
+              <input type="number" step="0.1" className={`${inputCls} max-w-[110px]`} placeholder="8.5" value={presBar} onChange={(e) => setPresBar(e.target.value)} />
+            </label>
+            <label className="flex flex-col text-[10px] text-slate-500">Margen (±bar)
+              <input type="number" step="0.1" className={`${inputCls} max-w-[110px]`} placeholder="0.5" value={presMargen} onChange={(e) => setPresMargen(e.target.value)} />
+            </label>
+            <button onClick={guardarPresion} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+ Añadir</button>
+          </div>
+        )}
+        {presiones.length === 0 ? (
+          <div className="text-[12px] text-slate-500">Sin presiones configuradas.</div>
+        ) : (
+          <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+            {presiones.map((p) => {
+              const tipo = tipos.find((t) => t.id === p.tipo_vehiculo_id);
+              return (
+                <div key={p.id} className="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-[12px]">
+                  <span className="text-slate-200">
+                    {tipo ? (tipo.descripcion ?? tipo.nombre) : (p.vehiculo_id ? "Vehículo" : "—")}
+                    <span className="text-slate-500"> · {p.eje != null ? `Eje ${p.eje}` : "todos los ejes"}</span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <span className="font-bold text-sky-300">{p.presion_objetivo_bar} bar <span className="font-normal text-slate-500">±{p.margen_bar}</span></span>
+                    {puedeEditar && (
+                      <button onClick={async () => { await eliminarPresionObjetivo(p.id); await cargar(); }} className="text-rose-300 hover:underline">Eliminar</button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Tipos de llanta */}

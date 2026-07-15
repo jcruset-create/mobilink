@@ -881,6 +881,51 @@ export async function listarPlanEstado(): Promise<PlanEstado[]> {
   return (data ?? []) as PlanEstado[];
 }
 
+// ── Presiones objetivo (para incidencias de presión) ───────────
+export interface PresionObjetivo {
+  id: string;
+  empresa_id?: string | null;
+  tipo_vehiculo_id?: string | null;
+  vehiculo_id?: string | null;
+  eje?: number | null;
+  presion_objetivo_bar: number;
+  margen_bar: number;
+}
+
+export async function listarPresionesObjetivo(): Promise<PresionObjetivo[]> {
+  const { data, error } = await supabase
+    .from("tc_presiones_objetivo")
+    .select("*")
+    .order("tipo_vehiculo_id")
+    .order("eje", { nullsFirst: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PresionObjetivo[];
+}
+
+export async function guardarPresionObjetivo(input: {
+  tipo_vehiculo_id?: string | null;
+  vehiculo_id?: string | null;
+  eje?: number | null;
+  presion_objetivo_bar: number;
+  margen_bar?: number;
+  empresa_id?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_presiones_objetivo").insert({
+    tipo_vehiculo_id: input.tipo_vehiculo_id ?? null,
+    vehiculo_id: input.vehiculo_id ?? null,
+    eje: input.eje ?? null,
+    presion_objetivo_bar: input.presion_objetivo_bar,
+    margen_bar: input.margen_bar ?? 0.5,
+    empresa_id: input.empresa_id ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarPresionObjetivo(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_presiones_objetivo").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 export async function guardarPlanMantenimiento(plan: Partial<PlanMantenimientoInput> & { id?: string }): Promise<void> {
   const payload = pick(plan as any, COLS_PLAN);
   const { error } = plan.id

@@ -360,6 +360,19 @@ class TyreControlApi {
     return data as String;
   }
 
+  /// Incidencias de una revisión concreta (para resolver en caliente y
+  /// recalcular el estado de la revisión al finalizar).
+  static Future<List<Incidencia>> listarIncidenciasDeRevision(String revisionId) async {
+    final data = await _db
+        .from('tc_incidencias')
+        .select(
+            '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje), problemas:tc_incidencia_problemas(id, tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))')
+        .eq('revision_id', revisionId);
+    return (data as List)
+        .map((e) => Incidencia.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
   /// Refresca el contador de pendientes (no solucionadas/canceladas).
   static Future<int> contarIncidenciasPendientes() async {
     try {
