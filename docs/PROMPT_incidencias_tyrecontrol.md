@@ -63,7 +63,7 @@ Una incidencia puede tener **varios** problemas (multi-selección); cada problem
 - `estado text` → `abierto | solucionado`, `operacion_id` (nullable, la operación que lo resolvió), `resuelto_at`.
 
 ### Cambios menores
-- Ampliar el dominio de `revisiones_vehiculo.estado_revision` para admitir `completada_con_incidencias` y `completada_incidencia_pendiente` (o dejar `completada` + derivar del conteo de incidencias; **decidir**, ver preguntas abiertas).
+- Ampliar el dominio de `revisiones_vehiculo.estado_revision` para admitir `completada_con_incidencias` y `completada_incidencia_pendiente` (decisión 1). Si hay CHECK constraint, actualizarlo; el código que hoy filtra por `completada` debe tratar los tres como "revisión cerrada".
 - Enlazar `operaciones_neumaticos` con la incidencia: añadir columna `incidencia_id uuid null` (FK).
 - RLS: SELECT con `tc_puede_ver_empresa(empresa_id)`; INSERT/UPDATE para operario de la empresa. Índices por `vehiculo_id`, `estado`, `gravedad`.
 
@@ -136,7 +136,7 @@ Al pulsar "Solucionar" abrir **directo** vehículo+posición+incidencia: confirm
 Marcar un problema como solucionado y mantener otros abiertos **sin duplicar** la incidencia; mostrar qué acciones siguen abiertas.
 
 ### Revisión de seguimiento (opcional)
-Al cerrar una incidencia, ofrecer "Crear revisión de seguimiento" con fecha automática configurable (p. ej. pinchazo→7 días, desgaste irregular→15 días, gemelos→próxima visita). Se materializa como un `tc_planes_mantenimiento` o una incidencia programada (**decidir**).
+Al cerrar una incidencia, ofrecer "Crear revisión de seguimiento" con fecha automática configurable (p. ej. pinchazo→7 días, desgaste irregular→15 días, gemelos→próxima visita). Se materializa como un **`tc_planes_mantenimiento`** con `proxima_fecha` (decisión 6), enlazado en `tc_incidencias.seguimiento_revision_id`. Fase 3.
 
 ---
 
@@ -154,23 +154,25 @@ La app de asistencias tiene cola persistente (Hive outbox); **`tyrecontrol_app` 
 
 ---
 
-## Preguntas abiertas (confirmar antes de programar)
+## Decisiones tomadas (fijadas — "tú decide", 2026-07-15)
 
-1. **`estado_revision`**: ¿añadimos los dos estados nuevos (`completada_con_incidencias`, `completada_incidencia_pendiente`) o dejamos `completada` y derivamos el matiz del conteo de incidencias? (Afecta a informes y a "no debe constar como correcta".)
-2. **Offline**: ¿fase 1 escribe directo a Supabase (rápido) o ya montamos la cola outbox como en asistencias (más trabajo, más robusto)?
-3. **Autorización**: ¿reutilizamos `autorizaciones_operaciones` para el estado `pendiente_autorizacion` o la incidencia se autogestiona con su propio estado?
-4. **Umbrales de gravedad por empresa/eje**: hoy son fijos en la app (1,6 / 3,0). ¿Se configuran por empresa (tabla de umbrales) en esta fase o dejamos los globales y lo dejamos para más adelante?
-5. **Presión objetivo**: hoy no hay presión objetivo por vehículo/posición, así que "presión baja/alta" no se puede autodetectar con fiabilidad. ¿Añadimos presión objetivo por eje/posición (necesario para las incidencias de presión) o de momento el técnico marca la presión manualmente como incidencia?
-6. **Revisión de seguimiento**: ¿como `tc_planes_mantenimiento` (entra en Planificación) o como incidencia programada aparte?
-7. **Alcance de la fase 1**: propongo partir en fases (abajo). ¿De acuerdo con empezar por detección + pendientes + menú, y dejar "solucionar ahora" completo para fase 2?
+1. **`estado_revision`** → **Se añaden dos estados nuevos**: `completada_con_incidencias` y `completada_incidencia_pendiente` (además de `borrador`/`completada`). Motivo: una revisión con incidencia **no** debe constar como "correcta"; queda trazabilidad para informes. La UI y los informes derivan el matiz del propio estado, no de un conteo.
+2. **Offline** → **Fase 1 escribe directo a Supabase** con manejo de error visible y reintento manual, **sin bloquear el cierre** de la revisión (la incidencia/medición ya quedan en local si falla el envío). La **foto obligatoria del pendiente** se sube con reintento ligero (persistir archivo + reintentar), no con cola completa. **La cola outbox completa (idempotencia por `clientActionId`, reintentos automáticos) se porta en Fase 2**, cuando entran operaciones y más fotos. Rationale: no frenar la fase 1 con infraestructura que rinde más en el flujo de "solucionar".
+3. **Autorización** → **La incidencia se autogestiona con su propio `estado`** (`pendiente_autorizacion`, `autorizada`, …) en fases 1-2. La integración con `autorizaciones_operaciones` (flujo de autorización de operaciones ya existente) se hace en **Fase 3**, solo para operaciones que la requieran. Evita acoplar de más al principio.
+4. **Umbrales de gravedad** → **Globales fijos** de `umbrales.dart` (1,6 / 3,0 mm) en fases 1-2. La configuración por empresa/eje (tabla de umbrales) se pospone (fase futura, no bloqueante).
+5. **Presión objetivo** → **No se autodetecta presión en fase 1**. Como hoy no hay presión objetivo por vehículo/posición, los problemas `presion_baja`/`presion_alta` los **marca el técnico manualmente** (con la presión medida guardada). Añadir "presión objetivo por eje/posición" (para autodetección y para la operación "corregir presión" con objetivo) se hace en **Fase 2** junto al flujo de solucionar. La gravedad automática de fase 1 se calcula sobre **profundidad + tipo de problema + estado visual**, no sobre presión.
+6. **Revisión de seguimiento** → Se materializa como **`tc_planes_mantenimiento`** con `proxima_fecha` (así aparece en Planificación y hereda los KPIs y el "en base" de Webfleet ya existentes). Se implementa en **Fase 3**. Se guarda el enlace en `tc_incidencias.seguimiento_revision_id` / al plan creado.
+7. **Alcance Fase 1** → **Confirmado**: detección + selección de posición/problemas/gravedad + "Dejar pendiente" + cierre con incidencia pendiente + menú "Incidencias" (pestaña Pendientes, tarjeta, contador). **"Solucionar ahora" completo va en Fase 2.**
+
+> Con estas decisiones, la migración de Fase 1 crea `tc_incidencias` + `tc_incidencia_problemas`, amplía `revisiones_vehiculo.estado_revision` (2 estados nuevos) y añade `operaciones_neumaticos.incidencia_id` (nullable, se usará en Fase 2). No se toca presión objetivo ni umbrales por empresa todavía.
 
 ---
 
 ## Plan por fases (propuesto)
 
-- **Fase 1 — Detección y pendientes**: migración `tc_incidencias` + `tc_incidencia_problemas`; bifurcación de botones en `review_screen`; selección posición+problemas+gravedad; "Dejar pendiente" con formulario y foto; cierre de revisión con incidencia pendiente; menú "Incidencias" (pestaña Pendientes + tarjeta + contador). Sin "solucionar ahora" todavía.
-- **Fase 2 — Solucionar**: "Solucionar ahora" en la revisión y desde el menú (operaciones filtradas, registro en `operaciones_neumaticos`, medición inicial/final, fotos, tiempo); solución parcial; cierre "con incidencias solucionadas".
-- **Fase 3 — Estados avanzados y panel**: autorización, planificación, pendiente material/vehículo; orden por prioridad + Webfleet en base; revisión de seguimiento; página Incidencias en el panel web y sección en la ficha del vehículo.
+- **Fase 1 — Detección y pendientes**: migración `tc_incidencias` + `tc_incidencia_problemas` + 2 estados nuevos de `estado_revision` + `operaciones_neumaticos.incidencia_id`; bifurcación de botones en `review_screen`; selección posición+problemas+gravedad (auto sobre profundidad+visual, decisión 5); "Dejar pendiente" con formulario y foto obligatoria (envío directo + reintento, decisión 2); cierre con incidencia pendiente; menú "Incidencias" (pestaña Pendientes + tarjeta + contador). **Sin "solucionar ahora".**
+- **Fase 2 — Solucionar**: "Solucionar ahora" en la revisión y desde el menú (operaciones filtradas, registro en `operaciones_neumaticos` con `incidencia_id`, medición inicial/final, fotos, tiempo); solución parcial; cierre "con incidencias solucionadas". Incluye: **presión objetivo por eje/posición** (decisión 5) y **cola outbox** portada de asistencias (decisión 2).
+- **Fase 3 — Estados avanzados y panel**: autorización (integración con `autorizaciones_operaciones`, decisión 3), planificación, pendiente material/vehículo; orden por prioridad + Webfleet en base; **revisión de seguimiento** como plan (decisión 6); página Incidencias en el panel web y sección en la ficha del vehículo.
 - **Transversal**: versionar `pubspec.yaml` y generar APK versionado en cada entrega (norma del repo).
 
 ## Entregables por fase
