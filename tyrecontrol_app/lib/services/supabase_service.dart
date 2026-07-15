@@ -302,6 +302,29 @@ class TyreControlApi {
     return incidenciaId;
   }
 
+  /// Crea una incidencia desde un payload serializable (lo usa la cola
+  /// offline). Las claves coinciden con los parámetros de [crearIncidencia].
+  static Future<String> crearIncidenciaDesdeMapa(Map<String, dynamic> p) {
+    return crearIncidencia(
+      empresaId: p['empresaId'] as String,
+      vehiculoId: p['vehiculoId'] as String,
+      posicionId: p['posicionId'] as String?,
+      neumaticoId: p['neumaticoId'] as String?,
+      revisionId: p['revisionId'] as String?,
+      tipos: (p['tipos'] as List).cast<String>(),
+      gravedad: p['gravedad'] as String,
+      gravedadAuto: p['gravedadAuto'] as String?,
+      estado: p['estado'] as String,
+      motivoPendiente: p['motivoPendiente'] as String?,
+      motivoObservacion: p['motivoObservacion'] as String?,
+      accionRecomendada: p['accionRecomendada'] as String?,
+      fechaRecomendada: p['fechaRecomendada'] as String?,
+      autorizaPersona: p['autorizaPersona'] as String?,
+      medicionInicial: p['medicionInicial'] == null ? null : Map<String, dynamic>.from(p['medicionInicial'] as Map),
+      fotoUrl: p['fotoUrl'] as String?,
+    );
+  }
+
   /// Lista de incidencias con vehículo/posición/problemas embebidos.
   /// [estados] filtra por estado (vacío = todas).
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {
@@ -329,6 +352,18 @@ class TyreControlApi {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Objetivos de presión por eje para un vehículo (resuelve la precedencia
+  /// vehículo > tipo). Devuelve mapa eje → (presión, margen). Best-effort.
+  static Future<Map<int, ({num presion, num margen})>> presionesObjetivoDeVehiculo(
+      String vehiculoId, List<int> ejes) async {
+    final out = <int, ({num presion, num margen})>{};
+    for (final eje in ejes) {
+      final o = await presionObjetivo(vehiculoId, eje);
+      if (o != null) out[eje] = o;
+    }
+    return out;
   }
 
   /// Resuelve (total o parcialmente) una incidencia: marca los problemas

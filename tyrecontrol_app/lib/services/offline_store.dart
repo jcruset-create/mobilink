@@ -102,6 +102,28 @@ class OfflineStore {
     pendingCount.value = _outbox.length;
   }
 
+  /// Encola la creación de una incidencia ("dejar pendiente" sin cobertura).
+  /// Si la foto no pudo subirse aún, se guarda su ruta local para subirla al
+  /// sincronizar. [payload] son los argumentos de crearIncidenciaDesdeMapa.
+  static Future<void> enqueueIncidencia(Map<String, dynamic> payload, {String? localFotoPath}) async {
+    String? dest;
+    if (localFotoPath != null) {
+      final dir = await getApplicationDocumentsDirectory();
+      final outDir = Directory('${dir.path}/tc_offline_fotos');
+      if (!await outDir.exists()) await outDir.create(recursive: true);
+      final ext = localFotoPath.split('.').last;
+      dest = '${outDir.path}/inc_${DateTime.now().microsecondsSinceEpoch}.$ext';
+      await File(localFotoPath).copy(dest);
+    }
+    await _outbox.add({
+      'type': 'incidencia',
+      'payload': payload,
+      'localFoto': dest,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    pendingCount.value = _outbox.length;
+  }
+
   static List<MapEntry<dynamic, Map<String, dynamic>>> pending() {
     return _outbox.toMap().entries.map((e) => MapEntry(e.key, Map<String, dynamic>.from(e.value as Map))).toList();
   }
@@ -152,6 +174,17 @@ class OfflineStore {
           'empresa_id': item['empresaId'], 'vehiculo_id': item['vehiculoId'], 'foto_url': url,
         });
         try { await f.delete(); } catch (_) {}
+      } else if (type == 'incidencia') {
+        final payload = Map<String, dynamic>.from(item['payload'] as Map);
+        final localFoto = item['localFoto'] as String?;
+        if (localFoto != null && payload['fotoUrl'] == null) {
+          final f = File(localFoto);
+          if (await f.exists()) {
+            payload['fotoUrl'] = await TyreControlApi.subirFotoIncidencia(f);
+            try { await f.delete(); } catch (_) {}
+          }
+        }
+        await TyreControlApi.crearIncidenciaDesdeMapa(payload);
       }
       offline.value = false;
       await _remove(key);

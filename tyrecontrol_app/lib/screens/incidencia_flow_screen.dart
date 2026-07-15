@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../models/incidencias.dart';
 import '../models/models.dart';
+import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_layout_image.dart';
@@ -122,44 +124,58 @@ class _IncidenciaFlowScreenState extends State<IncidenciaFlowScreen> {
 
   /// Crea las incidencias de los drafts. [form] null → estado 'detectada'
   /// (para resolver en caliente); si viene → estado según el motivo.
-  Future<void> _crearIncidencias({_PendienteForm? form}) async {
+  /// Si no hay cobertura, las encola (solo en el modo "dejar pendiente";
+  /// "solucionar ahora" necesita el id al momento y es una acción online).
+  /// Devuelve true si TODAS se crearon online, false si algo quedó en cola.
+  Future<bool> _crearIncidencias({_PendienteForm? form}) async {
+    final permitirCola = form != null; // "dejar pendiente" tolera offline
     String? fotoUrl;
+    final localFoto = form?.foto?.path;
     if (form?.foto != null) {
-      fotoUrl = await TyreControlApi.subirFotoIncidencia(form!.foto!);
+      try {
+        fotoUrl = await TyreControlApi.subirFotoIncidencia(form!.foto!);
+      } catch (_) {
+        fotoUrl = null; // sin red: se subirá al sincronizar
+      }
     }
     final estado = form == null ? 'detectada' : _estadoDesdeMotivo(form.motivo);
+    var todoOnline = true;
     for (final entry in _drafts.entries) {
       final posId = entry.key;
       final d = entry.value;
       final det = widget.detalles[posId];
-      await TyreControlApi.crearIncidencia(
-        empresaId: widget.vehiculo.empresaId,
-        vehiculoId: widget.vehiculo.id,
-        posicionId: posId,
-        neumaticoId: widget.montajePorPosicion[posId]?.neumaticoId ?? det?.neumaticoId,
-        revisionId: widget.revisionId,
-        tipos: d.tipos.toList(),
-        gravedad: gravedadKey(d.gravedad),
-        gravedadAuto: gravedadKey(gravedadAuto(
-          tipos: d.tipos,
-          profundidadMm: det?.profundidadMm,
-        )),
-        estado: estado,
-        motivoPendiente: form?.motivo,
-        motivoObservacion: form?.observacion,
-        accionRecomendada: form?.accion,
-        fechaRecomendada: form?.fecha,
-        autorizaPersona: form?.autoriza,
-        medicionInicial: det == null
+      final payload = <String, dynamic>{
+        'empresaId': widget.vehiculo.empresaId,
+        'vehiculoId': widget.vehiculo.id,
+        'posicionId': posId,
+        'neumaticoId': widget.montajePorPosicion[posId]?.neumaticoId ?? det?.neumaticoId,
+        'revisionId': widget.revisionId,
+        'tipos': d.tipos.toList(),
+        'gravedad': gravedadKey(d.gravedad),
+        'gravedadAuto': gravedadKey(gravedadAuto(tipos: d.tipos, profundidadMm: det?.profundidadMm)),
+        'estado': estado,
+        'motivoPendiente': form?.motivo,
+        'motivoObservacion': form?.observacion,
+        'accionRecomendada': form?.accion,
+        'fechaRecomendada': form?.fecha,
+        'autorizaPersona': form?.autoriza,
+        'medicionInicial': det == null
             ? null
-            : {
-                'profundidad_mm': det.profundidadMm,
-                'presion_bar': det.presionBar,
-                'estado_visual': det.estadoVisual,
-              },
-        fotoUrl: fotoUrl,
-      );
+            : {'profundidad_mm': det.profundidadMm, 'presion_bar': det.presionBar, 'estado_visual': det.estadoVisual},
+        'fotoUrl': fotoUrl,
+      };
+      try {
+        await TyreControlApi.crearIncidenciaDesdeMapa(payload);
+      } on PostgrestException {
+        rethrow; // rechazo real del servidor → mostrar al técnico
+      } catch (_) {
+        if (!permitirCola) rethrow;
+        await OfflineStore.enqueueIncidencia(payload, localFotoPath: fotoUrl == null ? localFoto : null);
+        OfflineStore.offline.value = true;
+        todoOnline = false;
+      }
     }
+    return todoOnline;
   }
 
   /// "Dejar pendiente": crea las incidencias con motivo y cierra la revisión
@@ -178,9 +194,13 @@ class _IncidenciaFlowScreenState extends State<IncidenciaFlowScreen> {
 
     setState(() => _guardando = true);
     try {
-      await _crearIncidencias(form: form);
+      final online = await _crearIncidencias(form: form);
       await TyreControlApi.contarIncidenciasPendientes();
       if (!mounted) return;
+      if (!online) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Sin cobertura: se guardó y se enviará al recuperar la conexión.')));
+      }
       Navigator.of(context).pop('completada_incidencia_pendiente');
     } catch (e) {
       if (!mounted) return;

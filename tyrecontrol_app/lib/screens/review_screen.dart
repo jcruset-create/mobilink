@@ -151,6 +151,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
       if (!mounted) return;
       setState(() => _posiciones = posiciones);
+
+      // Objetivos de presión por eje (autodetección de presión baja/alta).
+      final ejes = posiciones.map((p) => p.eje).whereType<int>().toSet().toList();
+      if (ejes.isNotEmpty) {
+        final obj = await TyreControlApi.presionesObjetivoDeVehiculo(widget.vehiculo.id, ejes);
+        if (mounted) setState(() => _objetivosPresion = obj);
+      }
     } catch (e) {
       setState(() => _error = 'No se pudo cargar el vehículo. Comprueba la conexión e inténtalo de nuevo.');
     } finally {
@@ -158,12 +165,16 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
+  // Objetivos de presión por eje (para autodetección de presión baja/alta).
+  Map<int, ({num presion, num margen})> _objetivosPresion = {};
+
   // ── Estado visual de cada posicion ───────────────────────────
   TireStatus _statusDe(PosicionVehiculo p) {
     if (p.id == _posiciones.elementAtOrNull(_index)?.id) return TireStatus.seleccionado;
     final d = _detalles[p.id];
     if (d == null || !d.medido) return TireStatus.pendiente;
-    return Umbrales.def.evaluar(d);
+    final obj = p.eje == null ? null : _objetivosPresion[p.eje];
+    return Umbrales.def.evaluar(d, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
   }
 
   bool get _todoRevisado => _posiciones.every((p) => _detalles[p.id]?.medido ?? false);
