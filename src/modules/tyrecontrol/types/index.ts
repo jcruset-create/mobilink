@@ -74,6 +74,9 @@ export interface Perfil {
   acceso_apk: boolean;
   acceso_panel: boolean;
   es_superadmin: boolean;
+  // true → sus empresas visibles se gestionan a mano desde la ficha
+  // (el login del operario y el trigger de empresas nuevas no las tocan).
+  empresas_manual?: boolean;
   created_at?: string;
   empresa?: Empresa | null;
   delegacion?: Delegacion | null;

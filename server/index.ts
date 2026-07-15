@@ -11014,21 +11014,108 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
 
     // El técnico de SEA atiende a todas las flotas: asignar todas las
     // empresas activas (la RLS de operador solo muestra las asignadas).
-    const { data: empresas } = await supabase
-      .from("tc_empresas")
-      .select("id")
-      .eq("activo", true);
-    if (empresas && empresas.length > 0) {
-      await supabase.from("tc_operador_empresas").upsert(
-        empresas.map((e: { id: string }) => ({ usuario_id: userId, empresa_id: e.id })),
-        { onConflict: "usuario_id,empresa_id" }
-      );
+    // EXCEPTO si el usuario tiene asignación manual desde el panel
+    // (empresas_manual): entonces sus empresas las gestiona el administrador
+    // y el login no las toca.
+    const { data: perfilUsuario } = await supabase
+      .from("tc_usuarios")
+      .select("empresas_manual")
+      .eq("id", userId)
+      .maybeSingle();
+    if (!perfilUsuario?.empresas_manual) {
+      const { data: empresas } = await supabase
+        .from("tc_empresas")
+        .select("id")
+        .eq("activo", true);
+      if (empresas && empresas.length > 0) {
+        await supabase.from("tc_operador_empresas").upsert(
+          empresas.map((e: { id: string }) => ({ usuario_id: userId, empresa_id: e.id })),
+          { onConflict: "usuario_id,empresa_id" }
+        );
+      }
     }
 
     res.json({ ok: true, email, techName });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/login-operario error:", error);
     res.status(500).json({ error: error?.message || "Error iniciando sesión" });
+  }
+});
+
+// ── Gestión de usuarios desde el panel (admin/super-admin) ──────────────
+// Igual que requireTyreControlUser pero exige rol administrador (o
+// super-admin) con acceso al panel. Deja el perfil en req.
+function requireTyreControlAdmin(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const authHeader = String(req.headers["authorization"] ?? "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "No autenticado" });
+
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("id, rol, es_superadmin, acceso_panel, activo")
+      .eq("id", data.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.activo || (!perfil.es_superadmin && perfil.rol !== "administrador")) {
+      return res.status(403).json({ error: "Solo un administrador puede gestionar usuarios" });
+    }
+
+    (req as any).tcAdmin = perfil;
+    next();
+  })().catch((error) => {
+    console.error("requireTyreControlAdmin error:", error);
+    res.status(500).json({ error: "Error de autenticación" });
+  });
+}
+
+// Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
+// Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
+// un 409 y se recomienda desactivarlo en su lugar: no se pierde histórico.
+app.delete("/api/tyrecontrol/usuarios/:id", requireTyreControlAdmin, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const admin = (req as any).tcAdmin as { id: string };
+    if (id === admin.id) return res.status(400).json({ error: "No puedes eliminarte a ti mismo" });
+
+    const { data: objetivo } = await supabase
+      .from("tc_usuarios")
+      .select("id, es_superadmin, nombre")
+      .eq("id", id)
+      .maybeSingle();
+    if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (objetivo.es_superadmin) return res.status(400).json({ error: "No se puede eliminar un super-admin" });
+
+    // Asignaciones de empresas: fuera siempre.
+    await supabase.from("tc_operador_empresas").delete().eq("usuario_id", id);
+
+    // Perfil: si tiene historial enlazado por FK (revisiones, planes…),
+    // Postgres lo rechaza → informamos en claro.
+    const { error: delPerfil } = await supabase.from("tc_usuarios").delete().eq("id", id);
+    if (delPerfil) {
+      if (/foreign key|violates/i.test(delPerfil.message)) {
+        return res.status(409).json({
+          error: `"${objetivo.nombre}" tiene historial (revisiones u operaciones). Desactívalo en lugar de eliminarlo.`,
+        });
+      }
+      throw new Error(delPerfil.message);
+    }
+
+    // Usuario de autenticación (best-effort: el perfil ya no existe).
+    try { await supabase.auth.admin.deleteUser(id); } catch (e) {
+      console.error("auth.admin.deleteUser:", e);
+    }
+
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error("DELETE /api/tyrecontrol/usuarios/:id error:", error);
+    res.status(500).json({ error: error?.message || "Error eliminando usuario" });
   }
 });
 

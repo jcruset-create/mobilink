@@ -206,6 +206,60 @@ export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Pro
   if (error) throw new Error(error.message);
 }
 
+// ── Empresas visibles por usuario (ficha de usuario) ───────────
+export async function listarEmpresasDeUsuario(usuarioId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("tc_operador_empresas")
+    .select("empresa_id")
+    .eq("usuario_id", usuarioId);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r: any) => r.empresa_id as string);
+}
+
+/// empresaIds = null → modo automático (ve todas, incluidas las futuras);
+/// array → asignación manual exacta (el login/trigger no la tocan).
+export async function guardarEmpresasUsuario(usuarioId: string, empresaIds: string[] | null): Promise<void> {
+  if (empresaIds === null) {
+    const { error: e1 } = await supabase.from("tc_usuarios")
+      .update({ empresas_manual: false, updated_at: new Date().toISOString() }).eq("id", usuarioId);
+    if (e1) throw new Error(e1.message);
+    const { data: empresas, error: e2 } = await supabase.from("tc_empresas").select("id").eq("activo", true);
+    if (e2) throw new Error(e2.message);
+    if (empresas && empresas.length > 0) {
+      const { error: e3 } = await supabase.from("tc_operador_empresas").upsert(
+        empresas.map((e: any) => ({ usuario_id: usuarioId, empresa_id: e.id })),
+        { onConflict: "usuario_id,empresa_id" }
+      );
+      if (e3) throw new Error(e3.message);
+    }
+    return;
+  }
+  const { error: e1 } = await supabase.from("tc_usuarios")
+    .update({ empresas_manual: true, updated_at: new Date().toISOString() }).eq("id", usuarioId);
+  if (e1) throw new Error(e1.message);
+  const { error: e2 } = await supabase.from("tc_operador_empresas").delete().eq("usuario_id", usuarioId);
+  if (e2) throw new Error(e2.message);
+  if (empresaIds.length > 0) {
+    const { error: e3 } = await supabase.from("tc_operador_empresas")
+      .insert(empresaIds.map((id) => ({ usuario_id: usuarioId, empresa_id: id })));
+    if (e3) throw new Error(e3.message);
+  }
+}
+
+/// Elimina el usuario del todo (perfil + auth) vía backend. Si tiene
+/// historial, el servidor responde 409 recomendando desactivarlo.
+export async function eliminarUsuario(id: string): Promise<void> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error eliminando usuario");
+}
+
 // ── Neumáticos ───────────────────────────────────────────────
 const NEU_SELECT = "*, empresa:tc_empresas(*)";
 
