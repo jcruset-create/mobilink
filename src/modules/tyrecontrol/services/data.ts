@@ -206,6 +206,33 @@ export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Pro
   if (error) throw new Error(error.message);
 }
 
+// ── Histórico de revisiones realizadas (filtros en servidor) ───
+export async function listarRevisionesHistorico(filtros: {
+  desde?: string | null;   // yyyy-MM-dd
+  hasta?: string | null;
+  empresaId?: string | null;
+  tecnicoId?: string | null;
+  limite?: number;
+}): Promise<any[]> {
+  let q = supabase
+    .from("revisiones_vehiculo")
+    .select(
+      "id, fecha_revision, created_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
+      "vehiculo:tc_vehiculos(matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), " +
+      "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado)"
+    )
+    .in("estado_revision", ["completada", "completada_con_incidencias", "completada_incidencia_pendiente"]);
+  if (filtros.desde) q = q.gte("fecha_revision", filtros.desde);
+  if (filtros.hasta) q = q.lte("fecha_revision", filtros.hasta);
+  if (filtros.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  if (filtros.tecnicoId) q = q.eq("tecnico_id", filtros.tecnicoId);
+  const { data, error } = await q
+    .order("created_at", { ascending: false })
+    .limit(filtros.limite ?? 200);
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 // ── Empresas visibles por usuario (ficha de usuario) ───────────
 export async function listarEmpresasDeUsuario(usuarioId: string): Promise<string[]> {
   const { data, error } = await supabase
