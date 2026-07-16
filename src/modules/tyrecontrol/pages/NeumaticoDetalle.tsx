@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { obtenerNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo, listarOperaciones, medicionesNeumatico } from "../services/data";
 import type { MedicionNeumatico } from "../services/data";
 import type { MontajeActual, Neumatico, OperacionNeumatico } from "../types";
-import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS } from "../types";
+import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, presionTxt } from "../types";
 import { Modal, Field, inputCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
@@ -128,7 +128,7 @@ export default function NeumaticoDetalle() {
     }
 
     for (const m of mediciones) {
-      const detalle = [m.posicion, m.profundidad_mm != null ? `${m.profundidad_mm} mm` : "", m.presion_bar != null ? `${m.presion_bar} bar` : "", m.estado_visual].filter(Boolean).join(" · ");
+      const detalle = [m.posicion, m.profundidad_mm != null ? `${m.profundidad_mm} mm` : "", m.presion_bar != null ? `${presionTxt(m.presion_bar)} bar` : "", m.estado_visual].filter(Boolean).join(" · ");
       ev.push({
         ts: new Date(m.created_at ?? m.fecha_revision ?? 0).getTime(),
         fecha: fmtFechaHora(m.fecha_revision, m.created_at),

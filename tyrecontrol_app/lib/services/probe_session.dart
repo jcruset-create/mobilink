@@ -147,7 +147,9 @@ class ProbeSession extends ChangeNotifier {
         profundidadMm = r.valor;
         break;
       case LecturaTipo.presion:
-        presionBar = r.valor != null ? r.valor! * _psiABar : null;
+        presionBar = r.valor != null
+            ? double.parse((r.valor! * _psiABar).toStringAsFixed(1))
+            : null;
         emitir = LecturaSonda(LecturaTipo.presion, valor: presionBar, raw: r.raw);
         break;
       case LecturaTipo.rfid:

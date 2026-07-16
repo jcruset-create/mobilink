@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
+import { presionTxt } from "../types";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
@@ -230,7 +231,7 @@ export default function CatalogoNeumaticos() {
               <Dato label="Diámetro exterior" v={ficha.diametro_exterior_mm != null ? `${ficha.diametro_exterior_mm} mm` : null} />
               <Dato label="Revoluciones/km" v={ficha.revoluciones_km} />
               <Dato label="Carga máxima" v={ficha.carga_maxima_kg != null ? `${ficha.carga_maxima_kg} kg` : null} />
-              <Dato label="Presión máxima" v={ficha.presion_maxima_bar != null ? `${ficha.presion_maxima_bar} bar` : null} />
+              <Dato label="Presión máxima" v={ficha.presion_maxima_bar != null ? `${presionTxt(ficha.presion_maxima_bar)} bar` : null} />
               <Dato label="Peso" v={ficha.peso_kg != null ? `${ficha.peso_kg} kg` : null} />
               <Dato label="Ply" v={ficha.ply} />
               <Dato label="Ancho sección" v={ficha.ancho_seccion_mm != null ? `${ficha.ancho_seccion_mm} mm` : null} />

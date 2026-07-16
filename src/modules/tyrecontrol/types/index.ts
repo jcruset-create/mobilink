@@ -63,6 +63,14 @@ export interface Delegacion {
   empresa?: Empresa | null;
 }
 
+/// Presión en bar para mostrar: SIEMPRE con un solo decimal (evita la
+/// basura de coma flotante tipo "4.3712778399999996").
+export function presionTxt(v: number | string | null | undefined): string {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(1) : "—";
+}
+
 export interface Perfil {
   id: string;
   empresa_id: string;

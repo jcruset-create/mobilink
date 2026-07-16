@@ -283,7 +283,7 @@ class _OperacionSheetState extends State<_OperacionSheet> {
             if (_objetivo != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
-                child: Text('Objetivo: ${_objetivo!.presion} bar (±${_objetivo!.margen})',
+                child: Text('Objetivo: ${_objetivo!.presion.toStringAsFixed(1)} bar (±${_objetivo!.margen.toStringAsFixed(1)})',
                     style: const TextStyle(color: AppColors.info, fontSize: 13, fontWeight: FontWeight.w600)),
               ),
             TextField(

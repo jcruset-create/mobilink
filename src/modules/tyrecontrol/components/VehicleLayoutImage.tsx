@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
+import { presionTxt } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico,
   actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
@@ -338,7 +339,7 @@ export default function VehicleLayoutImage({
                       <div className="text-slate-300">
                         {profundidad != null ? `${profundidad}mm` : "— mm"}
                         {" · "}
-                        {presion != null ? `${presion}bar` : "— bar"}
+                        {presion != null ? `${presionTxt(presion)}bar` : "— bar"}
                       </div>
                     </span>
                   );
@@ -412,9 +413,9 @@ export default function VehicleLayoutImage({
                     {fila("Medida", neu.medida ?? "")}
                     {fila("IC / CV", indices)}
                     {neu.dot ? fila("DOT", neu.dot) : null}
-                    {fila("Presión recom.", presionRecom != null ? `${presionRecom} bar` : "")}
+                    {fila("Presión recom.", presionRecom != null ? `${presionTxt(presionRecom)} bar` : "")}
                     {fila("Última prof.", profundidad != null ? `${profundidad} mm` : "")}
-                    {fila("Última pres.", presionMedida != null ? `${presionMedida} bar` : "")}
+                    {fila("Última pres.", presionMedida != null ? `${presionTxt(presionMedida)} bar` : "")}
                     {fila("Montado", `${montajeSeleccionado.fecha_montaje}${montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}`)}
                   </div>
                 </div>

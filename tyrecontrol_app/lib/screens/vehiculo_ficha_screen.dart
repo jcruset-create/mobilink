@@ -43,6 +43,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
   List<Map<String, dynamic>> _revisiones = [];
   Map<String, String> _medidas = {};
   List<Map<String, dynamic>> _llantas = [];
+  Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por posición
   String? _imagenChasis;
 
   @override
@@ -72,6 +73,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
         TyreControlApi.listarRevisionesDeVehiculo(widget.vehiculoId),
         TyreControlApi.mapaMedidas(),
         TyreControlApi.listarTiposLlantaCat(),
+        TyreControlApi.ultimasMedicionesPorPosicion(widget.vehiculoId),
       ]);
 
       final montajes = results[1] as List<MontajeActual>;
@@ -102,6 +104,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
         _revisiones = results[5] as List<Map<String, dynamic>>;
         _medidas = results[6] as Map<String, String>;
         _llantas = results[7] as List<Map<String, dynamic>>;
+        _mediciones = results[8] as Map<String, RevisionDetalleDraft>;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
       });
     } catch (e) {
@@ -454,7 +457,8 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
               imagenUrl: _imagenChasis!,
               posiciones: _posiciones,
               montajePorPosicion: _montajePorPosicion,
-              detalles: const {},
+              // Última medición por posición: el plano muestra "X mm · Y bar".
+              detalles: _mediciones,
               estados: const {},
               seleccionadaId: null,
               liveProf: null,
@@ -462,10 +466,14 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
               onTap: (p) {
                 final m = _montajePorPosicion[p.id];
                 final n = m?.neumatico;
+                final med = _mediciones[p.id];
+                final medTxt = med == null
+                    ? ''
+                    : ' · ${med.profundidadMm != null ? '${med.profundidadMm!.toStringAsFixed(1)} mm' : '— mm'} · ${med.presionBar != null ? '${med.presionBar!.toStringAsFixed(1)} bar' : '— bar'}';
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text(n == null
-                      ? '${p.codigoPosicion} · sin neumático montado'
-                      : '${p.codigoPosicion} · ${[n.marca, n.modelo, n.medida].whereType<String>().join(' ')}'),
+                      ? '${p.codigoPosicion} · sin neumático montado$medTxt'
+                      : '${p.codigoPosicion} · ${[n.marca, n.modelo, n.medida].whereType<String>().join(' ')}$medTxt'),
                 ));
               },
             ),

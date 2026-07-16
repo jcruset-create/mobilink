@@ -14,7 +14,7 @@ const ESTADO: Record<string, { label: string; cls: string }> = {
   sin_referencia: { label: "Sin referencia", cls: "text-slate-500" },
 };
 
-const bar = (n: number | null) => (n != null ? `${n} bar` : "—");
+const bar = (n: number | null) => (n != null ? `${n.toFixed(1)} bar` : "—");
 
 export default function InformePresiones() {
   const { filtros } = useInformesFiltros();
@@ -71,7 +71,7 @@ export default function InformePresiones() {
                   <td className={tdCls + " text-slate-400"}>{i.posicion ?? "—"}</td>
                   <td className={tdCls + " text-slate-200"}>{bar(i.presion_medida)}</td>
                   <td className={tdCls + " text-slate-400"}>{bar(i.presion_recomendada)}</td>
-                  <td className={tdCls + " text-slate-400"}>{i.diferencia != null ? `${i.diferencia > 0 ? "+" : ""}${i.diferencia} bar` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{i.diferencia != null ? `${i.diferencia > 0 ? "+" : ""}${i.diferencia.toFixed(1)} bar` : "—"}</td>
                   <td className={tdCls + " font-semibold " + est.cls}>{est.label}</td>
                 </tr>
               );

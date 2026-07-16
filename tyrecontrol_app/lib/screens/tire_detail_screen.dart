@@ -62,7 +62,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     super.initState();
     final d = widget.draft;
     _profundidad = TextEditingController(text: d.profundidadMm?.toString() ?? '');
-    _presion = TextEditingController(text: d.presionBar?.toString() ?? '');
+    _presion = TextEditingController(text: d.presionBar?.toStringAsFixed(1) ?? '');
     _observaciones = TextEditingController(text: d.observaciones ?? '');
     _estadoVisual = d.estadoVisual;
     _noAccesible = d.noAccesible;

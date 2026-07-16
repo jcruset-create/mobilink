@@ -86,7 +86,7 @@ class _SondaScreenState extends State<SondaScreen> {
     setState(() {
       switch (r.tipo) {
         case LecturaTipo.profundidad: _profundidad = r.valor; break;
-        case LecturaTipo.presion: _presion = r.valor != null ? r.valor! * _psiABar : null; break;
+        case LecturaTipo.presion: _presion = r.valor != null ? double.parse((r.valor! * _psiABar).toStringAsFixed(1)) : null; break;
         case LecturaTipo.rfid: _rfid = r.texto ?? ''; break;
         case LecturaTipo.info:
           if (r.clave == 'modelo') _modelo = r.texto ?? '';
@@ -265,7 +265,7 @@ class _SondaScreenState extends State<SondaScreen> {
           Row(children: [
             Expanded(child: _lecturaCard('Profundidad', _profundidad != null ? '${_profundidad!.toStringAsFixed(2)} mm' : '—', AppColors.info, Icons.straighten, () => _enviar('T'))),
             const SizedBox(width: 8),
-            Expanded(child: _lecturaCard('Presión', _presion != null ? '${_presion!.toStringAsFixed(2)} bar' : '—', AppColors.success, Icons.speed, () => _enviar('P'))),
+            Expanded(child: _lecturaCard('Presión', _presion != null ? '${_presion!.toStringAsFixed(1)} bar' : '—', AppColors.success, Icons.speed, () => _enviar('P'))),
           ]),
           const SizedBox(height: 8),
           _lecturaCard('RFID (EPC)', _rfid.isEmpty ? '—' : _rfid, const Color(0xFFA78BFA), Icons.nfc, () => _enviar('GR'), mono: true),

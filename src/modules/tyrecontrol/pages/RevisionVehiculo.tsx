@@ -6,6 +6,7 @@ import {
   listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
 } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
+import { presionTxt } from "../types";
 import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
@@ -307,7 +308,7 @@ export default function RevisionVehiculo() {
                   </div>
                   {m?.neumatico && (
                     <div className="mb-2 text-[10px] text-slate-500">
-                      Última medición: {ultimaProfundidad != null ? `${ultimaProfundidad} mm` : "—"} · Presión recomendada: {presionRecomendada != null ? `${presionRecomendada} bar` : "—"}
+                      Última medición: {ultimaProfundidad != null ? `${ultimaProfundidad} mm` : "—"} · Presión recomendada: {presionRecomendada != null ? `${presionTxt(presionRecomendada)} bar` : "—"}
                     </div>
                   )}
 
@@ -365,7 +366,7 @@ export default function RevisionVehiculo() {
                   <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${d.presion_bar} bar` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>
                 </tr>
