@@ -445,6 +445,38 @@ class TyreControlApi {
     });
   }
 
+  /// Clave normalizada marca|modelo|medida-base (ignora índice y espacios).
+  static String claveCatalogo(String? marca, String? modelo, String? medida) {
+    final base = (medida ?? '').toUpperCase().replaceAll(RegExp(r'\s+'), '');
+    final m = RegExp(r'(\d{2,3})(?:/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)').firstMatch(base);
+    final mb = m == null ? base : '${m.group(1)}${m.group(2) != null ? '/${m.group(2)}' : ''}R${m.group(3)!.replaceAll(',', '.')}';
+    return '${(marca ?? '').toLowerCase().trim()}|${(modelo ?? '').toLowerCase().trim()}|$mb';
+  }
+
+  /// Datos técnicos del catálogo por modelo (profundidad de dibujo + presión
+  /// máxima), para usarlos como referencia cuando el neumático no los tiene.
+  static Future<Map<String, ({double? prof, double? pres})>> datosCatalogoPorModelo() async {
+    try {
+      final data = await _db.from('tc_referencias_neumatico').select(
+          'profundidad_dibujo_mm, presion_maxima_bar, modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)');
+      final out = <String, ({double? prof, double? pres})>{};
+      for (final e in (data as List)) {
+        final r = Map<String, dynamic>.from(e as Map);
+        final marca = r['modelo'] is Map ? (r['modelo']['marca'] is Map ? r['modelo']['marca']['nombre'] : null) : null;
+        final modelo = r['modelo'] is Map ? r['modelo']['nombre'] : null;
+        final medida = r['tyre_size'] is Map ? r['tyre_size']['medida'] : null;
+        if (marca == null || modelo == null || medida == null) continue;
+        out[claveCatalogo(marca, modelo, medida)] = (
+          prof: (r['profundidad_dibujo_mm'] as num?)?.toDouble(),
+          pres: (r['presion_maxima_bar'] as num?)?.toDouble(),
+        );
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// Cierra la intervención de cambio (agrupa operaciones + informe con IA)
   /// llamando al backend. Best-effort: si falla, no bloquea el flujo.
   static Future<void> cerrarIntervencion(String vehiculoId, DateTime desde) async {

@@ -44,6 +44,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Set<String> _medidasVehiculo = {}; // medidas base admitidas por el vehículo
   Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por NEUMÁTICO
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
+  Map<String, ({double? prof, double? pres})> _datosCat = {}; // catálogo por modelo (dibujo/presión máx)
   bool _trabajando = false;
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
   final Set<String> _posicionesMontadas = {}; // posiciones donde se montó un neumático en esta sesión
@@ -88,6 +89,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         TyreControlApi.listarEjesDeVehiculo(widget.vehiculoId),
         _empresaId != null ? TyreControlApi.stockAlmacenEmpresa(_empresaId!) : Future.value(<StockAlmacenLinea>[]),
         TyreControlApi.ultimasMedicionesPorNeumatico(widget.vehiculoId),
+        TyreControlApi.datosCatalogoPorModelo(),
       ]);
 
       final medidas = results[2] as Map<String, String>;
@@ -126,6 +128,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             .where((l) => set.isEmpty || set.contains(_baseMedida(l.medida)))
             .toList();
         _mediciones = results[5] as Map<String, RevisionDetalleDraft>;
+        _datosCat = results[6] as Map<String, ({double? prof, double? pres})>;
         _presionesObjetivo = presObj;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
       });
@@ -413,16 +416,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     // Medición del PROPIO neumático (no de la posición): un nuevo no hereda mm del anterior.
     final med = _mediciones[m.neumaticoId];
     final obj = p.eje != null ? _presionesObjetivo[p.eje] : null;
-    // Profundidad: revisión del neumático → profundidad actual (dibujo/usado).
-    final prof = med?.profundidadMm ?? n?.profundidadActualMm?.toDouble();
-    // Presión: revisión del neumático → presión recomendada del eje.
-    final pres = med?.presionBar ?? obj?.presion.toDouble();
+    final cat = n != null ? _datosCat[TyreControlApi.claveCatalogo(n.marca, n.modelo, n.medida)] : null;
+    // Profundidad: revisión → profundidad actual (dibujo/usado) → dibujo del catálogo.
+    final prof = med?.profundidadMm ?? n?.profundidadActualMm?.toDouble() ?? cat?.prof;
+    // Presión: revisión → presión recomendada del eje → presión máx. del catálogo.
+    final pres = med?.presionBar ?? obj?.presion.toDouble() ?? cat?.pres;
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
     final esNuevoReciente = med == null && (n?.origen == 'almacen_generico' || n?.origen == 'catalogo_sin_stock');
-    final borde = resaltar
-        ? AppColors.warning
-        : (arrastrando ? AppColors.info : (esNuevoReciente ? _verdeNuevo : AppColors.success));
+    // El nuevo recién montado (verde oscuro) gana sobre el resaltado de incidencia.
+    final borde = arrastrando
+        ? AppColors.info
+        : (esNuevoReciente ? _verdeNuevo : (resaltar ? AppColors.warning : AppColors.success));
     final card = Container(
       width: cardW,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
