@@ -31,7 +31,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_veh record; v_prod record; v_empresa uuid; v_neumatico uuid; v_montaje uuid; v_numero text;
   v_compatible boolean; v_op_id uuid;
-  v_cliente_almacen uuid; v_ubicacion text; v_disponible numeric;
+  v_cliente_almacen uuid; v_ubicacion text; v_disponible numeric; v_prof_dibujo numeric;
 begin
   if p_condicion not in ('nuevo','usado') then raise exception 'Condición de stock no válida'; end if;
 
@@ -45,6 +45,10 @@ begin
 
   select * into v_prod from productos_neumaticos where id = p_producto_almacen and activo = true;
   if not found then raise exception 'Producto de almacén no encontrado'; end if;
+
+  -- Profundidad de dibujo (neumático nuevo) desde la ficha del catálogo.
+  select profundidad_dibujo_mm into v_prof_dibujo
+    from tc_referencias_neumatico where id = v_prod.referencia_neumatico_id;
 
   if v_veh.tipo_vehiculo_id is null or not exists (
      select 1 from tc_posiciones_vehiculo where id = p_posicion and tipo_vehiculo_id = v_veh.tipo_vehiculo_id) then
@@ -92,7 +96,7 @@ begin
     empresa_id, numero_interno, codigo_interno, almacen_producto_id,
     control_individual, creado_automaticamente, origen,
     marca, modelo, medida, indice_carga, indice_velocidad,
-    dot, numero_serie, rfid_epc, proveedor,
+    dot, numero_serie, rfid_epc, proveedor, profundidad_actual_mm,
     estado, vehiculo_id, posicion_id, activo
   ) values (
     v_empresa, v_numero, v_numero, p_producto_almacen,
@@ -105,6 +109,8 @@ begin
     case when p_control_individual then p_datos->>'numero_serie' else null end,
     case when p_control_individual then p_datos->>'rfid_epc' else null end,
     case when p_control_individual then p_datos->>'proveedor' else null end,
+    -- nuevo: profundidad de dibujo de la ficha; usado: se medirá en revisión
+    case when p_condicion = 'nuevo' then v_prof_dibujo else null end,
     'montado', p_vehiculo, p_posicion, true
   ) returning id into v_neumatico;
 

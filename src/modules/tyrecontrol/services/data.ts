@@ -562,6 +562,17 @@ export async function montarDesdeAlmacen(params: {
   return data as string;
 }
 
+// Profundidad de dibujo (mm) de la ficha del catálogo, por producto de almacén.
+// null = ese modelo no tiene la profundidad informada en el catálogo.
+export async function profundidadDibujoPorProducto(): Promise<Record<string, number | null>> {
+  const { data, error } = await supabase.from("productos_neumaticos")
+    .select("id, referencia:tc_referencias_neumatico(profundidad_dibujo_mm)");
+  if (error) throw new Error(error.message);
+  const mapa: Record<string, number | null> = {};
+  for (const r of (data ?? []) as any[]) mapa[r.id] = r.referencia?.profundidad_dibujo_mm ?? null;
+  return mapa;
+}
+
 // Stock del cliente de almacén enlazado, por producto (nuevo vs usado).
 export interface StockAlmacenLinea { producto_id: string; marca: string; modelo: string | null; medida: string; nuevo: number; usado: number; }
 export async function stockAlmacenEmpresa(empresaId: string): Promise<StockAlmacenLinea[]> {

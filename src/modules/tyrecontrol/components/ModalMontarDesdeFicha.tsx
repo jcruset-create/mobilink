@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico, esErrorMedidaIncompatible, stockAlmacenEmpresa } from "../services/data";
+import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico, esErrorMedidaIncompatible, stockAlmacenEmpresa, profundidadDibujoPorProducto } from "../services/data";
 import type { ProductoAlmacen, MotivoDesmontaje, DestinoDesmontaje } from "../types";
 import { MOTIVO_DESMONTAJE_LABELS } from "../types";
 import { Modal, Field, inputCls } from "./ui";
@@ -53,6 +53,13 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
       .catch(() => setStock(null));
   }, [empresaId]);
   const dispDe = (id: string) => stock ? (condicion === "usado" ? stock[id]?.usado ?? 0 : stock[id]?.nuevo ?? 0) : null;
+
+  // Profundidad de dibujo (nueva) por producto, para avisar si falta en el catálogo.
+  const [dibujo, setDibujo] = useState<Record<string, number | null> | null>(null);
+  useEffect(() => { profundidadDibujoPorProducto().then(setDibujo).catch(() => setDibujo(null)); }, []);
+  const dibujoProducto = productoId && dibujo ? dibujo[productoId] : undefined;
+  const faltaDibujo = condicion === "nuevo" && !!productoId && dibujo != null && (dibujoProducto == null);
+  const productoSel = productos.find((p) => p.id === productoId);
   useEffect(() => { const t = setTimeout(() => listarProductosAlmacen(busqueda).then(setProductos), 250); return () => clearTimeout(t); }, [busqueda]);
   useEffect(() => { setMedidaIncompatible(false); }, [productoId]);
 
@@ -179,6 +186,18 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
             );
           })()}
         </Field>
+
+        {condicion === "nuevo" && productoId && dibujoProducto != null && (
+          <div className="rounded-lg border border-emerald-600/40 bg-emerald-500/8 px-3 py-2 text-[12px] text-emerald-200">
+            Se registrará la profundidad de dibujo de la ficha: <b>{dibujoProducto} mm</b>.
+          </div>
+        )}
+        {faltaDibujo && (
+          <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
+            ⚠ El modelo <b>{productoSel ? `${productoSel.marca} ${productoSel.modelo ?? ""}`.trim() : "seleccionado"}</b> no tiene <b>profundidad de dibujo</b> en el catálogo, así que el neumático quedará sin profundidad hasta medirlo.
+            Complétala en <b>Catálogo de neumáticos</b> (editar datos técnicos del modelo) y se aplicará <b>siempre</b> a los montajes nuevos.
+          </div>
+        )}
 
         <label className="flex items-center gap-2 text-sm text-slate-200">
           <input type="checkbox" checked={controlIndividual} onChange={(e) => setControlIndividual(e.target.checked)} />
