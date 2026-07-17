@@ -71,9 +71,9 @@ export async function enlazarClienteAlmacen(empresaId: string, clienteAlmacenId:
 }
 
 export async function listarProductosAlmacen(q?: string): Promise<ProductoAlmacen[]> {
-  let query = supabase.from("tc_productos_almacen").select("*").order("medida");
+  let query = supabase.from("tc_productos_almacen").select("*").order("marca").order("medida");
   if (q) query = query.or(`marca.ilike.%${q}%,medida.ilike.%${q}%,modelo.ilike.%${q}%`);
-  const { data, error } = await query.limit(100);
+  const { data, error } = await query.limit(2000);
   if (error) throw new Error(error.message);
   return (data ?? []) as ProductoAlmacen[];
 }

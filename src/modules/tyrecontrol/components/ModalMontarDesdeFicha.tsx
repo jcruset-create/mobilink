@@ -45,6 +45,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
   const [profRestante, setProfRestante] = useState(""); // mm restantes al montar un usado
   const [stock, setStock] = useState<Record<string, { nuevo: number; usado: number }> | null>(null); // null = sin datos → no filtra por stock
   const [soloConStock, setSoloConStock] = useState(true);
+  const [fMarcaProd, setFMarcaProd] = useState(""); // filtro por marca en el desplegable
 
   useEffect(() => { listarProductosAlmacen().then(setProductos); }, []);
   useEffect(() => {
@@ -159,7 +160,9 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
           <input className={`${inputCls} mb-1`} placeholder="Buscar…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           {(() => {
             const filtrarMedida = soloMedida && !!medidaActual;
-            let visibles = filtrarMedida ? productos.filter((p) => baseMedida(p.medida) === baseMedida(medidaActual)) : productos;
+            const porMedida = filtrarMedida ? productos.filter((p) => baseMedida(p.medida) === baseMedida(medidaActual)) : productos;
+            const marcas = Array.from(new Set(porMedida.map((p) => p.marca).filter(Boolean))).sort();
+            let visibles = fMarcaProd ? porMedida.filter((p) => p.marca === fMarcaProd) : porMedida;
             const hayStock = stock !== null; // solo filtramos por stock si tenemos los datos
             if (hayStock && soloConStock) visibles = visibles.filter((p) => (dispDe(p.id) ?? 0) > 0);
             const etiqueta = (p: typeof productos[number]) => {
@@ -169,6 +172,10 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
             };
             return (
               <>
+                <select className={`${inputCls} mb-1`} value={fMarcaProd} onChange={(e) => setFMarcaProd(e.target.value)}>
+                  <option value="">Todas las marcas{marcas.length ? ` (${marcas.length})` : ""}</option>
+                  {marcas.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
                 <select className={inputCls} value={productoId} onChange={(e) => setProductoId(e.target.value)}>
                   <option value="">Selecciona…</option>
                   {visibles.map((p) => <option key={p.id} value={p.id}>{etiqueta(p)}</option>)}
