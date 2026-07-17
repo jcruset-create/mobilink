@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerNeumatico, montajeActualDeNeumatico, repararNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo, listarOperaciones, medicionesNeumatico } from "../services/data";
+import { obtenerNeumatico, montajeActualDeNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo, listarOperaciones, medicionesNeumatico, listarCatOperaciones, registrarReparacion, subirAdjuntoOperacion } from "../services/data";
 import type { MedicionNeumatico } from "../services/data";
-import type { MontajeActual, Neumatico, OperacionNeumatico } from "../types";
+import type { MontajeActual, Neumatico, OperacionNeumatico, CatTipoReparacion, CatResultadoReparacion } from "../types";
 import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, presionTxt } from "../types";
 import { Modal, Field, inputCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -89,12 +89,36 @@ export default function NeumaticoDetalle() {
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
 
-  async function reparar() {
-    const motivo = window.prompt("Motivo de la reparación:", "reparacion");
-    if (!motivo) return;
+  // ── Reparación (Operaciones Fase 4) ──
+  const [repModal, setRepModal] = useState(false);
+  const [tiposRep, setTiposRep] = useState<CatTipoReparacion[]>([]);
+  const [resultadosRep, setResultadosRep] = useState<CatResultadoReparacion[]>([]);
+  const [repForm, setRepForm] = useState({ tipo: "", resultado: "", proveedor: "", coste: "", km: "", obs: "" });
+  const [repFotos, setRepFotos] = useState<File[]>([]);
+
+  async function abrirReparacion() {
+    setRepForm({ tipo: "", resultado: "", proveedor: "", coste: "", km: "", obs: "" });
+    setRepFotos([]); setMsg(""); setRepModal(true);
+    if (tiposRep.length === 0) {
+      try { const cat = await listarCatOperaciones(); setTiposRep(cat.tiposReparacion); setResultadosRep(cat.resultadosReparacion); }
+      catch { /* catálogo opcional */ }
+    }
+  }
+
+  async function guardarReparacion() {
+    if (!repForm.tipo || !repForm.resultado) { setMsg("Elige tipo y resultado"); return; }
     setSaving(true); setMsg("");
-    try { await repararNeumatico(id, motivo); await cargar(); }
-    catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+    try {
+      const opId = await registrarReparacion({
+        neumaticoId: id, tipoReparacion: repForm.tipo, resultado: repForm.resultado,
+        proveedor: repForm.proveedor.trim() || null,
+        coste: repForm.coste.trim() === "" ? null : Number(repForm.coste.replace(",", ".")),
+        km: repForm.km.trim() === "" ? null : Number(repForm.km),
+        observaciones: repForm.obs.trim() || null,
+      });
+      for (const f of repFotos) { try { await subirAdjuntoOperacion(opId, f); } catch { /* seguimos con el resto */ } }
+      setRepModal(false); await cargar();
+    } catch (e: any) { setMsg(e?.message || "Error al registrar la reparación"); } finally { setSaving(false); }
   }
 
   async function descartar() {
@@ -169,7 +193,7 @@ export default function NeumaticoDetalle() {
           {puedeEditar && <button onClick={abrirEdicion} className="rounded bg-sky-600 px-3 py-1 text-[12px] font-bold text-white">Editar datos</button>}
           {n.estado !== "montado" && n.estado !== "descartado" && (
             <>
-              {n.estado !== "reparacion" && <button onClick={reparar} disabled={saving} className="rounded bg-purple-600 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50">Enviar a reparación</button>}
+              <button onClick={abrirReparacion} disabled={saving} className="rounded bg-purple-600 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50">Registrar reparación</button>
               <button onClick={descartar} disabled={saving} className="rounded bg-rose-600 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50">Descartar</button>
             </>
           )}
@@ -256,6 +280,43 @@ export default function NeumaticoDetalle() {
             <Field label="Fecha compra"><input type="date" className={inputCls} value={form.fecha_compra} onChange={(e) => setForm({ ...form, fecha_compra: e.target.value })} /></Field>
             <Field label="Coste (€)"><input type="number" step="0.01" className={inputCls} value={form.coste_compra} onChange={(e) => setForm({ ...form, coste_compra: e.target.value })} /></Field>
           </div>
+          {msg && <div className="mt-2 text-xs text-red-300">{msg}</div>}
+        </Modal>
+      )}
+
+      {repModal && (
+        <Modal title="Registrar reparación" onClose={() => setRepModal(false)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setRepModal(false)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={guardarReparacion} disabled={saving || !repForm.tipo || !repForm.resultado} className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Guardando…" : "Registrar"}</button>
+          </div>}>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="Tipo de reparación">
+              <select className={inputCls} value={repForm.tipo} onChange={(e) => setRepForm({ ...repForm, tipo: e.target.value })}>
+                <option value="">Elegir…</option>
+                {tiposRep.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
+              </select>
+            </Field>
+            <Field label="Resultado">
+              <select className={inputCls} value={repForm.resultado} onChange={(e) => setRepForm({ ...repForm, resultado: e.target.value })}>
+                <option value="">Elegir…</option>
+                {resultadosRep.map((r) => <option key={r.codigo} value={r.codigo}>{r.nombre}</option>)}
+              </select>
+            </Field>
+            <Field label="Proveedor / taller"><input className={inputCls} value={repForm.proveedor} onChange={(e) => setRepForm({ ...repForm, proveedor: e.target.value })} /></Field>
+            <Field label="Coste (€)"><input type="number" step="0.01" className={inputCls} value={repForm.coste} onChange={(e) => setRepForm({ ...repForm, coste: e.target.value })} /></Field>
+            <Field label="Km vehículo (opc.)"><input type="number" className={inputCls} value={repForm.km} onChange={(e) => setRepForm({ ...repForm, km: e.target.value })} /></Field>
+          </div>
+          <div className="mt-2">
+            <Field label="Observaciones"><textarea className={inputCls} rows={2} value={repForm.obs} onChange={(e) => setRepForm({ ...repForm, obs: e.target.value })} /></Field>
+          </div>
+          <div className="mt-2">
+            <label className="block text-xs text-slate-400">Fotos (opcional)</label>
+            <input type="file" accept="image/*" multiple className="mt-1 text-[12px] text-slate-300"
+              onChange={(e) => setRepFotos(Array.from(e.target.files ?? []))} />
+            {repFotos.length > 0 && <div className="mt-1 text-[11px] text-slate-500">{repFotos.length} foto(s) seleccionada(s)</div>}
+          </div>
+          <p className="mt-3 text-[11px] text-slate-500">El estado del neumático se actualiza según el resultado (reparado→almacén, enviado a proveedor→en reparación, no reparable/sustituido→descartado).</p>
           {msg && <div className="mt-2 text-xs text-red-300">{msg}</div>}
         </Modal>
       )}

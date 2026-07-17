@@ -11,7 +11,7 @@ import type {
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
-  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion,
+  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -639,6 +639,39 @@ export async function repararNeumatico(neumaticoId: string, motivo: string, obse
 export async function descartarNeumaticoStd(neumaticoId: string, motivo: string, observaciones?: string | null): Promise<void> {
   const { error } = await supabase.rpc("tc_descartar_neumatico", { p_neumatico: neumaticoId, p_motivo: motivo, p_obs: observaciones ?? null });
   if (error) throw new Error(error.message);
+}
+
+// ── Operaciones Fase 4: reparación con tipo/resultado, proveedor, coste ─
+export async function registrarReparacion(params: {
+  neumaticoId: string; tipoReparacion: string; resultado: string;
+  proveedor?: string | null; coste?: number | null; km?: number | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_registrar_reparacion", {
+    p_neumatico: params.neumaticoId, p_tipo_reparacion: params.tipoReparacion, p_resultado: params.resultado,
+    p_proveedor: params.proveedor ?? null, p_coste: params.coste ?? null, p_km: params.km ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+const BUCKET_OPERACIONES = "tc-operaciones";
+export async function subirAdjuntoOperacion(operacionId: string, file: File, descripcion?: string | null): Promise<OperacionAdjunto> {
+  const extension = file.name.split(".").pop() || "jpg";
+  const ruta = `${operacionId}/${Date.now()}.${extension}`;
+  const { error: upErr } = await supabase.storage.from(BUCKET_OPERACIONES).upload(ruta, file, { upsert: true });
+  if (upErr) throw new Error(upErr.message);
+  const url = supabase.storage.from(BUCKET_OPERACIONES).getPublicUrl(ruta).data.publicUrl;
+  const { data, error } = await supabase.from("tc_operacion_adjuntos")
+    .insert({ operacion_id: operacionId, file_url: url, storage_path: ruta, file_type: file.type, descripcion: descripcion ?? null })
+    .select("*").single();
+  if (error) throw new Error(error.message);
+  return data as unknown as OperacionAdjunto;
+}
+
+export async function listarAdjuntosOperacion(operacionId: string): Promise<OperacionAdjunto[]> {
+  const { data, error } = await supabase.from("tc_operacion_adjuntos").select("*").eq("operacion_id", operacionId).order("created_at");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as OperacionAdjunto[];
 }
 
 // ── Fase 8: Operaciones (listado/filtros) ──────────────────────
