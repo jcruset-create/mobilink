@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico } from "../services/data";
+import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico } from "../services/data";
 import type { ComboSinCatalogar } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { presionTxt } from "../types";
@@ -31,6 +31,10 @@ export default function CatalogoNeumaticos() {
   const [form, setForm] = useState<Record<CamposTecnicos, string>>({
     profundidad_dibujo_mm: "", llanta_recomendada: "", diametro_exterior_mm: "", revoluciones_km: "", carga_maxima_kg: "", presion_maxima_bar: "", peso_kg: "",
     ply: "", ancho_seccion_mm: "", anchura_rodadura_mm: "", radio_carga_mm: "", etiqueta_rr: "", etiqueta_grip_humedo: "", etiqueta_ruido_db: "", etiqueta_ruido_clase: "",
+  });
+  const [formMod, setFormMod] = useState({
+    gama: "", eje_recomendado: "" as EjeRecomendado | "", aplicacion: "", tipo_vehiculo: "",
+    m_s: false, tres_pmsf: false, reesculturable: false, recauchutable: false,
   });
   const [guardando, setGuardando] = useState(false);
   const [msgEdit, setMsgEdit] = useState("");
@@ -119,6 +123,16 @@ export default function CatalogoNeumaticos() {
       etiqueta_ruido_db: r.etiqueta_ruido_db != null ? String(r.etiqueta_ruido_db) : "",
       etiqueta_ruido_clase: r.etiqueta_ruido_clase ?? "",
     });
+    setFormMod({
+      gama: r.modelo?.gama ?? "",
+      eje_recomendado: r.modelo?.eje_recomendado ?? "",
+      aplicacion: r.modelo?.aplicacion ?? "",
+      tipo_vehiculo: r.modelo?.tipo_vehiculo ?? "",
+      m_s: !!r.modelo?.m_s,
+      tres_pmsf: !!r.modelo?.tres_pmsf,
+      reesculturable: !!r.modelo?.reesculturable,
+      recauchutable: !!r.modelo?.recauchutable,
+    });
     setMsgEdit("");
     setEditando(true);
   }
@@ -146,7 +160,16 @@ export default function CatalogoNeumaticos() {
         etiqueta_ruido_clase: form.etiqueta_ruido_clase.trim() === "" ? null : form.etiqueta_ruido_clase.trim().toUpperCase(),
       };
       await actualizarReferenciaNeumatico(ficha.id, cambios);
-      setFicha({ ...ficha, ...cambios });
+      const modeloCambios = {
+        gama: formMod.gama.trim() || null,
+        eje_recomendado: (formMod.eje_recomendado || null) as EjeRecomendado | null,
+        aplicacion: formMod.aplicacion.trim() || null,
+        tipo_vehiculo: formMod.tipo_vehiculo.trim() || null,
+        m_s: formMod.m_s, tres_pmsf: formMod.tres_pmsf,
+        reesculturable: formMod.reesculturable, recauchutable: formMod.recauchutable,
+      };
+      if (ficha.modelo?.id) await actualizarModeloTecnico(ficha.modelo.id, modeloCambios);
+      setFicha({ ...ficha, ...cambios, modelo: ficha.modelo ? { ...ficha.modelo, ...modeloCambios } : ficha.modelo });
       setEditando(false);
       await cargar();
     } catch (e: any) { setMsgEdit(e?.message || "Error al guardar"); } finally { setGuardando(false); }
@@ -336,7 +359,29 @@ export default function CatalogoNeumaticos() {
 
           {puedeEditar && editando && (
             <div className="mt-4 border-t border-slate-700 pt-3">
-              <div className="mb-2 text-xs font-semibold text-slate-300">Editar datos técnicos</div>
+              <div className="mb-2 text-xs font-semibold text-slate-300">Datos del modelo</div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <Campo label="Gama" value={formMod.gama} onChange={(v) => setFormMod({ ...formMod, gama: v })} tipo="text" />
+                <label className="block">
+                  <div className="mb-1 text-[10px] text-slate-400">Eje recomendado</div>
+                  <select className={`${inputCls} w-full`} value={formMod.eje_recomendado} onChange={(e) => setFormMod({ ...formMod, eje_recomendado: e.target.value as EjeRecomendado | "" })}>
+                    <option value="">—</option>
+                    {(Object.keys(EJE_LABELS) as EjeRecomendado[]).map((k) => <option key={k} value={k}>{EJE_LABELS[k]}</option>)}
+                  </select>
+                </label>
+                <Campo label="Aplicación" value={formMod.aplicacion} onChange={(v) => setFormMod({ ...formMod, aplicacion: v })} tipo="text" />
+                <Campo label="Tipo de vehículo" value={formMod.tipo_vehiculo} onChange={(v) => setFormMod({ ...formMod, tipo_vehiculo: v })} tipo="text" />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-4">
+                {([["m_s", "M+S"], ["tres_pmsf", "3PMSF"], ["reesculturable", "Reesculturable"], ["recauchutable", "Recauchutable"]] as const).map(([k, lbl]) => (
+                  <label key={k} className="flex items-center gap-2 text-xs text-slate-200">
+                    <input type="checkbox" checked={formMod[k]} onChange={(e) => setFormMod({ ...formMod, [k]: e.target.checked })} />
+                    {lbl}
+                  </label>
+                ))}
+              </div>
+
+              <div className="mb-2 mt-4 text-xs font-semibold text-slate-300">Datos técnicos</div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <Campo label="Profundidad dibujo (mm)" value={form.profundidad_dibujo_mm} onChange={(v) => setForm({ ...form, profundidad_dibujo_mm: v })} />
                 <Campo label="Llanta recomendada" value={form.llanta_recomendada} onChange={(v) => setForm({ ...form, llanta_recomendada: v })} tipo="text" />
