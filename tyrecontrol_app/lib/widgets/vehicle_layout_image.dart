@@ -133,7 +133,7 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
 
   Widget _cardPositioned(PosicionVehiculo p, int i, double w, double h) {
     final co = _coords(p, i);
-    final cardW = (co.w / 100 * w).clamp(88.0, 200.0);
+    final cardW = (co.w / 100 * w).clamp(108.0, 210.0);
     return Positioned(
       left: (co.x / 100 * w).clamp(0.0, w - cardW),
       top: (co.y / 100 * h).clamp(0.0, h - 36),
@@ -178,18 +178,14 @@ class _TarjetaPosicion extends StatelessWidget {
 
   static String _fmtFecha(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year % 100}';
 
-  /// Línea de referencia con la última revisión: "Ant 12/03/26 · 13.4mm · 8.5bar".
-  String? _ultimaTxt() {
+  /// Medidas de la última revisión: "13.4 mm · 8.5 bar" (o null si no hay).
+  String? _ultimaMedidasTxt() {
     final u = ultima;
     if (u == null) return null;
-    if (u.fecha == null && u.profundidadMm == null && u.presionBar == null) return null;
-    final partes = <String>[];
-    if (u.fecha != null) partes.add('Ant ${_fmtFecha(u.fecha!)}');
     final med = <String>[];
-    if (u.profundidadMm != null) med.add('${u.profundidadMm!.toStringAsFixed(1)}mm');
-    if (u.presionBar != null) med.add('${u.presionBar!.toStringAsFixed(1)}bar');
-    if (med.isNotEmpty) partes.add(med.join(' · '));
-    return partes.join(' · ');
+    if (u.profundidadMm != null) med.add('${u.profundidadMm!.toStringAsFixed(1)} mm');
+    if (u.presionBar != null) med.add('${u.presionBar!.toStringAsFixed(1)} bar');
+    return med.isEmpty ? null : med.join(' · ');
   }
 
   @override
@@ -262,14 +258,27 @@ class _TarjetaPosicion extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              if (_ultimaTxt() != null)
-                Text(
-                  _ultimaTxt()!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 8.5, color: AppColors.textHint),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+              if (ultima != null && (ultima!.fecha != null || _ultimaMedidasTxt() != null)) ...[
+                const SizedBox(height: 2),
+                const Divider(height: 1, thickness: 0.5, color: AppColors.cardBorder),
+                const SizedBox(height: 2),
+                if (ultima!.fecha != null)
+                  Text(
+                    'Últ. rev. ${_fmtFecha(ultima!.fecha!)}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 9, color: AppColors.textHint),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                if (_ultimaMedidasTxt() != null)
+                  Text(
+                    _ultimaMedidasTxt()!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 9, color: AppColors.textHint),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
             ],
           ),
         ),

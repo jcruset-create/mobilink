@@ -327,6 +327,7 @@ function ModalResolver({ incidencia, onClose, onDone }: { incidencia: Incidencia
           vehiculoId={incidencia.vehiculo_id}
           posicionId={incidencia.posicion_id}
           montajeActualId={montaje.id}
+          medidaActual={montaje.neumatico?.medida}
           onClose={() => setModalSust(false)}
           onDone={async () => {
             // Hecha la sustitución (montaje cambiado): marcamos la incidencia.

@@ -10,11 +10,14 @@ interface Props {
   vehiculoId: string;
   posicionId: string;
   montajeActualId?: string; // si viene informado, es una SUSTITUCIÓN (desmonta + monta)
+  medidaActual?: string | null; // medida del neumático de la posición → filtra el almacén
   onClose: () => void;
   onDone: () => void;
 }
 
-export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posicionId, montajeActualId, onClose, onDone }: Props) {
+const normMedida = (s?: string | null) => (s ?? "").toUpperCase().replace(/\s+/g, "");
+
+export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posicionId, montajeActualId, medidaActual, onClose, onDone }: Props) {
   const { perfil } = useTyreAuth();
   const esAdmin = !!(perfil?.es_superadmin || perfil?.rol === "administrador");
   const [productos, setProductos] = useState<ProductoAlmacen[]>([]);
@@ -29,6 +32,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [medidaIncompatible, setMedidaIncompatible] = useState(false);
+  const [soloMedida, setSoloMedida] = useState(true); // filtrar el almacén por la medida de la ficha
 
   useEffect(() => { listarProductosAlmacen().then(setProductos); }, []);
   useEffect(() => { const t = setTimeout(() => listarProductosAlmacen(busqueda).then(setProductos), 250); return () => clearTimeout(t); }, [busqueda]);
@@ -104,10 +108,27 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
 
         <Field label="Producto de almacén (marca / medida) *">
           <input className={`${inputCls} mb-1`} placeholder="Buscar…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
-          <select className={inputCls} value={productoId} onChange={(e) => setProductoId(e.target.value)}>
-            <option value="">Selecciona…</option>
-            {productos.map((p) => <option key={p.id} value={p.id}>{p.marca} {p.modelo ?? ""} · {p.medida}</option>)}
-          </select>
+          {(() => {
+            const filtrar = soloMedida && !!medidaActual;
+            const visibles = filtrar ? productos.filter((p) => normMedida(p.medida) === normMedida(medidaActual)) : productos;
+            return (
+              <>
+                <select className={inputCls} value={productoId} onChange={(e) => setProductoId(e.target.value)}>
+                  <option value="">Selecciona…</option>
+                  {visibles.map((p) => <option key={p.id} value={p.id}>{p.marca} {p.modelo ?? ""} · {p.medida}</option>)}
+                </select>
+                {medidaActual && (
+                  <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+                    <input type="checkbox" checked={!soloMedida} onChange={(e) => setSoloMedida(!e.target.checked)} />
+                    Mostrar todas las medidas (por defecto solo {medidaActual})
+                  </label>
+                )}
+                {filtrar && visibles.length === 0 && (
+                  <div className="mt-1 text-[11px] text-amber-300">No hay productos de almacén con la medida {medidaActual}. Marca «Mostrar todas las medidas» para elegir otra.</div>
+                )}
+              </>
+            );
+          })()}
         </Field>
 
         <label className="flex items-center gap-2 text-sm text-slate-200">

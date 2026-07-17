@@ -468,6 +468,7 @@ export default function VehicleLayoutImage({
           vehiculoId={vehiculoId}
           posicionId={posSeleccionada.id}
           montajeActualId={modalFicha.sustitucion ? montajeSeleccionado?.id : undefined}
+          medidaActual={montajeSeleccionado?.neumatico?.medida}
           onClose={() => setModalFicha(null)}
           onDone={() => { setModalFicha(null); setSeleccion(null); onChanged?.(); }}
         />
