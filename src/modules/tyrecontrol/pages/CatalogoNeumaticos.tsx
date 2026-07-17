@@ -395,7 +395,7 @@ export default function CatalogoNeumaticos() {
       )}
 
       {sinCatalogar !== null && (
-        <Modal title="Neumáticos sin catalogar" onClose={() => setSinCatalogar(null)}>
+        <Modal title="Neumáticos sin catalogar" size="xl" onClose={() => setSinCatalogar(null)}>
           <p className="mb-3 text-xs text-slate-400">
             Combinaciones marca/modelo/medida presentes en neumáticos reales que aún no tienen referencia en el catálogo. Crea la que falte con un clic; si faltan índices se abre el formulario para completarlos.
           </p>
@@ -423,7 +423,7 @@ export default function CatalogoNeumaticos() {
                       <td className={tdCls + " text-[11px] text-slate-500"}>{c.empresas.join(", ")}</td>
                       <td className={tdCls}>
                         <button onClick={() => crearDesdeCombo(c)} disabled={creandoClave === clave}
-                          className="rounded border border-emerald-600 px-2 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-600/10 disabled:opacity-50">
+                          className="whitespace-nowrap rounded border border-emerald-600 px-2 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-600/10 disabled:opacity-50">
                           {creandoClave === clave ? "Creando…" : "Añadir al catálogo"}
                         </button>
                       </td>

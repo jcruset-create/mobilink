@@ -37,10 +37,11 @@ export function Badge({ ok, children }: { ok: boolean; children: ReactNode }) {
   );
 }
 
-export function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+export function Modal({ title, onClose, children, footer, size = "md" }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; size?: "md" | "lg" | "xl" }) {
+  const maxW = size === "xl" ? "max-w-6xl" : size === "lg" ? "max-w-4xl" : "max-w-2xl";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100">
+      <div className={`flex max-h-[90vh] w-full ${maxW} flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100`}>
         <div className="flex shrink-0 items-center justify-between border-b border-slate-700 px-4 py-3">
           <h3 className="text-sm font-bold">{title}</h3>
           <button onClick={onClose} className="rounded-lg p-1 hover:bg-slate-700"><X className="h-4 w-4" /></button>
