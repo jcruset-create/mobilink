@@ -40,6 +40,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   String? _imagenChasis;
   List<StockAlmacenLinea> _stock = [];
   Set<String> _medidasVehiculo = {}; // medidas base admitidas por el vehículo
+  Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por posición
+  Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   bool _trabajando = false;
 
   double? _aspect;
@@ -81,6 +83,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         TyreControlApi.mapaMedidas(),
         TyreControlApi.listarEjesDeVehiculo(widget.vehiculoId),
         _empresaId != null ? TyreControlApi.stockAlmacenEmpresa(_empresaId!) : Future.value(<StockAlmacenLinea>[]),
+        TyreControlApi.ultimasMedicionesPorPosicion(widget.vehiculoId),
       ]);
 
       final medidas = results[2] as Map<String, String>;
@@ -102,14 +105,24 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       String? img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
       if (img == null || img.isEmpty) img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
 
+      final posiciones = results[0] as List<PosicionVehiculo>;
+      // Presión recomendada por eje (para las tarjetas).
+      final ejesSet = posiciones.map((p) => p.eje).whereType<int>().toSet().toList();
+      Map<int, ({num presion, num margen})> presObj = {};
+      if (ejesSet.isNotEmpty) {
+        presObj = await TyreControlApi.presionesObjetivoDeVehiculo(widget.vehiculoId, ejesSet);
+      }
+
       if (!mounted) return;
       setState(() {
-        _posiciones = results[0] as List<PosicionVehiculo>;
+        _posiciones = posiciones;
         _montajePorPosicion = {for (final m in results[1] as List<MontajeActual>) m.posicionId: m};
         _medidasVehiculo = set;
         _stock = (results[4] as List<StockAlmacenLinea>)
             .where((l) => set.isEmpty || set.contains(_baseMedida(l.medida)))
             .toList();
+        _mediciones = results[5] as Map<String, RevisionDetalleDraft>;
+        _presionesObjetivo = presObj;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
       });
       if (_imagenChasis != null) _resolverImagen(_imagenChasis!);
@@ -329,7 +342,14 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false}) {
     final n = m.neumatico;
-    final prof = n?.profundidadActualMm;
+    final med = _mediciones[p.id];
+    final obj = p.eje != null ? _presionesObjetivo[p.eje] : null;
+    // Profundidad: última revisión → profundidad actual (dibujo/usado).
+    final prof = med?.profundidadMm ?? n?.profundidadActualMm?.toDouble();
+    // Presión: última revisión → presión recomendada del eje.
+    final pres = med?.presionBar ?? obj?.presion.toDouble();
+    final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
+    final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
     final borde = resaltar ? AppColors.warning : (arrastrando ? AppColors.info : AppColors.success);
     final card = Container(
       width: cardW,
@@ -343,7 +363,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.marca ?? '—', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.medida ?? '', style: const TextStyle(fontSize: 9, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
-        Text(prof != null ? '${(prof).toStringAsFixed(1)} mm' : '— mm', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: borde)),
+        Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
       ]),
     );
     return arrastrando ? Material(color: Colors.transparent, child: card) : card;
