@@ -12,6 +12,7 @@ class VehicleLayoutImage extends StatefulWidget {
   final Map<String, MontajeActual> montajePorPosicion;
   final Map<String, RevisionDetalleDraft> detalles;
   final Map<String, TireStatus> estados;
+  final Map<String, UltimaMedicion> ultimas; // última medición conocida por posición
   final String? seleccionadaId;
   final double? liveProf; // medida en curso de la rueda activa
   final double? livePres;
@@ -24,6 +25,7 @@ class VehicleLayoutImage extends StatefulWidget {
     required this.montajePorPosicion,
     required this.detalles,
     required this.estados,
+    this.ultimas = const {},
     required this.seleccionadaId,
     required this.liveProf,
     required this.livePres,
@@ -141,6 +143,7 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
         neumatico: widget.montajePorPosicion[p.id]?.neumatico,
         draft: widget.detalles[p.id],
         status: widget.estados[p.id] ?? TireStatus.pendiente,
+        ultima: widget.ultimas[p.id],
         seleccionada: p.id == widget.seleccionadaId,
         liveProf: p.id == widget.seleccionadaId ? widget.liveProf : null,
         livePres: p.id == widget.seleccionadaId ? widget.livePres : null,
@@ -155,6 +158,7 @@ class _TarjetaPosicion extends StatelessWidget {
   final Neumatico? neumatico;
   final RevisionDetalleDraft? draft;
   final TireStatus status;
+  final UltimaMedicion? ultima;
   final bool seleccionada;
   final double? liveProf;
   final double? livePres;
@@ -165,11 +169,28 @@ class _TarjetaPosicion extends StatelessWidget {
     required this.neumatico,
     required this.draft,
     required this.status,
+    required this.ultima,
     required this.seleccionada,
     required this.liveProf,
     required this.livePres,
     required this.onTap,
   });
+
+  static String _fmtFecha(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year % 100}';
+
+  /// Línea de referencia con la última revisión: "Ant 12/03/26 · 13.4mm · 8.5bar".
+  String? _ultimaTxt() {
+    final u = ultima;
+    if (u == null) return null;
+    if (u.fecha == null && u.profundidadMm == null && u.presionBar == null) return null;
+    final partes = <String>[];
+    if (u.fecha != null) partes.add('Ant ${_fmtFecha(u.fecha!)}');
+    final med = <String>[];
+    if (u.profundidadMm != null) med.add('${u.profundidadMm!.toStringAsFixed(1)}mm');
+    if (u.presionBar != null) med.add('${u.presionBar!.toStringAsFixed(1)}bar');
+    if (med.isNotEmpty) partes.add(med.join(' · '));
+    return partes.join(' · ');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -241,6 +262,14 @@ class _TarjetaPosicion extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
+              if (_ultimaTxt() != null)
+                Text(
+                  _ultimaTxt()!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 8.5, color: AppColors.textHint),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
             ],
           ),
         ),

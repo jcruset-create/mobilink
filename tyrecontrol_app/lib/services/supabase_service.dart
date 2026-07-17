@@ -337,6 +337,74 @@ class TyreControlApi {
     );
   }
 
+  /// Última medición conocida por posición (de revisiones YA completadas),
+  /// para mostrarla como referencia en el plano. Excluye la revisión actual.
+  static Future<Map<String, UltimaMedicion>> ultimasMedicionesVehiculo(
+    String vehiculoId, {
+    String? excluirRevisionId,
+  }) async {
+    final rows = await _db
+        .from('revisiones_neumaticos_detalle')
+        .select(
+            'posicion_id, profundidad_mm, presion_bar, revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision)')
+        .eq('vehiculo_id', vehiculoId);
+    final completadas = {
+      'completada', 'completada_con_incidencias', 'completada_incidencia_pendiente', 'enviada'
+    };
+    final porPos = <String, UltimaMedicion>{};
+    final tsPorPos = <String, int>{};
+    for (final r in (rows as List)) {
+      final rev = r['revision'];
+      if (rev is! Map) continue;
+      if (!completadas.contains(rev['estado_revision'])) continue;
+      if (excluirRevisionId != null && rev['id'] == excluirRevisionId) continue;
+      final posId = r['posicion_id'] as String?;
+      if (posId == null) continue;
+      final createdAt = DateTime.tryParse('${rev['created_at'] ?? ''}');
+      final ts = createdAt?.millisecondsSinceEpoch ?? 0;
+      if (tsPorPos.containsKey(posId) && ts <= tsPorPos[posId]!) continue;
+      tsPorPos[posId] = ts;
+      porPos[posId] = UltimaMedicion(
+        fecha: DateTime.tryParse('${rev['fecha_revision'] ?? ''}') ?? createdAt,
+        profundidadMm: (r['profundidad_mm'] as num?)?.toDouble(),
+        presionBar: (r['presion_bar'] as num?)?.toDouble(),
+      );
+    }
+    return porPos;
+  }
+
+  /// Umbrales de profundidad de la empresa + overrides por medida.
+  /// Devuelve el umbral de empresa (o null) y un mapa medida(normalizada)→umbral.
+  static Future<({UmbralConfig? empresa, Map<String, UmbralConfig> porMedida})> umbralesDeEmpresa(
+    String empresaId,
+  ) async {
+    UmbralConfig? emp;
+    final porMedida = <String, UmbralConfig>{};
+    try {
+      final e = await _db.from('tc_config_umbrales').select().eq('empresa_id', empresaId).maybeSingle();
+      if (e != null && e['profundidad_minima_mm'] != null) {
+        emp = UmbralConfig(
+          minimaMm: (e['profundidad_minima_mm'] as num).toDouble(),
+          avisoMm: (e['profundidad_aviso_mm'] as num?)?.toDouble() ?? (e['profundidad_minima_mm'] as num).toDouble(),
+        );
+      }
+      final ms = await _db.from('tc_config_umbrales_medida').select().eq('empresa_id', empresaId);
+      for (final m in (ms as List)) {
+        final medida = (m['medida'] as String?);
+        if (medida == null || m['profundidad_minima_mm'] == null) continue;
+        porMedida[_normMedida(medida)] = UmbralConfig(
+          minimaMm: (m['profundidad_minima_mm'] as num).toDouble(),
+          avisoMm: (m['profundidad_aviso_mm'] as num?)?.toDouble() ?? (m['profundidad_minima_mm'] as num).toDouble(),
+        );
+      }
+    } catch (_) {
+      // sin cobertura o sin config: se usará el umbral por defecto de la app
+    }
+    return (empresa: emp, porMedida: porMedida);
+  }
+
+  static String _normMedida(String s) => s.toUpperCase().replaceAll(RegExp(r'\s+'), '');
+
   /// Lista de incidencias con vehículo/posición/problemas embebidos.
   /// [estados] filtra por estado (vacío = todas).
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {

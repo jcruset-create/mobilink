@@ -262,6 +262,23 @@ class RevisionVehiculo {
       );
 }
 
+/// Última medición conocida de una posición (de la revisión completada más
+/// reciente), para mostrarla como referencia en el plano de revisión.
+class UltimaMedicion {
+  final DateTime? fecha;
+  final double? profundidadMm;
+  final double? presionBar;
+  const UltimaMedicion({this.fecha, this.profundidadMm, this.presionBar});
+}
+
+/// Umbrales de profundidad efectivos para una empresa (con posibles
+/// overrides por medida). minimaMm → por debajo, rueda en rojo + incidencia.
+class UmbralConfig {
+  final double minimaMm;
+  final double avisoMm;
+  const UmbralConfig({required this.minimaMm, required this.avisoMm});
+}
+
 /// Detalle de revision por posicion. No usa un id de servidor hasta que
 /// se guarda; en el flujo local se identifica por posicionId.
 class RevisionDetalleDraft {

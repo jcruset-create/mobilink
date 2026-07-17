@@ -42,6 +42,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
   String? _imagenChasis; // foto/plano del vehículo (si está configurada)
   num _kmRevision = 0; // km del vehículo para esta revisión (Webfleet si está enlazado)
   final Map<String, RevisionDetalleDraft> _detalles = {};
+  Map<String, UltimaMedicion> _ultimasMed = {}; // última medición por posición (referencia)
+  UmbralConfig? _umbralEmpresa; // umbral de profundidad de la empresa
+  Map<String, UmbralConfig> _umbralPorMedida = {}; // overrides por medida (normalizada)
+  final Set<String> _incidenciaAutoCreada = {}; // posiciones con incidencia auto ya generada
   RevisionVehiculo? _revision;
   int _index = 0;
   bool _finalizando = false;
@@ -140,6 +144,21 @@ class _ReviewScreenState extends State<ReviewScreen> {
         _detalles[p.id] = RevisionDetalleDraft(posicionId: p.id, neumaticoId: _montajePorPosicion[p.id]?.neumaticoId);
       }
 
+      // Última medición conocida por posición (revisiones ya completadas) para
+      // mostrarla como referencia; y umbrales de la empresa/medida para el
+      // corte en rojo y la incidencia automática por desgaste bajo mínimo.
+      try {
+        _ultimasMed = await TyreControlApi.ultimasMedicionesVehiculo(
+          widget.vehiculo.id,
+          excluirRevisionId: _revision?.id,
+        );
+      } catch (_) {
+        _ultimasMed = {};
+      }
+      final umb = await TyreControlApi.umbralesDeEmpresa(widget.vehiculo.empresaId);
+      _umbralEmpresa = umb.empresa;
+      _umbralPorMedida = umb.porMedida;
+
       // Fotos de modelo del catálogo, con caché para trabajar sin cobertura.
       // Si falla no bloquea la revisión: simplemente no se muestra foto.
       try {
@@ -182,13 +201,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
     return d.medido;
   }
 
+  /// Umbral de profundidad efectivo para una posición: override por medida
+  /// del neumático montado → umbral de empresa → por defecto de la app.
+  /// minimaMm = por debajo, rueda en rojo; avisoMm = ámbar.
+  Umbrales _umbralDe(PosicionVehiculo p) {
+    final medida = _montajePorPosicion[p.id]?.neumatico?.medida;
+    UmbralConfig? c;
+    if (medida != null) {
+      final key = medida.toUpperCase().replaceAll(RegExp(r'\s+'), '');
+      c = _umbralPorMedida[key];
+    }
+    c ??= _umbralEmpresa;
+    if (c == null) return Umbrales.def;
+    return Umbrales(profCriticaMm: c.minimaMm, profAvisoMm: c.avisoMm);
+  }
+
   // ── Estado visual de cada posicion ───────────────────────────
   TireStatus _statusDe(PosicionVehiculo p) {
     if (p.id == _posiciones.elementAtOrNull(_index)?.id) return TireStatus.seleccionado;
     final d = _detalles[p.id];
     if (!_completo(d)) return TireStatus.pendiente;
     final obj = p.eje == null ? null : _objetivosPresion[p.eje];
-    return Umbrales.def.evaluar(d!, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+    return _umbralDe(p).evaluar(d!, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
   }
 
   bool get _todoRevisado => _posiciones.every((p) => _completo(_detalles[p.id]));
@@ -276,9 +310,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
     await _guardarDraft(p, draft);
     if (!mounted) return;
+    await _autoIncidenciaSiBajoMinimo(p, draft);
+    if (!mounted) return;
 
     final obj = p.eje == null ? null : _objetivosPresion[p.eje];
-    final anomalia = Umbrales.def.esAnomalia(draft, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+    final anomalia = _umbralDe(p).esAnomalia(draft, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
     if (!_completo(draft) || anomalia) {
       // Falta algún dato (p. ej. la presión con "verificar" activo) o hay
       // anomalía: se abre la ficha para completar/confirmar. No avanza.
@@ -440,7 +476,53 @@ class _ReviewScreenState extends State<ReviewScreen> {
     );
     if (resultado != null) {
       setState(() => _detalles[p.id] = resultado);
+      await _autoIncidenciaSiBajoMinimo(p, resultado);
       _avanzarSiguiente();
+    }
+  }
+
+  /// Si la nueva profundidad queda por debajo del mínimo del umbral (ficha
+  /// del neumático / empresa), crea una incidencia automática por desgaste
+  /// bajo mínimo (una sola vez por posición). La rueda ya se pinta en rojo
+  /// mediante [_statusDe]. Funciona online y, sin cobertura, se encola.
+  Future<void> _autoIncidenciaSiBajoMinimo(PosicionVehiculo p, RevisionDetalleDraft d) async {
+    final prof = d.profundidadMm;
+    if (prof == null || d.noAccesible || d.neumaticoAusente) return;
+    final u = _umbralDe(p);
+    if (prof > u.profCriticaMm) return; // no está bajo mínimo
+    if (_incidenciaAutoCreada.contains(p.id)) return;
+    _incidenciaAutoCreada.add(p.id);
+
+    final montaje = _montajePorPosicion[p.id];
+    final min = u.profCriticaMm.toStringAsFixed(1);
+    final payload = <String, dynamic>{
+      'empresaId': widget.vehiculo.empresaId,
+      'vehiculoId': widget.vehiculo.id,
+      'posicionId': p.id,
+      'neumaticoId': montaje?.neumaticoId,
+      'revisionId': _revision!.id,
+      'tipos': <String>['profundidad_baja'],
+      'gravedad': 'critica',
+      'gravedadAuto': 'critica',
+      'estado': 'detectada',
+      'motivoObservacion': 'Desgaste bajo mínimo: ${prof.toStringAsFixed(1)} mm (mínimo $min mm). Detectado automáticamente en la revisión.',
+      'medicionInicial': {'profundidad_mm': prof, 'presion_bar': d.presionBar},
+    };
+    try {
+      await TyreControlApi.crearIncidenciaDesdeMapa(payload);
+      TyreControlApi.incidenciasPendientesCount.value++;
+    } catch (_) {
+      try { await OfflineStore.enqueueIncidencia(payload); } catch (_) {}
+    }
+    if (mounted) {
+      final nombre = p.nombre ?? p.codigoPosicion;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⚠ $nombre: ${prof.toStringAsFixed(1)} mm bajo mínimo. Incidencia creada.'),
+          backgroundColor: AppColors.danger,
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
   }
 
@@ -533,6 +615,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                       montajePorPosicion: _montajePorPosicion,
                       detalles: _detalles,
                       estados: estados,
+                      ultimas: _ultimasMed,
                       seleccionadaId: actual?.id,
                       liveProf: _liveProf,
                       livePres: _livePres,
