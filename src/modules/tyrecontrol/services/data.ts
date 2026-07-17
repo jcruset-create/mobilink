@@ -550,16 +550,24 @@ export async function crearFichaGenerica(input: Omit<FichaGenerica, "id">): Prom
 export async function montarDesdeAlmacen(params: {
   vehiculoId: string; posicionId: string; productoAlmacenId: string; controlIndividual: boolean;
   datos?: Record<string, string>; km?: number | null; fecha?: string | null; observaciones?: string | null;
-  forzarMedida?: boolean;
+  forzarMedida?: boolean; condicion?: "nuevo" | "usado";
 }): Promise<string> {
   const { data, error } = await supabase.rpc("tc_montar_desde_almacen", {
     p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_producto_almacen: params.productoAlmacenId,
     p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
-    p_forzar_medida: params.forzarMedida ?? false,
+    p_forzar_medida: params.forzarMedida ?? false, p_condicion: params.condicion ?? "nuevo",
   });
   if (error) throw new Error(error.message);
   return data as string;
+}
+
+// Stock del cliente de almacén enlazado, por producto (nuevo vs usado).
+export interface StockAlmacenLinea { producto_id: string; marca: string; modelo: string | null; medida: string; nuevo: number; usado: number; }
+export async function stockAlmacenEmpresa(empresaId: string): Promise<StockAlmacenLinea[]> {
+  const { data, error } = await supabase.rpc("tc_stock_almacen_empresa", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as StockAlmacenLinea[];
 }
 
 export async function montarFueraAlmacen(params: {
@@ -579,14 +587,14 @@ export async function sustituirNeumatico(params: {
   montajeActualId: string; productoAlmacenId: string; controlIndividual: boolean; datos?: Record<string, string>;
   motivoDesmontaje: MotivoDesmontaje; destinoRetirado: DestinoDesmontaje;
   km?: number | null; fecha?: string | null; observaciones?: string | null;
-  forzarMedida?: boolean;
+  forzarMedida?: boolean; condicion?: "nuevo" | "usado";
 }): Promise<string> {
   const { data, error } = await supabase.rpc("tc_sustituir_neumatico", {
     p_montaje_actual: params.montajeActualId, p_producto_almacen: params.productoAlmacenId,
     p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
     p_motivo_desmontaje: params.motivoDesmontaje, p_destino_retirado: params.destinoRetirado,
     p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
-    p_forzar_medida: params.forzarMedida ?? false,
+    p_forzar_medida: params.forzarMedida ?? false, p_condicion: params.condicion ?? "nuevo",
   });
   if (error) throw new Error(error.message);
   return data as string;

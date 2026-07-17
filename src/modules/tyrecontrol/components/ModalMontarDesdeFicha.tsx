@@ -33,6 +33,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
   const [msg, setMsg] = useState("");
   const [medidaIncompatible, setMedidaIncompatible] = useState(false);
   const [soloMedida, setSoloMedida] = useState(true); // filtrar el almacén por la medida de la ficha
+  const [condicion, setCondicion] = useState<"nuevo" | "usado">("nuevo"); // consumir stock nuevo o usado
 
   useEffect(() => { listarProductosAlmacen().then(setProductos); }, []);
   useEffect(() => { const t = setTimeout(() => listarProductosAlmacen(busqueda).then(setProductos), 250); return () => clearTimeout(t); }, [busqueda]);
@@ -47,13 +48,13 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
           montajeActualId, productoAlmacenId: productoId, controlIndividual, datos,
           motivoDesmontaje: motivo, destinoRetirado: destino,
           km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
-          forzarMedida: forzar,
+          forzarMedida: forzar, condicion,
         });
       } else {
         await montarDesdeAlmacen({
           vehiculoId, posicionId, productoAlmacenId: productoId, controlIndividual, datos,
           km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
-          forzarMedida: forzar,
+          forzarMedida: forzar, condicion,
         });
       }
       onDone();
@@ -105,6 +106,18 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
             <div className="mt-1 text-[11px] font-bold uppercase text-slate-400">2. Neumático nuevo</div>
           </>
         )}
+
+        <Field label="Condición del stock">
+          <div className="flex gap-2">
+            {(["nuevo", "usado"] as const).map((c) => (
+              <button key={c} type="button" onClick={() => setCondicion(c)}
+                className={`flex-1 rounded-lg border px-3 py-2 text-sm font-semibold ${condicion === c ? (c === "usado" ? "border-amber-500 bg-amber-500/15 text-amber-200" : "border-emerald-500 bg-emerald-500/15 text-emerald-200") : "border-slate-600 text-slate-300"}`}>
+                {c === "nuevo" ? "Nuevo" : "Usado"}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">Se descuenta 1 unidad del stock {condicion} del cliente de almacén; si no hay, se bloquea.</div>
+        </Field>
 
         <Field label="Producto de almacén (marca / medida) *">
           <input className={`${inputCls} mb-1`} placeholder="Buscar…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />

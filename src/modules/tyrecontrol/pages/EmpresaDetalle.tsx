@@ -9,6 +9,7 @@ import { ROL_LABELS } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { EmpresaFormFields, EMPRESA_VACIA, DelegacionFormFields, delegacionVacia } from "../components/forms";
 import UmbralesEmpresa from "../components/UmbralesEmpresa";
+import StockAlmacen from "../components/StockAlmacen";
 import PreciosMedida from "../components/PreciosMedida";
 import WebfleetEmpresa from "../components/WebfleetEmpresa";
 
@@ -112,6 +113,11 @@ export default function EmpresaDetalle() {
         <button onClick={abrirModalAlmacen} className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200">
           {empresa.cliente_almacen_id ? "Cambiar enlace" : "Enlazar con almacén"}
         </button>
+      </div>
+
+      {/* Stock de almacén (nuevo / usado) */}
+      <div className="mb-3">
+        <StockAlmacen empresaId={id} enlazado={!!empresa.cliente_almacen_id} />
       </div>
 
       {/* Umbrales de profundidad */}
