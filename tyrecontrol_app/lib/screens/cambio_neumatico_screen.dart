@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
+import '../models/incidencias.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
@@ -13,7 +14,8 @@ import '../theme/app_theme.dart';
 class CambioNeumaticoScreen extends StatefulWidget {
   final String vehiculoId;
   final String? posicionInicialId; // resaltar (viene de una incidencia)
-  const CambioNeumaticoScreen({super.key, required this.vehiculoId, this.posicionInicialId});
+  final List<Incidencia> incidencias; // incidencias de esta revisión (para resolver al finalizar)
+  const CambioNeumaticoScreen({super.key, required this.vehiculoId, this.posicionInicialId, this.incidencias = const []});
 
   @override
   State<CambioNeumaticoScreen> createState() => _CambioNeumaticoScreenState();
@@ -44,6 +46,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   bool _trabajando = false;
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
+  final Set<String> _posicionesMontadas = {}; // posiciones donde se montó un neumático en esta sesión
 
   double? _aspect;
   ImageStream? _stream;
@@ -163,6 +166,47 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     finally { if (mounted) setState(() => _trabajando = false); }
   }
 
+  /// Finalizar: da por solucionadas las incidencias de las posiciones donde se
+  /// ha montado un neumático (sustitución completada); el resto sigue pendiente.
+  Future<void> _finalizar() async {
+    final aResolver = widget.incidencias
+        .where((i) => i.posicionId != null && _posicionesMontadas.contains(i.posicionId) && i.problemas.any((p) => p.abierto))
+        .toList();
+
+    if (widget.incidencias.isEmpty || aResolver.isEmpty) {
+      if (widget.incidencias.isNotEmpty && aResolver.isEmpty) {
+        _aviso('No se ha montado nada en las posiciones con incidencia; siguen pendientes.', ok: false);
+      } else {
+        _aviso('Cambios guardados', ok: true);
+      }
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
+
+    setState(() => _trabajando = true);
+    int ok = 0;
+    try {
+      for (final inc in aResolver) {
+        final abiertos = inc.problemas.where((p) => p.abierto).map((p) => p.id).toList();
+        try {
+          await TyreControlApi.resolverIncidencia(
+            incidenciaId: inc.id, problemaIds: abiertos, tipoOperacion: 'sustituir_neumatico',
+            observaciones: 'Resuelto desde el cambio de neumático (app).');
+          ok++;
+        } catch (_) {}
+      }
+    } finally { if (mounted) setState(() => _trabajando = false); }
+
+    final pendientes = widget.incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - ok;
+    _aviso(
+      ok > 0
+          ? '$ok incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
+          : 'No se solucionó ninguna incidencia',
+      ok: ok > 0,
+    );
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
   Future<void> _deshacer() async {
     setState(() => _trabajando = true);
     try {
@@ -186,6 +230,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
         condicion: d.condicion, profundidadUsado: profUsado,
       );
+      _posicionesMontadas.add(p.id);
       HapticFeedback.mediumImpact();
       await _cargar();
       _aviso('Montado ${d.linea.marca} ${d.linea.medida} (${d.condicion}) en ${p.codigoPosicion}', ok: true);
@@ -235,10 +280,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
-              onPressed: _trabajando ? null : () {
-                _aviso('Cambios guardados', ok: true);
-                Navigator.of(context).pop();
-              },
+              onPressed: _trabajando ? null : _finalizar,
               icon: const Icon(Icons.check_circle),
               label: const Text('Finalizar'),
             ),

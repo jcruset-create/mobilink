@@ -149,7 +149,8 @@ class _IncidenciasScreenState extends State<IncidenciasScreen> {
     final posId = g.incidencias.map((i) => i.posicionId).whereType<String>().firstOrNull;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => CambioNeumaticoScreen(vehiculoId: g.vehiculoId, posicionInicialId: posId),
+        builder: (_) => CambioNeumaticoScreen(
+          vehiculoId: g.vehiculoId, posicionInicialId: posId, incidencias: g.incidencias),
       ),
     );
     await _cargar();
