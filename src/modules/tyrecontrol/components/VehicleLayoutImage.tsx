@@ -50,13 +50,14 @@ interface Props {
   editable: boolean;         // puede montar/desmontar/rotar
   puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
   imagenFallback?: string | null; // imagen heredada de la configuración de ejes (si el tipo no tiene propia)
+  medidaPorPosicionId?: Record<string, string>; // medida configurada del vehículo por posición (para montar en vacío)
   onFicha?: (neumaticoId: string) => void;
   onChanged?: () => void;
   onTipoChanged?: () => void;
 }
 
 export default function VehicleLayoutImage({
-  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenFallback, onFicha, onChanged, onTipoChanged,
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenFallback, medidaPorPosicionId, onFicha, onChanged, onTipoChanged,
 }: Props) {
   // Imagen efectiva del plano: la del tipo de vehículo si existe; si no,
   // la heredada de la configuración de ejes del vehículo.
@@ -469,7 +470,7 @@ export default function VehicleLayoutImage({
           empresaId={empresaId}
           posicionId={posSeleccionada.id}
           montajeActualId={modalFicha.sustitucion ? montajeSeleccionado?.id : undefined}
-          medidaActual={montajeSeleccionado?.neumatico?.medida}
+          medidaActual={montajeSeleccionado?.neumatico?.medida ?? medidaPorPosicionId?.[posSeleccionada.id]}
           onClose={() => setModalFicha(null)}
           onDone={() => { setModalFicha(null); setSeleccion(null); onChanged?.(); }}
         />

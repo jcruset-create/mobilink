@@ -64,6 +64,19 @@ export default function VehiculoDetalle() {
 
   const configEjesLabel = [v.config_ejes?.nombre, v.config_ejes?.descripcion].filter(Boolean).join(" · ") || "—";
 
+  // Medida configurada del vehículo por posición (misma medida, o por eje),
+  // para filtrar el almacén al montar en una posición vacía.
+  const medidaPorPosicionId: Record<string, string> = {};
+  {
+    const ejeMedida = new Map<number, string>();
+    if (v.medidas_por_eje) for (const e of ejes) { const l = medidaLabel(e.medida_id); if (l && l !== "—") ejeMedida.set(e.eje, l); }
+    const def = v.medidas_por_eje ? null : medidaLabel(v.medida_id);
+    for (const p of posiciones) {
+      const m = v.medidas_por_eje ? ejeMedida.get(p.eje ?? -1) : (def && def !== "—" ? def : null);
+      if (m) medidaPorPosicionId[p.id] = m;
+    }
+  }
+
   return (
     <div>
       <div className="mb-3 flex items-center gap-2">
@@ -138,6 +151,7 @@ export default function VehiculoDetalle() {
           vehiculoId={v.id}
           empresaId={v.empresa_id}
           montajes={montajes}
+          medidaPorPosicionId={medidaPorPosicionId}
           editable={!esCliente}
           puedeCalibrar={!!perfil?.es_superadmin}
           onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
