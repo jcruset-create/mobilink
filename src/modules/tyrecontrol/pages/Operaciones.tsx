@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion } from "../services/data";
-import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo } from "../types";
-import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS } from "../types";
+import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion } from "../types";
+import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
@@ -37,6 +37,7 @@ export default function Operaciones() {
   const [fEmpresa, setFEmpresa] = useState(esCliente ? (perfil?.empresa_id ?? "") : "");
   const [fVehiculo, setFVehiculo] = useState("");
   const [fTipo, setFTipo] = useState<TipoOperacion | "">("");
+  const [fEstado, setFEstado] = useState<EstadoOperacion | "">("");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
 
@@ -46,7 +47,7 @@ export default function Operaciones() {
       const [ops, veh] = await Promise.all([
         listarOperaciones({
           empresaId: fEmpresa || undefined, vehiculoId: fVehiculo || undefined,
-          tipo: fTipo || undefined, desde: fDesde || undefined, hasta: fHasta || undefined,
+          tipo: fTipo || undefined, estado: fEstado || undefined, desde: fDesde || undefined, hasta: fHasta || undefined,
         }),
         listarVehiculos(fEmpresa ? { empresaId: fEmpresa } : undefined),
       ]);
@@ -54,7 +55,7 @@ export default function Operaciones() {
     } catch (e: any) { setMsg(e?.message || "Error"); } finally { setLoading(false); }
   }
   useEffect(() => { if (!esCliente) listarEmpresas().then(setEmpresas); }, [esCliente]);
-  useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [fEmpresa, fVehiculo, fTipo, fDesde, fHasta]);
+  useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [fEmpresa, fVehiculo, fTipo, fEstado, fDesde, fHasta]);
 
   const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
   async function guardarCoste() {
@@ -84,6 +85,10 @@ export default function Operaciones() {
           <option value="">Todos los tipos</option>
           {(Object.keys(TIPO_OPERACION_LABELS) as TipoOperacion[]).map((t) => <option key={t} value={t}>{TIPO_OPERACION_LABELS[t]}</option>)}
         </select>
+        <select className={`${inputCls} w-auto`} value={fEstado} onChange={(e) => setFEstado(e.target.value as EstadoOperacion | "")}>
+          <option value="">Todos los estados</option>
+          {(Object.keys(ESTADO_OPERACION_LABELS) as EstadoOperacion[]).map((s) => <option key={s} value={s}>{ESTADO_OPERACION_LABELS[s]}</option>)}
+        </select>
         <input type="date" className={`${inputCls} w-auto`} value={fDesde} onChange={(e) => setFDesde(e.target.value)} />
         <span className="text-xs text-slate-500">a</span>
         <input type="date" className={`${inputCls} w-auto`} value={fHasta} onChange={(e) => setFHasta(e.target.value)} />
@@ -92,19 +97,24 @@ export default function Operaciones() {
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
-          <th className={thCls}>Tipo</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
+          <th className={thCls}>Nº</th><th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
+          <th className={thCls}>Tipo</th><th className={thCls}>Estado</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
           <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th><th className={thCls}>Coste</th>
         </tr></thead>
         <tbody>
-          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Cargando…</td></tr>
-          : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Sin operaciones.</td></tr>
+          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Cargando…</td></tr>
+          : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin operaciones.</td></tr>
           : items.map((o) => (
             <tr key={o.id} className="border-t border-slate-700/60">
+              <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}</td>
               <td className={tdCls + " text-slate-400"}>{o.empresa?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.vehiculo?.matricula ?? "—"}</td>
               <td className={tdCls}><span className={`rounded-full px-2 py-0.5 text-xs font-bold ${COLOR_TIPO[o.tipo_operacion]}`}>{TIPO_OPERACION_LABELS[o.tipo_operacion]}</span></td>
+              <td className={tdCls}>
+                {o.status ? <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${ESTADO_OPERACION_BADGE[o.status]}`}>{ESTADO_OPERACION_LABELS[o.status]}</span> : "—"}
+                {o.prioridad && o.prioridad !== "normal" && <span className="ml-1 text-[10px] uppercase text-amber-300">{PRIORIDAD_OPERACION_LABELS[o.prioridad]}</span>}
+              </td>
               <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
               <td className={tdCls + " text-slate-400"}>{o.km_vehiculo ?? "—"}</td>
