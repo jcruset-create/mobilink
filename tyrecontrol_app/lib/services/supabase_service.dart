@@ -709,6 +709,32 @@ class TyreControlApi {
   /// Última medición (profundidad/presión) por posición del vehículo, para
   /// mostrarla en el plano de la ficha. Se toma el detalle más reciente de
   /// cada posición entre las últimas revisiones.
+  /// Última medición por NEUMÁTICO (no por posición): así un neumático recién
+  /// montado no hereda la medición del que había antes en esa posición.
+  static Future<Map<String, RevisionDetalleDraft>> ultimasMedicionesPorNeumatico(String vehiculoId) async {
+    try {
+      final data = await _db
+          .from('revisiones_neumaticos_detalle')
+          .select('neumatico_id, profundidad_mm, presion_bar, created_at')
+          .eq('vehiculo_id', vehiculoId)
+          .order('created_at', ascending: false)
+          .limit(400);
+      final out = <String, RevisionDetalleDraft>{};
+      for (final e in (data as List)) {
+        final r = Map<String, dynamic>.from(e as Map);
+        final nid = r['neumatico_id'] as String?;
+        if (nid == null || out.containsKey(nid)) continue;
+        final prof = (r['profundidad_mm'] as num?)?.toDouble();
+        final pres = (r['presion_bar'] as num?)?.toDouble();
+        if (prof == null && pres == null) continue;
+        out[nid] = RevisionDetalleDraft(posicionId: '', neumaticoId: nid, profundidadMm: prof, presionBar: pres);
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
   static Future<Map<String, RevisionDetalleDraft>> ultimasMedicionesPorPosicion(String vehiculoId) async {
     try {
       final data = await _db

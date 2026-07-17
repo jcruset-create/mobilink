@@ -159,6 +159,7 @@ class Neumatico {
   final String? rfidEpc;
   final String estado;
   final num? profundidadActualMm;
+  final String? origen; // almacen_generico | almacen_usado | catalogo_sin_stock | …
 
   Neumatico({
     required this.id,
@@ -173,6 +174,7 @@ class Neumatico {
     this.rfidEpc,
     required this.estado,
     this.profundidadActualMm,
+    this.origen,
   });
 
   factory Neumatico.fromJson(Map<String, dynamic> j) => Neumatico(
@@ -188,6 +190,7 @@ class Neumatico {
         rfidEpc: j['rfid_epc'],
         estado: j['estado'] ?? 'almacen',
         profundidadActualMm: j['profundidad_actual_mm'],
+        origen: j['origen'],
       );
 
   String get medidaCompleta {

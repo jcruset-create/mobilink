@@ -40,7 +40,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   String? _imagenChasis;
   List<StockAlmacenLinea> _stock = [];
   Set<String> _medidasVehiculo = {}; // medidas base admitidas por el vehículo
-  Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por posición
+  Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por NEUMÁTICO
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   bool _trabajando = false;
 
@@ -83,7 +83,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         TyreControlApi.mapaMedidas(),
         TyreControlApi.listarEjesDeVehiculo(widget.vehiculoId),
         _empresaId != null ? TyreControlApi.stockAlmacenEmpresa(_empresaId!) : Future.value(<StockAlmacenLinea>[]),
-        TyreControlApi.ultimasMedicionesPorPosicion(widget.vehiculoId),
+        TyreControlApi.ultimasMedicionesPorNeumatico(widget.vehiculoId),
       ]);
 
       final medidas = results[2] as Map<String, String>;
@@ -226,7 +226,23 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula')),
+      appBar: AppBar(
+        title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+              onPressed: _trabajando ? null : () {
+                _aviso('Cambios guardados', ok: true);
+                Navigator.of(context).pop();
+              },
+              icon: const Icon(Icons.check_circle),
+              label: const Text('Finalizar'),
+            ),
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -340,17 +356,24 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
+  // Verde oscuro para neumáticos NUEVOS recién montados (sin revisión aún).
+  static const _verdeNuevo = Color(0xFF166534);
+
   Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false}) {
     final n = m.neumatico;
-    final med = _mediciones[p.id];
+    // Medición del PROPIO neumático (no de la posición): un nuevo no hereda mm del anterior.
+    final med = _mediciones[m.neumaticoId];
     final obj = p.eje != null ? _presionesObjetivo[p.eje] : null;
-    // Profundidad: última revisión → profundidad actual (dibujo/usado).
+    // Profundidad: revisión del neumático → profundidad actual (dibujo/usado).
     final prof = med?.profundidadMm ?? n?.profundidadActualMm?.toDouble();
-    // Presión: última revisión → presión recomendada del eje.
+    // Presión: revisión del neumático → presión recomendada del eje.
     final pres = med?.presionBar ?? obj?.presion.toDouble();
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
-    final borde = resaltar ? AppColors.warning : (arrastrando ? AppColors.info : AppColors.success);
+    final esNuevoReciente = med == null && (n?.origen == 'almacen_generico' || n?.origen == 'catalogo_sin_stock');
+    final borde = resaltar
+        ? AppColors.warning
+        : (arrastrando ? AppColors.info : (esNuevoReciente ? _verdeNuevo : AppColors.success));
     final card = Container(
       width: cardW,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
