@@ -325,6 +325,7 @@ function ModalResolver({ incidencia, onClose, onDone }: { incidencia: Incidencia
         <ModalMontarDesdeFicha
           posicionNombre={incidencia.posicionNombre ?? "posición"}
           vehiculoId={incidencia.vehiculo_id}
+          empresaId={montaje.empresa_id}
           posicionId={incidencia.posicion_id}
           montajeActualId={montaje.id}
           medidaActual={montaje.neumatico?.medida}

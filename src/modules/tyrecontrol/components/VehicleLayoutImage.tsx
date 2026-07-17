@@ -466,6 +466,7 @@ export default function VehicleLayoutImage({
         <ModalMontarDesdeFicha
           posicionNombre={posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}
           vehiculoId={vehiculoId}
+          empresaId={empresaId}
           posicionId={posSeleccionada.id}
           montajeActualId={modalFicha.sustitucion ? montajeSeleccionado?.id : undefined}
           medidaActual={montajeSeleccionado?.neumatico?.medida}
