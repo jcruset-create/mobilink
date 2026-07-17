@@ -15,7 +15,14 @@ interface Props {
   onDone: () => void;
 }
 
-const normMedida = (s?: string | null) => (s ?? "").toUpperCase().replace(/\s+/g, "");
+// Medida base canónica (ancho/perfil R llanta), ignorando índice de carga y
+// velocidad, para casar "385/65R22.5" (ficha) con "385/65 R22.5 158L" (almacén).
+const baseMedida = (s?: string | null) => {
+  const t = (s ?? "").toUpperCase().replace(/\s+/g, "");
+  const m = t.match(/(\d{2,3})(?:\/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)/);
+  if (!m) return t;
+  return `${m[1]}${m[2] ? "/" + m[2] : ""}R${m[3].replace(",", ".")}`;
+};
 
 export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posicionId, montajeActualId, medidaActual, onClose, onDone }: Props) {
   const { perfil } = useTyreAuth();
@@ -123,7 +130,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, posi
           <input className={`${inputCls} mb-1`} placeholder="Buscar…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           {(() => {
             const filtrar = soloMedida && !!medidaActual;
-            const visibles = filtrar ? productos.filter((p) => normMedida(p.medida) === normMedida(medidaActual)) : productos;
+            const visibles = filtrar ? productos.filter((p) => baseMedida(p.medida) === baseMedida(medidaActual)) : productos;
             return (
               <>
                 <select className={inputCls} value={productoId} onChange={(e) => setProductoId(e.target.value)}>
