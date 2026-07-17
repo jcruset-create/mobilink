@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, CalendarCheck, AlertTriangle, History, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, CalendarCheck, AlertTriangle, History, HelpCircle, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -44,6 +44,7 @@ export const NAV: NavItem[] = [
   { key: "operaciones-cliente", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["cliente"] },
   { key: "informes-cliente", path: "informes", label: "Informes", icon: BarChart3, roles: ["cliente"] },
   // Todos
+  { key: "ayuda", path: "ayuda", label: "Ayuda / Manual", icon: HelpCircle },
   { key: "perfil", path: "perfil", label: "Perfil", icon: User },
 ];
 
@@ -59,7 +60,7 @@ export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: bo
   }
   // Gating por pantallas (usuarios unificados): se compara por path;
   // null = todas las del rol; el super-admin no se filtra.
-  if (!esSuperadmin && pantallas && item.path !== "dashboard" && !pantallas.includes(item.path)) {
+  if (!esSuperadmin && pantallas && item.path !== "dashboard" && item.path !== "ayuda" && !pantallas.includes(item.path)) {
     return false;
   }
   return true;
