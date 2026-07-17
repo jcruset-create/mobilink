@@ -405,6 +405,64 @@ class TyreControlApi {
 
   static String _normMedida(String s) => s.toUpperCase().replaceAll(RegExp(r'\s+'), '');
 
+  // ── Cambio rápido de neumático (stock, montar, desmontar) ──────────────────
+  /// Stock del cliente de almacén enlazado, por producto (nuevo/usado).
+  static Future<List<StockAlmacenLinea>> stockAlmacenEmpresa(String empresaId) async {
+    final data = await _db.rpc('tc_stock_almacen_empresa', params: {'p_empresa': empresaId});
+    return ((data as List?) ?? [])
+        .map((r) => StockAlmacenLinea.fromJson(Map<String, dynamic>.from(r as Map)))
+        .toList();
+  }
+
+  /// Monta un producto del almacén en una posición (descuenta stock).
+  /// [condicion] = 'nuevo' | 'usado'. En usado, [profundidadUsado] se guarda
+  /// como profundidad actual del neumático.
+  static Future<void> montarDesdeAlmacen({
+    required String vehiculoId,
+    required String posicionId,
+    required String productoAlmacenId,
+    String condicion = 'nuevo',
+    num? km,
+    String? observaciones,
+    double? profundidadUsado,
+    bool forzarMedida = false,
+  }) async {
+    final datos = <String, dynamic>{};
+    if (condicion == 'usado' && profundidadUsado != null) {
+      datos['profundidad_actual_mm'] = profundidadUsado.toString();
+    }
+    await _db.rpc('tc_montar_desde_almacen', params: {
+      'p_vehiculo': vehiculoId,
+      'p_posicion': posicionId,
+      'p_producto_almacen': productoAlmacenId,
+      'p_control_individual': false,
+      'p_datos': datos,
+      'p_km': km,
+      'p_fecha': null,
+      'p_obs': observaciones,
+      'p_forzar_medida': forzarMedida,
+      'p_condicion': condicion,
+    });
+  }
+
+  /// Desmonta un neumático. [destino] = 'almacen' (vuelve como usado) |
+  /// 'descartado' (baja) | 'reparacion'.
+  static Future<void> desmontarNeumatico({
+    required String montajeId,
+    String destino = 'almacen',
+    num? km,
+    String motivo = 'desgaste',
+    String? observaciones,
+  }) async {
+    await _db.rpc('tc_desmontar_neumatico', params: {
+      'p_montaje': montajeId,
+      'p_km': km,
+      'p_motivo': motivo,
+      'p_nuevo_estado': destino,
+      'p_obs': observaciones,
+    });
+  }
+
   /// Lista de incidencias con vehículo/posición/problemas embebidos.
   /// [estados] filtra por estado (vacío = todas).
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {

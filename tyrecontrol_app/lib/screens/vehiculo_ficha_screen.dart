@@ -3,6 +3,7 @@ import '../models/models.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_layout_image.dart';
+import 'cambio_neumatico_screen.dart';
 
 /// Ficha del vehículo — réplica de solo lectura de la del panel web.
 ///
@@ -450,6 +451,17 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
   Widget _plano() {
     return _seccion(
       'Plano del vehículo',
+      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId))),
+          icon: const Icon(Icons.swap_horiz),
+          label: const Text('Cambiar neumáticos (arrastrar)'),
+        ),
+      ),
+      const SizedBox(height: 10),
       _imagenChasis == null
           ? const Text('Este vehículo no tiene plano configurado.',
               style: TextStyle(color: AppColors.textHint, fontSize: 13))
@@ -477,6 +489,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
                 ));
               },
             ),
+      ]),
     );
   }
 

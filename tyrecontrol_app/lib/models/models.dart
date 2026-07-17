@@ -271,6 +271,33 @@ class UltimaMedicion {
   const UltimaMedicion({this.fecha, this.profundidadMm, this.presionBar});
 }
 
+/// Una línea de stock del almacén del cliente: un producto con sus unidades
+/// nuevas y usadas disponibles.
+class StockAlmacenLinea {
+  final String productoId;
+  final String marca;
+  final String? modelo;
+  final String medida;
+  final int nuevo;
+  final int usado;
+  const StockAlmacenLinea({
+    required this.productoId,
+    required this.marca,
+    this.modelo,
+    required this.medida,
+    required this.nuevo,
+    required this.usado,
+  });
+  factory StockAlmacenLinea.fromJson(Map<String, dynamic> j) => StockAlmacenLinea(
+        productoId: j['producto_id'] as String,
+        marca: (j['marca'] as String?) ?? '',
+        modelo: j['modelo'] as String?,
+        medida: (j['medida'] as String?) ?? '',
+        nuevo: ((j['nuevo'] as num?) ?? 0).toInt(),
+        usado: ((j['usado'] as num?) ?? 0).toInt(),
+      );
+}
+
 /// Umbrales de profundidad efectivos para una empresa (con posibles
 /// overrides por medida). minimaMm → por debajo, rueda en rojo + incidencia.
 class UmbralConfig {

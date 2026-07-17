@@ -3,6 +3,7 @@ import '../models/incidencias.dart';
 import '../models/incidencias_grupos.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import 'cambio_neumatico_screen.dart';
 import 'resolver_incidencias_screen.dart';
 import 'vehiculo_ficha_screen.dart';
 
@@ -143,16 +144,15 @@ class _IncidenciasScreenState extends State<IncidenciasScreen> {
   }
 
   Future<void> _resolver(GrupoRevision g) async {
-    final cambios = await Navigator.of(context).push<bool>(
+    // "Solucionar ahora" abre la ficha del vehículo en modo cambio táctil,
+    // resaltando la posición de la primera incidencia.
+    final posId = g.incidencias.map((i) => i.posicionId).whereType<String>().firstOrNull;
+    await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ResolverIncidenciasScreen(
-          matricula: g.matricula ?? '—',
-          fechaRevision: fechaCortaIncidencia(g.fechaRevision),
-          incidencias: g.incidencias,
-        ),
+        builder: (_) => CambioNeumaticoScreen(vehiculoId: g.vehiculoId, posicionInicialId: posId),
       ),
     );
-    if (cambios == true) await _cargar();
+    await _cargar();
   }
 
   void _detalleIncidencia(Incidencia inc) {
