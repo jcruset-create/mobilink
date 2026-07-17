@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva } from "../services/data";
-import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion } from "../types";
+import type { ReactNode } from "react";
+import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion } from "../services/data";
+import type { EstadoHistorialEntry, AuditoriaEntry } from "../services/data";
+import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion, OperacionMovimiento, OperacionAdjunto } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -51,6 +53,57 @@ export default function Operaciones() {
   const [accionando, setAccionando] = useState<string | null>(null);
   const [reservas, setReservas] = useState<ReservaNeumatico[] | null>(null);
   const [cargandoRes, setCargandoRes] = useState(false);
+
+  // Fase 6: detalle (historial/auditoría/movimientos/adjuntos) + anulación + export
+  const [detalle, setDetalle] = useState<null | {
+    op: OperacionNeumatico; movimientos: OperacionMovimiento[]; adjuntos: OperacionAdjunto[];
+    historial: EstadoHistorialEntry[]; auditoria: AuditoriaEntry[];
+  }>(null);
+  const [cargandoDet, setCargandoDet] = useState(false);
+  const [motivoAnular, setMotivoAnular] = useState("");
+  const [anulando, setAnulando] = useState(false);
+
+  async function abrirDetalle(o: OperacionNeumatico) {
+    setDetalle({ op: o, movimientos: [], adjuntos: [], historial: [], auditoria: [] });
+    setMotivoAnular(""); setCargandoDet(true);
+    try {
+      const [mov, adj, hist, aud] = await Promise.all([
+        listarMovimientosOperacion(o.id).catch(() => []),
+        listarAdjuntosOperacion(o.id).catch(() => []),
+        listarHistorialEstados(o.id).catch(() => []),
+        listarAuditoriaOperacion(o.id).catch(() => []),
+      ]);
+      setDetalle({ op: o, movimientos: mov, adjuntos: adj, historial: hist, auditoria: aud });
+    } finally { setCargandoDet(false); }
+  }
+
+  async function confirmarAnular() {
+    if (!detalle || !motivoAnular.trim()) { setMsg("Indica el motivo de anulación"); return; }
+    setAnulando(true); setMsg("");
+    try { await anularOperacion(detalle.op.id, motivoAnular.trim()); setDetalle(null); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error al anular"); } finally { setAnulando(false); }
+  }
+
+  const [exportando, setExportando] = useState(false);
+  async function exportarExcel() {
+    setExportando(true);
+    try {
+      const XLSX = await import("xlsx");
+      const filas = items.map((o) => ({
+        Nº: o.numero_operacion ?? "", Fecha: o.fecha_operacion ?? "", Empresa: o.empresa?.nombre ?? "",
+        Vehículo: o.vehiculo?.matricula ?? "", Tipo: TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion,
+        Estado: o.status ? ESTADO_OPERACION_LABELS[o.status] : "", Prioridad: o.prioridad ? PRIORIDAD_OPERACION_LABELS[o.prioridad] : "",
+        Neumático: o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "",
+        Motivo: o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "", Destino: o.destino ?? "",
+        Proveedor: o.proveedor ?? "", Coste: (o.coste ?? ((o.coste_material ?? 0) + (o.coste_mano_obra ?? 0))) || "",
+        Anulada: o.is_anulada ? "Sí" : "", Observaciones: o.observaciones ?? "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(filas);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Operaciones");
+      XLSX.writeFile(wb, `operaciones_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (e: any) { setMsg(e?.message || "Error al exportar"); } finally { setExportando(false); }
+  }
 
   async function abrirPlan() {
     setPlan({ ...vacioPlan, empresaId: esCliente ? (perfil?.empresa_id ?? "") : (fEmpresa || "") });
@@ -124,6 +177,7 @@ export default function Operaciones() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-black">Operaciones de neumáticos</h1>
         <div className="flex gap-2">
+          <button onClick={exportarExcel} disabled={exportando} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50">{exportando ? "Exportando…" : "Exportar Excel"}</button>
           <button onClick={abrirReservas} className="rounded-lg border border-sky-600 px-3 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-600/10">Reservas activas</button>
           <button onClick={abrirPlan} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500">+ Nueva operación</button>
         </div>
@@ -197,7 +251,8 @@ export default function Operaciones() {
               </td>
               <td className={tdCls}>
                 <div className="flex flex-wrap gap-1">
-                  {(o.status ? ACCIONES_ESTADO[o.status] ?? [] : []).map((a) => (
+                  <button onClick={() => abrirDetalle(o)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>
+                  {(o.status && !o.is_anulada ? ACCIONES_ESTADO[o.status] ?? [] : []).map((a) => (
                     <button key={a.estado} onClick={() => accionEstado(o, a.estado)} disabled={accionando === o.id}
                       className={`rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50 ${a.cls}`}>
                       {a.label}
@@ -294,6 +349,65 @@ export default function Operaciones() {
           )}
         </Modal>
       )}
+
+      {detalle && (
+        <Modal title={`Operación ${detalle.op.numero_operacion ? `#${detalle.op.numero_operacion}` : ""}`} onClose={() => setDetalle(null)}>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${COLOR_TIPO[detalle.op.tipo_operacion]}`}>{TIPO_OPERACION_LABELS[detalle.op.tipo_operacion]}</span>
+            {detalle.op.status && <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${ESTADO_OPERACION_BADGE[detalle.op.status]}`}>{ESTADO_OPERACION_LABELS[detalle.op.status]}</span>}
+            {detalle.op.is_anulada && <span className="rounded-full bg-slate-600 px-2 py-0.5 text-xs font-bold text-slate-200">ANULADA</span>}
+            <span className="text-slate-400">{detalle.op.fecha_operacion} · {detalle.op.vehiculo?.matricula ?? "—"}</span>
+          </div>
+          {cargandoDet ? <div className="text-sm text-slate-500">Cargando…</div> : (
+            <div className="space-y-3 text-sm">
+              <Seccion titulo={`Movimientos (${detalle.movimientos.length})`}>
+                {detalle.movimientos.length === 0 ? <Vacio /> : detalle.movimientos.map((m) => (
+                  <div key={m.id} className="text-[12px] text-slate-300">• {m.movimiento_tipo}{m.estado_anterior || m.estado_nuevo ? `: ${m.estado_anterior ?? "?"} → ${m.estado_nuevo ?? "?"}` : ""}{(m as any).neumatico ? ` · ${(m as any).neumatico.numero_interno ?? (m as any).neumatico.codigo_interno ?? ""}` : ""}</div>
+                ))}
+              </Seccion>
+              <Seccion titulo={`Historial de estados (${detalle.historial.length})`}>
+                {detalle.historial.length === 0 ? <Vacio /> : detalle.historial.map((h) => (
+                  <div key={h.id} className="text-[12px] text-slate-300">• {new Date(h.created_at).toLocaleString("es-ES")} — {h.estado_anterior ?? "—"} → <span className="font-semibold">{h.estado_nuevo}</span></div>
+                ))}
+              </Seccion>
+              <Seccion titulo={`Auditoría (${detalle.auditoria.length})`}>
+                {detalle.auditoria.length === 0 ? <Vacio /> : detalle.auditoria.map((a) => (
+                  <div key={a.id} className="text-[12px] text-slate-300">• {new Date(a.created_at).toLocaleString("es-ES")} — <span className="font-semibold">{a.accion}</span>{a.motivo ? `: ${a.motivo}` : ""}</div>
+                ))}
+              </Seccion>
+              <Seccion titulo={`Fotos (${detalle.adjuntos.length})`}>
+                {detalle.adjuntos.length === 0 ? <Vacio /> : (
+                  <div className="flex flex-wrap gap-2">
+                    {detalle.adjuntos.map((f) => (
+                      <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer"><img src={f.file_url} alt="" className="h-20 w-20 rounded bg-slate-950 object-cover" /></a>
+                    ))}
+                  </div>
+                )}
+              </Seccion>
+
+              {!esCliente && !detalle.op.is_anulada && (
+                <div className="mt-2 border-t border-slate-700 pt-3">
+                  <div className="mb-1 text-xs font-semibold text-rose-300">Anular operación</div>
+                  <div className="flex gap-2">
+                    <input className={`${inputCls} flex-1`} placeholder="Motivo de anulación…" value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} />
+                    <button onClick={confirmarAnular} disabled={anulando || !motivoAnular.trim()} className="rounded-lg border border-rose-600 bg-rose-600/20 px-3 py-2 text-xs font-bold text-rose-200 hover:bg-rose-600/30 disabled:opacity-50">{anulando ? "Anulando…" : "Anular"}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
+
+function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) {
+  return (
+    <div className="rounded-lg bg-slate-800/60 p-2">
+      <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">{titulo}</div>
+      <div className="space-y-0.5">{children}</div>
+    </div>
+  );
+}
+function Vacio() { return <div className="text-[12px] text-slate-500">—</div>; }

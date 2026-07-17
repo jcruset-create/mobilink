@@ -11,7 +11,7 @@ import type {
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
-  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto, ReservaNeumatico,
+  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto, ReservaNeumatico, OperacionMovimiento,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -710,6 +710,34 @@ export async function reservarNeumatico(params: { neumaticoId: string; operacion
 export async function liberarReserva(reservaId: string, motivo?: string | null): Promise<void> {
   const { error } = await supabase.rpc("tc_liberar_reserva", { p_reserva: reservaId, p_motivo: motivo ?? null });
   if (error) throw new Error(error.message);
+}
+
+// ── Operaciones Fase 6: anulación, auditoría, detalle ─────────
+export async function anularOperacion(operacionId: string, motivo: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_anular_operacion", { p_operacion: operacionId, p_motivo: motivo });
+  if (error) throw new Error(error.message);
+}
+
+export interface EstadoHistorialEntry { id: string; estado_anterior: string | null; estado_nuevo: string; motivo: string | null; created_at: string; }
+export async function listarHistorialEstados(operacionId: string): Promise<EstadoHistorialEntry[]> {
+  const { data, error } = await supabase.from("tc_operacion_estado_historial").select("*").eq("operacion_id", operacionId).order("created_at");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as EstadoHistorialEntry[];
+}
+
+export interface AuditoriaEntry { id: string; accion: string; motivo: string | null; datos_anteriores?: any; datos_nuevos?: any; created_at: string; }
+export async function listarAuditoriaOperacion(operacionId: string): Promise<AuditoriaEntry[]> {
+  const { data, error } = await supabase.from("tc_operacion_auditoria").select("*").eq("operacion_id", operacionId).order("created_at");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as AuditoriaEntry[];
+}
+
+export async function listarMovimientosOperacion(operacionId: string): Promise<OperacionMovimiento[]> {
+  const { data, error } = await supabase.from("tc_operacion_movimientos")
+    .select("*, neumatico:tc_neumaticos(numero_interno, codigo_interno, marca, medida)")
+    .eq("operacion_id", operacionId).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as OperacionMovimiento[];
 }
 
 const RESERVA_SELECT = "*, neumatico:tc_neumaticos(id, numero_interno, codigo_interno, marca, modelo, medida, estado), vehiculo:tc_vehiculos(matricula), empresa:tc_empresas(nombre)";
