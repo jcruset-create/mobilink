@@ -552,7 +552,9 @@ export interface HistorialMontaje {
 // ── Fase 8: Operaciones de neumáticos ──────────────────────────
 export type TipoOperacion =
   | "montaje" | "desmontaje" | "sustitucion" | "rotacion" | "reparacion"
-  | "descarte" | "entrada_almacen" | "salida_almacen" | "revision_vehiculo";
+  | "descarte" | "entrada_almacen" | "salida_almacen" | "revision_vehiculo"
+  | "cambio_posicion" | "intercambio" | "retirada_stock" | "retirada_definitiva"
+  | "correccion_posicion" | "correccion_montado";
 
 export type MotivoOperacion =
   | "desgaste" | "pinchazo" | "rotura" | "preventivo" | "desgaste_irregular"
@@ -564,6 +566,9 @@ export const TIPO_OPERACION_LABELS: Record<TipoOperacion, string> = {
   montaje: "Montaje", desmontaje: "Desmontaje", sustitucion: "Sustitución", rotacion: "Rotación",
   reparacion: "Reparación", descarte: "Descarte", entrada_almacen: "Entrada a almacén",
   salida_almacen: "Salida de almacén", revision_vehiculo: "Revisión de vehículo",
+  cambio_posicion: "Cambio de posición", intercambio: "Intercambio",
+  retirada_stock: "Retirada a stock", retirada_definitiva: "Retirada definitiva",
+  correccion_posicion: "Corrección de posición", correccion_montado: "Corrección de montado",
 };
 
 export const MOTIVO_OPERACION_LABELS: Record<MotivoOperacion, string> = {
@@ -594,12 +599,107 @@ export interface OperacionNeumatico {
   tecnico_id?: string | null;
   observaciones?: string | null;
   created_at?: string;
+  // Ciclo de vida (módulo Operaciones)
+  numero_operacion?: number | null;
+  status?: EstadoOperacion;
+  prioridad?: PrioridadOperacion;
+  fecha_prevista?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  cancelled_at?: string | null;
+  source?: SourceOperacion;
+  is_correccion?: boolean;
+  is_anulada?: boolean;
+  operacion_anulada_id?: string | null;
+  delegacion_id?: string | null;
+  incidencia_id?: string | null;
+  proveedor?: string | null;
+  coste?: number | null;
+  created_by?: string | null;
+  assigned_by?: string | null;
   empresa?: Empresa | null;
   vehiculo?: Vehiculo | null;
   neumatico?: Neumatico | null;
   tecnico?: Perfil | null;
   posicion_origen?: PosicionVehiculo | null;
   posicion_destino?: PosicionVehiculo | null;
+  delegacion?: Delegacion | null;
+}
+
+// ── Módulo Operaciones de neumáticos ────────────────────────────
+export type EstadoOperacion =
+  | "borrador" | "pendiente" | "planificada" | "asignada" | "en_proceso"
+  | "pausada" | "completada" | "cancelada" | "no_realizada" | "anulada";
+export const ESTADO_OPERACION_LABELS: Record<EstadoOperacion, string> = {
+  borrador: "Borrador", pendiente: "Pendiente", planificada: "Planificada", asignada: "Asignada",
+  en_proceso: "En proceso", pausada: "Pausada", completada: "Completada", cancelada: "Cancelada",
+  no_realizada: "No realizada", anulada: "Anulada",
+};
+export const ESTADO_OPERACION_BADGE: Record<EstadoOperacion, string> = {
+  borrador: "bg-slate-500/15 text-slate-300 ring-1 ring-slate-500/30",
+  pendiente: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  planificada: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  asignada: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30",
+  en_proceso: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  pausada: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  completada: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+  cancelada: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
+  no_realizada: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
+  anulada: "bg-slate-500/15 text-slate-400 ring-1 ring-slate-500/30",
+};
+export type PrioridadOperacion = "baja" | "normal" | "alta" | "urgente";
+export const PRIORIDAD_OPERACION_LABELS: Record<PrioridadOperacion, string> = {
+  baja: "Baja", normal: "Normal", alta: "Alta", urgente: "Urgente",
+};
+export type SourceOperacion = "desktop_web" | "mobile_app" | "import" | "api" | "system";
+
+export interface CatTipoOperacion { codigo: string; nombre: string; orden: number; es_fisica: boolean; activo: boolean; }
+export interface CatMotivo { id: string; codigo: string; nombre: string; tipo_operacion?: string | null; orden: number; activo: boolean; }
+export interface CatDestino { codigo: string; nombre: string; estado_resultante?: string | null; orden: number; activo: boolean; }
+export interface CatTipoReparacion { codigo: string; nombre: string; orden: number; activo: boolean; }
+export interface CatResultadoReparacion { codigo: string; nombre: string; orden: number; activo: boolean; }
+
+export interface OperacionMovimiento {
+  id: string;
+  operacion_id: string;
+  neumatico_id?: string | null;
+  movimiento_tipo: string;
+  origen_vehiculo_id?: string | null;
+  origen_posicion_id?: string | null;
+  destino_vehiculo_id?: string | null;
+  destino_posicion_id?: string | null;
+  origen_ubicacion?: string | null;
+  destino_ubicacion?: string | null;
+  estado_anterior?: string | null;
+  estado_nuevo?: string | null;
+  profundidad_anterior?: number | null;
+  profundidad_final?: number | null;
+  orden: number;
+  neumatico?: Neumatico | null;
+}
+
+export interface OperacionAdjunto {
+  id: string;
+  operacion_id: string;
+  file_url: string;
+  storage_path?: string | null;
+  file_type?: string | null;
+  descripcion?: string | null;
+  created_at?: string | null;
+}
+
+export interface ReservaNeumatico {
+  id: string;
+  neumatico_id: string;
+  operacion_id?: string | null;
+  vehiculo_id?: string | null;
+  posicion_id?: string | null;
+  empresa_id: string;
+  delegacion_id?: string | null;
+  fecha_prevista?: string | null;
+  status: "activa" | "liberada" | "consumida";
+  reservado_at?: string | null;
+  neumatico?: Neumatico | null;
 }
 
 export interface FichaGenerica {

@@ -15,6 +15,12 @@ const COLOR_TIPO: Record<TipoOperacion, string> = {
   entrada_almacen: "bg-teal-500/30 text-teal-200",
   salida_almacen: "bg-amber-500/30 text-amber-200",
   revision_vehiculo: "bg-cyan-500/30 text-cyan-200",
+  cambio_posicion: "bg-indigo-500/30 text-indigo-200",
+  intercambio: "bg-violet-500/30 text-violet-200",
+  retirada_stock: "bg-teal-500/30 text-teal-200",
+  retirada_definitiva: "bg-rose-500/30 text-rose-200",
+  correccion_posicion: "bg-orange-500/30 text-orange-200",
+  correccion_montado: "bg-orange-500/30 text-orange-200",
 };
 
 export default function Operaciones() {

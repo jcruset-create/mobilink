@@ -11,6 +11,7 @@ import type {
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
+  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -623,6 +624,27 @@ export async function listarOperaciones(filtros?: {
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as OperacionNeumatico[];
+}
+
+// ── Módulo Operaciones: catálogos configurables ────────────────
+export async function listarCatOperaciones(): Promise<{
+  tipos: CatTipoOperacion[]; motivos: CatMotivo[]; destinos: CatDestino[];
+  tiposReparacion: CatTipoReparacion[]; resultadosReparacion: CatResultadoReparacion[];
+}> {
+  const [t, m, d, tr, rr] = await Promise.all([
+    supabase.from("tc_cat_tipos_operacion").select("*").eq("activo", true).order("orden"),
+    supabase.from("tc_cat_motivos").select("*").eq("activo", true).order("orden"),
+    supabase.from("tc_cat_destinos").select("*").eq("activo", true).order("orden"),
+    supabase.from("tc_cat_tipos_reparacion").select("*").eq("activo", true).order("orden"),
+    supabase.from("tc_cat_resultados_reparacion").select("*").eq("activo", true).order("orden"),
+  ]);
+  const err = t.error || m.error || d.error || tr.error || rr.error;
+  if (err) throw new Error(err.message);
+  return {
+    tipos: (t.data ?? []) as CatTipoOperacion[], motivos: (m.data ?? []) as CatMotivo[],
+    destinos: (d.data ?? []) as CatDestino[], tiposReparacion: (tr.data ?? []) as CatTipoReparacion[],
+    resultadosReparacion: (rr.data ?? []) as CatResultadoReparacion[],
+  };
 }
 
 // ── Fase 8: Revisión de vehículo ────────────────────────────────
