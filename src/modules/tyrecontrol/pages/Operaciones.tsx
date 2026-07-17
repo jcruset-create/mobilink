@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
-import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion } from "../services/data";
-import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion } from "../types";
+import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva } from "../services/data";
+import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+
+// Acciones de estado disponibles según el estado actual (transiciones simples).
+const ACCIONES_ESTADO: Partial<Record<EstadoOperacion, { estado: EstadoOperacion; label: string; cls: string }[]>> = {
+  pendiente: [{ estado: "asignada", label: "Asignar", cls: "text-sky-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
+  planificada: [{ estado: "asignada", label: "Asignar", cls: "text-sky-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
+  asignada: [{ estado: "en_proceso", label: "Iniciar", cls: "text-amber-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
+  en_proceso: [{ estado: "completada", label: "Completar", cls: "text-emerald-300" }, { estado: "pausada", label: "Pausar", cls: "text-amber-300" }],
+  pausada: [{ estado: "en_proceso", label: "Reanudar", cls: "text-amber-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
+};
 
 const COLOR_TIPO: Record<TipoOperacion, string> = {
   montaje: "bg-emerald-500/30 text-emerald-200",
@@ -33,6 +42,49 @@ export default function Operaciones() {
   const [msg, setMsg] = useState("");
   const [editCoste, setEditCoste] = useState<null | { id: string; material: string; mano: string }>(null);
   const [savingCoste, setSavingCoste] = useState(false);
+
+  // Fase 5: planificar operación + reservas
+  const [tecnicos, setTecnicos] = useState<Perfil[]>([]);
+  const vacioPlan = { empresaId: "", tipo: "desmontaje" as TipoOperacion, vehiculoId: "", fechaPrevista: "", prioridad: "normal" as PrioridadOperacion, tecnicoId: "", motivo: "", obs: "" };
+  const [plan, setPlan] = useState<typeof vacioPlan | null>(null);
+  const [guardandoPlan, setGuardandoPlan] = useState(false);
+  const [accionando, setAccionando] = useState<string | null>(null);
+  const [reservas, setReservas] = useState<ReservaNeumatico[] | null>(null);
+  const [cargandoRes, setCargandoRes] = useState(false);
+
+  async function abrirPlan() {
+    setPlan({ ...vacioPlan, empresaId: esCliente ? (perfil?.empresa_id ?? "") : (fEmpresa || "") });
+    if (tecnicos.length === 0) listarUsuarios().then(setTecnicos).catch(() => {});
+  }
+
+  async function guardarPlan() {
+    if (!plan || !plan.empresaId || !plan.tipo) { setMsg("Empresa y tipo son obligatorios"); return; }
+    setGuardandoPlan(true); setMsg("");
+    try {
+      await planificarOperacion({
+        empresaId: plan.empresaId, tipoOperacion: plan.tipo, vehiculoId: plan.vehiculoId || null,
+        fechaPrevista: plan.fechaPrevista || null, prioridad: plan.prioridad,
+        tecnicoId: plan.tecnicoId || null, motivo: plan.motivo.trim() || null, observaciones: plan.obs.trim() || null,
+      });
+      setPlan(null); await cargar();
+    } catch (e: any) { setMsg(e?.message || "Error al planificar"); } finally { setGuardandoPlan(false); }
+  }
+
+  async function accionEstado(o: OperacionNeumatico, estado: EstadoOperacion) {
+    setAccionando(o.id); setMsg("");
+    try { await cambiarEstadoOperacion({ operacionId: o.id, nuevoEstado: estado }); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error"); } finally { setAccionando(null); }
+  }
+
+  async function abrirReservas() {
+    setReservas([]); setCargandoRes(true);
+    try { setReservas(await listarReservas({ empresaId: fEmpresa || undefined, status: "activa" })); }
+    catch { setReservas([]); } finally { setCargandoRes(false); }
+  }
+  async function quitarReserva(r: ReservaNeumatico) {
+    try { await liberarReserva(r.id); setReservas((prev) => (prev ?? []).filter((x) => x.id !== r.id)); }
+    catch (e: any) { setMsg(e?.message || "Error"); }
+  }
 
   const [fEmpresa, setFEmpresa] = useState(esCliente ? (perfil?.empresa_id ?? "") : "");
   const [fVehiculo, setFVehiculo] = useState("");
@@ -69,7 +121,13 @@ export default function Operaciones() {
 
   return (
     <div>
-      <h1 className="mb-3 text-lg font-black">Operaciones de neumáticos</h1>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-lg font-black">Operaciones de neumáticos</h1>
+        <div className="flex gap-2">
+          <button onClick={abrirReservas} className="rounded-lg border border-sky-600 px-3 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-600/10">Reservas activas</button>
+          <button onClick={abrirPlan} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500">+ Nueva operación</button>
+        </div>
+      </div>
       {msg && <div className="mb-3 text-sm text-red-300">{msg}</div>}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -99,11 +157,11 @@ export default function Operaciones() {
         <thead className="bg-slate-900"><tr>
           <th className={thCls}>Nº</th><th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
           <th className={thCls}>Tipo</th><th className={thCls}>Estado</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
-          <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th><th className={thCls}>Coste</th>
+          <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th><th className={thCls}>Coste</th><th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
-          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Cargando…</td></tr>
-          : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin operaciones.</td></tr>
+          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Cargando…</td></tr>
+          : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Sin operaciones.</td></tr>
           : items.map((o) => (
             <tr key={o.id} className="border-t border-slate-700/60">
               <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
@@ -137,6 +195,16 @@ export default function Operaciones() {
                   );
                 })()}
               </td>
+              <td className={tdCls}>
+                <div className="flex flex-wrap gap-1">
+                  {(o.status ? ACCIONES_ESTADO[o.status] ?? [] : []).map((a) => (
+                    <button key={a.estado} onClick={() => accionEstado(o, a.estado)} disabled={accionando === o.id}
+                      className={`rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50 ${a.cls}`}>
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -152,6 +220,78 @@ export default function Operaciones() {
             <Field label="Coste material (€)"><input type="number" step="0.01" className={inputCls} value={editCoste.material} onChange={(e) => setEditCoste({ ...editCoste, material: e.target.value })} /></Field>
             <Field label="Coste mano de obra (€)"><input type="number" step="0.01" className={inputCls} value={editCoste.mano} onChange={(e) => setEditCoste({ ...editCoste, mano: e.target.value })} /></Field>
           </div>
+        </Modal>
+      )}
+
+      {plan && (
+        <Modal title="Planificar operación" onClose={() => setPlan(null)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setPlan(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={guardarPlan} disabled={guardandoPlan || !plan.empresaId} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{guardandoPlan ? "Guardando…" : "Planificar"}</button>
+          </div>}>
+          <p className="mb-3 text-xs text-slate-400">La operación queda pendiente/planificada. Su ejecución física se registra al marcarla como completada desde la app o el escritorio.</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {!esCliente && (
+              <Field label="Empresa">
+                <select className={inputCls} value={plan.empresaId} onChange={(e) => setPlan({ ...plan, empresaId: e.target.value, vehiculoId: "" })}>
+                  <option value="">Elegir…</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label="Tipo de operación">
+              <select className={inputCls} value={plan.tipo} onChange={(e) => setPlan({ ...plan, tipo: e.target.value as TipoOperacion })}>
+                {(Object.keys(TIPO_OPERACION_LABELS) as TipoOperacion[]).map((t) => <option key={t} value={t}>{TIPO_OPERACION_LABELS[t]}</option>)}
+              </select>
+            </Field>
+            <Field label="Vehículo (opc.)">
+              <select className={inputCls} value={plan.vehiculoId} onChange={(e) => setPlan({ ...plan, vehiculoId: e.target.value })}>
+                <option value="">—</option>{vehiculos.map((v) => <option key={v.id} value={v.id}>{v.matricula}</option>)}
+              </select>
+            </Field>
+            <Field label="Fecha prevista"><input type="date" className={inputCls} value={plan.fechaPrevista} onChange={(e) => setPlan({ ...plan, fechaPrevista: e.target.value })} /></Field>
+            <Field label="Prioridad">
+              <select className={inputCls} value={plan.prioridad} onChange={(e) => setPlan({ ...plan, prioridad: e.target.value as PrioridadOperacion })}>
+                {(Object.keys(PRIORIDAD_OPERACION_LABELS) as PrioridadOperacion[]).map((p) => <option key={p} value={p}>{PRIORIDAD_OPERACION_LABELS[p]}</option>)}
+              </select>
+            </Field>
+            <Field label="Técnico (opc.)">
+              <select className={inputCls} value={plan.tecnicoId} onChange={(e) => setPlan({ ...plan, tecnicoId: e.target.value })}>
+                <option value="">—</option>{tecnicos.filter((t) => !plan.empresaId || t.empresa_id === plan.empresaId).map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-2 grid gap-2">
+            <Field label="Motivo (opc.)"><input className={inputCls} value={plan.motivo} onChange={(e) => setPlan({ ...plan, motivo: e.target.value })} /></Field>
+            <Field label="Observaciones"><textarea className={inputCls} rows={2} value={plan.obs} onChange={(e) => setPlan({ ...plan, obs: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {reservas !== null && (
+        <Modal title="Reservas de neumático activas" onClose={() => setReservas(null)}>
+          {cargandoRes ? (
+            <div className="text-sm text-slate-500">Cargando…</div>
+          ) : reservas.length === 0 ? (
+            <div className="text-sm text-slate-500">No hay reservas activas.</div>
+          ) : (
+            <TableWrap>
+              <thead className="bg-slate-900"><tr>
+                <th className={thCls}>Neumático</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
+                <th className={thCls}>Prevista</th><th className={thCls}></th>
+              </tr></thead>
+              <tbody>
+                {reservas.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-700/60">
+                    <td className={tdCls + " text-slate-200"}>{r.neumatico?.numero_interno ?? r.neumatico?.codigo_interno ?? "—"}{r.neumatico ? ` · ${r.neumatico.marca ?? ""} ${r.neumatico.medida ?? ""}` : ""}</td>
+                    <td className={tdCls + " text-slate-400"}>{(r as any).empresa?.nombre ?? "—"}</td>
+                    <td className={tdCls + " text-slate-400"}>{(r as any).vehiculo?.matricula ?? "—"}</td>
+                    <td className={tdCls + " text-slate-400"}>{r.fecha_prevista ?? "—"}</td>
+                    <td className={tdCls}><button onClick={() => quitarReserva(r)} className="rounded border border-rose-600 px-2 py-0.5 text-[11px] text-rose-300 hover:bg-rose-600/10">Liberar</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          )}
         </Modal>
       )}
     </div>

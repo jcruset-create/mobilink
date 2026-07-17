@@ -11,7 +11,7 @@ import type {
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
-  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto,
+  CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto, ReservaNeumatico,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -672,6 +672,54 @@ export async function listarAdjuntosOperacion(operacionId: string): Promise<Oper
   const { data, error } = await supabase.from("tc_operacion_adjuntos").select("*").eq("operacion_id", operacionId).order("created_at");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as OperacionAdjunto[];
+}
+
+// ── Operaciones Fase 5: pendientes / planificación + reservas ──
+export async function planificarOperacion(params: {
+  empresaId: string; tipoOperacion: string; vehiculoId?: string | null; neumaticoId?: string | null;
+  posicionDestinoId?: string | null; fechaPrevista?: string | null; prioridad?: string;
+  motivo?: string | null; tecnicoId?: string | null; observaciones?: string | null; reservar?: boolean;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_planificar_operacion", {
+    p_empresa: params.empresaId, p_tipo_operacion: params.tipoOperacion,
+    p_vehiculo: params.vehiculoId ?? null, p_neumatico: params.neumaticoId ?? null,
+    p_posicion_destino: params.posicionDestinoId ?? null, p_fecha_prevista: params.fechaPrevista ?? null,
+    p_prioridad: params.prioridad ?? "normal", p_motivo: params.motivo ?? null,
+    p_tecnico: params.tecnicoId ?? null, p_obs: params.observaciones ?? null, p_reservar: params.reservar ?? false,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function cambiarEstadoOperacion(params: { operacionId: string; nuevoEstado: string; tecnicoId?: string | null; motivo?: string | null }): Promise<void> {
+  const { error } = await supabase.rpc("tc_cambiar_estado_operacion", {
+    p_operacion: params.operacionId, p_nuevo_estado: params.nuevoEstado, p_tecnico: params.tecnicoId ?? null, p_motivo: params.motivo ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function reservarNeumatico(params: { neumaticoId: string; operacionId?: string | null; vehiculoId?: string | null; posicionId?: string | null; fechaPrevista?: string | null }): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_reservar_neumatico", {
+    p_neumatico: params.neumaticoId, p_operacion: params.operacionId ?? null, p_vehiculo: params.vehiculoId ?? null,
+    p_posicion: params.posicionId ?? null, p_fecha_prevista: params.fechaPrevista ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function liberarReserva(reservaId: string, motivo?: string | null): Promise<void> {
+  const { error } = await supabase.rpc("tc_liberar_reserva", { p_reserva: reservaId, p_motivo: motivo ?? null });
+  if (error) throw new Error(error.message);
+}
+
+const RESERVA_SELECT = "*, neumatico:tc_neumaticos(id, numero_interno, codigo_interno, marca, modelo, medida, estado), vehiculo:tc_vehiculos(matricula), empresa:tc_empresas(nombre)";
+export async function listarReservas(filtros?: { empresaId?: string; status?: string }): Promise<ReservaNeumatico[]> {
+  let q = supabase.from("tc_reservas_neumatico").select(RESERVA_SELECT).order("reservado_at", { ascending: false }).limit(500);
+  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  q = q.eq("status", filtros?.status ?? "activa");
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as ReservaNeumatico[];
 }
 
 // ── Fase 8: Operaciones (listado/filtros) ──────────────────────
