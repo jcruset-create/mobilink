@@ -3,8 +3,8 @@ import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from ".
 import type { ZoneRect } from "../vehicle-layouts/zones";
 import { categoriaDeTipo, firmaDePosiciones, resolverLayout } from "../vehicle-layouts/manifest";
 import TirePosition, { COLOR_ESTADO_VISUAL } from "./TirePosition";
-import { listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico } from "../services/data";
-import { inputCls } from "./ui";
+import { listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico, rotarNeumatico, corregirPosicion, corregirMontado } from "../services/data";
+import { inputCls, Modal } from "./ui";
 
 function puntoSvg(svg: SVGSVGElement, clientX: number, clientY: number): { x: number; y: number } {
   const pt = svg.createSVGPoint();
@@ -46,6 +46,10 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
   const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
   const [rotando, setRotando] = useState(false);
   const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
+  // Correcciones (Operaciones Fase 3): dato mal registrado, sin movimiento físico
+  const [correccion, setCorreccion] = useState<null | { tipo: "posicion" | "montado"; montajeId: string; codigo: string }>(null);
+  const [correccionValor, setCorreccionValor] = useState("");
+  const [correccionDisponibles, setCorreccionDisponibles] = useState<Neumatico[]>([]);
 
   const categoria = categoriaDeTipo(tipo);
   const signature = firmaDePosiciones(posiciones);
@@ -126,6 +130,29 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
       await desmontarNeumatico({ montajeId: m.id, km: null, motivo: destino === "reparacion" ? "reparacion" : "descarte", destino, observaciones: null });
       setSeleccion(null); onChanged?.();
     } catch (e: any) { setMsg(e?.message || "Error"); } finally { setSaving(false); }
+  }
+
+  function abrirCorreccion(codigo: string, tipo: "posicion" | "montado") {
+    const pos = posicionPorCodigo.get(codigo);
+    const m = pos ? montajePorPosicionId.get(pos.id) : undefined;
+    setMenuContextual(null);
+    if (!m) return;
+    setCorreccionValor("");
+    setCorreccion({ tipo, montajeId: m.id, codigo });
+    if (tipo === "montado") listarNeumaticosDisponibles(empresaId).then(setCorreccionDisponibles);
+  }
+
+  async function confirmarCorreccion() {
+    if (!correccion || !correccionValor) return;
+    setSaving(true); setMsg("");
+    try {
+      if (correccion.tipo === "posicion") {
+        await corregirPosicion({ montajeId: correccion.montajeId, posicionCorrectaId: correccionValor });
+      } else {
+        await corregirMontado({ montajeId: correccion.montajeId, neumaticoCorrectoId: correccionValor });
+      }
+      setCorreccion(null); setSeleccion(null); onChanged?.();
+    } catch (e: any) { setMsg(e?.message || "Error en la corrección"); } finally { setSaving(false); }
   }
 
   // ── Drag & drop: rotar / intercambiar sobre el propio plano ──
@@ -265,8 +292,46 @@ export default function VehicleLayout({ tipo, posiciones, vehiculoId, empresaId,
             >Ver ficha</button>
             <button onClick={() => enviarA(menuContextual.codigo, "reparacion")} className="block w-full px-3 py-1.5 text-left text-[12px] text-sky-300 hover:bg-slate-700">Enviar a reparación</button>
             <button onClick={() => enviarA(menuContextual.codigo, "descartado")} className="block w-full px-3 py-1.5 text-left text-[12px] text-rose-300 hover:bg-slate-700">Descartar neumático</button>
+            <div className="my-1 border-t border-slate-700" />
+            <button onClick={() => abrirCorreccion(menuContextual.codigo, "posicion")} className="block w-full px-3 py-1.5 text-left text-[12px] text-amber-300 hover:bg-slate-700">Corregir posición</button>
+            <button onClick={() => abrirCorreccion(menuContextual.codigo, "montado")} className="block w-full px-3 py-1.5 text-left text-[12px] text-amber-300 hover:bg-slate-700">Corregir neumático montado</button>
           </div>
         </>
+      )}
+
+      {correccion && (
+        <Modal
+          title={correccion.tipo === "posicion" ? "Corregir posición" : "Corregir neumático montado"}
+          onClose={() => setCorreccion(null)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setCorreccion(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={confirmarCorreccion} disabled={saving || !correccionValor} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Guardando…" : "Corregir"}</button>
+          </div>}
+        >
+          <p className="mb-3 text-xs text-slate-400">
+            Corrección de un dato mal registrado. No genera movimiento físico ni entra en el historial de montajes; queda registrada como operación de corrección.
+          </p>
+          {correccion.tipo === "posicion" ? (
+            <label className="block text-sm">
+              <span className="text-slate-300">Posición correcta</span>
+              <select className={`${inputCls} mt-1`} value={correccionValor} onChange={(e) => setCorreccionValor(e.target.value)}>
+                <option value="">Elegir posición…</option>
+                {posiciones.filter((p) => p.id !== posicionPorCodigo.get(correccion.codigo)?.id).map((p) => (
+                  <option key={p.id} value={p.id}>{p.nombre ?? p.codigo_posicion}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className="block text-sm">
+              <span className="text-slate-300">Neumático correcto (de almacén)</span>
+              <select className={`${inputCls} mt-1`} value={correccionValor} onChange={(e) => setCorreccionValor(e.target.value)}>
+                <option value="">Elegir neumático…</option>
+                {correccionDisponibles.map((n) => <option key={n.id} value={n.id}>{n.codigo_interno ?? n.numero_serie} · {n.marca} {n.medida}</option>)}
+              </select>
+            </label>
+          )}
+          {msg && <div className="mt-2 text-[11px] text-red-300">{msg}</div>}
+        </Modal>
       )}
     </div>
   );

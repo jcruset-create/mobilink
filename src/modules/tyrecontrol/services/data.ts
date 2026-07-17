@@ -450,6 +450,39 @@ export async function rotarNeumatico(params: { montajeOrigenId: string; posicion
   if (error) throw new Error(error.message);
 }
 
+// ── Operaciones Fase 3: cambio de posición, intercambio, correcciones ─
+export async function cambiarPosicion(params: { montajeId: string; posicionDestinoId: string; km?: number | null; observaciones?: string | null }): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_cambiar_posicion", {
+    p_montaje: params.montajeId, p_posicion_destino: params.posicionDestinoId, p_km: params.km ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function intercambiarPosiciones(params: { montajeAId: string; montajeBId: string; km?: number | null; observaciones?: string | null }): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_intercambiar_posiciones", {
+    p_montaje_a: params.montajeAId, p_montaje_b: params.montajeBId, p_km: params.km ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function corregirPosicion(params: { montajeId: string; posicionCorrectaId: string; observaciones?: string | null }): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_corregir_posicion", {
+    p_montaje: params.montajeId, p_posicion_correcta: params.posicionCorrectaId, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+export async function corregirMontado(params: { montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null }): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_corregir_montado", {
+    p_montaje: params.montajeId, p_neumatico_correcto: params.neumaticoCorrectoId, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
   const { data, error } = await supabase.from("tc_historial_montajes").select("*")
     .eq("neumatico_id", neumaticoId).order("created_at", { ascending: false });
