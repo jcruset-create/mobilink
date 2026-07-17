@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico } from "../services/data";
+import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico } from "../services/data";
+import type { ComboSinCatalogar } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { presionTxt } from "../types";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "../components/ui";
@@ -35,6 +36,70 @@ export default function CatalogoNeumaticos() {
   const [msgEdit, setMsgEdit] = useState("");
   const [borrando, setBorrando] = useState(false);
   const [confirmarBaja, setConfirmarBaja] = useState(false);
+
+  // Alta de referencias (Nueva referencia + Sin catalogar)
+  type FormRef = { marca: string; modelo: string; medida: string; indiceCargaSimple: string; indiceCargaDoble: string; codigoVelocidad: string };
+  const vacioRef: FormRef = { marca: "", modelo: "", medida: "", indiceCargaSimple: "", indiceCargaDoble: "", codigoVelocidad: "" };
+  const [nuevaRef, setNuevaRef] = useState<FormRef | null>(null);
+  const [creandoRef, setCreandoRef] = useState(false);
+  const [msgRef, setMsgRef] = useState("");
+  const [sinCatalogar, setSinCatalogar] = useState<ComboSinCatalogar[] | null>(null);
+  const [cargandoSC, setCargandoSC] = useState(false);
+  const [creandoClave, setCreandoClave] = useState<string | null>(null);
+
+  function abrirNuevaRef(prefill?: Partial<FormRef>) {
+    setMsgRef("");
+    setNuevaRef({ ...vacioRef, ...prefill });
+  }
+
+  async function guardarNuevaRef() {
+    if (!nuevaRef) return;
+    setCreandoRef(true); setMsgRef("");
+    try {
+      await crearReferenciaNeumatico({
+        marca: nuevaRef.marca, modelo: nuevaRef.modelo, medida: nuevaRef.medida,
+        indiceCargaSimple: nuevaRef.indiceCargaSimple, indiceCargaDoble: nuevaRef.indiceCargaDoble || null,
+        codigoVelocidad: nuevaRef.codigoVelocidad,
+      });
+      setNuevaRef(null);
+      await cargar();
+    } catch (e: any) { setMsgRef(e?.message || "Error al crear la referencia"); } finally { setCreandoRef(false); }
+  }
+
+  async function abrirSinCatalogar() {
+    setSinCatalogar([]); setCargandoSC(true);
+    try { setSinCatalogar(await listarNeumaticosSinCatalogar()); }
+    catch { setSinCatalogar([]); } finally { setCargandoSC(false); }
+  }
+
+  function separarIndiceCarga(ic: string | null): { simple: string; doble: string } {
+    if (!ic) return { simple: "", doble: "" };
+    const [s, d] = ic.split("/");
+    return { simple: (s ?? "").trim(), doble: (d ?? "").trim() };
+  }
+
+  async function crearDesdeCombo(c: ComboSinCatalogar) {
+    const { simple, doble } = separarIndiceCarga(c.indice_carga);
+    // Si faltan índices para crear el tyre_size, abrimos el formulario prefijado
+    if (!simple || !c.indice_velocidad) {
+      abrirNuevaRef({ marca: c.marca, modelo: c.modelo, medida: c.medida, indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: c.indice_velocidad ?? "" });
+      return;
+    }
+    const clave = `${c.marca}|${c.modelo}|${c.medida}`;
+    setCreandoClave(clave); setMsgRef("");
+    try {
+      await crearReferenciaNeumatico({
+        marca: c.marca, modelo: c.modelo, medida: c.medida,
+        indiceCargaSimple: simple, indiceCargaDoble: doble || null, codigoVelocidad: c.indice_velocidad,
+      });
+      setSinCatalogar((prev) => (prev ?? []).filter((x) => `${x.marca}|${x.modelo}|${x.medida}` !== clave));
+      await cargar();
+    } catch (e: any) {
+      // si falla (p.ej. medida no parseable), abrimos el formulario para corregir
+      abrirNuevaRef({ marca: c.marca, modelo: c.modelo, medida: c.medida, indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: c.indice_velocidad ?? "" });
+      setMsgRef(e?.message || "Revisa los datos");
+    } finally { setCreandoClave(null); }
+  }
 
   function abrirEdicion(r: ReferenciaNeumatico) {
     setForm({
@@ -142,7 +207,15 @@ export default function CatalogoNeumaticos() {
 
   return (
     <div>
-      <h1 className="mb-3 text-lg font-black">Catálogo de neumáticos</h1>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-lg font-black">Catálogo de neumáticos</h1>
+        {puedeEditar && (
+          <div className="flex gap-2">
+            <button onClick={abrirSinCatalogar} className="rounded-lg border border-amber-600 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-600/10">Sin catalogar</button>
+            <button onClick={() => abrirNuevaRef()} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500">+ Nueva referencia</button>
+          </div>
+        )}
+      </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input className={`${inputCls} max-w-[240px]`} placeholder="Buscar (ej. AH51, 315/80, regional)…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -300,6 +373,68 @@ export default function CatalogoNeumaticos() {
         >
           <img src={fotoAmpliada} alt="" className="max-h-full max-w-full rounded-lg bg-white object-contain" />
         </div>
+      )}
+
+      {nuevaRef && (
+        <Modal title="Nueva referencia de catálogo" onClose={() => setNuevaRef(null)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setNuevaRef(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={guardarNuevaRef} disabled={creandoRef || !nuevaRef.marca.trim() || !nuevaRef.modelo.trim() || !nuevaRef.medida.trim()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{creandoRef ? "Creando…" : "Crear referencia"}</button>
+          </div>}>
+          <p className="mb-3 text-xs text-slate-400">Se reutilizan marca, modelo y medida si ya existen; si no, se crean. La medida se parsea (ancho/perfil/llanta) automáticamente.</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <Campo label="Marca" value={nuevaRef.marca} onChange={(v) => setNuevaRef({ ...nuevaRef, marca: v })} tipo="text" />
+            <Campo label="Modelo" value={nuevaRef.modelo} onChange={(v) => setNuevaRef({ ...nuevaRef, modelo: v })} tipo="text" />
+            <Campo label="Medida (ej. 315/80R22.5)" value={nuevaRef.medida} onChange={(v) => setNuevaRef({ ...nuevaRef, medida: v })} tipo="text" />
+            <Campo label="Índice carga simple" value={nuevaRef.indiceCargaSimple} onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaSimple: v })} tipo="text" />
+            <Campo label="Índice carga doble (opc.)" value={nuevaRef.indiceCargaDoble} onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaDoble: v })} tipo="text" />
+            <Campo label="Código velocidad (ej. L)" value={nuevaRef.codigoVelocidad} onChange={(v) => setNuevaRef({ ...nuevaRef, codigoVelocidad: v })} tipo="text" />
+          </div>
+          {msgRef && <div className="mt-2 text-xs text-red-300">{msgRef}</div>}
+        </Modal>
+      )}
+
+      {sinCatalogar !== null && (
+        <Modal title="Neumáticos sin catalogar" onClose={() => setSinCatalogar(null)}>
+          <p className="mb-3 text-xs text-slate-400">
+            Combinaciones marca/modelo/medida presentes en neumáticos reales que aún no tienen referencia en el catálogo. Crea la que falte con un clic; si faltan índices se abre el formulario para completarlos.
+          </p>
+          {cargandoSC ? (
+            <div className="text-sm text-slate-500">Analizando neumáticos…</div>
+          ) : sinCatalogar.length === 0 ? (
+            <div className="text-sm text-emerald-300">Todo catalogado. No hay combinaciones pendientes.</div>
+          ) : (
+            <TableWrap>
+              <thead className="bg-slate-900"><tr>
+                <th className={thCls}>Marca</th><th className={thCls}>Modelo</th><th className={thCls}>Medida</th>
+                <th className={thCls}>Carga</th><th className={thCls}>Vel.</th><th className={thCls}>Uds.</th><th className={thCls}>Empresas</th><th className={thCls}></th>
+              </tr></thead>
+              <tbody>
+                {sinCatalogar.map((c) => {
+                  const clave = `${c.marca}|${c.modelo}|${c.medida}`;
+                  return (
+                    <tr key={clave} className="border-t border-slate-700/60">
+                      <td className={tdCls + " font-semibold"}>{c.marca}</td>
+                      <td className={tdCls + " text-slate-300"}>{c.modelo}</td>
+                      <td className={tdCls + " text-slate-400"}>{c.medida}</td>
+                      <td className={tdCls + " text-slate-400"}>{c.indice_carga ?? "—"}</td>
+                      <td className={tdCls + " text-slate-400"}>{c.indice_velocidad ?? "—"}</td>
+                      <td className={tdCls + " text-slate-400"}>{c.cantidad}</td>
+                      <td className={tdCls + " text-[11px] text-slate-500"}>{c.empresas.join(", ")}</td>
+                      <td className={tdCls}>
+                        <button onClick={() => crearDesdeCombo(c)} disabled={creandoClave === clave}
+                          className="rounded border border-emerald-600 px-2 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-600/10 disabled:opacity-50">
+                          {creandoClave === clave ? "Creando…" : "Añadir al catálogo"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </TableWrap>
+          )}
+          {msgRef && !nuevaRef && <div className="mt-2 text-xs text-red-300">{msgRef}</div>}
+        </Modal>
       )}
     </div>
   );

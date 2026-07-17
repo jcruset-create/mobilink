@@ -1512,3 +1512,127 @@ export async function eliminarReferenciaNeumatico(id: string): Promise<void> {
   const { error } = await supabase.from("tc_referencias_neumatico").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
 }
+
+// ── Alta de referencias en el catálogo (desde neumáticos manuales) ──
+// Normaliza texto libre y clave de comparación marca|modelo|medida.
+function normTexto(s?: string | null): string { return (s ?? "").trim().toLowerCase().replace(/\s+/g, " "); }
+function normMedida(s?: string | null): string { return (s ?? "").toUpperCase().replace(/\s+/g, ""); }
+function claveReferencia(marca?: string | null, modelo?: string | null, medida?: string | null): string {
+  return `${normTexto(marca)}|${normTexto(modelo)}|${normMedida(medida)}`;
+}
+
+// Parsea una medida en texto libre (315/80R22.5, 385/65 R 22.5, 12R22.5, 315/70R22.5)
+// devolviendo ancho / perfil / diámetro de llanta. Lanza si no es reconocible.
+export function parsearMedida(medida: string): { ancho: number; perfil: number | null; diametro: number } {
+  const m = medida.trim().match(/^(\d{2,3})(?:\s*\/\s*(\d{2,3}))?\s*R?\s*(\d{1,2}(?:[.,]\d)?)/i);
+  if (!m) throw new Error(`No se reconoce la medida «${medida}». Usa un formato tipo 315/80R22.5`);
+  return { ancho: Number(m[1]), perfil: m[2] != null ? Number(m[2]) : null, diametro: Number(m[3].replace(",", ".")) };
+}
+
+async function upsertMarca(nombre: string): Promise<string> {
+  const n = nombre.trim();
+  if (!n) throw new Error("La marca es obligatoria");
+  const { data } = await supabase.from("tc_cat_marcas_neumatico").select("id").ilike("nombre", n).limit(1).maybeSingle();
+  if (data) return (data as any).id;
+  const { data: c, error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: n }).select("id").single();
+  if (error) throw new Error(error.message);
+  return (c as any).id;
+}
+
+async function upsertModelo(marcaId: string, nombre: string): Promise<string> {
+  const n = nombre.trim();
+  if (!n) throw new Error("El modelo es obligatorio");
+  const { data } = await supabase.from("tc_cat_modelos_neumatico").select("id").eq("marca_id", marcaId).ilike("nombre", n).limit(1).maybeSingle();
+  if (data) return (data as any).id;
+  const { data: c, error } = await supabase.from("tc_cat_modelos_neumatico").insert({ marca_id: marcaId, nombre: n }).select("id").single();
+  if (error) throw new Error(error.message);
+  return (c as any).id;
+}
+
+async function upsertTyreSize(medida: string, icSimple: string, icDoble: string | null, velocidad: string): Promise<string> {
+  const { ancho, perfil, diametro } = parsearMedida(medida);
+  const medidaStr = construirMedidaTs(ancho, perfil, diametro);
+  const referencia_completa = construirReferenciaTs(medidaStr, icSimple, icDoble, velocidad);
+  const { data } = await supabase.from("tyre_sizes").select("id").eq("referencia_completa", referencia_completa).limit(1).maybeSingle();
+  if (data) return (data as any).id;
+  const medida_id = await resolverMedidaId(medidaStr);
+  const { data: c, error } = await supabase.from("tyre_sizes").insert({
+    medida: medidaStr, referencia_completa, medida_id, ancho, perfil, diametro_llanta: diametro,
+    indice_carga_simple: icSimple, indice_carga_doble: icDoble, codigo_velocidad: velocidad, activo: true,
+  }).select("id").single();
+  if (error) throw new Error(error.message);
+  return (c as any).id;
+}
+
+// Crea (o reutiliza) la referencia de catálogo para una combinación
+// marca/modelo/medida. Reaprovecha marca, modelo y tyre_size existentes.
+export async function crearReferenciaNeumatico(input: {
+  marca: string; modelo: string; medida: string;
+  indiceCargaSimple: string; indiceCargaDoble?: string | null; codigoVelocidad: string;
+}): Promise<string> {
+  const icSimple = input.indiceCargaSimple.trim();
+  const velocidad = input.codigoVelocidad.trim().toUpperCase();
+  if (!icSimple) throw new Error("Falta el índice de carga");
+  if (!velocidad) throw new Error("Falta el código de velocidad");
+  const marcaId = await upsertMarca(input.marca);
+  const modeloId = await upsertModelo(marcaId, input.modelo);
+  const tyreSizeId = await upsertTyreSize(input.medida, icSimple, input.indiceCargaDoble?.trim() || null, velocidad);
+
+  const { data: exist } = await supabase.from("tc_referencias_neumatico")
+    .select("id, activo").eq("modelo_id", modeloId).eq("tyre_size_id", tyreSizeId).limit(1).maybeSingle();
+  if (exist) {
+    if (!(exist as any).activo) await supabase.from("tc_referencias_neumatico").update({ activo: true }).eq("id", (exist as any).id);
+    return (exist as any).id;
+  }
+  const { data: ts } = await supabase.from("tyre_sizes").select("referencia_completa").eq("id", tyreSizeId).single();
+  const referencia_completa = `${input.marca.trim()} ${input.modelo.trim()} ${(ts as any)?.referencia_completa ?? input.medida}`.trim();
+  const { data: c, error } = await supabase.from("tc_referencias_neumatico")
+    .insert({ modelo_id: modeloId, tyre_size_id: tyreSizeId, referencia_completa, activo: true }).select("id").single();
+  if (error) throw new Error(error.message);
+  return (c as any).id;
+}
+
+// Detecta combinaciones marca/modelo/medida presentes en neumáticos reales
+// que aún NO tienen referencia en el catálogo.
+export interface ComboSinCatalogar {
+  marca: string; modelo: string; medida: string;
+  indice_carga: string | null; indice_velocidad: string | null;
+  cantidad: number; empresas: string[];
+}
+export async function listarNeumaticosSinCatalogar(empresaId?: string): Promise<ComboSinCatalogar[]> {
+  const { data: refs, error: refErr } = await supabase.from("tc_referencias_neumatico")
+    .select("modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)")
+    .eq("activo", true).limit(5000);
+  if (refErr) throw new Error(refErr.message);
+  const catalogadas = new Set<string>();
+  for (const r of (refs ?? []) as any[]) {
+    catalogadas.add(claveReferencia(r.modelo?.marca?.nombre, r.modelo?.nombre, r.tyre_size?.medida));
+  }
+
+  let q = supabase.from("tc_neumaticos")
+    .select("marca, modelo, medida, indice_carga, indice_velocidad, empresa:tc_empresas(nombre)")
+    .eq("activo", true).limit(5000);
+  if (empresaId) q = q.eq("empresa_id", empresaId);
+  const { data: neus, error } = await q;
+  if (error) throw new Error(error.message);
+
+  const mapa = new Map<string, ComboSinCatalogar>();
+  for (const n of (neus ?? []) as any[]) {
+    if (!n.marca || !n.modelo || !n.medida) continue; // sin datos suficientes
+    const clave = claveReferencia(n.marca, n.modelo, n.medida);
+    if (catalogadas.has(clave)) continue;
+    const emp = n.empresa?.nombre as string | undefined;
+    const found = mapa.get(clave);
+    if (found) {
+      found.cantidad += 1;
+      if (emp && !found.empresas.includes(emp)) found.empresas.push(emp);
+    } else {
+      mapa.set(clave, {
+        marca: String(n.marca).trim(), modelo: String(n.modelo).trim(), medida: String(n.medida).trim(),
+        indice_carga: n.indice_carga ?? null, indice_velocidad: n.indice_velocidad ?? null,
+        cantidad: 1, empresas: emp ? [emp] : [],
+      });
+    }
+  }
+  return Array.from(mapa.values()).sort((a, b) => b.cantidad - a.cantidad);
+}
