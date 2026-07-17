@@ -581,6 +581,26 @@ export async function stockAlmacenEmpresa(empresaId: string): Promise<StockAlmac
   return (data ?? []) as StockAlmacenLinea[];
 }
 
+// Montar desde el catálogo (sin stock de almacén). Si viene montajeActualId
+// es una sustitución (desmonta el actual, lo devuelve como usado si procede).
+export async function montarDesdeCatalogo(params: {
+  vehiculoId: string; posicionId: string; referenciaId: string; controlIndividual: boolean;
+  datos?: Record<string, string>; km?: number | null; fecha?: string | null; observaciones?: string | null;
+  forzarMedida?: boolean; condicion?: "nuevo" | "usado";
+  montajeActualId?: string | null; motivoDesmontaje?: string; destinoRetirado?: string;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_montar_desde_catalogo", {
+    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId, p_referencia: params.referenciaId,
+    p_control_individual: params.controlIndividual, p_datos: params.datos ?? {},
+    p_km: params.km ?? null, p_fecha: params.fecha ?? null, p_obs: params.observaciones ?? null,
+    p_forzar_medida: params.forzarMedida ?? false, p_condicion: params.condicion ?? "nuevo",
+    p_montaje_actual: params.montajeActualId ?? null,
+    p_motivo_desmontaje: params.motivoDesmontaje ?? "desgaste", p_destino_retirado: params.destinoRetirado ?? "almacen",
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
 export async function montarFueraAlmacen(params: {
   vehiculoId: string; posicionId: string; controlIndividual: boolean; datos?: Record<string, string>;
   motivo: string; km?: number | null; fecha?: string | null; observaciones?: string | null;

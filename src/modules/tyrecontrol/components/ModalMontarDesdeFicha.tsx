@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico, esErrorMedidaIncompatible, stockAlmacenEmpresa, profundidadDibujoPorProducto } from "../services/data";
-import type { ProductoAlmacen, MotivoDesmontaje, DestinoDesmontaje } from "../types";
+import { useEffect, useMemo, useState } from "react";
+import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico, esErrorMedidaIncompatible, stockAlmacenEmpresa, profundidadDibujoPorProducto, montarDesdeCatalogo, listarReferenciasNeumatico } from "../services/data";
+import type { ProductoAlmacen, MotivoDesmontaje, DestinoDesmontaje, ReferenciaNeumatico } from "../types";
 import { MOTIVO_DESMONTAJE_LABELS } from "../types";
 import { Modal, Field, inputCls } from "./ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -46,8 +46,10 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
   const [stock, setStock] = useState<Record<string, { nuevo: number; usado: number }> | null>(null); // null = sin datos → no filtra por stock
   const [soloConStock, setSoloConStock] = useState(true);
   const [fMarcaProd, setFMarcaProd] = useState(""); // filtro por marca en el desplegable
+  const [referencias, setReferencias] = useState<ReferenciaNeumatico[]>([]); // catálogo completo (todas las marcas)
 
   useEffect(() => { listarProductosAlmacen().then(setProductos); }, []);
+  useEffect(() => { listarReferenciasNeumatico().then(setReferencias).catch(() => setReferencias([])); }, []);
   useEffect(() => {
     if (!empresaId) { setStock(null); return; }
     stockAlmacenEmpresa(empresaId)
@@ -56,35 +58,55 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
   }, [empresaId]);
   const dispDe = (id: string) => stock ? (condicion === "usado" ? stock[id]?.usado ?? 0 : stock[id]?.nuevo ?? 0) : null;
 
-  // Profundidad de dibujo (nueva) por producto, para avisar si falta en el catálogo.
+  // Profundidad de dibujo (nueva) por producto de almacén.
   const [dibujo, setDibujo] = useState<Record<string, number | null> | null>(null);
   useEffect(() => { profundidadDibujoPorProducto().then(setDibujo).catch(() => setDibujo(null)); }, []);
-  const dibujoProducto = productoId && dibujo ? dibujo[productoId] : undefined;
-  const faltaDibujo = condicion === "nuevo" && !!productoId && dibujo != null && (dibujoProducto == null);
-  const productoSel = productos.find((p) => p.id === productoId);
   useEffect(() => { const t = setTimeout(() => listarProductosAlmacen(busqueda).then(setProductos), 250); return () => clearTimeout(t); }, [busqueda]);
   useEffect(() => { setMedidaIncompatible(false); }, [productoId]);
 
+  // Lista unificada: productos de almacén (con stock) + referencias de catálogo
+  // que no estén en el almacén (se montan sin descontar stock).
+  type Item = { key: string; tipo: "almacen" | "catalogo"; id: string; marca: string; modelo: string | null; medida: string; dibujo: number | null };
+  const claveId = (m?: string | null, mo?: string | null, me?: string | null) => `${(m ?? "").toLowerCase().trim()}|${(mo ?? "").toLowerCase().trim()}|${baseMedida(me)}`;
+  const items: Item[] = useMemo(() => {
+    const almClaves = new Set(productos.map((p) => claveId(p.marca, p.modelo, p.medida)));
+    const alm: Item[] = productos.map((p) => ({ key: `alm:${p.id}`, tipo: "almacen", id: p.id, marca: p.marca, modelo: p.modelo ?? null, medida: p.medida, dibujo: dibujo?.[p.id] ?? null }));
+    const cat: Item[] = referencias
+      .filter((r) => !almClaves.has(claveId(r.modelo?.marca?.nombre, r.modelo?.nombre, r.tyre_size?.medida)))
+      .map((r) => ({ key: `cat:${r.id}`, tipo: "catalogo", id: r.id, marca: r.modelo?.marca?.nombre ?? "", modelo: r.modelo?.nombre ?? null, medida: r.tyre_size?.medida ?? "", dibujo: r.profundidad_dibujo_mm ?? null }));
+    return [...alm, ...cat];
+  }, [productos, referencias, dibujo]);
+
+  const sel = productoId ? items.find((i) => i.key === productoId) ?? null : null;
+  const dibujoProducto = sel?.dibujo;
+  const faltaDibujo = condicion === "nuevo" && !!sel && dibujoProducto == null && (sel.tipo === "catalogo" || dibujo != null);
+
   async function confirmar(forzar = false) {
-    if (!productoId) { setMsg("Selecciona un producto de almacén"); return; }
+    if (!sel) { setMsg("Selecciona un neumático"); return; }
     // Para un usado, la profundidad restante se pasa vía datos → profundidad_actual_mm.
     const datosFinal = condicion === "usado" && profRestante.trim() !== ""
       ? { ...datos, profundidad_actual_mm: profRestante.replace(",", ".") }
       : datos;
+    const fecha = new Date().toISOString().slice(0, 10);
     setSaving(true); setMsg("");
     try {
-      if (montajeActualId) {
+      if (sel.tipo === "catalogo") {
+        // Solo catálogo (no está en almacén): se monta sin descontar stock.
+        await montarDesdeCatalogo({
+          vehiculoId, posicionId, referenciaId: sel.id, controlIndividual, datos: datosFinal,
+          km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+          montajeActualId: montajeActualId ?? null, motivoDesmontaje: motivo, destinoRetirado: destino,
+        });
+      } else if (montajeActualId) {
         await sustituirNeumatico({
-          montajeActualId, productoAlmacenId: productoId, controlIndividual, datos: datosFinal,
+          montajeActualId, productoAlmacenId: sel.id, controlIndividual, datos: datosFinal,
           motivoDesmontaje: motivo, destinoRetirado: destino,
-          km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
-          forzarMedida: forzar, condicion,
+          km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
         });
       } else {
         await montarDesdeAlmacen({
-          vehiculoId, posicionId, productoAlmacenId: productoId, controlIndividual, datos: datosFinal,
-          km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
-          forzarMedida: forzar, condicion,
+          vehiculoId, posicionId, productoAlmacenId: sel.id, controlIndividual, datos: datosFinal,
+          km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
         });
       }
       onDone();
@@ -146,7 +168,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
               </button>
             ))}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">Se descuenta 1 unidad del stock {condicion} del cliente de almacén; si no hay, se bloquea.</div>
+          <div className="mt-1 text-[11px] text-slate-500">Si el neumático está en el almacén, se descuenta 1 unidad del stock {condicion}; los de solo catálogo se montan sin descuento.</div>
           {condicion === "usado" && (
             <div className="mt-2">
               <div className="mb-1 text-[10px] text-slate-400">Profundidad restante (mm)</div>
@@ -156,19 +178,24 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
           )}
         </Field>
 
-        <Field label="Producto de almacén (marca / medida) *">
-          <input className={`${inputCls} mb-1`} placeholder="Buscar…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        <Field label="Neumático (almacén / catálogo) *">
+          <input className={`${inputCls} mb-1`} placeholder="Buscar marca, modelo o medida…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           {(() => {
+            const q = busqueda.trim().toLowerCase();
             const filtrarMedida = soloMedida && !!medidaActual;
-            const porMedida = filtrarMedida ? productos.filter((p) => baseMedida(p.medida) === baseMedida(medidaActual)) : productos;
-            const marcas = Array.from(new Set(porMedida.map((p) => p.marca).filter(Boolean))).sort();
-            let visibles = fMarcaProd ? porMedida.filter((p) => p.marca === fMarcaProd) : porMedida;
-            const hayStock = stock !== null; // solo filtramos por stock si tenemos los datos
-            if (hayStock && soloConStock) visibles = visibles.filter((p) => (dispDe(p.id) ?? 0) > 0);
-            const etiqueta = (p: typeof productos[number]) => {
-              const d = dispDe(p.id);
-              const base = `${p.marca} ${p.modelo ?? ""} · ${p.medida}`.replace(/\s+/g, " ").trim();
-              return d != null ? `${base} · ${d} en stock` : base;
+            let base = filtrarMedida ? items.filter((i) => baseMedida(i.medida) === baseMedida(medidaActual)) : items;
+            if (q) base = base.filter((i) => `${i.marca} ${i.modelo ?? ""} ${i.medida}`.toLowerCase().includes(q));
+            const marcas = Array.from(new Set(base.map((i) => i.marca).filter(Boolean))).sort();
+            let visibles = fMarcaProd ? base.filter((i) => i.marca === fMarcaProd) : base;
+            const hayStock = stock !== null;
+            // el filtro de stock solo aplica a los de almacén; los de catálogo siempre salen (se montan sin descuento)
+            if (hayStock && soloConStock) visibles = visibles.filter((i) => i.tipo === "catalogo" || (dispDe(i.id) ?? 0) > 0);
+            visibles = [...visibles].sort((a, b) => (a.marca + (a.modelo ?? "")).localeCompare(b.marca + (b.modelo ?? "")));
+            const etiqueta = (i: Item) => {
+              const nom = `${i.marca} ${i.modelo ?? ""} · ${i.medida}`.replace(/\s+/g, " ").trim();
+              if (i.tipo === "catalogo") return `${nom} · catálogo (sin stock)`;
+              const d = dispDe(i.id);
+              return d != null ? `${nom} · ${d} en stock` : nom;
             };
             return (
               <>
@@ -178,13 +205,13 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
                 </select>
                 <select className={inputCls} value={productoId} onChange={(e) => setProductoId(e.target.value)}>
                   <option value="">Selecciona…</option>
-                  {visibles.map((p) => <option key={p.id} value={p.id}>{etiqueta(p)}</option>)}
+                  {visibles.map((i) => <option key={i.key} value={i.key}>{etiqueta(i)}</option>)}
                 </select>
                 <div className="mt-1 flex flex-col gap-1 text-[11px] text-slate-400">
                   {hayStock && (
                     <label className="flex items-center gap-2">
                       <input type="checkbox" checked={soloConStock} onChange={(e) => setSoloConStock(e.target.checked)} />
-                      Mostrar solo con stock {condicion} disponible
+                      Mostrar solo con stock {condicion} disponible (el catálogo se muestra igualmente)
                     </label>
                   )}
                   {medidaActual && (
@@ -195,25 +222,27 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
                   )}
                 </div>
                 {visibles.length === 0 && (
-                  <div className="mt-1 text-[11px] text-amber-300">
-                    {hayStock && soloConStock
-                      ? `No hay stock ${condicion}${filtrarMedida ? ` de la medida ${medidaActual}` : ""}. Desmarca «solo con stock» o cambia de condición.`
-                      : `No hay productos de almacén${filtrarMedida ? ` con la medida ${medidaActual}` : ""}.`}
-                  </div>
+                  <div className="mt-1 text-[11px] text-amber-300">Sin resultados{filtrarMedida ? ` para la medida ${medidaActual}` : ""}.</div>
                 )}
               </>
             );
           })()}
         </Field>
 
-        {condicion === "nuevo" && productoId && dibujoProducto != null && (
+        {sel?.tipo === "catalogo" && (
+          <div className="rounded-lg border border-sky-600/40 bg-sky-500/8 px-3 py-2 text-[12px] text-sky-200">
+            Este modelo no está en el almacén: se montará <b>sin descontar stock</b> (como neumático de catálogo).
+          </div>
+        )}
+
+        {condicion === "nuevo" && sel && dibujoProducto != null && (
           <div className="rounded-lg border border-emerald-600/40 bg-emerald-500/8 px-3 py-2 text-[12px] text-emerald-200">
             Se registrará la profundidad de dibujo de la ficha: <b>{dibujoProducto} mm</b>.
           </div>
         )}
         {faltaDibujo && (
           <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
-            ⚠ El modelo <b>{productoSel ? `${productoSel.marca} ${productoSel.modelo ?? ""}`.trim() : "seleccionado"}</b> no tiene <b>profundidad de dibujo</b> en el catálogo, así que el neumático quedará sin profundidad hasta medirlo.
+            ⚠ El modelo <b>{sel ? `${sel.marca} ${sel.modelo ?? ""}`.trim() : "seleccionado"}</b> no tiene <b>profundidad de dibujo</b> en el catálogo, así que el neumático quedará sin profundidad hasta medirlo.
             Complétala en <b>Catálogo de neumáticos</b> (editar datos técnicos del modelo) y se aplicará <b>siempre</b> a los montajes nuevos.
           </div>
         )}
@@ -232,7 +261,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
           </div>
         )}
         {!controlIndividual && (
-          <div className="text-[11px] text-slate-500">Se creará un número interno automático; el resto de datos se hereda del producto de almacén.</div>
+          <div className="text-[11px] text-slate-500">Se creará un número interno automático; el resto de datos se hereda del producto de almacén o del catálogo.</div>
         )}
 
         <div className="grid grid-cols-2 gap-2">
