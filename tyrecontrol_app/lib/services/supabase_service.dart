@@ -445,6 +445,18 @@ class TyreControlApi {
     });
   }
 
+  /// Cierra la intervención de cambio (agrupa operaciones + informe con IA)
+  /// llamando al backend. Best-effort: si falla, no bloquea el flujo.
+  static Future<void> cerrarIntervencion(String vehiculoId, DateTime desde) async {
+    try {
+      await http.post(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/intervencion/cerrar'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'vehiculoId': vehiculoId, 'desde': desde.toUtc().toIso8601String()}),
+      ).timeout(const Duration(seconds: 20));
+    } catch (_) {/* el informe se puede regenerar; no bloquea */}
+  }
+
   /// Deshace la última operación de montaje/desmontaje del vehículo desde
   /// [desde] (sesión de cambio). Devuelve una descripción de lo deshecho.
   static Future<String> deshacerUltimaOperacion(String vehiculoId, DateTime desde) async {

@@ -792,8 +792,18 @@ export async function listarReservas(filtros?: { empresaId?: string; status?: st
 // ── Fase 8: Operaciones (listado/filtros) ──────────────────────
 const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), neumatico:tc_neumaticos(*), posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(*), posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(*)";
 
+export interface Intervencion {
+  id: string; empresa_id: string; vehiculo_id: string | null; fecha: string;
+  resumen: string | null; resumen_ia: string | null; n_operaciones: number; created_at?: string;
+}
+export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
+  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Intervencion[];
+}
+
 export async function listarOperaciones(filtros?: {
-  empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; estado?: string; desde?: string; hasta?: string;
+  empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; estado?: string; intervencionId?: string; desde?: string; hasta?: string;
 }): Promise<OperacionNeumatico[]> {
   let q = supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200);
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
@@ -801,6 +811,7 @@ export async function listarOperaciones(filtros?: {
   if (filtros?.neumaticoId) q = q.eq("neumatico_id", filtros.neumaticoId);
   if (filtros?.tipo) q = q.eq("tipo_operacion", filtros.tipo);
   if (filtros?.estado) q = q.eq("status", filtros.estado);
+  if (filtros?.intervencionId) q = q.eq("intervencion_id", filtros.intervencionId);
   if (filtros?.desde) q = q.gte("fecha_operacion", filtros.desde);
   if (filtros?.hasta) q = q.lte("fecha_operacion", filtros.hasta);
   const { data, error } = await q;

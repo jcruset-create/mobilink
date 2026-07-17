@@ -1524,6 +1524,72 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+// ── TyreControl: cerrar una intervención de cambio de neumático ──
+// Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
+app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
+  try {
+    const { vehiculoId, desde } = req.body ?? {};
+    if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
+
+    // Operaciones de la sesión aún sin intervención.
+    const { data: ops, error } = await supabase
+      .from("operaciones_neumaticos")
+      .select("id, empresa_id, tecnico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
+        "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
+        "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
+        "neumatico:tc_neumaticos(marca, modelo, medida)")
+      .eq("vehiculo_id", vehiculoId)
+      .is("intervencion_id", null)
+      .gte("created_at", desde)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    const activas = (ops ?? []).filter((o: any) => !o.is_anulada);
+    if (activas.length === 0) return res.json({ id: null, resumen: "", resumen_ia: "", n: 0 });
+
+    // Resumen determinista (mismas frases que en el front).
+    const MOTIVO: Record<string, string> = { desgaste: "desgaste", pinchazo: "pinchazo", rotura: "rotura", preventivo: "preventivo", desgaste_irregular: "desgaste irregular", cambio_estacional: "cambio estacional", reparacion: "reparación", fin_vida: "fin de vida", error_montaje: "error de montaje", otro: "otro" };
+    const VERBO: Record<string, [string, string]> = { montaje: ["Montado", "Montados"], desmontaje: ["Desmontado", "Desmontados"], sustitucion: ["Sustituido", "Sustituidos"], rotacion: ["Rotado", "Rotados"], cambio_posicion: ["Cambiado de posición", "Cambiados de posición"], intercambio: ["Intercambiado", "Intercambiados"], descarte: ["Descartado", "Descartados"] };
+    const posLabel = (o: any) => { const p = o.posicion_destino ?? o.posicion_origen; return p?.nombre ?? p?.codigo_posicion ?? o.neumatico?.medida ?? ""; };
+    const unirY = (xs: string[]) => { const a = xs.filter(Boolean); if (!a.length) return ""; if (a.length === 1) return a[0]; return `${a.slice(0, -1).join(", ")} y ${a[a.length - 1]}`; };
+    const porTipo = new Map<string, string[]>(); const reps = new Map<string, string[]>();
+    for (const o of activas as any[]) {
+      if (o.tipo_operacion === "reparacion") { const m = o.motivo ? (MOTIVO[o.motivo] ?? o.motivo) : "reparación"; const a = reps.get(m) ?? []; const pl = posLabel(o); if (pl) a.push(pl); reps.set(m, a); continue; }
+      const a = porTipo.get(o.tipo_operacion) ?? []; const pl = posLabel(o); if (pl) a.push(pl); porTipo.set(o.tipo_operacion, a);
+    }
+    const lineas: string[] = [];
+    for (const [tipo, poss] of porTipo) { const v = VERBO[tipo]; const n = poss.length || (activas as any[]).filter((o) => o.tipo_operacion === tipo).length; const s = n === 1 ? "neumático" : "neumáticos"; const verbo = v ? (n === 1 ? v[0] : v[1]) : tipo; lineas.push(`${verbo} ${n} ${s}${poss.length ? ": " + unirY(poss) : ""}`); }
+    for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
+    const resumen = lineas.join("\n");
+
+    // Redacción con IA (breve informe técnico).
+    let resumenIa = resumen;
+    try {
+      const r = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe MUY breve (1-3 frases, español, tono profesional) de la intervención a partir de la lista de acciones. No inventes datos." },
+          { role: "user", content: `Acciones realizadas:\n${resumen}` },
+        ],
+      });
+      resumenIa = r.choices[0]?.message?.content?.trim() || resumen;
+    } catch (e) { console.error("IA intervención falló, se guarda solo el resumen:", e); }
+
+    const empresaId = (activas[0] as any).empresa_id;
+    const tecnicoId = (activas[0] as any).tecnico_id ?? null;
+    const { data: interv, error: e2 } = await supabase
+      .from("tc_intervenciones")
+      .insert({ empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId, resumen, resumen_ia: resumenIa, n_operaciones: activas.length })
+      .select("id").single();
+    if (e2) throw e2;
+    await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
+
+    res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
+  } catch (error: any) {
+    console.error("cerrar intervención:", error);
+    res.status(500).json({ error: error?.message || "Error" });
+  }
+});
+
 app.get("/api/ai-test", async (req, res) => {
   try {
     const response = await openai.chat.completions.create({

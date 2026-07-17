@@ -169,6 +169,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   /// Finalizar: da por solucionadas las incidencias de las posiciones donde se
   /// ha montado un neumático (sustitución completada); el resto sigue pendiente.
   Future<void> _finalizar() async {
+    // Cierra la intervención (agrupa las operaciones de la sesión + informe IA).
+    setState(() => _trabajando = true);
+    await TyreControlApi.cerrarIntervencion(widget.vehiculoId, _abiertoEn);
+    if (mounted) setState(() => _trabajando = false);
+
     final aResolver = widget.incidencias
         .where((i) => i.posicionId != null && _posicionesMontadas.contains(i.posicionId) && i.problemas.any((p) => p.abierto))
         .toList();

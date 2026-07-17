@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones } from "../services/data";
+import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
@@ -35,6 +36,8 @@ export default function VehiculoDetalle() {
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
   const [modalOps, setModalOps] = useState(false);
+  const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
+  const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
@@ -50,6 +53,12 @@ export default function VehiculoDetalle() {
     setEjes(veh?.medidas_por_eje ? await listarEjesVehiculo(id) : []);
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
+    setIntervenciones(await listarIntervenciones(id).catch(() => []));
+  }
+
+  async function abrirIntervencion(interv: Intervencion) {
+    const ops = await listarOperaciones({ intervencionId: interv.id }).catch(() => []);
+    setVerInterv({ interv, ops });
   }
 
   async function verFichaRevision(r: RevisionVehiculoT) {
@@ -234,7 +243,48 @@ export default function VehiculoDetalle() {
             </div>
           );
         })()}
+
+        {intervenciones.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Intervenciones ({intervenciones.length})</div>
+            <div className="space-y-2">
+              {intervenciones.map((iv) => (
+                <div key={iv.id} className="flex items-start justify-between gap-3 rounded-lg bg-slate-900 p-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-slate-400">{iv.fecha} · {iv.n_operaciones} operación(es)</div>
+                    <div className="text-sm text-slate-200">{iv.resumen_ia || iv.resumen || "—"}</div>
+                  </div>
+                  <button onClick={() => abrirIntervencion(iv)} className="shrink-0 rounded-lg border border-sky-600 px-3 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-600/10">Visualizar</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {verInterv && (
+        <Modal title={`Intervención · ${verInterv.interv.fecha}`} onClose={() => setVerInterv(null)}>
+          <div className="mb-3 rounded-lg border border-emerald-600/30 bg-emerald-500/5 p-3">
+            <div className="mb-1 text-[11px] font-semibold uppercase text-emerald-300">Informe</div>
+            <div className="whitespace-pre-line text-sm text-slate-200">{verInterv.interv.resumen_ia || verInterv.interv.resumen || "—"}</div>
+          </div>
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Tipo</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
+            </tr></thead>
+            <tbody>
+              {verInterv.ops.map((o) => (
+                <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
+                  <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Modal>
+      )}
 
       {fichaRevision && (
         <Modal title={`Revisión del ${fechaHora(fichaRevision)}`} onClose={() => setFichaRevision(null)}>
