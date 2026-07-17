@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision } from "../services/data";
-import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
-import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt } from "../types";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones } from "../services/data";
+import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
+import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
+import { resumenOperaciones } from "../services/resumenOperaciones";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
@@ -32,6 +33,8 @@ export default function VehiculoDetalle() {
   const [fichaRevision, setFichaRevision] = useState<RevisionVehiculoT | null>(null);
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
+  const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
+  const [modalOps, setModalOps] = useState(false);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
@@ -46,6 +49,7 @@ export default function VehiculoDetalle() {
 
     setEjes(veh?.medidas_por_eje ? await listarEjesVehiculo(id) : []);
     setRevisiones(await listarRevisiones(id));
+    setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
   }
 
   async function verFichaRevision(r: RevisionVehiculoT) {
@@ -203,13 +207,33 @@ export default function VehiculoDetalle() {
         )}
       </div>
 
-      {/* Placeholders futuros */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        {["Histórico de neumáticos", "Operaciones"].map((t) => (
-          <div key={t} className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-6 text-center text-sm text-slate-500">
-            {t}<div className="text-[11px]">Disponible en próximas fases</div>
-          </div>
-        ))}
+      {/* Operaciones del vehículo: informe resumido + histórico */}
+      <div className="mt-3 rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[11px] font-bold uppercase text-slate-400">Operaciones ({operaciones.length})</span>
+          {operaciones.length > 0 && (
+            <button onClick={() => setModalOps(true)} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">Ver histórico</button>
+          )}
+        </div>
+        {(() => {
+          if (operaciones.length === 0) return <div className="text-sm text-slate-500">Sin operaciones registradas.</div>;
+          // Informe de la última jornada (la fecha de la operación más reciente).
+          const ultimaFecha = operaciones[0]?.fecha_operacion;
+          const delDia = operaciones.filter((o) => o.fecha_operacion === ultimaFecha);
+          const lineas = resumenOperaciones(delDia);
+          return (
+            <div className="rounded-lg border border-emerald-600/30 bg-emerald-500/5 p-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase text-emerald-300">Informe · {ultimaFecha}</div>
+              {lineas.length === 0 ? (
+                <div className="text-sm text-slate-400">Sin cambios que resumir.</div>
+              ) : (
+                <ul className="list-disc space-y-0.5 pl-5 text-sm text-slate-200 marker:text-emerald-400">
+                  {lineas.map((l, i) => <li key={i}>{l}</li>)}
+                </ul>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {fichaRevision && (
@@ -235,6 +259,40 @@ export default function VehiculoDetalle() {
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Modal>
+      )}
+
+      {modalOps && (
+        <Modal title="Histórico de operaciones" onClose={() => setModalOps(false)}>
+          {(() => {
+            const lineas = resumenOperaciones(operaciones);
+            return lineas.length > 0 ? (
+              <div className="mb-3 rounded-lg border border-emerald-600/30 bg-emerald-500/5 p-3">
+                <div className="mb-1 text-[11px] font-semibold uppercase text-emerald-300">Resumen general</div>
+                <ul className="list-disc space-y-0.5 pl-5 text-sm text-slate-200 marker:text-emerald-400">
+                  {lineas.map((l, i) => <li key={i}>{l}</li>)}
+                </ul>
+              </div>
+            ) : null;
+          })()}
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Fecha</th><th className={thCls}>Tipo</th><th className={thCls}>Estado</th>
+              <th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
+            </tr></thead>
+            <tbody>
+              {operaciones.map((o) => (
+                <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
+                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}</td>
+                  <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
                 </tr>
               ))}
             </tbody>
