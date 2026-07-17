@@ -15,6 +15,7 @@ const VACIO: NeumaticoInput = {
 const ESTADO_COLOR: Record<EstadoNeumatico, string> = {
   almacen: "bg-slate-600 text-slate-100", reservado: "bg-amber-500/30 text-amber-200",
   montado: "bg-emerald-500/30 text-emerald-200", reparacion: "bg-sky-500/30 text-sky-200", descartado: "bg-rose-500/30 text-rose-200",
+  pendiente_reciclaje: "bg-orange-500/30 text-orange-200",
 };
 
 export default function Neumaticos() {

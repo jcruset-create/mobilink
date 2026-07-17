@@ -445,8 +445,18 @@ class TyreControlApi {
     });
   }
 
+  /// Deshace la última operación de montaje/desmontaje del vehículo desde
+  /// [desde] (sesión de cambio). Devuelve una descripción de lo deshecho.
+  static Future<String> deshacerUltimaOperacion(String vehiculoId, DateTime desde) async {
+    final data = await _db.rpc('tc_deshacer_ultima_operacion', params: {
+      'p_vehiculo': vehiculoId,
+      'p_desde': desde.toUtc().toIso8601String(),
+    });
+    return (data as String?) ?? 'Nada que deshacer';
+  }
+
   /// Desmonta un neumático. [destino] = 'almacen' (vuelve como usado) |
-  /// 'descartado' (baja) | 'reparacion'.
+  /// 'pendiente_reciclaje' (papelera) | 'descartado' (baja) | 'reparacion'.
   static Future<void> desmontarNeumatico({
     required String montajeId,
     String destino = 'almacen',

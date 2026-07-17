@@ -470,12 +470,13 @@ export const ORIGEN_KM_LABELS: Record<OrigenKm, string> = {
   importacion_excel: "Importación Excel",
 };
 
-export type EstadoNeumatico = "almacen" | "reservado" | "montado" | "reparacion" | "descartado";
+export type EstadoNeumatico = "almacen" | "reservado" | "montado" | "reparacion" | "descartado" | "pendiente_reciclaje";
 export type MotivoDesmontaje = "desgaste" | "pinchazo" | "rotura" | "preventivo" | "rotacion" | "reparacion" | "descarte";
 export type DestinoDesmontaje = "almacen" | "reparacion" | "descartado";
 
 export const ESTADO_NEUMATICO_LABELS: Record<EstadoNeumatico, string> = {
   almacen: "En almacén", reservado: "Reservado", montado: "Montado", reparacion: "Reparación", descartado: "Descartado",
+  pendiente_reciclaje: "Papelera (reciclaje)",
 };
 export const MOTIVO_DESMONTAJE_LABELS: Record<MotivoDesmontaje, string> = {
   desgaste: "Desgaste", pinchazo: "Pinchazo", rotura: "Rotura", preventivo: "Preventivo",

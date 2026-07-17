@@ -43,6 +43,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por NEUMÁTICO
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   bool _trabajando = false;
+  late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
 
   double? _aspect;
   ImageStream? _stream;
@@ -152,24 +153,25 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino);
       HapticFeedback.mediumImpact();
       await _cargar();
-      _aviso(destino == 'almacen' ? 'Desmontado y devuelto al almacén (usado)' : 'Neumático descartado', ok: destino == 'almacen');
+      final msg = destino == 'almacen'
+          ? 'Desmontado y devuelto al almacén (usado)'
+          : destino == 'pendiente_reciclaje'
+              ? 'Enviado a la papelera de reciclaje'
+              : 'Neumático descartado';
+      _aviso(msg, ok: destino != 'descartado');
     } catch (e) { _aviso('Error: $e', ok: false); }
     finally { if (mounted) setState(() => _trabajando = false); }
   }
 
-  Future<void> _soltarEnBasura(MontajeActual m) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Descartar neumático'),
-        content: Text('¿Dar de baja (reciclar) el neumático de ${_posNombre(m.posicionId)}? Es irreversible.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          FilledButton(style: FilledButton.styleFrom(backgroundColor: AppColors.danger), onPressed: () => Navigator.pop(ctx, true), child: const Text('Descartar')),
-        ],
-      ),
-    );
-    if (ok == true) await _desmontar(m, 'descartado');
+  Future<void> _deshacer() async {
+    setState(() => _trabajando = true);
+    try {
+      final res = await TyreControlApi.deshacerUltimaOperacion(widget.vehiculoId, _abiertoEn);
+      HapticFeedback.mediumImpact();
+      await _cargar();
+      _aviso(res, ok: res != 'Nada que deshacer');
+    } catch (e) { _aviso('Error al deshacer: $e', ok: false); }
+    finally { if (mounted) setState(() => _trabajando = false); }
   }
 
   Future<void> _soltarStockEnPosicion(_DragStock d, PosicionVehiculo p) async {
@@ -211,11 +213,6 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  String _posNombre(String posId) {
-    final p = _posiciones.where((x) => x.id == posId).firstOrNull;
-    return p?.nombre ?? p?.codigoPosicion ?? 'posición';
-  }
-
   void _aviso(String txt, {required bool ok}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -229,6 +226,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       appBar: AppBar(
         title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
         actions: [
+          TextButton.icon(
+            onPressed: _trabajando ? null : _deshacer,
+            icon: const Icon(Icons.undo, color: Colors.white),
+            label: const Text('Deshacer', style: TextStyle(color: Colors.white)),
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: FilledButton.icon(
@@ -274,8 +276,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           Expanded(child: _zonaDestino(icono: Icons.warehouse, label: 'Almacén (usado)', color: AppColors.info,
               onAccept: (m) => _desmontar(m, 'almacen'))),
           const SizedBox(width: 8),
-          Expanded(child: _zonaDestino(icono: Icons.delete_outline, label: 'Basura (reciclar)', color: AppColors.danger,
-              onAccept: (m) => _soltarEnBasura(m))),
+          Expanded(child: _zonaDestino(icono: Icons.recycling, label: 'Papelera (reciclaje)', color: AppColors.danger,
+              onAccept: (m) => _desmontar(m, 'pendiente_reciclaje'))),
         ]),
       ),
     ]);
