@@ -109,8 +109,9 @@ begin
     case when p_control_individual then p_datos->>'numero_serie' else null end,
     case when p_control_individual then p_datos->>'rfid_epc' else null end,
     case when p_control_individual then p_datos->>'proveedor' else null end,
-    -- nuevo: profundidad de dibujo de la ficha; usado: se medirá en revisión
-    case when p_condicion = 'nuevo' then v_prof_dibujo else null end,
+    -- nuevo: profundidad de dibujo de la ficha; usado: la restante indicada (o null → se mide)
+    case when p_condicion = 'nuevo' then v_prof_dibujo
+         else nullif(p_datos->>'profundidad_actual_mm', '')::numeric end,
     'montado', p_vehiculo, p_posicion, true
   ) returning id into v_neumatico;
 

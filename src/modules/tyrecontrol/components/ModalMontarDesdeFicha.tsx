@@ -42,6 +42,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
   const [medidaIncompatible, setMedidaIncompatible] = useState(false);
   const [soloMedida, setSoloMedida] = useState(true); // filtrar el almacén por la medida de la ficha
   const [condicion, setCondicion] = useState<"nuevo" | "usado">("nuevo"); // consumir stock nuevo o usado
+  const [profRestante, setProfRestante] = useState(""); // mm restantes al montar un usado
   const [stock, setStock] = useState<Record<string, { nuevo: number; usado: number }> | null>(null); // null = sin datos → no filtra por stock
   const [soloConStock, setSoloConStock] = useState(true);
 
@@ -65,18 +66,22 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
 
   async function confirmar(forzar = false) {
     if (!productoId) { setMsg("Selecciona un producto de almacén"); return; }
+    // Para un usado, la profundidad restante se pasa vía datos → profundidad_actual_mm.
+    const datosFinal = condicion === "usado" && profRestante.trim() !== ""
+      ? { ...datos, profundidad_actual_mm: profRestante.replace(",", ".") }
+      : datos;
     setSaving(true); setMsg("");
     try {
       if (montajeActualId) {
         await sustituirNeumatico({
-          montajeActualId, productoAlmacenId: productoId, controlIndividual, datos,
+          montajeActualId, productoAlmacenId: productoId, controlIndividual, datos: datosFinal,
           motivoDesmontaje: motivo, destinoRetirado: destino,
           km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
           forzarMedida: forzar, condicion,
         });
       } else {
         await montarDesdeAlmacen({
-          vehiculoId, posicionId, productoAlmacenId: productoId, controlIndividual, datos,
+          vehiculoId, posicionId, productoAlmacenId: productoId, controlIndividual, datos: datosFinal,
           km: km ? Number(km) : null, fecha: new Date().toISOString().slice(0, 10), observaciones: obs || null,
           forzarMedida: forzar, condicion,
         });
@@ -141,6 +146,13 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
             ))}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">Se descuenta 1 unidad del stock {condicion} del cliente de almacén; si no hay, se bloquea.</div>
+          {condicion === "usado" && (
+            <div className="mt-2">
+              <div className="mb-1 text-[10px] text-slate-400">Profundidad restante (mm)</div>
+              <input type="number" step="0.1" className={inputCls} placeholder="p. ej. 8.5" value={profRestante} onChange={(e) => setProfRestante(e.target.value)} />
+              <div className="mt-1 text-[11px] text-slate-500">Milímetros que le quedan al neumático usado. Si lo dejas vacío, se registrará en la próxima revisión.</div>
+            </div>
+          )}
         </Field>
 
         <Field label="Producto de almacén (marca / medida) *">
