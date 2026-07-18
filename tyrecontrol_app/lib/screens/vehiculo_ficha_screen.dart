@@ -4,6 +4,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_layout_image.dart';
 import 'cambio_neumatico_screen.dart';
+import 'historial_operaciones_screen.dart';
 
 /// Ficha del vehículo — réplica de solo lectura de la del panel web.
 ///
@@ -452,15 +453,27 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
     return _seccion(
       'Plano del vehículo',
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      SizedBox(
-        width: double.infinity,
-        child: FilledButton.icon(
-          onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId))),
-          icon: const Icon(Icons.swap_horiz),
-          label: const Text('Cambiar neumáticos (arrastrar)'),
+      Row(children: [
+        Expanded(
+          child: FilledButton.icon(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId))),
+            icon: const Icon(Icons.swap_horiz),
+            label: const Text('Cambiar'),
+          ),
         ),
-      ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => HistorialOperacionesScreen(
+                    vehiculoId: widget.vehiculoId,
+                    matricula: (_v?['matricula'] as String?) ?? ''))),
+            icon: const Icon(Icons.history),
+            label: const Text('Operaciones'),
+          ),
+        ),
+      ]),
       const SizedBox(height: 10),
       _imagenChasis == null
           ? const Text('Este vehículo no tiene plano configurado.',
