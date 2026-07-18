@@ -497,13 +497,27 @@ class TyreControlApi {
 
   /// Cierra la intervención de cambio (agrupa operaciones + informe con IA)
   /// llamando al backend. Best-effort: si falla, no bloquea el flujo.
-  static Future<void> cerrarIntervencion(String vehiculoId, DateTime desde) async {
+  ///
+  /// [montajeAntes] = estado del vehículo al abrir la pantalla (posición →
+  /// neumático) para el plano "antes"; [incidencias] = las averías de origen.
+  /// El backend calcula el estado "después" y redacta el informe con IA.
+  static Future<void> cerrarIntervencion(
+    String vehiculoId,
+    DateTime desde, {
+    List<Map<String, dynamic>>? montajeAntes,
+    List<Map<String, dynamic>>? incidencias,
+  }) async {
     try {
       await http.post(
         Uri.parse('$kBackendUrl/api/tyrecontrol/intervencion/cerrar'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'vehiculoId': vehiculoId, 'desde': desde.toUtc().toIso8601String()}),
-      ).timeout(const Duration(seconds: 20));
+        body: jsonEncode({
+          'vehiculoId': vehiculoId,
+          'desde': desde.toUtc().toIso8601String(),
+          if (montajeAntes != null) 'montajeAntes': montajeAntes,
+          if (incidencias != null) 'incidencias': incidencias,
+        }),
+      ).timeout(const Duration(seconds: 25));
     } catch (_) {/* el informe se puede regenerar; no bloquea */}
   }
 

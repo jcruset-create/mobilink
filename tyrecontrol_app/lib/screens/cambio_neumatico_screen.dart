@@ -85,6 +85,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   ImageStream? _stream;
   ImageStreamListener? _listener;
 
+  List<Map<String, dynamic>>? _montajeAntes; // estado del vehículo al abrir (plano "antes")
+
   @override
   void initState() {
     super.initState();
@@ -166,6 +168,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         _presionesObjetivo = presObj;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
       });
+      // El plano "antes" se congela con el estado de la PRIMERA carga.
+      _montajeAntes ??= _snapshotActual();
       if (_imagenChasis != null) _resolverImagen(_imagenChasis!);
     } catch (e) {
       if (!mounted) return;
@@ -173,6 +177,45 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Estado actual del vehículo (posición → neumático + avería) para el plano.
+  List<Map<String, dynamic>> _snapshotActual() {
+    final out = <Map<String, dynamic>>[];
+    for (final p in _posiciones) {
+      final m = _montajePorPosicion[p.id];
+      final n = m?.neumatico;
+      final med = m != null ? _mediciones[m.neumaticoId] : null;
+      final inc = _incidenciaPorPosicion[p.id];
+      final tipos = inc?.problemas.where((x) => x.abierto).map((x) => problemaLabel(x.tipo)).toList();
+      out.add({
+        'posicion_id': p.id,
+        'codigo': p.codigoPosicion,
+        'eje': p.eje,
+        'marca': n?.marca,
+        'modelo': n?.modelo,
+        'medida': n?.medida,
+        'mm': med?.profundidadMm ?? n?.profundidadActualMm?.toDouble(),
+        'presion': med?.presionBar,
+        'averias': (tipos != null && tipos.isNotEmpty) ? tipos : null,
+      });
+    }
+    return out;
+  }
+
+  /// Incidencias de origen (posición + averías) para la ficha de la intervención.
+  List<Map<String, dynamic>> _incidenciasOrigen() {
+    final out = <Map<String, dynamic>>[];
+    for (final inc in widget.incidencias) {
+      final tipos = inc.problemas.where((x) => x.abierto).map((x) => problemaLabel(x.tipo)).toList();
+      out.add({
+        'posicion_id': inc.posicionId,
+        'codigo': inc.posicionNombre,
+        'averias': tipos,
+        'gravedad': gravedadLabel(inc.gravedad),
+      });
+    }
+    return out;
   }
 
   void _resolverImagen(String url) {
@@ -206,9 +249,14 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   /// Finalizar: da por solucionadas las incidencias de las posiciones donde se
   /// ha montado un neumático (sustitución completada); el resto sigue pendiente.
   Future<void> _finalizar() async {
-    // Cierra la intervención (agrupa las operaciones de la sesión + informe IA).
+    // Cierra la intervención (agrupa las operaciones de la sesión + informe IA)
+    // aportando el estado "antes" y las incidencias de origen para la trazabilidad.
     setState(() => _trabajando = true);
-    await TyreControlApi.cerrarIntervencion(widget.vehiculoId, _abiertoEn);
+    await TyreControlApi.cerrarIntervencion(
+      widget.vehiculoId, _abiertoEn,
+      montajeAntes: _montajeAntes,
+      incidencias: _incidenciasOrigen(),
+    );
     if (mounted) setState(() => _trabajando = false);
 
     // Posiciones sustituidas (se montó una rueda) cuya incidencia sigue abierta

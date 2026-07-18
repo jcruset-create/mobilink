@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones } from "../services/data";
-import type { Intervencion } from "../services/data";
+import type { Intervencion, MontajeSnapshot } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
@@ -17,6 +17,48 @@ function fechaHora(r: RevisionVehiculoT): string {
   const fecha = r.fecha_revision ?? "";
   const hora = r.created_at ? new Date(r.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
   return hora ? `${fecha} · ${hora}` : fecha;
+}
+
+// Plano esquemático de un snapshot (posición → neumático), agrupado por eje
+// con columnas IZQ/DER. `cambiadas` = posiciones cuyo neumático cambió (verde).
+function PlanoSnapshot({ titulo, snap, cambiadas, conAveria }: {
+  titulo: string; snap: MontajeSnapshot[] | null | undefined;
+  cambiadas?: Set<string>; conAveria?: boolean;
+}) {
+  const items = snap ?? [];
+  const lado = (codigo?: string | null) => /IZQ|_I$|IZQUIER/i.test(codigo ?? "") ? "izq" : "der";
+  const ejes = Array.from(new Set(items.map((s) => s.eje ?? 99))).sort((a, b) => a - b);
+  const card = (s?: MontajeSnapshot) => {
+    if (!s) return <div className="min-h-[52px] rounded-lg border border-dashed border-slate-700/60" />;
+    const averia = conAveria && s.averias && s.averias.length;
+    const cambiada = cambiadas?.has(s.posicion_id ?? "");
+    const borde = averia ? "border-red-500/80 bg-red-500/5" : cambiada ? "border-emerald-500/80 bg-emerald-500/5" : "border-slate-700 bg-slate-800/40";
+    return (
+      <div className={`min-h-[52px] rounded-lg border ${borde} px-2 py-1.5 text-[11px]`}>
+        <div className="font-semibold text-slate-300">{s.codigo ?? "—"}</div>
+        {s.marca ? (
+          <>
+            <div className="text-slate-200">{s.marca}{s.medida ? ` · ${s.medida}` : ""}</div>
+            <div className="text-slate-400">{s.mm != null ? `${s.mm} mm` : "— mm"}{s.presion != null ? ` · ${s.presion} bar` : ""}</div>
+          </>
+        ) : <div className="text-slate-500">Libre</div>}
+        {averia ? <div className="mt-0.5 font-semibold text-red-400">⚠ {s.averias!.join(" · ")}</div> : null}
+      </div>
+    );
+  };
+  return (
+    <div className="flex-1">
+      <div className="mb-1 text-[11px] font-semibold uppercase text-slate-400">{titulo}</div>
+      <div className="space-y-1.5">
+        {ejes.map((e) => {
+          const izq = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "izq");
+          const der = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "der");
+          return <div key={e} className="grid grid-cols-2 gap-1.5">{card(izq)}{card(der)}</div>;
+        })}
+        {ejes.length === 0 && <div className="text-[12px] text-slate-500">Sin datos.</div>}
+      </div>
+    </div>
+  );
 }
 
 export default function VehiculoDetalle() {
@@ -268,6 +310,34 @@ export default function VehiculoDetalle() {
             <div className="mb-1 text-[11px] font-semibold uppercase text-emerald-300">Informe</div>
             <div className="whitespace-pre-line text-sm text-slate-200">{verInterv.interv.resumen_ia || verInterv.interv.resumen || "—"}</div>
           </div>
+          {verInterv.interv.incidencias && verInterv.interv.incidencias.length > 0 && (
+            <div className="mb-3 rounded-lg border border-red-600/30 bg-red-500/5 p-3 text-sm">
+              <div className="mb-1 text-[11px] font-semibold uppercase text-red-300">Avería de origen</div>
+              <ul className="space-y-0.5 text-slate-200">
+                {verInterv.interv.incidencias.map((i, k) => (
+                  <li key={k}>{i.codigo ?? "—"}: <span className="text-red-300">{(i.averias ?? []).join(" · ")}</span>{i.gravedad ? ` (${i.gravedad})` : ""}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(verInterv.interv.montaje_antes || verInterv.interv.montaje_despues) && (() => {
+            const antes = verInterv.interv.montaje_antes ?? [];
+            const despues = verInterv.interv.montaje_despues ?? [];
+            const antesPorPos = new Map(antes.map((s) => [s.posicion_id ?? "", s]));
+            const cambiadas = new Set(
+              despues.filter((d) => {
+                const a = antesPorPos.get(d.posicion_id ?? "");
+                return !a || a.marca !== d.marca || a.medida !== d.medida || a.mm !== d.mm;
+              }).map((d) => d.posicion_id ?? "")
+            );
+            return (
+              <div className="mb-3 flex gap-4 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                <PlanoSnapshot titulo="Antes (con la avería)" snap={antes} conAveria />
+                <div className="flex items-center text-slate-500">→</div>
+                <PlanoSnapshot titulo="Después" snap={despues} cambiadas={cambiadas} />
+              </div>
+            );
+          })()}
           <TableWrap>
             <thead className="bg-slate-900"><tr>
               <th className={thCls}>Fecha</th><th className={thCls}>Tipo</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>

@@ -1528,7 +1528,7 @@ app.get("/api/health", (_req, res) => {
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
 app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
   try {
-    const { vehiculoId, desde } = req.body ?? {};
+    const { vehiculoId, desde, montajeAntes, incidencias } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
     // Operaciones de la sesión aún sin intervención.
@@ -1561,14 +1561,45 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
     for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
     const resumen = lineas.join("\n");
 
-    // Redacción con IA (breve informe técnico).
+    // Estado del vehículo DESPUÉS (montajes actuales) para el plano "después".
+    let montajeDespues: any[] = [];
+    try {
+      const { data: md } = await supabase
+        .from("tc_montajes_actuales")
+        .select("posicion_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm), " +
+          "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje)")
+        .eq("vehiculo_id", vehiculoId);
+      montajeDespues = (md ?? []).map((r: any) => ({
+        posicion_id: r.posicion_id,
+        codigo: r.posicion?.codigo_posicion ?? null,
+        eje: r.posicion?.eje ?? null,
+        marca: r.neumatico?.marca ?? null,
+        modelo: r.neumatico?.modelo ?? null,
+        medida: r.neumatico?.medida ?? null,
+        mm: r.neumatico?.profundidad_actual_mm ?? null,
+        presion: null,
+      }));
+    } catch (e) { console.error("montaje después falló:", e); }
+
+    // Trazabilidad de origen (incidencias) para el prompt y la ficha.
+    const origen = Array.isArray(incidencias)
+      ? (incidencias as any[])
+          .filter((i) => Array.isArray(i?.averias) && i.averias.length)
+          .map((i) => `${i.codigo ?? "—"}: ${i.averias.join(", ")}${i.gravedad ? ` (${i.gravedad})` : ""}`)
+      : [];
+
+    // Redacción con IA (informe técnico con trazabilidad antes→después).
     let resumenIa = resumen;
     try {
+      const partes = [
+        origen.length ? `Averías de origen:\n${origen.join("\n")}` : "",
+        `Acciones realizadas:\n${resumen}`,
+      ].filter(Boolean).join("\n\n");
       const r = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe MUY breve (1-3 frases, español, tono profesional) de la intervención a partir de la lista de acciones. No inventes datos." },
-          { role: "user", content: `Acciones realizadas:\n${resumen}` },
+          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. No inventes datos ni cifras que no aparezcan." },
+          { role: "user", content: partes },
         ],
       });
       resumenIa = r.choices[0]?.message?.content?.trim() || resumen;
@@ -1578,7 +1609,13 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
     const tecnicoId = (activas[0] as any).tecnico_id ?? null;
     const { data: interv, error: e2 } = await supabase
       .from("tc_intervenciones")
-      .insert({ empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId, resumen, resumen_ia: resumenIa, n_operaciones: activas.length })
+      .insert({
+        empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId,
+        resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
+        montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
+        montaje_despues: montajeDespues.length ? montajeDespues : null,
+        incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
+      })
       .select("id").single();
     if (e2) throw e2;
     await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));

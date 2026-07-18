@@ -793,9 +793,20 @@ export async function listarReservas(filtros?: { empresaId?: string; status?: st
 // ── Fase 8: Operaciones (listado/filtros) ──────────────────────
 const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), neumatico:tc_neumaticos(*), posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(*), posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(*)";
 
+export interface MontajeSnapshot {
+  posicion_id: string | null; codigo?: string | null; eje?: number | null;
+  marca?: string | null; modelo?: string | null; medida?: string | null;
+  mm?: number | null; presion?: number | null; averias?: string[] | null;
+}
+export interface IncidenciaOrigen {
+  posicion_id?: string | null; codigo?: string | null; averias?: string[] | null; gravedad?: string | null;
+}
 export interface Intervencion {
   id: string; empresa_id: string; vehiculo_id: string | null; fecha: string;
   resumen: string | null; resumen_ia: string | null; n_operaciones: number; created_at?: string;
+  montaje_antes?: MontajeSnapshot[] | null;
+  montaje_despues?: MontajeSnapshot[] | null;
+  incidencias?: IncidenciaOrigen[] | null;
 }
 export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
   const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
