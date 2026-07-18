@@ -270,11 +270,12 @@ export default function VehiculoDetalle() {
           </div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Tipo</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
+              <th className={thCls}>Fecha</th><th className={thCls}>Tipo</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
             </tr></thead>
             <tbody>
               {verInterv.ops.map((o) => (
                 <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
+                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
                   <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}</td>
                   <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
@@ -337,7 +338,7 @@ export default function VehiculoDetalle() {
             <tbody>
               {operaciones.map((o) => (
                 <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
-                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
                   <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
                   <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>

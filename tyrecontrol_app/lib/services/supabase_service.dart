@@ -487,7 +487,7 @@ class TyreControlApi {
   /// Operaciones de una intervención (con posición y neumático).
   static Future<List<Map<String, dynamic>>> listarOperacionesDeIntervencion(String intervencionId) async {
     final data = await _db.from('operaciones_neumaticos').select(
-        'id, tipo_operacion, motivo, is_anulada, fecha_operacion, '
+        'id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, '
         'posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), '
         'posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), '
         'neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)')

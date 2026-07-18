@@ -92,6 +92,14 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
     );
   }
 
+  static String _fechaHora(Map<String, dynamic> o) {
+    final f = _fecha(o['fecha_operacion'] as String?);
+    final ca = DateTime.tryParse('${o['created_at'] ?? ''}');
+    if (ca == null) return f;
+    final h = '${ca.hour.toString().padLeft(2, '0')}:${ca.minute.toString().padLeft(2, '0')}';
+    return '$f · $h';
+  }
+
   Widget _filaOperacion(Map<String, dynamic> o) {
     final tipo = _tipoLabels[o['tipo_operacion']] ?? '${o['tipo_operacion']}';
     final n = o['neumatico'];
@@ -107,9 +115,8 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('$tipo${anulada ? ' (anulada)' : ''}',
               style: TextStyle(color: anulada ? AppColors.textHint : AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
-          if (neu.isNotEmpty || pos.isNotEmpty)
-            Text([neu, pos].where((s) => s.isNotEmpty).join(' · '),
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          Text([_fechaHora(o), neu, pos].where((s) => s.isNotEmpty).join(' · '),
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
         ])),
       ]),
     );
