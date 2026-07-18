@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
-  listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
+  listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado, crearMedida,
 } from "../services/data";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
@@ -221,6 +221,17 @@ export default function Vehiculos() {
   const setEje = (eje: number, p: Partial<VehiculoEje>) =>
     modal && setModal({ ...modal, ejes: modal.ejes.map((e) => (e.eje === eje ? { ...e, ...p } : e)) });
 
+  // Crea una medida nueva desde el formulario y la selecciona (callback).
+  async function nuevaMedida(onCreated: (id: string) => void) {
+    const valor = window.prompt("Nueva medida de neumático (ej. 385/65R22.5):", "");
+    if (!valor || !valor.trim()) return;
+    try {
+      const id = await crearMedida(valor.trim());
+      setMedidas(await listarMedidas());
+      onCreated(id);
+    } catch (e: any) { alert(e?.message || "No se pudo crear la medida"); }
+  }
+
   const filasEjes = modal?.draft.medidas_por_eje ? modal.ejes : [];
 
   return (
@@ -384,10 +395,14 @@ export default function Vehiculos() {
             {!modal.draft.medidas_por_eje && (
               <>
                 <Field label="Medida de neumático">
-                  <select className={inputCls} value={modal.draft.medida_id ?? ""} onChange={(e) => set({ medida_id: e.target.value || null })}>
-                    <option value="">—</option>
-                    {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
-                  </select>
+                  <div className="flex gap-1">
+                    <select className={inputCls} value={modal.draft.medida_id ?? ""} onChange={(e) => set({ medida_id: e.target.value || null })}>
+                      <option value="">—</option>
+                      {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
+                    </select>
+                    <button type="button" onClick={() => nuevaMedida((id) => set({ medida_id: id }))}
+                      className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
+                  </div>
                 </Field>
                 <Field label="Tipo de llanta">
                   <select className={inputCls} value={modal.draft.tipo_llanta_id ?? ""} onChange={(e) => set({ tipo_llanta_id: e.target.value || null })}>
@@ -431,10 +446,14 @@ export default function Vehiculos() {
                   {filasEjes.map((f) => (
                     <div key={f.eje} className="grid items-center gap-2 sm:grid-cols-[110px_1fr_1fr]">
                       <span className="text-[12px] font-semibold text-slate-300">Eje {f.eje} · {f.ruedas} rueda{f.ruedas === 1 ? "" : "s"}</span>
-                      <select className={inputCls} value={f.medida_id ?? ""} onChange={(e) => setEje(f.eje, { medida_id: e.target.value || null })}>
-                        <option value="">Medida…</option>
-                        {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
-                      </select>
+                      <div className="flex gap-1">
+                        <select className={inputCls} value={f.medida_id ?? ""} onChange={(e) => setEje(f.eje, { medida_id: e.target.value || null })}>
+                          <option value="">Medida…</option>
+                          {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
+                        </select>
+                        <button type="button" onClick={() => nuevaMedida((id) => setEje(f.eje, { medida_id: id }))}
+                          className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
+                      </div>
                       <select className={inputCls} value={f.tipo_llanta_id ?? ""} onChange={(e) => setEje(f.eje, { tipo_llanta_id: e.target.value || null })}>
                         <option value="">Llanta…</option>
                         {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}

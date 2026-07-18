@@ -1024,9 +1024,14 @@ export async function fijarTiposDeMedida(medidaId: string, tipoVehiculoIds: stri
     .insert(tipoVehiculoIds.map((tipo_vehiculo_id) => ({ medida_id: medidaId, tipo_vehiculo_id })));
   if (error) throw new Error(error.message);
 }
-export async function crearMedida(valor: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: valor.trim() });
+export async function crearMedida(valor: string): Promise<string> {
+  const v = valor.trim();
+  // Reutiliza si ya existe (evita duplicados por unique).
+  const { data: ya } = await supabase.from("tc_cat_medidas_neumatico").select("id").eq("valor", v).limit(1).maybeSingle();
+  if (ya) return (ya as { id: string }).id;
+  const { data, error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: v }).select("id").single();
   if (error) throw new Error(error.message);
+  return (data as { id: string }).id;
 }
 
 // ── Configuración de ejes (catálogo editable) ────────────────
