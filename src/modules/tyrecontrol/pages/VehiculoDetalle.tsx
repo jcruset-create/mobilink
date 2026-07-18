@@ -19,44 +19,66 @@ function fechaHora(r: RevisionVehiculoT): string {
   return hora ? `${fecha} · ${hora}` : fecha;
 }
 
-// Plano esquemático de un snapshot (posición → neumático), agrupado por eje
-// con columnas IZQ/DER. `cambiadas` = posiciones cuyo neumático cambió (verde).
-function PlanoSnapshot({ titulo, snap, cambiadas, conAveria }: {
-  titulo: string; snap: MontajeSnapshot[] | null | undefined;
+// Plano de un snapshot pintado SOBRE la imagen real del chasis, con las
+// tarjetas de cada posición en sus coordenadas (%). Si no hay imagen o
+// coordenadas, cae a una rejilla esquemática por eje.
+function PlanoSnapshot({ titulo, snap, imagen, cambiadas, conAveria }: {
+  titulo: string; snap: MontajeSnapshot[] | null | undefined; imagen?: string | null;
   cambiadas?: Set<string>; conAveria?: boolean;
 }) {
   const items = snap ?? [];
-  const lado = (codigo?: string | null) => /IZQ|_I$|IZQUIER/i.test(codigo ?? "") ? "izq" : "der";
-  const ejes = Array.from(new Set(items.map((s) => s.eje ?? 99))).sort((a, b) => a - b);
-  const card = (s?: MontajeSnapshot) => {
-    if (!s) return <div className="min-h-[52px] rounded-lg border border-dashed border-slate-700/60" />;
+  const tieneCoords = !!imagen && items.some((s) => s.x != null && s.y != null);
+
+  const clases = (s: MontajeSnapshot) => {
     const averia = conAveria && s.averias && s.averias.length;
     const cambiada = cambiadas?.has(s.posicion_id ?? "");
-    const borde = averia ? "border-red-500/80 bg-red-500/5" : cambiada ? "border-emerald-500/80 bg-emerald-500/5" : "border-slate-700 bg-slate-800/40";
-    return (
-      <div className={`min-h-[52px] rounded-lg border ${borde} px-2 py-1.5 text-[11px]`}>
-        <div className="font-semibold text-slate-300">{s.codigo ?? "—"}</div>
-        {s.marca ? (
-          <>
-            <div className="text-slate-200">{s.marca}{s.medida ? ` · ${s.medida}` : ""}</div>
-            <div className="text-slate-400">{s.mm != null ? `${s.mm} mm` : "— mm"}{s.presion != null ? ` · ${s.presion} bar` : ""}</div>
-          </>
-        ) : <div className="text-slate-500">Libre</div>}
-        {averia ? <div className="mt-0.5 font-semibold text-red-400">⚠ {s.averias!.join(" · ")}</div> : null}
-      </div>
-    );
+    return averia ? "border-red-500 bg-red-950/70" : cambiada ? "border-emerald-500 bg-emerald-950/70" : "border-slate-600 bg-slate-900/85";
   };
+  const contenido = (s: MontajeSnapshot) => (
+    <>
+      <div className="truncate font-semibold text-slate-300">{s.codigo ?? "—"}</div>
+      {s.marca ? (
+        <>
+          <div className="truncate text-slate-100">{s.marca}</div>
+          <div className="truncate text-slate-400">{s.medida ?? ""}</div>
+          <div className="truncate text-slate-400">{s.mm != null ? `${s.mm} mm` : "— mm"}{s.presion != null ? ` · ${s.presion} bar` : ""}</div>
+        </>
+      ) : <div className="text-slate-500">Libre</div>}
+      {conAveria && s.averias && s.averias.length ? <div className="mt-0.5 truncate font-semibold text-red-400">⚠ {s.averias.join(" · ")}</div> : null}
+    </>
+  );
+
   return (
-    <div className="flex-1">
+    <div className="flex-1 min-w-0">
       <div className="mb-1 text-[11px] font-semibold uppercase text-slate-400">{titulo}</div>
-      <div className="space-y-1.5">
-        {ejes.map((e) => {
-          const izq = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "izq");
-          const der = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "der");
-          return <div key={e} className="grid grid-cols-2 gap-1.5">{card(izq)}{card(der)}</div>;
-        })}
-        {ejes.length === 0 && <div className="text-[12px] text-slate-500">Sin datos.</div>}
-      </div>
+      {tieneCoords ? (
+        <div className="relative w-full overflow-hidden rounded-lg border border-slate-700 bg-slate-950">
+          <img src={imagen!} alt={titulo} className="block w-full" />
+          {items.map((s, k) => (
+            <div key={k}
+              className={`absolute rounded border ${clases(s)} px-1 py-0.5 text-[8px] leading-tight`}
+              style={{ left: `${s.x}%`, top: `${s.y}%`, width: `${Math.max(s.w ?? 16, 12)}%` }}>
+              {contenido(s)}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {(() => {
+            const lado = (c?: string | null) => /IZQ|_I$|IZQUIER/i.test(c ?? "") ? "izq" : "der";
+            const ejes = Array.from(new Set(items.map((s) => s.eje ?? 99))).sort((a, b) => a - b);
+            if (!ejes.length) return <div className="text-[12px] text-slate-500">Sin datos.</div>;
+            return ejes.map((e) => {
+              const izq = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "izq");
+              const der = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "der");
+              const celda = (s?: MontajeSnapshot) => s
+                ? <div className={`min-h-[52px] rounded-lg border ${clases(s)} px-2 py-1.5 text-[11px]`}>{contenido(s)}</div>
+                : <div className="min-h-[52px] rounded-lg border border-dashed border-slate-700/60" />;
+              return <div key={e} className="grid grid-cols-2 gap-1.5">{celda(izq)}{celda(der)}</div>;
+            });
+          })()}
+        </div>
+      )}
     </div>
   );
 }
@@ -332,9 +354,9 @@ export default function VehiculoDetalle() {
             );
             return (
               <div className="mb-3 flex gap-4 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
-                <PlanoSnapshot titulo="Antes (con la avería)" snap={antes} conAveria />
+                <PlanoSnapshot titulo="Antes (con la avería)" snap={antes} imagen={verInterv.interv.imagen_chasis} conAveria />
                 <div className="flex items-center text-slate-500">→</div>
-                <PlanoSnapshot titulo="Después" snap={despues} cambiadas={cambiadas} />
+                <PlanoSnapshot titulo="Después" snap={despues} imagen={verInterv.interv.imagen_chasis} cambiadas={cambiadas} />
               </div>
             );
           })()}

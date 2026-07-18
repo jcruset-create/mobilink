@@ -1528,7 +1528,7 @@ app.get("/api/health", (_req, res) => {
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
 app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
   try {
-    const { vehiculoId, desde, montajeAntes, incidencias } = req.body ?? {};
+    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
     // Operaciones de la sesión aún sin intervención.
@@ -1561,25 +1561,47 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
     for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
     const resumen = lineas.join("\n");
 
-    // Estado del vehículo DESPUÉS (montajes actuales) para el plano "después".
-    let montajeDespues: any[] = [];
+    // Estado del vehículo DESPUÉS: montajes actuales por posición.
+    const curPorPos = new Map<string, any>();
     try {
       const { data: md } = await supabase
         .from("tc_montajes_actuales")
         .select("posicion_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm), " +
-          "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje)")
+          "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje, pos_x, pos_y, pos_w, pos_h)")
         .eq("vehiculo_id", vehiculoId);
-      montajeDespues = (md ?? []).map((r: any) => ({
+      for (const r of (md ?? []) as any[]) curPorPos.set(r.posicion_id, r);
+    } catch (e) { console.error("montaje después falló:", e); }
+
+    // El plano "después" reutiliza el esqueleto del "antes" (mismas posiciones y
+    // coordenadas), sustituyendo el neumático por el actual y limpiando averías.
+    let montajeDespues: any[] = [];
+    if (Array.isArray(montajeAntes) && montajeAntes.length) {
+      montajeDespues = (montajeAntes as any[]).map((a) => {
+        const cur = curPorPos.get(a.posicion_id);
+        return {
+          ...a,
+          marca: cur?.neumatico?.marca ?? null,
+          modelo: cur?.neumatico?.modelo ?? null,
+          medida: cur?.neumatico?.medida ?? null,
+          mm: cur?.neumatico?.profundidad_actual_mm ?? null,
+          presion: null,
+          averias: null,
+        };
+      });
+    } else {
+      montajeDespues = Array.from(curPorPos.values()).map((r: any) => ({
         posicion_id: r.posicion_id,
         codigo: r.posicion?.codigo_posicion ?? null,
         eje: r.posicion?.eje ?? null,
+        x: r.posicion?.pos_x ?? null, y: r.posicion?.pos_y ?? null,
+        w: r.posicion?.pos_w ?? null, h: r.posicion?.pos_h ?? null,
         marca: r.neumatico?.marca ?? null,
         modelo: r.neumatico?.modelo ?? null,
         medida: r.neumatico?.medida ?? null,
         mm: r.neumatico?.profundidad_actual_mm ?? null,
         presion: null,
       }));
-    } catch (e) { console.error("montaje después falló:", e); }
+    }
 
     // Trazabilidad de origen (incidencias) para el prompt y la ficha.
     const origen = Array.isArray(incidencias)
@@ -1615,6 +1637,7 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
         montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
         montaje_despues: montajeDespues.length ? montajeDespues : null,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
+        imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
       })
       .select("id").single();
     if (e2) throw e2;

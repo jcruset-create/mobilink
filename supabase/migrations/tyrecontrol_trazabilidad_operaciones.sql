@@ -22,6 +22,7 @@ create index if not exists idx_op_incidencia on operaciones_neumaticos (incidenc
 alter table tc_intervenciones add column if not exists montaje_antes   jsonb;
 alter table tc_intervenciones add column if not exists montaje_despues jsonb;
 alter table tc_intervenciones add column if not exists incidencias     jsonb;
+alter table tc_intervenciones add column if not exists imagen_chasis   text; -- para pintar el plano antes/después
 
 -- ── tc_resolver_incidencia_parcial: además de cerrar la incidencia, deja
 --    traza en operaciones_neumaticos cuando es una reparación en sitio ──────

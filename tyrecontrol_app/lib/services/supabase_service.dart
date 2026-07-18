@@ -506,6 +506,7 @@ class TyreControlApi {
     DateTime desde, {
     List<Map<String, dynamic>>? montajeAntes,
     List<Map<String, dynamic>>? incidencias,
+    String? imagenChasis,
   }) async {
     try {
       await http.post(
@@ -516,6 +517,7 @@ class TyreControlApi {
           'desde': desde.toUtc().toIso8601String(),
           if (montajeAntes != null) 'montajeAntes': montajeAntes,
           if (incidencias != null) 'incidencias': incidencias,
+          if (imagenChasis != null) 'imagenChasis': imagenChasis,
         }),
       ).timeout(const Duration(seconds: 25));
     } catch (_) {/* el informe se puede regenerar; no bloquea */}

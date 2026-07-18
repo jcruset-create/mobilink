@@ -179,10 +179,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     }
   }
 
-  /// Estado actual del vehículo (posición → neumático + avería) para el plano.
+  /// Estado actual del vehículo (posición → neumático + avería + coordenadas)
+  /// para pintar el plano "antes" sobre la imagen real del chasis.
   List<Map<String, dynamic>> _snapshotActual() {
     final out = <Map<String, dynamic>>[];
-    for (final p in _posiciones) {
+    for (int i = 0; i < _posiciones.length; i++) {
+      final p = _posiciones[i];
+      final co = _coords(p, i);
       final m = _montajePorPosicion[p.id];
       final n = m?.neumatico;
       final med = m != null ? _mediciones[m.neumaticoId] : null;
@@ -192,6 +195,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         'posicion_id': p.id,
         'codigo': p.codigoPosicion,
         'eje': p.eje,
+        'x': co.x, 'y': co.y, 'w': co.w, 'h': co.h,
         'marca': n?.marca,
         'modelo': n?.modelo,
         'medida': n?.medida,
@@ -256,6 +260,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       widget.vehiculoId, _abiertoEn,
       montajeAntes: _montajeAntes,
       incidencias: _incidenciasOrigen(),
+      imagenChasis: _imagenChasis,
     );
     if (mounted) setState(() => _trabajando = false);
 

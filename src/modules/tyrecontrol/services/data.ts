@@ -795,6 +795,7 @@ const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), n
 
 export interface MontajeSnapshot {
   posicion_id: string | null; codigo?: string | null; eje?: number | null;
+  x?: number | null; y?: number | null; w?: number | null; h?: number | null;
   marca?: string | null; modelo?: string | null; medida?: string | null;
   mm?: number | null; presion?: number | null; averias?: string[] | null;
 }
@@ -807,6 +808,7 @@ export interface Intervencion {
   montaje_antes?: MontajeSnapshot[] | null;
   montaje_despues?: MontajeSnapshot[] | null;
   incidencias?: IncidenciaOrigen[] | null;
+  imagen_chasis?: string | null;
 }
 export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
   const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
