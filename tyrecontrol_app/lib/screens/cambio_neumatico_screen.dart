@@ -484,20 +484,23 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   Widget _plano() {
     return LayoutBuilder(builder: (ctx, c) {
-      double w = c.maxWidth, h = w / _aspect!;
-      if (c.maxHeight.isFinite && h > c.maxHeight) { h = c.maxHeight; w = h * _aspect!; }
-      return Center(
-        child: SizedBox(
-          width: w, height: h,
-          child: Stack(children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Image.network(_imagenChasis!, width: w, height: h, fit: BoxFit.fill,
-                  errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
-            ),
-            for (int i = 0; i < _posiciones.length; i++) _tarjetaPosicion(_posiciones[i], i, w, h),
-          ]),
-        ),
+      // Rellenamos toda el área disponible (la imagen se estira) para que los
+      // ejes queden bien separados y las etiquetas/incidencias se lean. En una
+      // tablet vertical sobra altura, así que priorizamos ocupar el alto.
+      final w = c.maxWidth;
+      final h = (c.maxHeight.isFinite && c.maxHeight > 0)
+          ? c.maxHeight
+          : w / _aspect!;
+      return SizedBox(
+        width: w, height: h,
+        child: Stack(children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Image.network(_imagenChasis!, width: w, height: h, fit: BoxFit.fill,
+                errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
+          ),
+          for (int i = 0; i < _posiciones.length; i++) _tarjetaPosicion(_posiciones[i], i, w, h),
+        ]),
       );
     });
   }
