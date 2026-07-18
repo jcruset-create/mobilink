@@ -48,20 +48,38 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   bool _trabajando = false;
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
   final Set<String> _posicionesMontadas = {}; // posiciones donde se montó un neumático en esta sesión
+  final Set<String> _posicionesResueltas = {}; // reparaciones en sitio hechas en esta sesión
+  final Set<String> _incidenciasResueltas = {}; // ids de incidencias ya resueltas (para no re-resolver al finalizar)
+  String? _posSeleccionada; // posición elegida en el plano para operar desde el panel
 
-  // Problemas abiertos por posición (de las incidencias que se vienen a resolver),
-  // para pintarlos en rojo bajo el neumático afectado.
-  late final Map<String, List<String>> _problemasPorPosicion = () {
-    final map = <String, List<String>>{};
+  // Incidencia (con problemas abiertos) por posición: para pintar el rojo y
+  // ofrecer las operaciones en el panel lateral.
+  late final Map<String, Incidencia> _incidenciaPorPosicion = () {
+    final map = <String, Incidencia>{};
     for (final inc in widget.incidencias) {
       final pid = inc.posicionId;
       if (pid == null) continue;
-      final labels = inc.problemas.where((p) => p.abierto).map((p) => problemaLabel(p.tipo)).toList();
-      if (labels.isEmpty) continue;
-      map.putIfAbsent(pid, () => <String>[]).addAll(labels);
+      if (!inc.problemas.any((p) => p.abierto)) continue;
+      map[pid] = inc; // si hay varias, la última gana (poco habitual)
     }
     return map;
   }();
+
+  /// Problemas abiertos (etiquetas) de una posición aún no atendida en esta sesión.
+  List<String>? _problemasVigentes(String posId) {
+    if (_posicionesMontadas.contains(posId) || _posicionesResueltas.contains(posId)) return null;
+    final inc = _incidenciaPorPosicion[posId];
+    if (inc == null) return null;
+    final labels = inc.problemas.where((p) => p.abierto).map((p) => problemaLabel(p.tipo)).toList();
+    return labels.isEmpty ? null : labels;
+  }
+
+  /// Tipos de problema abiertos de una posición (claves, p. ej. 'pinchazo').
+  Set<String> _tiposVigentes(String posId) {
+    final inc = _incidenciaPorPosicion[posId];
+    if (inc == null) return {};
+    return inc.problemas.where((p) => p.abierto).map((p) => p.tipo).toSet();
+  }
 
   double? _aspect;
   ImageStream? _stream;
@@ -70,6 +88,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   @override
   void initState() {
     super.initState();
+    // Si venimos de una incidencia, abrimos el panel de operaciones sobre ella.
+    _posSeleccionada = widget.posicionInicialId;
     _cargar();
   }
 
@@ -191,13 +211,19 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     await TyreControlApi.cerrarIntervencion(widget.vehiculoId, _abiertoEn);
     if (mounted) setState(() => _trabajando = false);
 
+    // Posiciones sustituidas (se montó una rueda) cuya incidencia sigue abierta
+    // y no se resolvió ya en sitio (reparación).
     final aResolver = widget.incidencias
-        .where((i) => i.posicionId != null && _posicionesMontadas.contains(i.posicionId) && i.problemas.any((p) => p.abierto))
+        .where((i) => i.posicionId != null && _posicionesMontadas.contains(i.posicionId)
+            && !_incidenciasResueltas.contains(i.id) && i.problemas.any((p) => p.abierto))
         .toList();
+    final yaResueltas = _incidenciasResueltas.length; // reparaciones en sitio
 
-    if (widget.incidencias.isEmpty || aResolver.isEmpty) {
-      if (widget.incidencias.isNotEmpty && aResolver.isEmpty) {
-        _aviso('No se ha montado nada en las posiciones con incidencia; siguen pendientes.', ok: false);
+    if (aResolver.isEmpty) {
+      if (yaResueltas > 0) {
+        _aviso('$yaResueltas incidencia(s) solucionada(s)', ok: true);
+      } else if (widget.incidencias.isNotEmpty) {
+        _aviso('No se ha actuado sobre las posiciones con incidencia; siguen pendientes.', ok: false);
       } else {
         _aviso('Cambios guardados', ok: true);
       }
@@ -219,14 +245,47 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       }
     } finally { if (mounted) setState(() => _trabajando = false); }
 
-    final pendientes = widget.incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - ok;
+    final total = ok + yaResueltas;
+    final pendientes = widget.incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - total;
     _aviso(
-      ok > 0
-          ? '$ok incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
+      total > 0
+          ? '$total incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
           : 'No se solucionó ninguna incidencia',
-      ok: ok > 0,
+      ok: total > 0,
     );
     if (mounted) Navigator.of(context).pop(true);
+  }
+
+  /// Reparación en sitio (el neumático se queda): registra la operación y da la
+  /// incidencia por resuelta. p. ej. "Reparar pinchazo", "Corregir presión".
+  Future<void> _repararEnSitio(PosicionVehiculo p, Incidencia inc, String opKey, String label) async {
+    setState(() => _trabajando = true);
+    try {
+      final abiertos = inc.problemas.where((x) => x.abierto).map((x) => x.id).toList();
+      await TyreControlApi.resolverIncidencia(
+        incidenciaId: inc.id, problemaIds: abiertos, tipoOperacion: opKey,
+        resultado: 'reparado', observaciones: '$label (app · cambio de neumático).');
+      _posicionesResueltas.add(p.id);
+      _incidenciasResueltas.add(inc.id);
+      HapticFeedback.mediumImpact();
+      if (mounted) setState(() => _posSeleccionada = null);
+      await _cargar();
+      _aviso('$label registrada', ok: true);
+    } catch (e) { _aviso('Error: $e', ok: false); }
+    finally { if (mounted) setState(() => _trabajando = false); }
+  }
+
+  /// Avería irreparable: el neumático montado va directo a la papelera de
+  /// reciclaje y la posición queda libre para montar una nueva/usada.
+  Future<void> _marcarIrreparable(PosicionVehiculo p, MontajeActual m) async {
+    setState(() => _trabajando = true);
+    try {
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje');
+      HapticFeedback.mediumImpact();
+      await _cargar();
+      _aviso('Neumático a la papelera de reciclaje. Monta ahora la rueda de sustitución.', ok: true);
+    } catch (e) { _aviso('Error: $e', ok: false); }
+    finally { if (mounted) setState(() => _trabajando = false); }
   }
 
   Future<void> _deshacer() async {
@@ -398,31 +457,50 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return (x: col == 0 ? 6.0 : 78.0, y: 8.0 + row * 18.0, w: 16.0, h: 13.0);
   }
 
+  void _toggleSeleccion(String posId) {
+    setState(() => _posSeleccionada = _posSeleccionada == posId ? null : posId);
+  }
+
   Widget _tarjetaPosicion(PosicionVehiculo p, int i, double w, double h) {
     final co = _coords(p, i);
     final cardW = (co.w / 100 * w).clamp(96.0, 200.0);
     final m = _montajePorPosicion[p.id];
     final resaltar = p.id == widget.posicionInicialId;
-    // Si la posición ya tiene un montaje nuevo hecho en esta sesión, la
-    // incidencia se considera atendida y ya no la marcamos en rojo.
-    final problemas = _posicionesMontadas.contains(p.id) ? null : _problemasPorPosicion[p.id];
+    final problemas = _problemasVigentes(p.id);
+    final sel = _posSeleccionada == p.id;
+    final anilloSel = sel
+        ? BoxDecoration(
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(color: AppColors.info, width: 2),
+          )
+        : null;
     return Positioned(
       left: (co.x / 100 * w).clamp(0.0, w - cardW),
       top: (co.y / 100 * h).clamp(0.0, h - 44),
       width: cardW,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        m != null
-            ? Draggable<_DragMontaje>(
-                data: _DragMontaje(m),
-                feedback: _cardMontado(p, m, cardW, arrastrando: true),
-                childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
-                child: _cardMontado(p, m, cardW, resaltar: resaltar, conIncidencia: problemas != null),
-              )
-            : DragTarget<_DragStock>(
-                onWillAcceptWithDetails: (_) => true,
-                onAcceptWithDetails: (d) => _soltarStockEnPosicion(d.data, p),
-                builder: (ctx, cand, rej) => _cardVacia(p, cardW, activo: cand.isNotEmpty),
-              ),
+        Container(
+          decoration: anilloSel,
+          padding: sel ? const EdgeInsets.all(2) : EdgeInsets.zero,
+          child: m != null
+              ? Draggable<_DragMontaje>(
+                  data: _DragMontaje(m),
+                  feedback: _cardMontado(p, m, cardW, arrastrando: true),
+                  childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
+                  child: GestureDetector(
+                    onTap: () => _toggleSeleccion(p.id),
+                    child: _cardMontado(p, m, cardW, resaltar: resaltar, conIncidencia: problemas != null),
+                  ),
+                )
+              : DragTarget<_DragStock>(
+                  onWillAcceptWithDetails: (_) => true,
+                  onAcceptWithDetails: (d) => _soltarStockEnPosicion(d.data, p),
+                  builder: (ctx, cand, rej) => GestureDetector(
+                    onTap: () => _toggleSeleccion(p.id),
+                    child: _cardVacia(p, cardW, activo: cand.isNotEmpty, resaltar: problemas != null),
+                  ),
+                ),
+        ),
         if (problemas != null) _bannerIncidencia(problemas),
       ]),
     );
@@ -491,14 +569,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return arrastrando ? Material(color: Colors.transparent, child: card) : card;
   }
 
-  Widget _cardVacia(PosicionVehiculo p, double cardW, {bool activo = false}) {
+  Widget _cardVacia(PosicionVehiculo p, double cardW, {bool activo = false, bool resaltar = false}) {
+    final color = activo ? AppColors.info : (resaltar ? AppColors.danger : AppColors.cardBorder);
     return Container(
       width: cardW,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
         color: activo ? AppColors.info.withValues(alpha: 0.2) : AppColors.surface.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: activo ? AppColors.info : AppColors.cardBorder, width: activo ? 3 : 1.5, style: BorderStyle.solid),
+        border: Border.all(color: color, width: (activo || resaltar) ? 3 : 1.5, style: BorderStyle.solid),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text(p.codigoPosicion, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -509,68 +588,198 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  // ── Panel de stock (draggable) ────────────────────────────────────────────
+  PosicionVehiculo? get _posSel {
+    final id = _posSeleccionada;
+    if (id == null) return null;
+    for (final p in _posiciones) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  // Reparaciones "en sitio" sugeridas según los tipos de avería (el neumático
+  // se queda montado). Excluye sustituciones (esas se hacen desmontando+montando).
+  List<({String key, String label, IconData icon})> _accionesEnSitio(Set<String> tipos) {
+    const enSitu = {
+      'corregir_presion', 'reparar_pinchazo', 'cambiar_valvula', 'equilibrar',
+      'solicitar_alineacion', 'reapretar', 'actualizar_neumatico',
+    };
+    final out = <({String key, String label, IconData icon})>[];
+    for (final k in operacionesSugeridas(tipos)) {
+      if (!enSitu.contains(k)) continue;
+      final o = operacionPorKey(k);
+      out.add((key: k, label: o.label, icon: o.icon));
+    }
+    return out;
+  }
+
+  // ── Panel lateral: operaciones + stock ────────────────────────────────────
   Widget _panelStock() {
     final medidaTxt = _medidasVehiculo.isEmpty ? 'todas' : _medidasVehiculo.join(' · ');
     final nuevos = _stock.where((l) => l.nuevo > 0).toList();
     final usados = _stock.where((l) => l.usado > 0).toList();
+    final p = _posSel;
+    final montarEn = (p != null && !_montajePorPosicion.containsKey(p.id)) ? p : null; // posición vacía seleccionada
     return Container(
-      width: 270,
+      width: 280,
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(left: BorderSide(color: AppColors.cardBorder)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (p != null) _panelOperaciones(p),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('STOCK DEL CLIENTE', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
             Text('Medida: $medidaTxt', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
-            const Text('Arrastra una tarjeta a una posición libre.', style: TextStyle(color: AppColors.textHint, fontSize: 11)),
+            Text(
+              montarEn != null
+                  ? 'Toca una rueda para montarla en ${montarEn.codigoPosicion}.'
+                  : 'Arrastra una tarjeta a una posición libre.',
+              style: TextStyle(color: montarEn != null ? AppColors.info : AppColors.textHint, fontSize: 11, fontWeight: montarEn != null ? FontWeight.w700 : FontWeight.w400),
+            ),
           ]),
         ),
         Expanded(
           child: (nuevos.isEmpty && usados.isEmpty)
               ? const Center(child: Padding(padding: EdgeInsets.all(16), child: Text('Sin stock de esta medida en el almacén del cliente.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint, fontSize: 13))))
               : ListView(padding: const EdgeInsets.fromLTRB(10, 4, 10, 16), children: [
-                  if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success),
-                  if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning),
+                  if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success, montarEn),
+                  if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
                 ]),
         ),
       ]),
     );
   }
 
-  Widget _grupoStock(String titulo, List<StockAlmacenLinea> lineas, String condicion, Color color) {
+  // Bloque de operaciones para la posición seleccionada, según su avería.
+  Widget _panelOperaciones(PosicionVehiculo p) {
+    final inc = _incidenciaPorPosicion[p.id];
+    final m = _montajePorPosicion[p.id];
+    final atendida = _posicionesMontadas.contains(p.id) || _posicionesResueltas.contains(p.id);
+    final tipos = atendida ? <String>{} : _tiposVigentes(p.id);
+    final labels = atendida ? <String>[] : (_problemasVigentes(p.id) ?? const []);
+    final acciones = _accionesEnSitio(tipos);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceVariant,
+        border: Border(bottom: BorderSide(color: AppColors.danger.withValues(alpha: labels.isNotEmpty ? 0.6 : 0.0))),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Expanded(
+            child: Text('OPERACIÓN · ${p.codigoPosicion}',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+          ),
+          GestureDetector(
+            onTap: () => setState(() => _posSeleccionada = null),
+            child: const Icon(Icons.close, size: 18, color: AppColors.textHint),
+          ),
+        ]),
+        if (labels.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text('Avería: ${labels.join(' · ')}',
+              style: const TextStyle(color: AppColors.danger, fontSize: 12, fontWeight: FontWeight.w800)),
+        ],
+        const SizedBox(height: 8),
+        if (m != null) ...[
+          // Reparaciones en sitio sugeridas (el neumático se queda).
+          for (final a in acciones)
+            _btnOp(a.icon, a.label, AppColors.success,
+                onTap: inc == null ? null : () => _repararEnSitio(p, inc, a.key, a.label)),
+          // Avería irreparable → a la papelera de reciclaje.
+          _btnOp(Icons.recycling, 'Avería irreparable · a papelera', AppColors.danger,
+              onTap: () => _marcarIrreparable(p, m)),
+          // Desmontar reutilizable → almacén como usado.
+          _btnOp(Icons.warehouse, 'Desmontar · al almacén (usado)', AppColors.info,
+              onTap: () => _desmontar(m, 'almacen')),
+          const SizedBox(height: 4),
+          const Text('Para sustituir, desmonta y luego monta la rueda nueva o usada del stock.',
+              style: TextStyle(color: AppColors.textHint, fontSize: 10.5)),
+        ] else ...[
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: AppColors.info.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+            child: const Row(children: [
+              Icon(Icons.south, size: 16, color: AppColors.info),
+              SizedBox(width: 6),
+              Expanded(child: Text('Posición libre: toca una rueda del stock para montar la sustitución.',
+                  style: TextStyle(color: AppColors.info, fontSize: 11, fontWeight: FontWeight.w700))),
+            ]),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _btnOp(IconData icon, String label, Color color, {VoidCallback? onTap}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: color.withValues(alpha: onTap == null ? 0.06 : 0.16),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: _trabajando ? null : onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: color.withValues(alpha: onTap == null ? 0.3 : 0.8)),
+            ),
+            child: Row(children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 8),
+              Expanded(child: Text(label, style: TextStyle(color: color, fontSize: 12.5, fontWeight: FontWeight.w700))),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _montarDesdeStockTap(StockAlmacenLinea l, String condicion, PosicionVehiculo p) async {
+    await _soltarStockEnPosicion(_DragStock(l, condicion), p);
+    if (mounted) setState(() => _posSeleccionada = null);
+  }
+
+  Widget _grupoStock(String titulo, List<StockAlmacenLinea> lineas, String condicion, Color color, PosicionVehiculo? montarEn) {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Padding(padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(titulo.toUpperCase(), style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800))),
       ...lineas.map((l) {
         final cant = condicion == 'nuevo' ? l.nuevo : l.usado;
+        final card = Draggable<_DragStock>(
+          data: _DragStock(l, condicion),
+          feedback: _cardStock(l, condicion, color, cant, arrastrando: true),
+          childWhenDragging: Opacity(opacity: 0.4, child: _cardStock(l, condicion, color, cant)),
+          child: _cardStock(l, condicion, color, cant, montable: montarEn != null),
+        );
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
-          child: Draggable<_DragStock>(
-            data: _DragStock(l, condicion),
-            feedback: _cardStock(l, condicion, color, cant, arrastrando: true),
-            childWhenDragging: Opacity(opacity: 0.4, child: _cardStock(l, condicion, color, cant)),
-            child: _cardStock(l, condicion, color, cant),
-          ),
+          // Con una posición vacía seleccionada, un toque monta directamente.
+          child: montarEn != null
+              ? GestureDetector(onTap: _trabajando ? null : () => _montarDesdeStockTap(l, condicion, montarEn), child: card)
+              : card,
         );
       }),
     ]);
   }
 
-  Widget _cardStock(StockAlmacenLinea l, String condicion, Color color, int cant, {bool arrastrando = false}) {
+  Widget _cardStock(StockAlmacenLinea l, String condicion, Color color, int cant, {bool arrastrando = false, bool montable = false}) {
     final card = Container(
       width: 240,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surfaceVariant,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
+        border: Border.all(color: color.withValues(alpha: montable ? 0.9 : 0.5), width: montable ? 1.5 : 1),
       ),
       child: Row(children: [
-        Icon(Icons.drag_indicator, size: 18, color: AppColors.textHint),
+        Icon(montable ? Icons.touch_app : Icons.drag_indicator, size: 18, color: montable ? color : AppColors.textHint),
         const SizedBox(width: 4),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
