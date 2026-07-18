@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "SEA TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.13.0+39
+version: 0.14.0+40
 
 environment:
   sdk: ^3.8.1
