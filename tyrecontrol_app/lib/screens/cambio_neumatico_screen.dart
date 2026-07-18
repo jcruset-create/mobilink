@@ -49,6 +49,20 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
   final Set<String> _posicionesMontadas = {}; // posiciones donde se montó un neumático en esta sesión
 
+  // Problemas abiertos por posición (de las incidencias que se vienen a resolver),
+  // para pintarlos en rojo bajo el neumático afectado.
+  late final Map<String, List<String>> _problemasPorPosicion = () {
+    final map = <String, List<String>>{};
+    for (final inc in widget.incidencias) {
+      final pid = inc.posicionId;
+      if (pid == null) continue;
+      final labels = inc.problemas.where((p) => p.abierto).map((p) => problemaLabel(p.tipo)).toList();
+      if (labels.isEmpty) continue;
+      map.putIfAbsent(pid, () => <String>[]).addAll(labels);
+    }
+    return map;
+  }();
+
   double? _aspect;
   ImageStream? _stream;
   ImageStreamListener? _listener;
@@ -389,29 +403,57 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final cardW = (co.w / 100 * w).clamp(96.0, 200.0);
     final m = _montajePorPosicion[p.id];
     final resaltar = p.id == widget.posicionInicialId;
+    // Si la posición ya tiene un montaje nuevo hecho en esta sesión, la
+    // incidencia se considera atendida y ya no la marcamos en rojo.
+    final problemas = _posicionesMontadas.contains(p.id) ? null : _problemasPorPosicion[p.id];
     return Positioned(
       left: (co.x / 100 * w).clamp(0.0, w - cardW),
       top: (co.y / 100 * h).clamp(0.0, h - 44),
       width: cardW,
-      child: m != null
-          ? Draggable<_DragMontaje>(
-              data: _DragMontaje(m),
-              feedback: _cardMontado(p, m, cardW, arrastrando: true),
-              childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
-              child: _cardMontado(p, m, cardW, resaltar: resaltar),
-            )
-          : DragTarget<_DragStock>(
-              onWillAcceptWithDetails: (_) => true,
-              onAcceptWithDetails: (d) => _soltarStockEnPosicion(d.data, p),
-              builder: (ctx, cand, rej) => _cardVacia(p, cardW, activo: cand.isNotEmpty),
-            ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        m != null
+            ? Draggable<_DragMontaje>(
+                data: _DragMontaje(m),
+                feedback: _cardMontado(p, m, cardW, arrastrando: true),
+                childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
+                child: _cardMontado(p, m, cardW, resaltar: resaltar, conIncidencia: problemas != null),
+              )
+            : DragTarget<_DragStock>(
+                onWillAcceptWithDetails: (_) => true,
+                onAcceptWithDetails: (d) => _soltarStockEnPosicion(d.data, p),
+                builder: (ctx, cand, rej) => _cardVacia(p, cardW, activo: cand.isNotEmpty),
+              ),
+        if (problemas != null) _bannerIncidencia(problemas),
+      ]),
+    );
+  }
+
+  // Etiqueta roja con los problemas abiertos de la posición (p. ej. "Pinchazo").
+  Widget _bannerIncidencia(List<String> labels) {
+    return Container(
+      margin: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withValues(alpha: 0.20),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.85)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+        const Icon(Icons.warning_amber_rounded, size: 12, color: AppColors.danger),
+        const SizedBox(width: 3),
+        Flexible(
+          child: Text(labels.join(' · '),
+              style: const TextStyle(color: AppColors.danger, fontSize: 9.5, fontWeight: FontWeight.w800, height: 1.1),
+              maxLines: 3, textAlign: TextAlign.center),
+        ),
+      ]),
     );
   }
 
   // Verde oscuro para neumáticos NUEVOS recién montados (sin revisión aún).
   static const _verdeNuevo = Color(0xFF166534);
 
-  Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false}) {
+  Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false, bool conIncidencia = false}) {
     final n = m.neumatico;
     // Medición del PROPIO neumático (no de la posición): un nuevo no hereda mm del anterior.
     final med = _mediciones[m.neumaticoId];
@@ -424,17 +466,20 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
     final esNuevoReciente = med == null && (n?.origen == 'almacen_generico' || n?.origen == 'catalogo_sin_stock');
-    // El nuevo recién montado (verde oscuro) gana sobre el resaltado de incidencia.
+    // Prioridad de color de borde: arrastrando > nuevo reciente (verde oscuro) >
+    // incidencia abierta (rojo) > resaltado por incidencia (ámbar) > normal (verde).
     final borde = arrastrando
         ? AppColors.info
-        : (esNuevoReciente ? _verdeNuevo : (resaltar ? AppColors.warning : AppColors.success));
+        : (esNuevoReciente
+            ? _verdeNuevo
+            : (conIncidencia ? AppColors.danger : (resaltar ? AppColors.warning : AppColors.success)));
     final card = Container(
       width: cardW,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
       decoration: BoxDecoration(
         color: AppColors.surface.withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: borde, width: resaltar ? 3 : 2),
+        border: Border.all(color: borde, width: (resaltar || conIncidencia) ? 3 : 2),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
