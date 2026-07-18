@@ -173,8 +173,9 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
       if (comun.odometro_km != null && comun.odometro_km !== Number(v.km_actual)) {
         kmUpdates.push({ id: v.id, km: comun.odometro_km });
       }
-      // Entrada nueva en SU base → candidata a alerta (se decide tras calcular planes).
-      if (esNuevaEntrada && estado === "en_base" && delegId && alertasActivas && basePorId.get(delegId)?.webfleet_genera_avisos) {
+      // Entrada nueva en CUALQUIER base de su empresa (la asignada u otra) →
+      // candidata a alerta: se puede revisar allí igualmente.
+      if (esNuevaEntrada && (estado === "en_base" || estado === "otra_base") && delegId && alertasActivas && basePorId.get(delegId)?.webfleet_genera_avisos) {
         entradas.push({ vehiculo_id: v.id, empresa_id: v.empresa_id, delegacion_id: delegId, entrada,
           matricula: v.matricula, baseNom: basePorId.get(delegId)?.nombre ?? "la base" });
       }

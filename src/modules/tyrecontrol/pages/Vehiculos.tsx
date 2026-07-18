@@ -85,7 +85,9 @@ export default function Vehiculos() {
   // Revisión pendiente = sin revisión, vencida o próxima. Vencida = sin revisión o vencida.
   const esPendiente = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida" || e === "proxima"; };
   const esVencida = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida"; };
-  const revisarEnBase = (id: string) => estadoDe(id) === "en_base" && esPendiente(id);
+  // "En base" a efectos de revisión = en su base asignada O en otra base de su empresa.
+  const enAlgunaBase = (id: string) => { const e = estados.get(id)?.estado; return e === "en_base" || e === "otra_base"; };
+  const revisarEnBase = (id: string) => enAlgunaBase(id) && esPendiente(id);
 
   async function cargar() {
     setLoading(true);
@@ -121,7 +123,7 @@ export default function Vehiculos() {
       const e = estados.get(v.id)?.estado ?? "sin_dispositivo";
       if (e === "en_ruta") en_ruta++;
       else if (e === "sin_conexion") sin_conexion++;
-      else if (e === "en_base") {
+      else if (e === "en_base" || e === "otra_base") {
         en_base++;
         const r = revEstados.get(v.id)?.estado;
         if (r === "sin_revision" || r === "vencida" || r === "proxima") pend_base++;
@@ -139,10 +141,10 @@ export default function Vehiculos() {
       if (fTipo && v.tipo_vehiculo_id !== fTipo) return false;
       if (fEstado === "activos" && !v.activo) return false;
       if (fEstado === "inactivos" && v.activo) return false;
-      if (fWebfleet === "en_base" && estadoDe(v.id) !== "en_base") return false;
+      if (fWebfleet === "en_base" && !enAlgunaBase(v.id)) return false;
       if (fWebfleet === "en_ruta" && estadoDe(v.id) !== "en_ruta") return false;
       if (fWebfleet === "pend_base" && !revisarEnBase(v.id)) return false;
-      if (fWebfleet === "venc_base" && !(estadoDe(v.id) === "en_base" && esVencida(v.id))) return false;
+      if (fWebfleet === "venc_base" && !(enAlgunaBase(v.id) && esVencida(v.id))) return false;
       if (s && !v.matricula.toLowerCase().includes(s) && !(v.numero_unidad ?? "").toLowerCase().includes(s)) return false;
       return true;
     });
@@ -296,10 +298,14 @@ export default function Vehiculos() {
                 {(() => {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
-                  const revisar = e === "en_base" && esPendiente(v.id);
+                  const enBase = e === "en_base" || e === "otra_base";
+                  const revisar = enBase && esPendiente(v.id);
+                  // Nombre de la base donde está (delegación detectada por Webfleet).
+                  const baseNom = est?.delegacion?.nombre;
+                  const enBaseTxt = `EN BASE${baseNom ? " " + baseNom.toUpperCase() : ""}`;
                   // Posición con más de 30 min (GPS dormido, típico aparcado en
                   // base): se sigue mostrando en base, con aviso de antigüedad.
-                  const posAntigua = (e === "en_base" || e === "otra_base") && est?.pos_time != null
+                  const posAntigua = enBase && est?.pos_time != null
                     && Date.now() - new Date(est.pos_time).getTime() > 30 * 60 * 1000;
                   return (
                     <button
@@ -308,7 +314,11 @@ export default function Vehiculos() {
                       className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]} ${est ? "cursor-pointer" : "cursor-default opacity-70"}`}
                       title={est ? (posAntigua ? "Última posición con más de 30 min (GPS dormido) · Ver detalle" : "Ver detalle") : "Sin datos Webfleet"}
                     >
-                      {revisar ? `🟢 EN BASE · REVISAR` : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}${posAntigua ? " · POS. ANT." : ""}`}
+                      {revisar
+                        ? `🟢 ${enBaseTxt} · REVISAR`
+                        : enBase
+                          ? `${ESTADO_WEBFLEET_PUNTO[e]} ${enBaseTxt}${posAntigua ? " · POS. ANT." : ""}`
+                          : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}${posAntigua ? " · POS. ANT." : ""}`}
                     </button>
                   );
                 })()}

@@ -82,7 +82,8 @@ export default function DisponiblesRevisar() {
     for (const v of items) {
       const est = estados.get(v.id);
       const rev = revs.get(v.id);
-      if (!est || est.estado !== "en_base" || !rev) continue;
+      // En base = en su base asignada O en otra base de su empresa (revisable igual).
+      if (!est || !(est.estado === "en_base" || est.estado === "otra_base") || !rev) continue;
       if (!(rev.estado === "sin_revision" || rev.estado === "vencida" || rev.estado === "proxima")) continue;
       const fl = flags.get(v.id);
       if (fl?.no_disponible) continue;
