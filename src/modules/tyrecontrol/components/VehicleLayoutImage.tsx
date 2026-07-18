@@ -113,12 +113,14 @@ export default function VehicleLayoutImage({
 
   const posicionPorCodigo = new Map(posiciones.map((p) => [p.codigo_posicion, p]));
   const montajePorPosicionId = new Map(montajes.map((m) => [m.posicion_id, m]));
+  const posicionesLibres = posiciones.filter((p) => !montajePorPosicionId.get(p.id));
 
   const [seleccion, setSeleccion] = useState<string | null>(null);
   const [disponibles, setDisponibles] = useState<Neumatico[]>([]);
   const [neumaticoElegido, setNeumaticoElegido] = useState("");
   const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
+  const [modalBulk, setModalBulk] = useState(false);
   const [modalFueraAlmacen, setModalFueraAlmacen] = useState(false);
   const [arrastrando, setArrastrando] = useState<string | null>(null);
   const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
@@ -383,7 +385,14 @@ export default function VehicleLayoutImage({
             </div>
           </div>
         ) : !posSeleccionada ? (
-          <div className="text-sm text-slate-500">Selecciona una posición del plano.</div>
+          <div>
+            <div className="text-sm text-slate-500">Selecciona una posición del plano.</div>
+            {editable && posicionesLibres.length > 1 && (
+              <button onClick={() => setModalBulk(true)} className="mt-3 w-full rounded bg-emerald-600 px-2 py-1.5 text-[12px] font-bold text-white">
+                Montar el mismo en todas las libres ({posicionesLibres.length})
+              </button>
+            )}
+          </div>
         ) : montajeSeleccionado?.neumatico ? (
           <div>
             <div className="text-[11px] font-bold uppercase text-slate-400">{posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}</div>
@@ -473,6 +482,18 @@ export default function VehicleLayoutImage({
           medidaActual={montajeSeleccionado?.neumatico?.medida ?? medidaPorPosicionId?.[posSeleccionada.id]}
           onClose={() => setModalFicha(null)}
           onDone={() => { setModalFicha(null); setSeleccion(null); onChanged?.(); }}
+        />
+      )}
+      {modalBulk && posicionesLibres.length > 0 && (
+        <ModalMontarDesdeFicha
+          posicionNombre={`${posicionesLibres.length} posiciones libres`}
+          vehiculoId={vehiculoId}
+          empresaId={empresaId}
+          posicionId={posicionesLibres[0].id}
+          posicionesBulk={posicionesLibres.map((p) => p.id)}
+          medidaActual={medidaPorPosicionId?.[posicionesLibres[0].id]}
+          onClose={() => setModalBulk(false)}
+          onDone={() => { setModalBulk(false); setSeleccion(null); onChanged?.(); }}
         />
       )}
       {modalFueraAlmacen && posSeleccionada && (

@@ -12,6 +12,7 @@ interface Props {
   posicionId: string;
   montajeActualId?: string; // si viene informado, es una SUSTITUCIÓN (desmonta + monta)
   medidaActual?: string | null; // medida del neumático de la posición → filtra el almacén
+  posicionesBulk?: string[]; // si viene, se monta el MISMO neumático en todas estas posiciones
   onClose: () => void;
   onDone: () => void;
 }
@@ -25,7 +26,8 @@ const baseMedida = (s?: string | null) => {
   return `${m[1]}${m[2] ? "/" + m[2] : ""}R${m[3].replace(",", ".")}`;
 };
 
-export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empresaId, posicionId, montajeActualId, medidaActual, onClose, onDone }: Props) {
+export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empresaId, posicionId, montajeActualId, medidaActual, posicionesBulk, onClose, onDone }: Props) {
+  const bulk = (posicionesBulk?.length ?? 0) > 1;
   const { perfil } = useTyreAuth();
   const esAdmin = !!(perfil?.es_superadmin || perfil?.rol === "administrador");
   const [productos, setProductos] = useState<ProductoAlmacen[]>([]);
@@ -88,26 +90,42 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
       ? { ...datos, profundidad_actual_mm: profRestante.replace(",", ".") }
       : datos;
     const fecha = new Date().toISOString().slice(0, 10);
+    const posiciones = bulk ? posicionesBulk! : [posicionId];
+    const ctrlInd = bulk ? false : controlIndividual; // en bulk no se controlan individualmente
     setSaving(true); setMsg("");
     try {
-      if (sel.tipo === "catalogo") {
-        // Solo catálogo (no está en almacén): se monta sin descontar stock.
-        await montarDesdeCatalogo({
-          vehiculoId, posicionId, referenciaId: sel.id, controlIndividual, datos: datosFinal,
-          km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
-          montajeActualId: montajeActualId ?? null, motivoDesmontaje: motivo, destinoRetirado: destino,
-        });
-      } else if (montajeActualId) {
-        await sustituirNeumatico({
-          montajeActualId, productoAlmacenId: sel.id, controlIndividual, datos: datosFinal,
-          motivoDesmontaje: motivo, destinoRetirado: destino,
-          km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
-        });
-      } else {
-        await montarDesdeAlmacen({
-          vehiculoId, posicionId, productoAlmacenId: sel.id, controlIndividual, datos: datosFinal,
-          km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
-        });
+      let ok = 0; let ultimo = "";
+      for (const pid of posiciones) {
+        try {
+          if (sel.tipo === "catalogo") {
+            await montarDesdeCatalogo({
+              vehiculoId, posicionId: pid, referenciaId: sel.id, controlIndividual: ctrlInd, datos: datosFinal,
+              km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+              montajeActualId: !bulk && montajeActualId ? montajeActualId : null, motivoDesmontaje: motivo, destinoRetirado: destino,
+            });
+          } else if (!bulk && montajeActualId) {
+            await sustituirNeumatico({
+              montajeActualId, productoAlmacenId: sel.id, controlIndividual: ctrlInd, datos: datosFinal,
+              motivoDesmontaje: motivo, destinoRetirado: destino,
+              km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+            });
+          } else {
+            await montarDesdeAlmacen({
+              vehiculoId, posicionId: pid, productoAlmacenId: sel.id, controlIndividual: ctrlInd, datos: datosFinal,
+              km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+            });
+          }
+          ok++;
+        } catch (e: any) {
+          const t = e?.message || "Error";
+          if (esErrorMedidaIncompatible(t)) throw e; // permite forzar
+          ultimo = t;
+          if (/no hay stock|no hay producto/i.test(t)) break; // sin stock: no seguir
+        }
+      }
+      if (ok === 0) { setMsg(ultimo || "No se pudo montar"); return; }
+      if (bulk && ok < posiciones.length) {
+        window.alert(`Montados ${ok} de ${posiciones.length} neumáticos.${ultimo ? "\n" + ultimo : ""}`);
       }
       onDone();
     } catch (e: any) {
@@ -124,7 +142,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
   }
 
   return (
-    <Modal title={`${montajeActualId ? "Sustituir" : "Montar"} en ${posicionNombre}`} onClose={onClose}
+    <Modal title={bulk ? `Montar el mismo en ${posicionesBulk!.length} posiciones libres` : `${montajeActualId ? "Sustituir" : "Montar"} en ${posicionNombre}`} onClose={onClose}
       footer={<div className="flex justify-end gap-2">
         <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
         {medidaIncompatible && esAdmin ? (
@@ -133,7 +151,7 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
           </button>
         ) : (
           <button onClick={() => confirmar(false)} disabled={saving || !productoId || (medidaIncompatible && !esAdmin)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
-            {montajeActualId ? "Sustituir" : "Montar"}
+            {bulk ? `Montar en ${posicionesBulk!.length}` : (montajeActualId ? "Sustituir" : "Montar")}
           </button>
         )}
       </div>}>
@@ -247,10 +265,17 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
           </div>
         )}
 
-        <label className="flex items-center gap-2 text-sm text-slate-200">
-          <input type="checkbox" checked={controlIndividual} onChange={(e) => setControlIndividual(e.target.checked)} />
-          Controlar este neumático individualmente (DOT, serie, RFID)
-        </label>
+        {bulk && (
+          <div className="rounded-lg border border-emerald-600/40 bg-emerald-500/8 px-3 py-2 text-[12px] text-emerald-200">
+            Se montará el mismo neumático en <b>{posicionesBulk!.length} posiciones libres</b>. Si es de almacén, se descontarán {posicionesBulk!.length} unidades.
+          </div>
+        )}
+        {!bulk && (
+          <label className="flex items-center gap-2 text-sm text-slate-200">
+            <input type="checkbox" checked={controlIndividual} onChange={(e) => setControlIndividual(e.target.checked)} />
+            Controlar este neumático individualmente (DOT, serie, RFID)
+          </label>
+        )}
 
         {controlIndividual && (
           <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-900 p-2">
