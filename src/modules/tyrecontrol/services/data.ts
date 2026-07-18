@@ -1571,7 +1571,7 @@ async function resolverMedidaId(medida: string): Promise<string> {
   return creada.id;
 }
 
-export async function crearTyreSize(input: TyreSizeInput): Promise<void> {
+export async function crearTyreSize(input: TyreSizeInput): Promise<string> {
   const medida = construirMedidaTs(input.ancho, input.perfil, input.diametro_llanta);
   const referencia_completa = construirReferenciaTs(medida, input.indice_carga_simple, input.indice_carga_doble, input.codigo_velocidad);
   const medida_id = await resolverMedidaId(medida);
@@ -1582,6 +1582,7 @@ export async function crearTyreSize(input: TyreSizeInput): Promise<void> {
     codigo_velocidad: input.codigo_velocidad, activo: input.activo,
   });
   if (error) throw new Error(error.message);
+  return medida_id; // id de la medida (tc_cat_medidas_neumatico) para asignar al vehículo
 }
 
 export async function eliminarTyreSize(id: string): Promise<void> {

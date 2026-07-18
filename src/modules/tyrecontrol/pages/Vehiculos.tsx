@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
-  listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado, crearMedida,
+  listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
 } from "../services/data";
+import ModalNuevaMedida from "../components/ModalNuevaMedida";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
   ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje,
@@ -221,15 +222,12 @@ export default function Vehiculos() {
   const setEje = (eje: number, p: Partial<VehiculoEje>) =>
     modal && setModal({ ...modal, ejes: modal.ejes.map((e) => (e.eje === eje ? { ...e, ...p } : e)) });
 
-  // Crea una medida nueva desde el formulario y la selecciona (callback).
-  async function nuevaMedida(onCreated: (id: string) => void) {
-    const valor = window.prompt("Nueva medida de neumático (ej. 385/65R22.5):", "");
-    if (!valor || !valor.trim()) return;
-    try {
-      const id = await crearMedida(valor.trim());
-      setMedidas(await listarMedidas());
-      onCreated(id);
-    } catch (e: any) { alert(e?.message || "No se pudo crear la medida"); }
+  // Abre el modal de crear medida; al crearla la selecciona donde toque.
+  const [modalMedida, setModalMedida] = useState<null | ((id: string) => void)>(null);
+  async function medidaCreada(id: string) {
+    setMedidas(await listarMedidas());
+    modalMedida?.(id);
+    setModalMedida(null);
   }
 
   const filasEjes = modal?.draft.medidas_por_eje ? modal.ejes : [];
@@ -400,7 +398,7 @@ export default function Vehiculos() {
                       <option value="">—</option>
                       {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
                     </select>
-                    <button type="button" onClick={() => nuevaMedida((id) => set({ medida_id: id }))}
+                    <button type="button" onClick={() => setModalMedida(() => (id: string) => set({ medida_id: id }))}
                       className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
                   </div>
                 </Field>
@@ -451,7 +449,7 @@ export default function Vehiculos() {
                           <option value="">Medida…</option>
                           {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
                         </select>
-                        <button type="button" onClick={() => nuevaMedida((id) => setEje(f.eje, { medida_id: id }))}
+                        <button type="button" onClick={() => setModalMedida(() => (id: string) => setEje(f.eje, { medida_id: id }))}
                           className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
                       </div>
                       <select className={inputCls} value={f.tipo_llanta_id ?? ""} onChange={(e) => setEje(f.eje, { tipo_llanta_id: e.target.value || null })}>
@@ -465,6 +463,10 @@ export default function Vehiculos() {
             </div>
           )}
         </Modal>
+      )}
+
+      {modalMedida && (
+        <ModalNuevaMedida onClose={() => setModalMedida(null)} onCreated={medidaCreada} />
       )}
 
       {/* Popup de detalle del estado Webfleet */}
