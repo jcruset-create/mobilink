@@ -11,7 +11,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_layout_image.dart';
 import '../widgets/vehicle_schema.dart';
-import 'resolver_incidencias_screen.dart';
+import 'cambio_neumatico_screen.dart';
 
 /// Flujo "⚠ Revisión con incidencia" (Fase 1).
 /// El técnico marca posición → problemas → gravedad, y decide dejarlas
@@ -218,11 +218,14 @@ class _IncidenciaFlowScreenState extends State<IncidenciaFlowScreen> {
       final incidencias = await TyreControlApi.listarIncidenciasDeRevision(widget.revisionId);
       if (!mounted) return;
       setState(() => _guardando = false);
+      // Misma pantalla que "Solucionar ahora" desde Incidencias pendientes:
+      // cambio táctil con el panel de operaciones por avería.
+      final posId = incidencias.map((i) => i.posicionId).whereType<String>().firstOrNull;
       await Navigator.of(context).push<bool>(
         MaterialPageRoute(
-          builder: (_) => ResolverIncidenciasScreen(
-            matricula: widget.vehiculo.matricula,
-            fechaRevision: '',
+          builder: (_) => CambioNeumaticoScreen(
+            vehiculoId: widget.vehiculo.id,
+            posicionInicialId: posId,
             incidencias: incidencias,
           ),
         ),
