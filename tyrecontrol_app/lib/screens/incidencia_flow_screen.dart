@@ -420,7 +420,7 @@ class _ProblemasSheetState extends State<_ProblemasSheet> {
               child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: kProblemasTipos.map((p) {
+                children: problemasTipos.map((p) {
                   final sel = _tipos.contains(p.key);
                   return FilterChip(
                     label: Text(p.label),
@@ -563,7 +563,7 @@ class _PendienteFormScreenState extends State<_PendienteFormScreen> {
           const SizedBox(height: 8),
           Wrap(
             spacing: 8, runSpacing: 8,
-            children: kMotivosPendiente.map((m) {
+            children: motivosPendiente.map((m) {
               final sel = _motivo == m.key;
               return ChoiceChip(
                 label: Text(m.value),

@@ -6,6 +6,7 @@ import type {
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
   MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
+  TipoIncidencia, TipoIncidenciaInput, MotivoPendiente, MotivoPendienteInput,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
@@ -1537,6 +1538,54 @@ export async function actualizarMotivoFueraAlmacen(id: string, motivo: string): 
 }
 export async function eliminarMotivoFueraAlmacen(id: string): Promise<void> {
   const { error } = await supabase.from("tc_cat_motivos_fuera_almacen").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Catálogo configurable de tipos de incidencia ─────────────
+const COLS_TIPO_INCIDENCIA = ["clave", "etiqueta", "icono", "gravedad_sugerida", "operacion_sugerida", "orden"] as const;
+
+export async function listarTiposIncidencia(soloActivos = false): Promise<TipoIncidencia[]> {
+  let query = supabase.from("tc_cat_tipos_incidencia").select("*").order("orden").order("etiqueta");
+  if (soloActivos) query = query.eq("activo", true);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as TipoIncidencia[];
+}
+export async function crearTipoIncidencia(input: TipoIncidenciaInput): Promise<void> {
+  const { error } = await supabase.from("tc_cat_tipos_incidencia").insert(pick(input, COLS_TIPO_INCIDENCIA));
+  if (error) throw new Error(error.message);
+}
+export async function actualizarTipoIncidencia(id: string, patch: Partial<TipoIncidenciaInput> & { activo?: boolean }): Promise<void> {
+  const cols = [...COLS_TIPO_INCIDENCIA, "activo"] as const;
+  const { error } = await supabase.from("tc_cat_tipos_incidencia").update(pick(patch, cols)).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function eliminarTipoIncidencia(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_tipos_incidencia").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Catálogo configurable de motivos "pendiente" ─────────────
+const COLS_MOTIVO_PENDIENTE = ["clave", "etiqueta", "orden"] as const;
+
+export async function listarMotivosPendiente(soloActivos = false): Promise<MotivoPendiente[]> {
+  let query = supabase.from("tc_cat_motivos_pendiente").select("*").order("orden").order("etiqueta");
+  if (soloActivos) query = query.eq("activo", true);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MotivoPendiente[];
+}
+export async function crearMotivoPendiente(input: MotivoPendienteInput): Promise<void> {
+  const { error } = await supabase.from("tc_cat_motivos_pendiente").insert(pick(input, COLS_MOTIVO_PENDIENTE));
+  if (error) throw new Error(error.message);
+}
+export async function actualizarMotivoPendiente(id: string, patch: Partial<MotivoPendienteInput> & { activo?: boolean }): Promise<void> {
+  const cols = [...COLS_MOTIVO_PENDIENTE, "activo"] as const;
+  const { error } = await supabase.from("tc_cat_motivos_pendiente").update(pick(patch, cols)).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function eliminarMotivoPendiente(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_motivos_pendiente").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 

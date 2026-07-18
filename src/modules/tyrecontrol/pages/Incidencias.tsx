@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarIncidencias, resolverIncidencia, listarMontajesVehiculo } from "../services/data";
+import { listarIncidencias, resolverIncidencia, listarMontajesVehiculo, listarTiposIncidencia } from "../services/data";
 import type { MontajeActual } from "../types";
 import { Modal, Field, inputCls } from "../components/ui";
 import ModalMontarDesdeFicha from "../components/ModalMontarDesdeFicha";
 
-// ── Catálogos (mismos strings que la migración/APK) ──────────
-const PROBLEMA_LABELS: Record<string, string> = {
+// ── Catálogos ────────────────────────────────────────────────
+// Etiquetas por defecto (fallback si el catálogo tc_cat_tipos_incidencia
+// aún no ha cargado o no incluye una clave concreta).
+const PROBLEMA_LABELS_DEFAULT: Record<string, string> = {
   profundidad_baja: "Profundidad baja", presion_baja: "Presión baja", presion_alta: "Presión alta",
   pinchazo: "Pinchazo / pérdida de aire", objeto_clavado: "Objeto clavado", desgaste_irregular: "Desgaste irregular",
   desgaste_interior: "Desgaste interior", desgaste_exterior: "Desgaste exterior", diferencia_gemelos: "Diferencia entre gemelos",
@@ -15,6 +17,8 @@ const PROBLEMA_LABELS: Record<string, string> = {
   necesita_sustitucion: "Necesita sustitución", necesita_reparacion: "Necesita reparación", necesita_equilibrado: "Necesita equilibrado",
   necesita_alineacion: "Necesita alineación", otra: "Otra incidencia",
 };
+// Etiquetas efectivas: se rellenan desde el catálogo al cargar la página.
+let PROBLEMA_LABELS: Record<string, string> = { ...PROBLEMA_LABELS_DEFAULT };
 const OPERACIONES: { key: string; label: string; sustitucion?: boolean }[] = [
   { key: "corregir_presion", label: "Corregir presión" },
   { key: "reparar_pinchazo", label: "Reparar pinchazo" },
@@ -125,7 +129,14 @@ export default function Incidencias() {
 
   async function cargar() {
     setLoading(true); setError("");
-    try { setRows((await listarIncidencias()).map(parse)); }
+    try {
+      // Etiquetas configurables (no bloquea si falla: quedan las por defecto).
+      try {
+        const tipos = await listarTiposIncidencia(false);
+        PROBLEMA_LABELS = { ...PROBLEMA_LABELS_DEFAULT, ...Object.fromEntries(tipos.map((t) => [t.clave, t.etiqueta])) };
+      } catch { /* se mantienen las etiquetas por defecto */ }
+      setRows((await listarIncidencias()).map(parse));
+    }
     catch (e: any) { setError(e?.message || "Error"); }
     finally { setLoading(false); }
   }

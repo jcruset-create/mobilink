@@ -33,6 +33,7 @@ import MisVehiculos from "./pages/MisVehiculos";
 import MisNeumaticos from "./pages/MisNeumaticos";
 import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
+import TiposIncidencia from "./pages/TiposIncidencia";
 import Importar from "./pages/Importar";
 import InformesLayout from "./pages/informes/InformesLayout";
 import InformeAlertas from "./pages/informes/InformeAlertas";
@@ -98,6 +99,7 @@ export default function TyreControlApp() {
               <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
               <Route path="planificacion" element={<PlanificacionRevisiones />} />
               <Route path="incidencias" element={<Incidencias />} />
+              <Route path="tipos-incidencia" element={<TiposIncidencia />} />
               <Route path="historico-revisiones" element={<HistoricoRevisiones />} />
               <Route path="plantillas-mantenimiento" element={<PlantillasMantenimiento />} />
               <Route path="lotes-revision" element={<LotesRevision />} />

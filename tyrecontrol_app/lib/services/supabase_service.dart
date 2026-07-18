@@ -535,6 +535,27 @@ class TyreControlApi {
     });
   }
 
+  /// Catálogo configurable de tipos de incidencia (tabla tc_cat_tipos_incidencia).
+  /// Devuelve filas crudas activas ordenadas; el mapeo lo hace incidencias.dart.
+  static Future<List<Map<String, dynamic>>> fetchTiposIncidencia() async {
+    final data = await _db
+        .from('tc_cat_tipos_incidencia')
+        .select('clave, etiqueta, icono, gravedad_sugerida, operacion_sugerida, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Catálogo configurable de motivos "pendiente" (tabla tc_cat_motivos_pendiente).
+  static Future<List<Map<String, dynamic>>> fetchMotivosPendiente() async {
+    final data = await _db
+        .from('tc_cat_motivos_pendiente')
+        .select('clave, etiqueta, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   /// Lista de incidencias con vehículo/posición/problemas embebidos.
   /// [estados] filtra por estado (vacío = todas).
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {

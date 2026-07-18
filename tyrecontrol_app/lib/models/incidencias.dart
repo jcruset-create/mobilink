@@ -13,6 +13,9 @@ class ProblemaTipo {
   const ProblemaTipo(this.key, this.label, this.icon);
 }
 
+/// Semilla de fábrica (fallback offline antes de cargar el catálogo del
+/// servidor). En cuanto la APK lee `tc_cat_tipos_incidencia`, `problemasTipos`
+/// se sustituye por lo configurado en el panel de administración.
 const kProblemasTipos = <ProblemaTipo>[
   ProblemaTipo('profundidad_baja', 'Profundidad baja', Icons.straighten),
   ProblemaTipo('presion_baja', 'Presión baja', Icons.south),
@@ -37,8 +40,74 @@ const kProblemasTipos = <ProblemaTipo>[
   ProblemaTipo('otra', 'Otra incidencia', Icons.more_horiz),
 ];
 
+/// Lista efectiva de tipos (chips en la revisión). Empieza con la semilla y se
+/// sustituye al cargar el catálogo configurable del servidor.
+List<ProblemaTipo> problemasTipos = List<ProblemaTipo>.of(kProblemasTipos);
+
+// Overrides cargados del catálogo (vacío = usar la lógica por defecto de abajo).
+Map<String, Gravedad> _gravedadPorTipo = {};
+Map<String, String> _operacionPorTipo = {};
+
+/// Aplica el catálogo `tc_cat_tipos_incidencia` (filas ya filtradas por activo,
+/// ordenadas por `orden`). Tolera campos ausentes.
+void aplicarCatalogoDesdeJson(List<Map<String, dynamic>> filas) {
+  final tipos = <ProblemaTipo>[];
+  final grav = <String, Gravedad>{};
+  final oper = <String, String>{};
+  for (final f in filas) {
+    final clave = (f['clave'] as String?)?.trim();
+    if (clave == null || clave.isEmpty) continue;
+    tipos.add(ProblemaTipo(
+      clave,
+      (f['etiqueta'] as String?)?.trim().isNotEmpty == true ? f['etiqueta'] as String : clave,
+      iconoIncidenciaPorNombre(f['icono'] as String?),
+    ));
+    grav[clave] = gravedadFrom(f['gravedad_sugerida'] as String?);
+    final op = (f['operacion_sugerida'] as String?)?.trim();
+    if (op != null && op.isNotEmpty) oper[clave] = op;
+  }
+  if (tipos.isEmpty) return; // catálogo vacío o ilegible: conservamos lo actual
+  problemasTipos = tipos;
+  _gravedadPorTipo = grav;
+  _operacionPorTipo = oper;
+}
+
+/// Traduce el nombre de icono (compartido con la web) a un icono de Material.
+IconData iconoIncidenciaPorNombre(String? nombre) {
+  switch (nombre) {
+    case 'straighten': return Icons.straighten;
+    case 'south': return Icons.south;
+    case 'north': return Icons.north;
+    case 'tire_repair': return Icons.tire_repair;
+    case 'push_pin': return Icons.push_pin;
+    case 'blur_linear': return Icons.blur_linear;
+    case 'align_horizontal_left': return Icons.align_horizontal_left;
+    case 'align_horizontal_right': return Icons.align_horizontal_right;
+    case 'compare_arrows': return Icons.compare_arrows;
+    case 'content_cut': return Icons.content_cut;
+    case 'report_gmailerrorred': return Icons.report_gmailerrorred;
+    case 'change_history': return Icons.change_history;
+    case 'air': return Icons.air;
+    case 'rule': return Icons.rule;
+    case 'swap_horiz': return Icons.swap_horiz;
+    case 'help_outline': return Icons.help_outline;
+    case 'autorenew': return Icons.autorenew;
+    case 'build': return Icons.build;
+    case 'balance': return Icons.balance;
+    case 'linear_scale': return Icons.linear_scale;
+    case 'more_horiz': return Icons.more_horiz;
+    case 'gauge': return Icons.speed;
+    case 'thermometer': return Icons.thermostat;
+    case 'droplet': return Icons.water_drop;
+    case 'snowflake': return Icons.ac_unit;
+    case 'flame': return Icons.local_fire_department;
+    case 'settings': return Icons.settings;
+    default: return Icons.help_outline;
+  }
+}
+
 String problemaLabel(String key) =>
-    kProblemasTipos.firstWhere((p) => p.key == key,
+    problemasTipos.firstWhere((p) => p.key == key,
         orElse: () => ProblemaTipo(key, key, Icons.help_outline)).label;
 
 // ── Gravedad ─────────────────────────────────────────────────
@@ -77,6 +146,20 @@ Gravedad gravedadAuto({
   double profCriticaMm = 1.6,
   double profAvisoMm = 3.0,
 }) {
+  // Si hay catálogo cargado, la gravedad de cada tipo la define el panel.
+  if (_gravedadPorTipo.isNotEmpty) {
+    var peor = Gravedad.leve;
+    for (final t in tipos) {
+      final g = _gravedadPorTipo[t];
+      if (g != null && g.index > peor.index) peor = g;
+    }
+    if (profundidadMm != null && profundidadMm <= profCriticaMm) return Gravedad.critica;
+    if (peor == Gravedad.critica) return Gravedad.critica;
+    if (profundidadMm != null && profundidadMm <= profAvisoMm) return Gravedad.importante;
+    if (peor == Gravedad.importante) return Gravedad.importante;
+    return Gravedad.leve;
+  }
+
   const criticos = {
     'dano_flanco', 'deformacion', 'no_coincide_ficha', 'necesita_sustitucion',
   };
@@ -144,6 +227,11 @@ List<String> operacionesSugeridas(Set<String> tipos) {
   void add(String k) {
     if (!orden.contains(k)) orden.add(k);
   }
+  // Operación configurada en el catálogo (prioritaria).
+  for (final t in tipos) {
+    final o = _operacionPorTipo[t];
+    if (o != null && o.isNotEmpty) add(o);
+  }
   for (final t in tipos) {
     switch (t) {
       case 'presion_baja':
@@ -180,6 +268,8 @@ List<String> operacionesSugeridas(Set<String> tipos) {
 }
 
 // ── Motivos rápidos para "dejar pendiente" ───────────────────
+/// Semilla de fábrica (fallback offline). Se sustituye por lo configurado en
+/// el panel (tabla tc_cat_motivos_pendiente) en cuanto la APK la lee.
 const kMotivosPendiente = <MapEntry<String, String>>[
   MapEntry('falta_autorizacion', 'Falta autorización del cliente'),
   MapEntry('falta_neumatico', 'Falta neumático'),
@@ -192,6 +282,22 @@ const kMotivosPendiente = <MapEntry<String, String>>[
   MapEntry('no_accesible', 'No se puede acceder correctamente'),
   MapEntry('otro', 'Otro motivo'),
 ];
+
+/// Lista efectiva de motivos (chips en "dejar pendiente"). Empieza con la
+/// semilla y se sustituye al cargar el catálogo del servidor.
+List<MapEntry<String, String>> motivosPendiente = List<MapEntry<String, String>>.of(kMotivosPendiente);
+
+/// Aplica el catálogo `tc_cat_motivos_pendiente` (filas activas, ordenadas).
+void aplicarMotivosDesdeJson(List<Map<String, dynamic>> filas) {
+  final out = <MapEntry<String, String>>[];
+  for (final f in filas) {
+    final clave = (f['clave'] as String?)?.trim();
+    if (clave == null || clave.isEmpty) continue;
+    final et = (f['etiqueta'] as String?)?.trim();
+    out.add(MapEntry(clave, et != null && et.isNotEmpty ? et : clave));
+  }
+  if (out.isNotEmpty) motivosPendiente = out;
+}
 
 /// Un problema concreto dentro de una incidencia (con su id para resolver).
 class ProblemaInc {

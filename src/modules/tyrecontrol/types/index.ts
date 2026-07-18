@@ -869,3 +869,33 @@ export interface UmbralCategoria {
 export interface IndiceCarga { id: string; valor: string; activo: boolean; }
 export interface IndiceVelocidad { id: string; valor: string; activo: boolean; }
 export interface MotivoFueraAlmacen { id: string; motivo: string; activo: boolean; }
+
+export type GravedadIncidencia = "leve" | "importante" | "critica";
+export interface TipoIncidencia {
+  id: string;
+  clave: string;
+  etiqueta: string;
+  icono: string | null;
+  gravedad_sugerida: GravedadIncidencia;
+  operacion_sugerida: string | null;
+  orden: number;
+  activo: boolean;
+  es_sistema: boolean;
+}
+export type TipoIncidenciaInput = {
+  clave: string;
+  etiqueta: string;
+  icono: string | null;
+  gravedad_sugerida: GravedadIncidencia;
+  operacion_sugerida: string | null;
+  orden: number;
+};
+export interface MotivoPendiente {
+  id: string;
+  clave: string;
+  etiqueta: string;
+  orden: number;
+  activo: boolean;
+  es_sistema: boolean;
+}
+export type MotivoPendienteInput = { clave: string; etiqueta: string; orden: number };

@@ -34,6 +34,7 @@ export const NAV: NavItem[] = [
   { key: "catalogo-neumaticos", path: "catalogo-neumaticos", label: "Catálogo de neumáticos", icon: BookOpen, roles: ["administrador"] },
   { key: "sonda", path: "sonda", label: "Sonda TLGX", icon: Bluetooth, roles: ["administrador"] },
   { key: "importar", path: "importar", label: "Importar", icon: Upload, roles: ["administrador"] },
+  { key: "tipos-incidencia", path: "tipos-incidencia", label: "Tipos y motivos de incidencia", icon: AlertTriangle, roles: ["administrador"] },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, roles: ["administrador"] },
   // Cliente
   { key: "mi-empresa", path: "mi-empresa", label: "Mi empresa", icon: Building2, roles: ["cliente"] },
