@@ -11108,11 +11108,14 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       }
       userId = created.user.id;
 
-      // Empresa de referencia: SEA Tarragona (o la más antigua si no existe)
+      // Empresa de referencia: Mobilink Tarragona (nombre legacy "SEA Tarragona"
+      // aceptado hasta ejecutar la migración de datos; si no, la más antigua).
       const { data: empresa } = await supabase
         .from("tc_empresas")
         .select("id")
-        .eq("nombre", "SEA Tarragona")
+        .in("nombre", ["Mobilink Tarragona", "SEA Tarragona"])
+        .order("nombre", { ascending: true }) // "Mobilink..." < "SEA..." → prioriza el nuevo
+        .limit(1)
         .maybeSingle();
       let empresaId = empresa?.id;
       if (!empresaId) {
