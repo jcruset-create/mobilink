@@ -23,7 +23,7 @@ export default function PaymentResult({ type }: PaymentResultProps) {
         </p>
 
         <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4 text-sm text-slate-300">
-          SEA Tarragona
+          Mobilink
         </div>
 
         <a

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>SEA Asistencia</string>
+	<string>Mobilink Asistencia</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -46,14 +46,14 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>SEA Asistencia usa la cámara para fotografiar matrículas, averías y reparaciones de las asistencias.</string>
+	<string>Mobilink Asistencia usa la cámara para fotografiar matrículas, averías y reparaciones de las asistencias.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>SEA Asistencia accede a tus fotos para adjuntar imágenes a las asistencias.</string>
+	<string>Mobilink Asistencia accede a tus fotos para adjuntar imágenes a las asistencias.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>SEA Asistencia guarda imágenes de las asistencias en tu galería.</string>
+	<string>Mobilink Asistencia guarda imágenes de las asistencias en tu galería.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>SEA Asistencia usa tu ubicación para el seguimiento del trayecto hasta el punto de avería y el regreso al taller.</string>
+	<string>Mobilink Asistencia usa tu ubicación para el seguimiento del trayecto hasta el punto de avería y el regreso al taller.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>SEA Asistencia puede usar el micrófono al grabar vídeos de la asistencia.</string>
+	<string>Mobilink Asistencia puede usar el micrófono al grabar vídeos de la asistencia.</string>
 </dict>
 </plist>

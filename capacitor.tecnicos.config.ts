@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.seatarragona.tecnicosmobile",
-  appName: "SEA Técnicos",
+  appName: "Mobilink Técnicos",
   webDir: "dist-tecnicos",
   android: {
     path: "android-tecnicos",

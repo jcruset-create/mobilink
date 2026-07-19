@@ -170,7 +170,7 @@ function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
           <div className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 mb-3">
             <span className="text-3xl">🔧</span>
           </div>
-          <h1 className="text-2xl font-black">SEA Tarragona</h1>
+          <h1 className="text-2xl font-black">Mobilink</h1>
           <p className="text-slate-400 text-sm mt-1">Portal operarios taller</p>
         </div>
 

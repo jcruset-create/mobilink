@@ -289,7 +289,7 @@ function ModalUsuarioApp({ usuario, onClose, onSaved }: {
         )}
         <TextField label="Email de recuperación (solo administradores)" value={emailRec} onChange={setEmailRec} type="email" />
         <TextField label="Teléfono" value={telefono} onChange={setTelefono} />
-        <SelectField label="Empleado SEA Core (opcional)" value={employeeId} onChange={setEmployeeId}>
+        <SelectField label="Empleado Mobilink Core (opcional)" value={employeeId} onChange={setEmployeeId}>
           <option value="">—</option>
           {empleados.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
         </SelectField>

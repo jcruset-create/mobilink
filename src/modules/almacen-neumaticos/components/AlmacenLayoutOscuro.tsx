@@ -8,7 +8,7 @@ import {
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { cerrarSesion } from "../services/authAlmacen";
 
-// Mismo estilo visual que SEA TyreControl (fondo slate-900, activo sky-600),
+// Mismo estilo visual que Mobilink TyreControl (fondo slate-900, activo sky-600),
 // aplicado al módulo de Almacén — sin tocar rutas ni lógica existente.
 interface NavItem {
   href: string;
@@ -64,7 +64,7 @@ export default function AlmacenLayoutOscuro({ children }: { children: ReactNode 
             <Menu className="h-5 w-5" />
           </button>
           <Package className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">SEA Almacén</span>
+          <span className="text-sm font-black">Mobilink Almacén</span>
         </div>
         <div className="flex items-center gap-3">
           {!cargandoPermisos && permisos.perfil && (

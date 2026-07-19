@@ -267,7 +267,7 @@ export default function App() {
         }
       />
 
-      {/* SEA Safety Manager */}
+      {/* Mobilink Safety Manager */}
       <Route path="/safety" element={<Protegida><SafetyDashboard /></Protegida>} />
       <Route path="/safety/epis" element={<Protegida><Epis /></Protegida>} />
       <Route path="/safety/entregas" element={<Protegida><Entregas /></Protegida>} />
@@ -277,7 +277,7 @@ export default function App() {
       <Route path="/safety/formacion" element={<Protegida><Formacion /></Protegida>} />
       <Route path="/safety/inspecciones" element={<Protegida><Inspecciones /></Protegida>} />
 
-      {/* SEA ToolControl */}
+      {/* Mobilink ToolControl */}
       <Route path="/toolcontrol" element={<Protegida><ToolControlDashboard /></Protegida>} />
       <Route path="/toolcontrol/herramientas" element={<Protegida><Herramientas /></Protegida>} />
       <Route path="/toolcontrol/maquinas" element={<Protegida><Maquinas /></Protegida>} />
@@ -303,11 +303,11 @@ export default function App() {
         path="/almacen-neumaticos/mobile/traspaso/:id"
         element={<MobileTraspasoDetalle />}
       />
-      {/* SEA Presencia */}
+      {/* Mobilink Presencia */}
       <Route path="/presencia" element={<Protegida><PresenciaDashboard /></Protegida>} />
       <Route path="/presencia/fichajes" element={<Protegida><Fichajes /></Protegida>} />
 
-      {/* SEA Core routes */}
+      {/* Mobilink Core routes */}
       <Route path="/sea-core" element={<Protegida><CoreDashboard /></Protegida>} />
       <Route path="/sea-core/empleados" element={<Protegida><Empleados /></Protegida>} />
       <Route path="/sea-core/empleados/:id" element={<Protegida><EmpleadoDetalle /></Protegida>} />
@@ -316,7 +316,7 @@ export default function App() {
       <Route path="/sea-core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
       <Route path="/sea-core/autorizaciones" element={<Protegida><CoreAutorizaciones /></Protegida>} />
 
-      {/* SEA TyreControl */}
+      {/* Mobilink TyreControl */}
       <Route path="/tyrecontrol/*" element={<TyreControlApp />} />
 
       {/* Login unificado por usuario y contraseña + hub de módulos */}

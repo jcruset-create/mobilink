@@ -246,7 +246,7 @@ export default function VehicleLayoutImage({
             <button onClick={() => setCalibrando(true)} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white">Añadir imagen y calibrar posiciones</button>
           </div>
         ) : (
-          <div className="mt-1 text-[11px]">Usa la vista de lista más abajo. Pide a un administrador SEA que cargue la imagen.</div>
+          <div className="mt-1 text-[11px]">Usa la vista de lista más abajo. Pide a un administrador Mobilink que cargue la imagen.</div>
         )}
       </div>
     );

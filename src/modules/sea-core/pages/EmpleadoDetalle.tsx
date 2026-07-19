@@ -243,7 +243,7 @@ export default function EmpleadoDetalle() {
           </p>
         </div>
         <div style="text-align:right;font-size:11px;color:#9ca3af">
-          <div>SEA Platform</div>
+          <div>Mobilink Platform</div>
           <div>${hoy}</div>
           <div style="margin-top:4px;font-weight:700;color:${empleado!.activo ? "#16a34a" : "#dc2626"}">${empleado!.activo ? "ACTIVO" : "INACTIVO"}</div>
         </div>
@@ -288,7 +288,7 @@ export default function EmpleadoDetalle() {
       ].join(""))) : ""}
 
       <p style="margin-top:32px;font-size:10px;color:#9ca3af;text-align:center">
-        Documento generado el ${hoy} · SEA Platform · Confidencial
+        Documento generado el ${hoy} · Mobilink Platform · Confidencial
       </p>
     </body></html>`;
 

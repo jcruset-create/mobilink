@@ -41,7 +41,7 @@ function Callout({ tono = "emerald", titulo, children }: { tono?: "emerald" | "a
 export default function Ayuda() {
   return (
     <div className="mx-auto max-w-3xl pb-16">
-      <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.18em] text-emerald-300">SEA TyreControl · Manual de uso</div>
+      <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.18em] text-emerald-300">Mobilink TyreControl · Manual de uso</div>
       <h1 className="text-2xl font-black text-slate-100">Operaciones de neumáticos</h1>
       <p className="mt-2 max-w-2xl text-[15px] text-slate-400">
         Cómo registrar, planificar y controlar todo lo que le pasa a un neumático: montarlo, moverlo, repararlo, retirarlo y dejar traza de cada paso.
@@ -253,7 +253,7 @@ export default function Ayuda() {
       </Seccion>
 
       <div className="mt-10 border-t border-slate-700 pt-4 text-[13px] text-slate-500">
-        SEA TyreControl · Módulo Operaciones de neumáticos · Los nombres de botones y estados corresponden a la interfaz en producción.
+        Mobilink TyreControl · Módulo Operaciones de neumáticos · Los nombres de botones y estados corresponden a la interfaz en producción.
       </div>
     </div>
   );

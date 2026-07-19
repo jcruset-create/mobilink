@@ -58,7 +58,7 @@ export default function Login() {
         <div className="mb-6 flex items-center gap-2">
           <Wallet className="h-6 w-6 text-sky-400" />
           <div>
-            <h1 className="text-lg font-black leading-tight">SEA Administración</h1>
+            <h1 className="text-lg font-black leading-tight">Mobilink Administración</h1>
             <p className="text-xs text-slate-400">Cobros, seguimiento de pagos y recobros</p>
           </div>
         </div>

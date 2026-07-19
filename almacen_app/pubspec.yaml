@@ -1,7 +1,7 @@
 name: almacen_app
-description: "SEA Almacén - Gestión de traspasos de neumáticos"
+description: "Mobilink Almacén - Gestión de traspasos de neumáticos"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.8.1

@@ -89,7 +89,7 @@ class _TraspasoListScreenState extends State<TraspasoListScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('SEA Almacén',
+            const Text('Mobilink Almacén',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
             Text(
               widget.operario['nombre'] as String? ?? '',

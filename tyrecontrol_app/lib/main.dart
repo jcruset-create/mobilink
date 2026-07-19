@@ -48,7 +48,7 @@ class TyreControlApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SEA TyreControl',
+      title: 'Mobilink TyreControl',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
       home: TyreControlApi.hasSession ? const HomeScreen() : const LoginScreen(),

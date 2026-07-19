@@ -16,7 +16,7 @@ export default function SafetyMenu() {
   return (
     <nav className="flex flex-wrap gap-2 border-b pb-3 mb-4">
       <span className="flex items-center gap-1 font-bold text-yellow-700 mr-2">
-        🦺 SEA Safety Manager
+        🦺 Mobilink Safety Manager
       </span>
       {links.map((l) => (
         <NavLink

@@ -28,7 +28,7 @@ type Alerta = {
 const MODULOS: Modulo[] = [
   {
     id: "core",
-    titulo: "SEA Core",
+    titulo: "Mobilink Core",
     descripcion: "Gestión central de empleados, competencias, certificaciones y autorizaciones.",
     icon: "👷",
     color: "bg-gray-50",
@@ -44,7 +44,7 @@ const MODULOS: Modulo[] = [
   },
   {
     id: "toolcontrol",
-    titulo: "SEA ToolControl",
+    titulo: "Mobilink ToolControl",
     descripcion: "Control de herramientas, máquinas, mantenimiento e inventario.",
     icon: "🔧",
     color: "bg-blue-50",
@@ -60,7 +60,7 @@ const MODULOS: Modulo[] = [
   },
   {
     id: "safety",
-    titulo: "SEA Safety Manager",
+    titulo: "Mobilink Safety Manager",
     descripcion: "Gestión de EPIs, documentos de seguridad, formación e inspecciones.",
     icon: "🦺",
     color: "bg-yellow-50",
@@ -76,7 +76,7 @@ const MODULOS: Modulo[] = [
   },
   {
     id: "presencia",
-    titulo: "SEA Presencia",
+    titulo: "Mobilink Presencia",
     descripcion: "Control de fichajes y presencia diaria del personal.",
     icon: "🕐",
     color: "bg-violet-50",
@@ -187,7 +187,7 @@ async function cargarAlertas(): Promise<Alerta[]> {
       titulo: `Certificación por caducar: ${c.nombre}`,
       detalle: `${(c as any).sea_employees?.nombre ?? "?"} · caduca en ${dias} día${dias !== 1 ? "s" : ""}`,
       ruta: "/sea-core/empleados",
-      modulo: "SEA Core",
+      modulo: "Mobilink Core",
     });
   }
 
@@ -201,7 +201,7 @@ async function cargarAlertas(): Promise<Alerta[]> {
       titulo: `Autorización por caducar: ${(a as any).sea_authorizations?.nombre ?? "?"}`,
       detalle: `${(a as any).sea_employees?.nombre ?? "?"} · caduca en ${dias} día${dias !== 1 ? "s" : ""}`,
       ruta: "/sea-core/empleados",
-      modulo: "SEA Core",
+      modulo: "Mobilink Core",
     });
   }
 
@@ -311,7 +311,7 @@ export default function SeaHub() {
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-xl bg-gray-800 flex items-center justify-center text-white font-black text-sm">S</div>
             <div>
-              <div className="font-bold text-gray-900 leading-none">SEA Platform</div>
+              <div className="font-bold text-gray-900 leading-none">Mobilink Platform</div>
               <div className="text-xs text-gray-400">{APP_VERSION}</div>
             </div>
           </div>

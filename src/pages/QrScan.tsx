@@ -308,7 +308,7 @@ export default function QrScan() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-xs text-gray-400 pt-2">SEA Platform · ToolControl</p>
+        <p className="text-center text-xs text-gray-400 pt-2">Mobilink Platform · ToolControl</p>
       </div>
     </div>
   );

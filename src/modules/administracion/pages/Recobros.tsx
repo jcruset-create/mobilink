@@ -485,7 +485,7 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
       `${tipo === "primer_aviso" ? "Le informamos" : "Le recordamos de nuevo"} que ${doc}, ` +
       `con vencimiento ${fmtFecha(c.due_date)}, tiene un importe pendiente de ${fmtEur(c.pending_amount)}.\n\n` +
       `Le rogamos regularice el pago a la mayor brevedad. Si ya lo ha realizado, ignore este mensaje.\n\n` +
-      `Gracias,\nAdministración SEA`
+      `Gracias,\nAdministración Mobilink`
     );
     window.open(`mailto:${email}?subject=${asunto}&body=${cuerpo}`);
     void accion(async () => {
@@ -500,7 +500,7 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
     const texto = encodeURIComponent(
       `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""}, le recordamos que ${doc} ` +
       `con vencimiento ${fmtFecha(c.due_date)} tiene un importe pendiente de ${fmtEur(c.pending_amount)}. ` +
-      `Le agradecemos que regularice el pago. — Administración SEA`
+      `Le agradecemos que regularice el pago. — Administración Mobilink`
     );
     window.open(`https://wa.me/${tel.startsWith("34") ? tel : "34" + tel}?text=${texto}`, "_blank");
     void accion(async () => {
@@ -1063,7 +1063,7 @@ function ModalNuevaGestion({ caso: c, formas, userIdActual, onClose, onSaved }: 
             const texto = encodeURIComponent(
               `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""}, le recordamos que ${doc} ` +
               `con vencimiento ${fmtFecha(c.due_date)} tiene un importe pendiente de ${fmtEur(c.pending_amount)}. ` +
-              `Le agradecemos que regularice el pago. — Administración SEA`
+              `Le agradecemos que regularice el pago. — Administración Mobilink`
             );
             window.open(`https://wa.me/${tel.startsWith("34") ? tel : "34" + tel}?text=${texto}`, "_blank");
           }
@@ -1081,7 +1081,7 @@ function ModalNuevaGestion({ caso: c, formas, userIdActual, onClose, onSaved }: 
             const cuerpo = encodeURIComponent(
               `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""},\n\n` +
               `Le recordamos que ${doc}, con vencimiento ${fmtFecha(c.due_date)}, tiene un importe pendiente de ${fmtEur(c.pending_amount)}.\n\n` +
-              `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración SEA`
+              `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración Mobilink`
             );
             window.open(`mailto:${email}?subject=${asunto}&body=${cuerpo}`);
           }

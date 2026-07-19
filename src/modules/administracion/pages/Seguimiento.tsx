@@ -238,7 +238,7 @@ function ModalDetalle({ tracking: t, formas, puedeGestionar, userId, onClose, on
       `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""},\n\n` +
       `Le recordamos que ${doc} con importe pendiente de ${fmtEur(t.pending_amount)} ` +
       `tiene fecha prevista de pago ${fmtFecha(t.expected_payment_date)}.\n\n` +
-      `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración SEA`
+      `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración Mobilink`
     );
     window.open(`mailto:${email}?subject=${asunto}&body=${cuerpo}`);
     void accion(async () => {
@@ -252,7 +252,7 @@ function ModalDetalle({ tracking: t, formas, puedeGestionar, userId, onClose, on
     if (!tel) { setError("El cliente no tiene teléfono de administración."); return; }
     const texto = encodeURIComponent(
       `Hola${cliente?.payment_contact_name ? " " + cliente.payment_contact_name : ""}, le recordamos que ${doc} ` +
-      `tiene un importe pendiente de ${fmtEur(t.pending_amount)} con fecha prevista de pago ${fmtFecha(t.expected_payment_date)}. Gracias. — Administración SEA`
+      `tiene un importe pendiente de ${fmtEur(t.pending_amount)} con fecha prevista de pago ${fmtFecha(t.expected_payment_date)}. Gracias. — Administración Mobilink`
     );
     window.open(`https://wa.me/${tel.startsWith("34") ? tel : "34" + tel}?text=${texto}`, "_blank");
     void accion(async () => {

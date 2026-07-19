@@ -37,7 +37,7 @@ export default function TyreLayout() {
             <Menu className="h-5 w-5" />
           </button>
           <Truck className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">SEA TyreControl</span>
+          <span className="text-sm font-black">Mobilink TyreControl</span>
         </div>
         <div className="flex items-center gap-3">
           <AlertasWebfleet />

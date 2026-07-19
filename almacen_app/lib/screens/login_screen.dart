@@ -99,7 +99,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const Icon(Icons.warehouse, size: 72, color: Colors.white54),
                 const SizedBox(height: 16),
                 const Text(
-                  'SEA Almacén',
+                  'Mobilink Almacén',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 28,

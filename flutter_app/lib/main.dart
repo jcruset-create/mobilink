@@ -26,7 +26,7 @@ class SeaApp extends StatelessWidget {
       valueListenable: exteriorMode,
       builder: (_, exterior, __) {
         return MaterialApp(
-          title: 'SEA Tarragona',
+          title: 'Mobilink Asistencia',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.build(exterior: exterior),
           home: const SplashScreen(),

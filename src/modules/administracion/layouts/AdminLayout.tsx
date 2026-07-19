@@ -36,7 +36,7 @@ export default function AdminLayout() {
             <Menu className="h-5 w-5" />
           </button>
           <Wallet className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">SEA Administración</span>
+          <span className="text-sm font-black">Mobilink Administración</span>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block">

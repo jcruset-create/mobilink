@@ -339,7 +339,7 @@ function getScheduledPhaseLabel(job: ScheduledJobForWall) {
 
               <div>
                 <h1 className="text-4xl font-bold tracking-tight">
-                  Pantalla TV · Taller SEA Tarragona
+                  Pantalla TV · Taller Mobilink Tarragona
                 </h1>
 
                 <p className="mt-1 text-lg text-slate-300">

@@ -68,7 +68,7 @@ export default function SafetyDashboard() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">SEA Safety Manager</h1>
+          <h1 className="text-2xl font-bold">Mobilink Safety Manager</h1>
           <p className="text-sm text-gray-500">Gestión de EPIs, PRL y documentación preventiva</p>
         </div>
         <Link to="/safety/epis" className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-600">

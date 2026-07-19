@@ -17,7 +17,7 @@ class AlmacenApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SEA Almacén',
+      title: 'Mobilink Almacén',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF1a1a2e),

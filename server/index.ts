@@ -786,7 +786,7 @@ function buildRoadsideTrackingMessage(assistance: any, trackingUrl: string) {
 
   return (
     `Hola ${customerName},\n\n` +
-    `Tu asistencia de SEA Tarragona para ${plate} esta registrada.\n` +
+    `Tu asistencia de Mobilink para ${plate} esta registrada.\n` +
     techLine +
     `Puedes seguir el estado aqui:\n${trackingUrl}\n\n` +
     `Gracias.`
@@ -5593,7 +5593,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       doc
         .fontSize(18)
         .font("Helvetica-Bold")
-        .text("SEA Tarragona – Informe de Asistencia", { align: "center" });
+        .text("Mobilink – Informe de Asistencia", { align: "center" });
 
       doc.moveDown(0.3);
       doc
@@ -5882,7 +5882,7 @@ async function buildVehicleTrackingPdfBuffer(
   doc.on("data", (c) => chunks.push(c));
   const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  doc.fontSize(18).font("Helvetica-Bold").text("SEA Tarragona – Seguimiento de furgoneta", { align: "center" });
+  doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Seguimiento de furgoneta", { align: "center" });
   doc.moveDown(0.3);
   doc.fontSize(11).font("Helvetica").text(
     `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`,
@@ -6063,7 +6063,7 @@ app.post(
             await twilioClient.messages.create({
               from: getWhatsAppFromNumber(),
               to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
-              body: `Hola ${assistance.customerName || "cliente"}, adjuntamos el informe de tu asistencia de SEA Tarragona.`,
+              body: `Hola ${assistance.customerName || "cliente"}, adjuntamos el informe de tu asistencia de Mobilink.`,
               mediaUrl: [publicData.publicUrl],
             });
             result.whatsapp = "sent";
@@ -6083,7 +6083,7 @@ app.post(
             await transport.sendMail({
               from: process.env.SMTP_FROM || process.env.SMTP_USER,
               to: email,
-              subject: `Informe de asistencia SEA Tarragona #${id}`,
+              subject: `Informe de asistencia Mobilink #${id}`,
               text: `Hola ${assistance.customerName || "cliente"}, adjuntamos el informe de tu asistencia.`,
               attachments: [
                 { filename: `asistencia_${id}.pdf`, content: buffer, contentType: "application/pdf" },
@@ -10915,7 +10915,7 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     doc.on("data", (c) => chunks.push(c));
     const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-    doc.fontSize(18).font("Helvetica-Bold").text("SEA Tarragona – Orden de Trabajo de Flota", { align: "center" });
+    doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Orden de Trabajo de Flota", { align: "center" });
     doc.moveDown(0.3);
     doc.fontSize(11).font("Helvetica").text(`OTF nº ${data.id}   |   ${formatDateEs(data.createdAtMs)}`, { align: "center" });
     doc.moveDown(1);
@@ -11676,7 +11676,7 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
           `Le recordamos que ${doc}, con vencimiento ${fmtFechaServer(n.vencimiento)}, ` +
           `tiene un importe pendiente de ${fmtEurServer(Number(n.pendiente ?? 0))}.\n\n` +
           (n.mensaje ? `${n.mensaje}\n\n` : "") +
-          `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración SEA`;
+          `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración Mobilink`;
         await enviarEmailRecobro(n.email, `Recordatorio de pago — ${doc}`, cuerpo);
       }
       await db.query(

@@ -11,7 +11,7 @@ const NAV = [
   { to: "/sea-core/autorizaciones", label: "Autorizaciones", icon: KeyRound, end: false },
 ];
 
-// Shell del módulo SEA Core con el mismo estilo que SEA TyreControl:
+// Shell del módulo Mobilink Core con el mismo estilo que Mobilink TyreControl:
 // topbar oscuro + sidebar izquierda (activo en sky-600) sobre fondo slate.
 export default function CoreLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
@@ -28,7 +28,7 @@ export default function CoreLayout({ children }: { children: ReactNode }) {
           <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-sky-600">
             <span className="text-[10px] font-black text-white">SC</span>
           </div>
-          <span className="text-sm font-black">SEA Core</span>
+          <span className="text-sm font-black">Mobilink Core</span>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => navigate("/inicio")} title="Volver al inicio" className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">

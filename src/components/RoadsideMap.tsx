@@ -85,7 +85,7 @@ export default function RoadsideMap({
   etaKm,
   workshopLat,
   workshopLng,
-  workshopLabel = "Taller SEA",
+  workshopLabel = "Taller Mobilink",
 }: Props) {
   const hasVehicle =
     vehicleLat != null &&

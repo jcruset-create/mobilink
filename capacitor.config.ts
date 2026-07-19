@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.seatarragona.almacenmobile",
-  appName: "SEA Almacen Mobile",
+  appName: "Mobilink Almacén",
   webDir: "dist",
   server: {
     androidScheme: "https",

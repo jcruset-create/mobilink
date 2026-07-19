@@ -17,7 +17,7 @@ export type ModuloApp = {
   conEmpresa?: boolean; // tyrecontrol: los usuarios tipo cliente van ligados a una empresa
 };
 
-// Rol único para los módulos de SEA Core (no tienen roles propios;
+// Rol único para los módulos de Mobilink Core (no tienen roles propios;
 // el acceso se controla por pantallas)
 const ROL_ACCESO: RolApp[] = [{ value: "usuario", label: "Usuario" }];
 
@@ -100,7 +100,7 @@ export const MODULOS_APP: ModuloApp[] = [
   },
   {
     key: "sea-core",
-    label: "SEA Core (RRHH)",
+    label: "Mobilink Core (RRHH)",
     roles: ROL_ACCESO,
     pantallas: [
       { key: "dashboard", label: "Panel" },

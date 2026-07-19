@@ -1,6 +1,6 @@
-# SEA Tarragona
+# Mobilink
 
-Aplicacion interna de gestion para taller SEA Tarragona. Incluye panel operativo, agenda, pantallas de operarios, cobros, asistencias en carretera y modulo de almacen de neumaticos.
+Aplicacion interna de gestion para taller Mobilink (antes SEA Tarragona). Incluye panel operativo, agenda, pantallas de operarios, cobros, asistencias en carretera y modulo de almacen de neumaticos.
 
 ## Desarrollo
 

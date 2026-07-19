@@ -103,7 +103,7 @@ export default function ToolControlDashboard() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">SEA ToolControl</h1>
+          <h1 className="text-2xl font-bold">Mobilink ToolControl</h1>
           <p className="text-sm text-gray-500">Gestión de herramientas y maquinaria</p>
         </div>
         <Link

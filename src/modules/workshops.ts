@@ -13,14 +13,14 @@ export const DEFAULT_WORKSHOP_ID: WorkshopId = "sea-tarragona";
 export const WORKSHOPS: Workshop[] = [
   {
     id: "sea-tarragona",
-    name: "SEA Tarragona",
+    name: "Mobilink Tarragona",
     shortName: "Tarragona",
     city: "Tarragona",
     active: true,
   },
   {
     id: "sea-reus",
-    name: "SEA Reus",
+    name: "Mobilink Reus",
     shortName: "Reus",
     city: "Reus",
     active: true,

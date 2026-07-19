@@ -136,7 +136,7 @@ export default function InicioPage() {
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-4 py-2 backdrop-blur">
         <div className="flex items-center gap-2">
           <KeyRound className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">SEA Tarragona</span>
+          <span className="text-sm font-black">Mobilink</span>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block">

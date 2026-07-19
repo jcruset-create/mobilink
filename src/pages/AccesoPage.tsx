@@ -47,7 +47,7 @@ export default function AccesoPage() {
         <div className="mb-6 flex items-center gap-2">
           <KeyRound className="h-6 w-6 text-sky-400" />
           <div>
-            <h1 className="text-lg font-black leading-tight">SEA Tarragona</h1>
+            <h1 className="text-lg font-black leading-tight">Mobilink</h1>
             <p className="text-xs text-slate-400">Acceso a la aplicación</p>
           </div>
         </div>

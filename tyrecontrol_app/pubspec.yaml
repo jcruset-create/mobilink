@@ -1,8 +1,8 @@
 name: tyrecontrol_app
-description: "SEA TyreControl — revision de neumaticos en campo"
+description: "Mobilink TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.15.0+41
+version: 0.16.0+42
 
 environment:
   sdk: ^3.8.1

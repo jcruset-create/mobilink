@@ -14,7 +14,7 @@ export default function Dashboard() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-black">Dashboard</h1>
-          <p className="text-sm text-slate-400">Bienvenido{perfil?.nombre ? `, ${perfil.nombre}` : ""}. Panel de SEA TyreControl.</p>
+          <p className="text-sm text-slate-400">Bienvenido{perfil?.nombre ? `, ${perfil.nombre}` : ""}. Panel de Mobilink TyreControl.</p>
         </div>
         <FiltroBarInformes filtros={filtros} setFiltros={setFiltros} esCliente={esCliente} empresas={empresas} />
       </div>

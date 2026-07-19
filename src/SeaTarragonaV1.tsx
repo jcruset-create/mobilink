@@ -4621,7 +4621,7 @@ if (!isAuthenticated) {
     <div className="min-h-screen bg-slate-100 p-6 text-slate-900">
       <div className="mx-auto mt-24 max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-2 text-xl font-semibold">
-          Acceso SEA Tarragona
+          Acceso Mobilink
         </div>
 
         <p className="mb-5 text-sm text-slate-500">
@@ -6943,7 +6943,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
     <div className="fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100">
       {/* Barra superior */}
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-bold">📊 SEA Tarragona · Operativo 2{userName ? <span className="ml-2 rounded bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-100">👤 {userName}</span> : null}</span>
+        <span className="text-sm font-bold">📊 Mobilink · Operativo 2{userName ? <span className="ml-2 rounded bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-100">👤 {userName}</span> : null}</span>
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => { setView("operarios"); void reloadMaintenanceAvailabilityFromBackend(); }} className="rounded bg-sky-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-sky-600">Técnicos</button>
           <button type="button" onClick={() => setView("entradas2")} className="rounded bg-emerald-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-emerald-600">ER</button>

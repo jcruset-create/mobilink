@@ -397,7 +397,7 @@ export default function RoadsideOperatorPage() {
 
     async function loadTechs() {
       try {
-        // Intentar cargar desde SEA Core primero
+        // Intentar cargar desde Mobilink Core primero
         const { data: seaEmps } = await supabase
           .from("sea_employees")
           .select("nombre, apellidos, codigo_operario")
@@ -408,7 +408,7 @@ export default function RoadsideOperatorPage() {
 
         if (!cancelled) {
           if (seaEmps && seaEmps.length > 0) {
-            // Convertir empleados SEA Core al formato Tech mínimo que necesita el selector
+            // Convertir empleados Mobilink Core al formato Tech mínimo que necesita el selector
             const seaTechs = seaEmps.map((e) => ({
               name: [e.nombre, e.apellidos].filter(Boolean).join(" "),
               status: "available" as const,
@@ -420,7 +420,7 @@ export default function RoadsideOperatorPage() {
             setTechs(seaTechs as unknown as Tech[]);
             setTechName((current) => current || seaTechs[0]?.name || "");
           } else {
-            // Fallback al backend si no hay empleados SEA Core configurados
+            // Fallback al backend si no hay empleados Mobilink Core configurados
             const data = await loadRoadsideOperatorTechs();
             if (!cancelled) {
               setTechs(data);

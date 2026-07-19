@@ -493,7 +493,7 @@ export default function Configuracion() {
 
       <div className="mb-4 rounded-lg bg-slate-800 p-3">
         <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Fabricantes ({fabricantes.length})</div>
-        <div className="mb-3 text-[11px] text-slate-500">Grupo empresarial al que pertenece cada marca (ej. Michelin fabrica también BFGoodrich, Kleber…).{!puedeEditar && " Solo un administrador SEA puede añadir/editar."}</div>
+        <div className="mb-3 text-[11px] text-slate-500">Grupo empresarial al que pertenece cada marca (ej. Michelin fabrica también BFGoodrich, Kleber…).{!puedeEditar && " Solo un administrador Mobilink puede añadir/editar."}</div>
         {puedeEditar && (
           <div className="mb-2 flex max-w-sm gap-2">
             <input className={inputCls} placeholder="Nuevo fabricante…" value={nuevoFabricante} onChange={(e) => setNuevoFabricante(e.target.value)} />
@@ -617,7 +617,7 @@ export default function Configuracion() {
 
       <div className="rounded-lg bg-slate-800 p-3">
         <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Catálogo de neumáticos (marca / modelo / medida)</div>
-        <div className="mb-3 text-[11px] text-slate-500">Alimenta los desplegables del alta de neumáticos en todas las empresas. Abre "detalle" en una marca para asignar fabricante, segmento y país, y ver cuántos neumáticos/vehículos la usan.{!puedeEditar && " Solo un administrador SEA puede añadir valores."}</div>
+        <div className="mb-3 text-[11px] text-slate-500">Alimenta los desplegables del alta de neumáticos en todas las empresas. Abre "detalle" en una marca para asignar fabricante, segmento y país, y ver cuántos neumáticos/vehículos la usan.{!puedeEditar && " Solo un administrador Mobilink puede añadir valores."}</div>
 
         <div className="grid gap-4 lg:grid-cols-3">
           {/* Marcas */}
@@ -695,7 +695,7 @@ export default function Configuracion() {
         <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Configuración de vehículos</div>
         <div className="mb-3 text-[11px] text-slate-500">
           Etiqueta de configuración de ejes (ej. 2x2x2, 4x2, 6x4) por tipo de vehículo — identifica qué imagen de chasis (motor gráfico) corresponde a cada tipo.
-          {!puedeEditar && " Solo un administrador SEA puede editarla."}
+          {!puedeEditar && " Solo un administrador Mobilink puede editarla."}
         </div>
         <TableWrap>
           <thead className="bg-slate-900"><tr>

@@ -17,7 +17,7 @@ export default function ToolControlMenu() {
   return (
     <nav className="flex flex-wrap gap-2 border-b pb-3 mb-4">
       <span className="flex items-center gap-1 font-bold text-blue-700 mr-2">
-        🔧 SEA ToolControl
+        🔧 Mobilink ToolControl
       </span>
       {links.map((l) => (
         <NavLink
