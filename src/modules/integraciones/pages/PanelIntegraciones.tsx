@@ -15,7 +15,7 @@ import { getAdminHeaders } from "../../adminHeaders";
 
 const TENANT_STORAGE_KEY = "mobilink-tenant-id";
 
-type ConnectorKind = "erp" | "technical" | "supplier";
+type ConnectorKind = "erp" | "technical" | "supplier" | "communication";
 
 const CONNECTOR_META: Record<string, { nombre: string; kind: ConnectorKind; descripcion: string; secretos: string[] }> = {
   "business-central": {
@@ -42,12 +42,25 @@ const CONNECTOR_META: Record<string, { nombre: string; kind: ConnectorKind; desc
     descripcion: "Proveedor de recambios (SUP-001). Config: baseUrl, leadDays.",
     secretos: ["api_key"],
   },
+  "twilio-whatsapp": {
+    nombre: "WhatsApp Business (Twilio)",
+    kind: "communication",
+    descripcion: 'Envío de presupuestos, citas y avisos por WhatsApp. Config: {"sendReal": true, "from": "whatsapp:+34..."} — sin sendReal, simula.',
+    secretos: ["account_sid", "auth_token"],
+  },
+  "smtp-email": {
+    nombre: "Email (SMTP)",
+    kind: "communication",
+    descripcion: 'Envío por email. Config: {"sendReal": true, "from": "Mobilink <taller@...>"} — sin sendReal, simula.',
+    secretos: ["host", "user", "pass"],
+  },
 };
 
 const KIND_LABEL: Record<ConnectorKind, { label: string; clase: string }> = {
   erp: { label: "ERP", clase: "bg-blue-500/15 text-blue-300" },
   technical: { label: "Datos técnicos", clase: "bg-emerald-500/15 text-emerald-300" },
   supplier: { label: "Proveedor", clase: "bg-amber-500/15 text-amber-300" },
+  communication: { label: "Comunicación", clase: "bg-violet-500/15 text-violet-300" },
 };
 
 const ESTADOS = [
@@ -250,10 +263,18 @@ function PestanaConectores({ tenantId }: { tenantId: string }) {
   const cargar = useCallback(async () => {
     setError(null);
     try {
-      const health = await api<{ erpConnectors: string[]; technicalConnectors: string[]; supplierConnectors: string[] }>(
-        "/api/v1/health"
-      );
-      setKeys([...health.erpConnectors, ...health.technicalConnectors, ...health.supplierConnectors]);
+      const health = await api<{
+        erpConnectors: string[];
+        technicalConnectors: string[];
+        supplierConnectors: string[];
+        communicationConnectors?: string[];
+      }>("/api/v1/health");
+      setKeys([
+        ...health.erpConnectors,
+        ...health.technicalConnectors,
+        ...health.supplierConnectors,
+        ...(health.communicationConnectors ?? []),
+      ]);
       const data = await api<{ configs: ConfigRow[] }>(`/api/v1/admin/connectors?tenantId=${encodeURIComponent(tenantId)}`);
       setConfigs(data.configs);
     } catch (e: any) {

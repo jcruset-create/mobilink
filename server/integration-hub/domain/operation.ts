@@ -60,7 +60,12 @@ export type OperationType =
   | "SUPPLIER_SEARCH_PART"
   | "SUPPLIER_CREATE_PURCHASE_ORDER"
   | "CHECKLIST_PROCESS_NON_CONFORMITY"
-  | "COMM_SEND_QUOTE";
+  | "COMM_SEND_QUOTE"
+  | "COMM_SEND_APPOINTMENT"
+  | "COMM_SEND_WORK_ORDER_STATUS"
+  | "COMM_REQUEST_APPROVAL"
+  | "COMM_REQUEST_SIGNATURE"
+  | "COMM_SEND_INVOICE";
 
 /** Categorías de conector (mapean a los "Hubs" del §2.3). */
 export type ConnectorKind = "erp" | "technical" | "supplier" | "communication" | "telematics";

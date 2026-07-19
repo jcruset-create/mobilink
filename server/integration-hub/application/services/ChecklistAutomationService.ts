@@ -25,6 +25,7 @@ import { runOperation } from "./IntegrationOperationsService.ts";
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "./TechnicalService.ts";
 import { searchOffers } from "./SupplierService.ts";
 import { createQuoteFromWorkOrder } from "./SalesQuoteService.ts";
+import { sendCommunication } from "./CommunicationService.ts";
 import { nextCorrelationId, nextDocumentNumber, saveChecklistRun } from "../../infrastructure/repositories.ts";
 import type { SupplierOffer } from "../../domain/models.ts";
 
@@ -37,6 +38,10 @@ export interface ProcessNonConformityInput {
   /** Cliente en el sistema externo (para el presupuesto). */
   customerId: string;
   customerTier?: string;
+  /** Contacto del cliente: si viene, el presupuesto se le envía (paso 10 del §7). */
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
   /** Identificación del vehículo (matrícula o VIN) o un vehicleRef ya conocido. */
   plate?: string;
   vin?: string;
@@ -175,6 +180,33 @@ export async function processNonConformity(
         ok: true,
         detail: { mobilinkQuoteId: quote.mobilinkQuoteId, externalQuoteNumber: quote.businessCentralQuoteNumber },
       });
+
+      // 5) Paso 10 del §7: enviar el presupuesto al cliente (best-effort — un fallo
+      //    de comunicación no invalida el flujo; queda como paso KO y su propia
+      //    operación COMM_* para reprocesarla desde el panel).
+      if (input.customerPhone || input.customerEmail) {
+        try {
+          const sent = await sendCommunication({
+            tenantId: input.tenantId,
+            kind: "quote",
+            recipient: { name: input.customerName, phone: input.customerPhone, email: input.customerEmail },
+            data: {
+              documentNumber: quote.businessCentralQuoteNumber,
+              amount: quote.totalAmount,
+              currency: quote.currency,
+              workOrderId: input.workOrderId,
+            },
+            workOrderId: input.workOrderId,
+            correlationId,
+          });
+          steps.push({ step: "send_quote", ok: true, detail: { channel: sent.channel, providerMessageId: sent.providerMessageId, simulated: sent.simulated } });
+        } catch (e: any) {
+          steps.push({ step: "send_quote", ok: false, detail: { error: e?.message ?? String(e) } });
+          await log.warn(`Envío del presupuesto al cliente fallido: ${e?.message ?? e}`);
+        }
+      } else {
+        steps.push({ step: "send_quote", ok: true, detail: { skipped: "sin contacto del cliente" } });
+      }
 
       // Reevaluar reglas ahora que conocemos el importe (aprobación de gerente).
       decision = evaluateRules({

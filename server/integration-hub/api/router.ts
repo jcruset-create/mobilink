@@ -13,14 +13,17 @@ import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteServ
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
+import { sendCommunication } from "../application/services/CommunicationService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
   knownTechnicalConnectorKeys,
   knownSupplierConnectorKeys,
+  knownCommunicationConnectorKeys,
   buildTechnicalConnector,
   buildSupplierConnector,
+  buildCommunicationConnector,
 } from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
@@ -76,6 +79,7 @@ export function createIntegrationHubRouter(): Router {
       erpConnectors: knownErpConnectorKeys(),
       technicalConnectors: knownTechnicalConnectorKeys(),
       supplierConnectors: knownSupplierConnectorKeys(),
+      communicationConnectors: knownCommunicationConnectorKeys(),
     });
   });
 
@@ -161,6 +165,27 @@ export function createIntegrationHubRouter(): Router {
     }
   });
 
+  // ── Communication Hub ─────────────────────────────────────────────────────
+  // Envío de comunicaciones al cliente (presupuesto, cita, estado de OT, aprobación,
+  // firma, factura). El canal se decide por `channel` o por los datos del destinatario.
+  router.post("/communications/messages", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const { kind, channel, recipient, data, workOrderId } = req.body ?? {};
+      const result = await sendCommunication({
+        tenantId: tenantId ?? "",
+        kind,
+        channel,
+        recipient,
+        data,
+        workOrderId,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
   // ── Automatización del checklist (Fase 4) ─────────────────────────────────
   // Un ítem "No conforme" dispara todo el flujo: incidencia → vehículo → OE →
   // oferta → presupuesto BC, con un único correlationId y aplicando el Rules Engine.
@@ -175,6 +200,9 @@ export function createIntegrationHubRouter(): Router {
         category: b.category,
         customerId: b.customerId,
         customerTier: b.customerTier,
+        customerName: b.customerName,
+        customerPhone: b.customerPhone,
+        customerEmail: b.customerEmail,
         plate: b.plate,
         vin: b.vin,
         vehicleRef: b.vehicleRef,
@@ -232,6 +260,11 @@ export function createIntegrationHubRouter(): Router {
       }
       if (knownSupplierConnectorKeys().includes(key)) {
         const connector = await buildSupplierConnector(tenantId, key);
+        const result = await connector.testConnection(ctx);
+        return res.json({ key, ...result });
+      }
+      if (knownCommunicationConnectorKeys().includes(key)) {
+        const connector = await buildCommunicationConnector(tenantId, key);
         const result = await connector.testConnection(ctx);
         return res.json({ key, ...result });
       }

@@ -28,6 +28,7 @@ import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteServ
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
+import { sendCommunication } from "../application/services/CommunicationService.ts";
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const BATCH_SIZE = 5;
@@ -61,6 +62,28 @@ const HANDLERS: Record<string, RetryHandler> = {
 
   CHECKLIST_PROCESS_NON_CONFORMITY: (op, p) => processNonConformity({ ...p, tenantId: op.tenant_id }),
 };
+
+// Handlers de comunicaciones: todos reejecutan sendCommunication desde el payload.
+const commRetry: RetryHandler = (op, p) =>
+  sendCommunication({
+    tenantId: op.tenant_id,
+    kind: p?.kind,
+    channel: p?.channel,
+    recipient: p?.recipient,
+    data: p?.data,
+    workOrderId: p?.workOrderId ?? undefined,
+    correlationId: op.correlation_id,
+  });
+for (const t of [
+  "COMM_SEND_QUOTE",
+  "COMM_SEND_APPOINTMENT",
+  "COMM_SEND_WORK_ORDER_STATUS",
+  "COMM_REQUEST_APPROVAL",
+  "COMM_REQUEST_SIGNATURE",
+  "COMM_SEND_INVOICE",
+]) {
+  HANDLERS[t] = commRetry;
+}
 
 /** Claim atómico de un lote de operaciones RETRY_PENDING (nadie más las verá). */
 async function claimBatch(limit: number): Promise<OperationRow[]> {

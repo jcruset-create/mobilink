@@ -6,7 +6,13 @@
  * conocer si por debajo es Business Central, SAP u otro.
  */
 
-import type { IErpConnector, ITechnicalConnector, ISupplierConnector } from "../domain/connectors.ts";
+import type {
+  IErpConnector,
+  ITechnicalConnector,
+  ISupplierConnector,
+  ICommunicationConnector,
+} from "../domain/connectors.ts";
+import type { CommChannel } from "../domain/communication.ts";
 import type { ConnectorKind } from "../domain/operation.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { getConnectorConfig, listConnectorConfigs } from "../infrastructure/repositories.ts";
@@ -17,6 +23,8 @@ import {
   RecambistaGenericoConnector,
   type RecambistaGenericoConfig,
 } from "./suppliers/recambista-generico/RecambistaGenericoConnector.ts";
+import { TwilioWhatsAppConnector, type TwilioWhatsAppConfig } from "./communications/twilio-whatsapp/TwilioWhatsAppConnector.ts";
+import { SmtpEmailConnector, type SmtpEmailConfig } from "./communications/smtp-email/SmtpEmailConnector.ts";
 
 /** Fábricas de conectores ERP disponibles, por key. */
 const ERP_FACTORIES: Record<string, (config: any) => IErpConnector> = {
@@ -186,4 +194,82 @@ export async function resolveSupplierConnectors(
       usingDefault: false,
     }))
   );
+}
+
+// ── Communication Hub ────────────────────────────────────────────────────────
+
+/** Fábricas de conectores de comunicación, por key. */
+const COMMUNICATION_FACTORIES: Record<string, (config: any) => ICommunicationConnector> = {
+  "twilio-whatsapp": (config: TwilioWhatsAppConfig) => new TwilioWhatsAppConnector(config),
+  "smtp-email": (config: SmtpEmailConfig) => new SmtpEmailConnector(config),
+  // Futuro: sms, push, teams, outlook...
+};
+
+/** Canal que atiende cada conector registrado. */
+const COMMUNICATION_CHANNELS: Record<string, CommChannel> = {
+  "twilio-whatsapp": "whatsapp",
+  "smtp-email": "email",
+};
+
+export function knownCommunicationConnectorKeys(): string[] {
+  return Object.keys(COMMUNICATION_FACTORIES);
+}
+
+/** Construye un conector de comunicación concreto por key, con la config del tenant. */
+export async function buildCommunicationConnector(
+  tenantId: string,
+  key: string
+): Promise<ICommunicationConnector> {
+  const factory = COMMUNICATION_FACTORIES[key];
+  if (!factory) {
+    throw IntegrationError.validation(
+      "CONNECTOR_UNKNOWN",
+      `No hay implementación para el conector de comunicación '${key}'`
+    );
+  }
+  const cfg = await getConnectorConfig(tenantId, key);
+  return factory(cfg?.config ?? {});
+}
+
+/**
+ * Resuelve el conector para un canal. Si no se especifica canal, prioriza los
+ * conectores HABILITADOS del tenant (whatsapp antes que email); sin ninguno
+ * habilitado, usa whatsapp en simulación.
+ */
+export async function resolveCommunicationConnector(
+  tenantId: string,
+  channel?: CommChannel
+): Promise<ResolvedConnector<ICommunicationConnector> & { channel: CommChannel }> {
+  const keysForChannel = (ch: CommChannel) =>
+    Object.entries(COMMUNICATION_CHANNELS)
+      .filter(([, c]) => c === ch)
+      .map(([k]) => k);
+
+  const candidates = channel
+    ? keysForChannel(channel)
+    : ["twilio-whatsapp", "smtp-email"]; // preferencia por defecto
+
+  if (candidates.length === 0) {
+    throw IntegrationError.validation("COMM_CHANNEL_UNSUPPORTED", `Canal no soportado: ${channel}`);
+  }
+
+  for (const key of candidates) {
+    const cfg = await getConnectorConfig(tenantId, key);
+    if (cfg?.enabled) {
+      return {
+        key,
+        channel: COMMUNICATION_CHANNELS[key],
+        connector: await buildCommunicationConnector(tenantId, key),
+        usingDefault: false,
+      };
+    }
+  }
+
+  const key = candidates[0];
+  return {
+    key,
+    channel: COMMUNICATION_CHANNELS[key],
+    connector: await buildCommunicationConnector(tenantId, key),
+    usingDefault: true,
+  };
 }

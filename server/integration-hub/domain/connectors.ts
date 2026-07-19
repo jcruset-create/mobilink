@@ -36,6 +36,7 @@ import type {
   SupplierOrderResult,
   SupplierOrderStatusResult,
 } from "./supplier.ts";
+import type { CommMessage, CommSendResult } from "./communication.ts";
 import type { OperationContext } from "./identifiers.ts";
 import type { ConnectorKind } from "./operation.ts";
 
@@ -102,4 +103,17 @@ export interface ISupplierConnector extends Connector {
   createPurchaseOrder(ctx: OperationContext, input: CreateSupplierOrderInput): Promise<SupplierOrderResult>;
   getOrderStatus(ctx: OperationContext, supplierOrderId: string): Promise<SupplierOrderStatusResult>;
   cancelOrder(ctx: OperationContext, supplierOrderId: string): Promise<SupplierOrderStatusResult>;
+}
+
+/**
+ * Contrato del Communication Hub (§2.3). Las 6 funciones comparten el mensaje
+ * normalizado CommMessage; cada conector renderiza su plantilla y envía por su canal.
+ */
+export interface ICommunicationConnector extends Connector {
+  sendQuote(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
+  sendAppointment(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
+  sendWorkOrderStatus(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
+  requestApproval(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
+  requestSignature(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
+  sendInvoiceNotification(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
 }
