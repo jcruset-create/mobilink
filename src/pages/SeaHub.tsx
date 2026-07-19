@@ -104,6 +104,20 @@ const MODULOS: Modulo[] = [
       { label: "Inventarios", ruta: "/almacen/inventarios" },
     ],
   },
+  {
+    id: "integraciones",
+    titulo: "Integration Hub",
+    descripcion: "Conectores con ERP, datos técnicos y proveedores. Operaciones, errores y reproceso.",
+    icon: "🔌",
+    color: "bg-sky-50",
+    colorBorder: "border-sky-300",
+    colorIcon: "bg-sky-600 text-white",
+    ruta: "/integraciones",
+    links: [
+      { label: "Conectores", ruta: "/integraciones" },
+      { label: "Operaciones", ruta: "/integraciones" },
+    ],
+  },
 ];
 
 const NIVEL_STYLE = {

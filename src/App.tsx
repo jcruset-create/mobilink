@@ -56,6 +56,7 @@ import AuditoriaAlmacen from "./modules/almacen-neumaticos/pages/AuditoriaAlmace
 import SistemaAlmacen from "./modules/almacen-neumaticos/pages/SistemaAlmacen";
 import NotFound from "./pages/NotFound";
 import SeaHub from "./pages/SeaHub";
+import PanelIntegraciones from "./modules/integraciones/pages/PanelIntegraciones";
 import QrScan from "./pages/QrScan";
 import PortalLogin from "./pages/PortalLogin";
 import PortalFicha from "./pages/PortalFicha";
@@ -325,6 +326,9 @@ export default function App() {
 
       {/* SEA Administración (cobros, seguimiento de pagos y recobros) */}
       <Route path="/administracion/*" element={<AdministracionApp />} />
+
+      {/* Mobilink Integration Hub — panel de integraciones */}
+      <Route path="/integraciones" element={<Protegida><PanelIntegraciones /></Protegida>} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>
