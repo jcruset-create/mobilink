@@ -13,6 +13,7 @@ import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteServ
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
+import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
@@ -270,9 +271,21 @@ export function createIntegrationHubRouter(): Router {
       errorCode: null,
       errorMessage: null,
     });
-    // NOTA: el relanzamiento efectivo lo hará el Integration Worker (Fase asíncrona).
-    // De momento marcamos el estado; el worker reejecutará el request_payload persistido.
-    res.json({ operation: updated, note: "Marcada para reproceso (worker pendiente de implementar)" });
+    res.json({
+      operation: updated,
+      note: "Marcada para reproceso; el worker la reejecutará en el próximo ciclo (o lanza /admin/worker/run)",
+    });
+  });
+
+  // Ejecutar un ciclo del worker bajo demanda (botón del panel / diagnóstico).
+  router.post("/admin/worker/run", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const result = await runWorkerCycle();
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
   });
 
   return router;

@@ -17,7 +17,7 @@ import OpenAI, { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
-import { initIntegrationHub, mountIntegrationHub } from "./integration-hub/index.ts";
+import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -12075,6 +12075,7 @@ initDb()
       startRecobrosNotifierChecker();
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
+      startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
     });
   })
   .catch((error) => {

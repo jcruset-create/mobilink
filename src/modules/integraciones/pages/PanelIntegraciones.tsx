@@ -387,6 +387,8 @@ function PestanaOperaciones({ tenantId }: { tenantId: string }) {
   const [estado, setEstado] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [detalleId, setDetalleId] = useState<number | null>(null);
+  const [workerMsg, setWorkerMsg] = useState<string | null>(null);
+  const [workerRunning, setWorkerRunning] = useState(false);
 
   const cargar = useCallback(async () => {
     setError(null);
@@ -420,7 +422,34 @@ function PestanaOperaciones({ tenantId }: { tenantId: string }) {
         <button onClick={cargar} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-700">
           ⟳ Actualizar
         </button>
+        <button
+          onClick={async () => {
+            setWorkerRunning(true);
+            setWorkerMsg(null);
+            try {
+              const r = await api<{ claimed: number; succeeded: number; failed: number; noHandler: number }>(
+                "/api/v1/admin/worker/run",
+                { method: "POST", body: "{}" }
+              );
+              setWorkerMsg(
+                r.claimed === 0
+                  ? "Worker: nada pendiente de reproceso"
+                  : `Worker: ${r.claimed} reclamadas · ${r.succeeded} ok · ${r.failed} fallidas`
+              );
+              await cargar();
+            } catch (e: any) {
+              setWorkerMsg(e.message);
+            } finally {
+              setWorkerRunning(false);
+            }
+          }}
+          disabled={workerRunning}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+        >
+          {workerRunning ? "Ejecutando…" : "▶ Ejecutar worker"}
+        </button>
         <span className="text-[11px] text-slate-500">{ops.length} operaciones</span>
+        {workerMsg && <span className="text-[11px] text-sky-300">{workerMsg}</span>}
       </div>
       {error && <div className="mb-3 rounded-lg bg-rose-500/10 p-2 text-xs text-rose-300">{error}</div>}
       <div className="overflow-x-auto rounded-xl border border-slate-700">

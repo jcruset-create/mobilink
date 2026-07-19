@@ -10,8 +10,9 @@
 import type { Express } from "express";
 import { initIntegrationHub } from "./infrastructure/schema.ts";
 import { createIntegrationHubRouter } from "./api/router.ts";
+import { startIntegrationWorker, stopIntegrationWorker } from "./workers/IntegrationWorker.ts";
 
-export { initIntegrationHub };
+export { initIntegrationHub, startIntegrationWorker, stopIntegrationWorker };
 
 /** Monta el API Gateway del Hub bajo /api/v1. */
 export function mountIntegrationHub(app: Express): void {
