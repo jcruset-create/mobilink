@@ -10,7 +10,13 @@
 
 import express, { type Request, type Response, type Router } from "express";
 import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteService.ts";
-import { resolveErpConnector, knownErpConnectorKeys } from "../connectors/ConnectorRegistry.ts";
+import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
+import {
+  resolveErpConnector,
+  knownErpConnectorKeys,
+  knownTechnicalConnectorKeys,
+  buildTechnicalConnector,
+} from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
 import {
@@ -59,7 +65,12 @@ export function createIntegrationHubRouter(): Router {
 
   // ── Health ──────────────────────────────────────────────────────────────
   router.get("/health", (_req, res) => {
-    res.json({ ok: true, service: "mobilink-integration-hub", erpConnectors: knownErpConnectorKeys() });
+    res.json({
+      ok: true,
+      service: "mobilink-integration-hub",
+      erpConnectors: knownErpConnectorKeys(),
+      technicalConnectors: knownTechnicalConnectorKeys(),
+    });
   });
 
   // ── ERP: primera entrega funcional (OT → presupuesto de venta) ────────────
@@ -77,6 +88,43 @@ export function createIntegrationHubRouter(): Router {
         lines,
       });
       res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Technical Data Hub (Fase 2) ───────────────────────────────────────────
+  // Identificar vehículo por matrícula o VIN.
+  router.post("/technical/vehicles/identify", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const { plate, vin, country } = req.body ?? {};
+      const result = await identifyVehicle(tenantId ?? "", { plate, vin, country });
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Recambios compatibles con un vehículo (opcional ?category=).
+  router.get("/technical/parts/search", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const vehicleRef = req.query.vehicleRef as string;
+      const category = req.query.category as string | undefined;
+      const result = await getCompatibleParts(tenantId ?? "", vehicleRef, category);
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Referencias OE de una pieza.
+  router.get("/technical/parts/:partRef/oe-references", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const result = await getOeReferences(tenantId ?? "", String(req.params.partRef));
+      res.json(result);
     } catch (err) {
       sendError(res, err);
     }
@@ -111,13 +159,21 @@ export function createIntegrationHubRouter(): Router {
     try {
       const tenantId = tenantOf(req);
       if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
-      if (req.params.key !== "business-central") {
-        return res.status(400).json({ error: "unsupported_connector", key: req.params.key });
-      }
-      const resolved = await resolveErpConnector(tenantId);
+      const key = req.params.key;
       const correlationId = await nextCorrelationId();
-      const result = await resolved.connector.testConnection({ tenantId, correlationId });
-      res.json({ key: resolved.key, usingDefault: resolved.usingDefault, ...result });
+      const ctx = { tenantId, correlationId };
+
+      if (key === "business-central") {
+        const resolved = await resolveErpConnector(tenantId);
+        const result = await resolved.connector.testConnection(ctx);
+        return res.json({ key: resolved.key, usingDefault: resolved.usingDefault, ...result });
+      }
+      if (knownTechnicalConnectorKeys().includes(key)) {
+        const connector = await buildTechnicalConnector(tenantId, key);
+        const result = await connector.testConnection(ctx);
+        return res.json({ key, ...result });
+      }
+      return res.status(400).json({ error: "unsupported_connector", key });
     } catch (err) {
       sendError(res, err);
     }

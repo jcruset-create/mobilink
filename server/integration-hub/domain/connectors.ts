@@ -19,6 +19,15 @@ import type {
   PurchaseOrderResult,
   SupplierOffer,
 } from "./models.ts";
+import type {
+  VehicleQuery,
+  VehicleIdentification,
+  TechnicalSpecifications,
+  CompatiblePart,
+  RepairTime,
+  MaintenancePlan,
+  TyreSpecification,
+} from "./technical.ts";
 import type { OperationContext } from "./identifiers.ts";
 import type { ConnectorKind } from "./operation.ts";
 
@@ -58,11 +67,18 @@ export interface IErpConnector extends Connector {
   updateCustomer(ctx: OperationContext, customer: MobilinkCustomer): Promise<MobilinkCustomer>;
 }
 
-/** Contrato del Technical Data Hub (Autodata, TecDoc...). Se implementará en Fase 2. */
+/**
+ * Contrato del Technical Data Hub (Autodata, TecDoc, catálogos, VIN, matrícula).
+ * Refleja las funciones del §2.3.
+ */
 export interface ITechnicalConnector extends Connector {
-  identifyVehicle(ctx: OperationContext, query: { plate?: string; vin?: string }): Promise<unknown>;
-  getCompatibleParts(ctx: OperationContext, vehicleRef: string): Promise<unknown[]>;
+  identifyVehicle(ctx: OperationContext, query: VehicleQuery): Promise<VehicleIdentification[]>;
+  getTechnicalSpecifications(ctx: OperationContext, vehicleRef: string): Promise<TechnicalSpecifications>;
+  getCompatibleParts(ctx: OperationContext, vehicleRef: string, category?: string): Promise<CompatiblePart[]>;
   getOeReferences(ctx: OperationContext, partRef: string): Promise<string[]>;
+  getRepairTimes(ctx: OperationContext, vehicleRef: string, operationCode?: string): Promise<RepairTime[]>;
+  getMaintenancePlan(ctx: OperationContext, vehicleRef: string): Promise<MaintenancePlan>;
+  getTyreSpecifications(ctx: OperationContext, vehicleRef: string): Promise<TyreSpecification[]>;
 }
 
 /** Contrato del Supplier Hub (recambistas). Se implementará en Fase 3. */
