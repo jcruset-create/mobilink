@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
 import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
@@ -84,6 +84,13 @@ type RolAlmacen = "admin" | "responsable" | "operario";
 
 function Protegida({ children }: { children: ReactNode }) {
   return <RequireAuth>{children}</RequireAuth>;
+}
+
+/** Redirect legacy: /sea-core/* → /core/* (marcadores antiguos siguen funcionando). */
+function RedirectSeaCore() {
+  const location = useLocation();
+  const destino = location.pathname.replace(/^\/sea-core/, "/core") + location.search;
+  return <Navigate to={destino} replace />;
 }
 
 function ProtegidaPorRol({
@@ -309,13 +316,16 @@ export default function App() {
       <Route path="/presencia/fichajes" element={<Protegida><Fichajes /></Protegida>} />
 
       {/* Mobilink Core routes */}
-      <Route path="/sea-core" element={<Protegida><CoreDashboard /></Protegida>} />
-      <Route path="/sea-core/empleados" element={<Protegida><Empleados /></Protegida>} />
-      <Route path="/sea-core/empleados/:id" element={<Protegida><EmpleadoDetalle /></Protegida>} />
-      <Route path="/sea-core/empresas" element={<Protegida><Empresas /></Protegida>} />
-      <Route path="/sea-core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
-      <Route path="/sea-core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
-      <Route path="/sea-core/autorizaciones" element={<Protegida><CoreAutorizaciones /></Protegida>} />
+      <Route path="/core" element={<Protegida><CoreDashboard /></Protegida>} />
+      <Route path="/core/empleados" element={<Protegida><Empleados /></Protegida>} />
+      <Route path="/core/empleados/:id" element={<Protegida><EmpleadoDetalle /></Protegida>} />
+      <Route path="/core/empresas" element={<Protegida><Empresas /></Protegida>} />
+      <Route path="/core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
+      <Route path="/core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
+      <Route path="/core/autorizaciones" element={<Protegida><CoreAutorizaciones /></Protegida>} />
+      {/* Redirects legacy del renombrado profundo (B2) */}
+      <Route path="/sea-core" element={<RedirectSeaCore />} />
+      <Route path="/sea-core/*" element={<RedirectSeaCore />} />
 
       {/* Mobilink TyreControl */}
       <Route path="/tyrecontrol/*" element={<TyreControlApp />} />

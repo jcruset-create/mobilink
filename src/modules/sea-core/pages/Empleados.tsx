@@ -192,7 +192,7 @@ export default function Empleados() {
               {filtrados.map((e) => (
                 <tr key={e.id} className="border-t border-slate-700 hover:bg-slate-700/50">
                   <td className="p-3">
-                    <Link to={`/sea-core/empleados/${e.id}`} className="flex items-center gap-2 group">
+                    <Link to={`/core/empleados/${e.id}`} className="flex items-center gap-2 group">
                       <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
                         {e.nombre.charAt(0).toUpperCase()}
                       </div>
@@ -223,7 +223,7 @@ export default function Empleados() {
                   </td>
                   <td className="p-3">
                     <div className="flex gap-1">
-                      <Link to={`/sea-core/empleados/${e.id}`}
+                      <Link to={`/core/empleados/${e.id}`}
                         className="rounded-lg bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100">
                         Ver ficha
                       </Link>

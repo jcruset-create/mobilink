@@ -3,12 +3,12 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound } from "lucide-react";
 
 const NAV = [
-  { to: "/sea-core", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/sea-core/empleados", label: "Empleados", icon: Users, end: false },
-  { to: "/sea-core/empresas", label: "Empresas", icon: Building2, end: false },
-  { to: "/sea-core/centros", label: "Centros de trabajo", icon: MapPin, end: false },
-  { to: "/sea-core/competencias", label: "Competencias", icon: Target, end: false },
-  { to: "/sea-core/autorizaciones", label: "Autorizaciones", icon: KeyRound, end: false },
+  { to: "/core", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/core/empleados", label: "Empleados", icon: Users, end: false },
+  { to: "/core/empresas", label: "Empresas", icon: Building2, end: false },
+  { to: "/core/centros", label: "Centros de trabajo", icon: MapPin, end: false },
+  { to: "/core/competencias", label: "Competencias", icon: Target, end: false },
+  { to: "/core/autorizaciones", label: "Autorizaciones", icon: KeyRound, end: false },
 ];
 
 // Shell del módulo Mobilink Core con el mismo estilo que Mobilink TyreControl:

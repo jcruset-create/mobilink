@@ -32,7 +32,7 @@ const BASES: Record<string, string> = {
   administracion: "/administracion",
   almacen: "/almacen-neumaticos",
   tyrecontrol: "/tyrecontrol",
-  "sea-core": "/sea-core",
+  "sea-core": "/core",
   toolcontrol: "/toolcontrol",
   safety: "/safety",
   presencia: "/presencia",

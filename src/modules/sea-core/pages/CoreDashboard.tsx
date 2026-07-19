@@ -56,11 +56,11 @@ export default function CoreDashboard() {
   ];
 
   const ACCESOS = [
-    { to: "/sea-core/empleados",    label: "Empleados",       desc: "Gestión de personal",     icon: "👤", color: "hover:border-slate-500" },
-    { to: "/sea-core/empresas",     label: "Empresas",        desc: "Clientes y proveedores",  icon: "🏢", color: "hover:border-sky-500/50" },
-    { to: "/sea-core/centros",      label: "Centros",         desc: "Delegaciones y plantas",  icon: "📍", color: "hover:border-violet-500/50" },
-    { to: "/sea-core/competencias", label: "Competencias",    desc: "Catálogo de habilidades", icon: "🎯", color: "hover:border-amber-500/50" },
-    { to: "/sea-core/autorizaciones",label: "Autorizaciones", desc: "Permisos y habilitaciones",icon: "🔑",color: "hover:border-emerald-500/50" },
+    { to: "/core/empleados",    label: "Empleados",       desc: "Gestión de personal",     icon: "👤", color: "hover:border-slate-500" },
+    { to: "/core/empresas",     label: "Empresas",        desc: "Clientes y proveedores",  icon: "🏢", color: "hover:border-sky-500/50" },
+    { to: "/core/centros",      label: "Centros",         desc: "Delegaciones y plantas",  icon: "📍", color: "hover:border-violet-500/50" },
+    { to: "/core/competencias", label: "Competencias",    desc: "Catálogo de habilidades", icon: "🎯", color: "hover:border-amber-500/50" },
+    { to: "/core/autorizaciones",label: "Autorizaciones", desc: "Permisos y habilitaciones",icon: "🔑",color: "hover:border-emerald-500/50" },
   ];
 
   return (
@@ -75,7 +75,7 @@ export default function CoreDashboard() {
               {new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
             </p>
           </div>
-          <Link to="/sea-core/empleados"
+          <Link to="/core/empleados"
             className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 transition-colors shadow-sm">
             + Nuevo empleado
           </Link>
@@ -98,7 +98,7 @@ export default function CoreDashboard() {
           <div className="lg:col-span-2 rounded-2xl border border-slate-700 bg-slate-800 overflow-hidden shadow-sm">
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
               <h2 className="font-semibold text-slate-100">Empleados recientes</h2>
-              <Link to="/sea-core/empleados"
+              <Link to="/core/empleados"
                 className="text-xs font-medium text-slate-500 hover:text-slate-200 transition-colors">
                 Ver todos →
               </Link>
@@ -110,7 +110,7 @@ export default function CoreDashboard() {
               <div className="p-10 text-center">
                 <div className="text-4xl mb-3">👷</div>
                 <p className="text-sm text-slate-500">Sin empleados registrados.</p>
-                <Link to="/sea-core/empleados"
+                <Link to="/core/empleados"
                   className="mt-4 inline-block text-sm font-medium text-slate-200 underline underline-offset-2">
                   Añadir primer empleado
                 </Link>
@@ -121,7 +121,7 @@ export default function CoreDashboard() {
                   const inicial = (e.nombre ?? "?").charAt(0).toUpperCase();
                   const nombreCompleto = [e.nombre, e.apellidos].filter(Boolean).join(" ");
                   return (
-                    <Link key={e.id} to={`/sea-core/empleados/${e.id}`}
+                    <Link key={e.id} to={`/core/empleados/${e.id}`}
                       className="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-700/50 transition-colors group">
                       <div className={`h-9 w-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${ROL_AVATAR[e.rol] ?? "bg-slate-700 text-slate-300"}`}>
                         {inicial}

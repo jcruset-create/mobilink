@@ -368,7 +368,7 @@ export default function EmpleadoDetalle() {
             className="rounded-xl border border-slate-700 border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-700/50 flex items-center gap-1">
             ⬇ Exportar PDF
           </button>
-          <Link to="/sea-core/empleados" className="text-sm text-slate-400 hover:text-slate-200">← Volver</Link>
+          <Link to="/core/empleados" className="text-sm text-slate-400 hover:text-slate-200">← Volver</Link>
         </div>
       </div>
 

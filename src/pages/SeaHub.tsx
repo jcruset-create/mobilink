@@ -34,12 +34,12 @@ const MODULOS: Modulo[] = [
     color: "bg-gray-50",
     colorBorder: "border-gray-300",
     colorIcon: "bg-gray-800 text-white",
-    ruta: "/sea-core",
+    ruta: "/core",
     links: [
-      { label: "Empleados", ruta: "/sea-core/empleados" },
-      { label: "Empresas", ruta: "/sea-core/empresas" },
-      { label: "Centros de trabajo", ruta: "/sea-core/centros" },
-      { label: "Competencias", ruta: "/sea-core/competencias" },
+      { label: "Empleados", ruta: "/core/empleados" },
+      { label: "Empresas", ruta: "/core/empresas" },
+      { label: "Centros de trabajo", ruta: "/core/centros" },
+      { label: "Competencias", ruta: "/core/competencias" },
     ],
   },
   {
@@ -200,7 +200,7 @@ async function cargarAlertas(): Promise<Alerta[]> {
       icono: "📋",
       titulo: `Certificación por caducar: ${c.nombre}`,
       detalle: `${(c as any).sea_employees?.nombre ?? "?"} · caduca en ${dias} día${dias !== 1 ? "s" : ""}`,
-      ruta: "/sea-core/empleados",
+      ruta: "/core/empleados",
       modulo: "Mobilink Core",
     });
   }
@@ -214,7 +214,7 @@ async function cargarAlertas(): Promise<Alerta[]> {
       icono: "🔑",
       titulo: `Autorización por caducar: ${(a as any).sea_authorizations?.nombre ?? "?"}`,
       detalle: `${(a as any).sea_employees?.nombre ?? "?"} · caduca en ${dias} día${dias !== 1 ? "s" : ""}`,
-      ruta: "/sea-core/empleados",
+      ruta: "/core/empleados",
       modulo: "Mobilink Core",
     });
   }

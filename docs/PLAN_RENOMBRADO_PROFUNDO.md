@@ -56,11 +56,13 @@ Assets con la marca antigua que requieren diseño gráfico nuevo:
   todas las apps. No recomendada.
 - **Decisión pendiente**: ¿compramos dominio? ¿cuál?
 
-### B2. Rutas web `/sea-core/*` → `/core/*` — `DECISIÓN` (cosmético, bajo riesgo)
-- **Pasos preparados**: en `App.tsx` duplicar rutas con el prefijo nuevo y dejar las
-  antiguas como `<Navigate to>` (redirect); actualizar los ~15 enlaces internos
-  (SeaHub, CoreLayout, InicioPage). Bookmarks antiguos siguen funcionando.
-- **Beneficio**: solo estético en la barra de direcciones. Hazlo cuando quieras; 30 min.
+### B2. Rutas web `/sea-core/*` → `/core/*` — `HECHO` ✅ (2026-07-19)
+- Rutas renombradas a `/core/*` y enlaces internos actualizados (SeaHub, CoreLayout,
+  InicioPage, CoreDashboard, Empleados, EmpleadoDetalle).
+- `/sea-core` y `/sea-core/*` quedan como redirect (`RedirectSeaCore` en App.tsx):
+  los marcadores antiguos siguen funcionando.
+- Verificado en navegador: `/core` y `/sea-core/empleados` resuelven (login), ruta
+  inexistente da 404. El directorio `src/modules/sea-core/` (imports) se queda (Tier C).
 
 ### B3. Bundle ids `com.seatarragona.*` y `com.example.sea_tarragona_operario` — `DECISIÓN`
 - Cambiar el `applicationId` = **app nueva** en Android: no actualiza la existente, aparece
