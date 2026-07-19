@@ -180,6 +180,11 @@ export async function initIntegrationHub(): Promise<void> {
     CREATE INDEX IF NOT EXISTS ihcr_tenant_idx ON integration_checklist_runs(tenant_id);
     CREATE INDEX IF NOT EXISTS ihcr_correlation_idx ON integration_checklist_runs(correlation_id);
     CREATE INDEX IF NOT EXISTS ihcr_wo_idx ON integration_checklist_runs(work_order_id);
+
+    -- Aceptación del presupuesto (§7 pasos 11-14)
+    ALTER TABLE integration_checklist_runs ADD COLUMN IF NOT EXISTS accepted_at_ms BIGINT;
+    ALTER TABLE integration_checklist_runs ADD COLUMN IF NOT EXISTS sales_order_number TEXT;
+    ALTER TABLE integration_checklist_runs ADD COLUMN IF NOT EXISTS purchase_order_number TEXT;
   `);
 
   // ── Contador diario para CorrelationId (COR-YYYYMMDD-NNNNNN) ───────────────

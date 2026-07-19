@@ -29,6 +29,7 @@ import { identifyVehicle, getCompatibleParts, getOeReferences } from "../applica
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
 import { sendCommunication } from "../application/services/CommunicationService.ts";
+import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const BATCH_SIZE = 5;
@@ -61,6 +62,10 @@ const HANDLERS: Record<string, RetryHandler> = {
     }),
 
   CHECKLIST_PROCESS_NON_CONFORMITY: (op, p) => processNonConformity({ ...p, tenantId: op.tenant_id }),
+
+  // Aceptación (§7 pasos 11-14). acceptQuote es idempotente/reanudable: si el pedido
+  // de venta ya se creó en el intento fallido, lo reutiliza y continúa con lo que falte.
+  ERP_CREATE_SALES_ORDER: (op, p) => acceptQuote({ tenantId: op.tenant_id, mobilinkQuoteId: p?.mobilinkQuoteId }),
 };
 
 // Handlers de comunicaciones: todos reejecutan sendCommunication desde el payload.

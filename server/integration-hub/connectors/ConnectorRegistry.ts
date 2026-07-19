@@ -273,3 +273,15 @@ export async function resolveCommunicationConnector(
     usingDefault: true,
   };
 }
+
+/**
+ * Mapa supplierId (el de las ofertas normalizadas, p. ej. "SUP-001") → key del
+ * conector. Necesario para crear el pedido de compra de una oferta guardada.
+ */
+const SUPPLIER_ID_TO_CONNECTOR: Record<string, string> = {
+  "SUP-001": "recambista-generico",
+};
+
+export function supplierConnectorKeyForSupplierId(supplierId: string): string | null {
+  return SUPPLIER_ID_TO_CONNECTOR[supplierId] ?? null;
+}

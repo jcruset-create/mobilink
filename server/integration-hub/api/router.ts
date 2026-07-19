@@ -14,6 +14,7 @@ import { identifyVehicle, getCompatibleParts, getOeReferences } from "../applica
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
 import { sendCommunication } from "../application/services/CommunicationService.ts";
+import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
 import {
   resolveErpConnector,
@@ -96,6 +97,21 @@ export function createIntegrationHubRouter(): Router {
         reference,
         currency,
         lines,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Aceptación del presupuesto (§7 pasos 11-14): pedido de venta en el ERP +
+  // pedido de compra al recambista de la mejor oferta + run actualizado.
+  router.post("/erp/sales-quotes/:mobilinkQuoteId/accept", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const result = await acceptQuote({
+        tenantId: tenantId ?? "",
+        mobilinkQuoteId: String(req.params.mobilinkQuoteId),
       });
       res.status(201).json(result);
     } catch (err) {

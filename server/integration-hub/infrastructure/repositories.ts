@@ -336,6 +336,65 @@ export async function saveChecklistRun(run: ChecklistRunInput): Promise<number> 
   return rows[0].id;
 }
 
+// ── Aceptación de presupuestos (§7 pasos 11-14) ─────────────────────────────
+
+/** Busca un enlace de documento por tipo+id de Mobilink (p. ej. sales_quote MQ-000258). */
+export async function findDocumentLink(tenantId: string, mobilinkDocType: string, mobilinkDocId: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_document_links
+      WHERE tenant_id = $1 AND mobilink_doc_type = $2 AND mobilink_doc_id = $3`,
+    [tenantId, mobilinkDocType, mobilinkDocId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Busca un enlace de documento por correlationId y tipo (para idempotencia). */
+export async function findDocumentLinkByCorrelation(tenantId: string, correlationId: string, mobilinkDocType: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_document_links
+      WHERE tenant_id = $1 AND correlation_id = $2 AND mobilink_doc_type = $3`,
+    [tenantId, correlationId, mobilinkDocType]
+  );
+  return rows[0] ?? null;
+}
+
+/** Última operación COMPLETED de un tipo dentro de un correlationId. */
+export async function findCompletedOperation(tenantId: string, correlationId: string, operationType: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_operations
+      WHERE tenant_id = $1 AND correlation_id = $2 AND operation_type = $3 AND status = 'COMPLETED'
+      ORDER BY id DESC LIMIT 1`,
+    [tenantId, correlationId, operationType]
+  );
+  return rows[0] ?? null;
+}
+
+/** Run del checklist por correlationId. */
+export async function findChecklistRun(tenantId: string, correlationId: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_checklist_runs WHERE tenant_id = $1 AND correlation_id = $2`,
+    [tenantId, correlationId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Marca el run como aceptado con los números de pedido resultantes. */
+export async function markChecklistRunAccepted(params: {
+  tenantId: string;
+  correlationId: string;
+  salesOrderNumber?: string;
+  purchaseOrderNumber?: string;
+}): Promise<void> {
+  await pool.query(
+    `UPDATE integration_checklist_runs SET
+       accepted_at_ms = COALESCE(accepted_at_ms, $3),
+       sales_order_number = COALESCE($4, sales_order_number),
+       purchase_order_number = COALESCE($5, purchase_order_number)
+     WHERE tenant_id = $1 AND correlation_id = $2`,
+    [params.tenantId, params.correlationId, now(), params.salesOrderNumber ?? null, params.purchaseOrderNumber ?? null]
+  );
+}
+
 // ── Configuración de conectores por tenant ──────────────────────────────────
 export async function getConnectorConfig(tenantId: string, connectorKey: string) {
   const { rows } = await pool.query(
