@@ -24,11 +24,13 @@ estado: `PREPARADO` (listo para ejecutar), `DECISIÓN` (necesita que elijas), `N
 - Renombrado junto con `package-lock.json` (regenerado con `--package-lock-only`).
 - Validado con `npm ci --dry-run` (es lo que ejecuta Render). Paquete privado: sin más impacto.
 
-### A3. Repositorio GitHub `sea-tarragona` → `mobilink` — `PREPARADO` (lo haces tú)
-- **Pasos**: GitHub → Settings → Rename. GitHub redirige el remote antiguo automáticamente
-  (git push/pull siguen funcionando) y Render mantiene la conexión por id, no por nombre.
-- Después, opcional en local: `git remote set-url origin https://github.com/jcruset-create/mobilink.git`
-- **Riesgo**: bajo. Verificar tras el rename: un push y un deploy de Render.
+### A3. Repositorio GitHub `sea-tarragona` → `mobilink` — `HECHO` ✅ (2026-07-19)
+- Renombrado vía API (`jcruset-create/mobilink`). GitHub redirige el nombre antiguo
+  automáticamente y Render mantiene la conexión por id.
+- Remote local actualizado a `https://github.com/jcruset-create/mobilink.git`.
+- Verificado: fetch/push al nombre nuevo OK (este mismo commit llegó por el remote nuevo).
+- Nota: la carpeta local sigue llamándose `Desktop/sea-tarragona` — renombrarla es opcional
+  y solo local (cerrar editores/terminales antes si se hace).
 
 ### A4. Logos e iconos — `PREPARADO` (necesita diseño)
 Assets con la marca antigua que requieren diseño gráfico nuevo:
