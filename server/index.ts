@@ -17,6 +17,7 @@ import OpenAI, { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
+import { initIntegrationHub, mountIntegrationHub } from "./integration-hub/index.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -12029,6 +12030,13 @@ function startRecobrosNotifierChecker() {
 }
 
 /* =========================================================
+   MOBILINK INTEGRATION HUB (API Gateway bajo /api/v1)
+   Debe montarse ANTES del catch-all SPA para no quedar tapado.
+========================================================= */
+
+mountIntegrationHub(app);
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
@@ -12058,6 +12066,7 @@ app.use(
    START SERVER
 ========================================================= */
 initDb()
+  .then(() => initIntegrationHub())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
