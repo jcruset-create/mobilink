@@ -285,6 +285,57 @@ export async function listSupplierOffers(tenantId: string, correlationId?: strin
   return rows;
 }
 
+// ── Automatización del checklist (Fase 4) ───────────────────────────────────
+export interface ChecklistRunInput {
+  tenantId: string;
+  correlationId: string;
+  workOrderId?: string;
+  checklistId?: string;
+  incidentId: string;
+  category?: string;
+  status: "COMPLETED" | "PARTIAL" | "FAILED";
+  vehicleRef?: string;
+  selectedPartRef?: string;
+  oeReferences?: string[];
+  bestOffer?: unknown;
+  mobilinkQuoteId?: string;
+  externalQuoteNumber?: string;
+  quoteAmount?: number;
+  decision?: unknown;
+  steps?: unknown;
+}
+
+export async function saveChecklistRun(run: ChecklistRunInput): Promise<number> {
+  const { rows } = await pool.query(
+    `INSERT INTO integration_checklist_runs
+       (tenant_id, correlation_id, work_order_id, checklist_id, incident_id, category, status,
+        vehicle_ref, selected_part_ref, oe_references, best_offer, mobilink_quote_id,
+        external_quote_number, quote_amount, decision, steps, created_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     RETURNING id`,
+    [
+      run.tenantId,
+      run.correlationId,
+      run.workOrderId ?? null,
+      run.checklistId ?? null,
+      run.incidentId,
+      run.category ?? null,
+      run.status,
+      run.vehicleRef ?? null,
+      run.selectedPartRef ?? null,
+      run.oeReferences ? JSON.stringify(run.oeReferences) : null,
+      run.bestOffer !== undefined ? JSON.stringify(run.bestOffer) : null,
+      run.mobilinkQuoteId ?? null,
+      run.externalQuoteNumber ?? null,
+      run.quoteAmount ?? null,
+      run.decision !== undefined ? JSON.stringify(run.decision) : null,
+      run.steps !== undefined ? JSON.stringify(run.steps) : null,
+      now(),
+    ]
+  );
+  return rows[0].id;
+}
+
 // ── Configuración de conectores por tenant ──────────────────────────────────
 export async function getConnectorConfig(tenantId: string, connectorKey: string) {
   const { rows } = await pool.query(

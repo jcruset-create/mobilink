@@ -22,6 +22,8 @@ export interface CreateQuoteFromWorkOrderInput {
   reference?: string;
   currency?: string;
   lines: QuoteLineInput[];
+  /** CorrelationId externo (orquestación Fase 4). Si no viene, se genera uno. */
+  correlationId?: string;
 }
 
 export interface CreateQuoteFromWorkOrderResult {
@@ -46,7 +48,7 @@ export async function createQuoteFromWorkOrder(
     if (!(l.quantity > 0)) throw IntegrationError.validation("LINE_BAD_QTY", `Línea ${i}: cantidad debe ser > 0`);
   }
 
-  const correlationId = await nextCorrelationId();
+  const correlationId = input.correlationId ?? (await nextCorrelationId());
   const resolved = await resolveErpConnector(input.tenantId);
   const ctx: OperationContext = {
     tenantId: input.tenantId,

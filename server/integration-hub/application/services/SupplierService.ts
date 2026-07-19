@@ -26,14 +26,18 @@ function rankOffers(offers: SupplierOffer[], quantity: number): SupplierOffer[] 
   });
 }
 
-export async function searchOffers(tenantId: string, query: SupplierSearchQuery) {
+export interface SupplierOpts {
+  correlationId?: string;
+}
+
+export async function searchOffers(tenantId: string, query: SupplierSearchQuery, opts: SupplierOpts = {}) {
   if (!tenantId) throw IntegrationError.validation("MISSING_TENANT", "tenantId es obligatorio");
   if (!query.oeReference && !query.manufacturerReference && !query.text) {
     throw IntegrationError.validation("MISSING_SEARCH", "Se requiere oeReference, manufacturerReference o text");
   }
   const quantity = query.quantity ?? 1;
   const suppliers = await resolveSupplierConnectors(tenantId);
-  const ctx: OperationContext = { tenantId, correlationId: await nextCorrelationId() };
+  const ctx: OperationContext = { tenantId, correlationId: opts.correlationId ?? (await nextCorrelationId()) };
 
   const { result } = await runOperation(
     ctx,
@@ -79,7 +83,8 @@ export async function createPurchaseOrder(
   tenantId: string,
   supplierKey: string,
   lines: SupplierOrderLine[],
-  reference?: string
+  reference?: string,
+  opts: SupplierOpts = {}
 ) {
   if (!tenantId) throw IntegrationError.validation("MISSING_TENANT", "tenantId es obligatorio");
   if (!supplierKey) throw IntegrationError.validation("MISSING_SUPPLIER", "supplierKey es obligatorio");
@@ -90,7 +95,7 @@ export async function createPurchaseOrder(
   }
 
   const connector = await buildSupplierConnector(tenantId, supplierKey);
-  const ctx: OperationContext = { tenantId, correlationId: await nextCorrelationId() };
+  const ctx: OperationContext = { tenantId, correlationId: opts.correlationId ?? (await nextCorrelationId()) };
 
   const { result } = await runOperation(
     ctx,

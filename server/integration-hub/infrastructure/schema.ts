@@ -155,6 +155,33 @@ export async function initIntegrationHub(): Promise<void> {
     CREATE INDEX IF NOT EXISTS ihdl_correlation_idx ON integration_document_links(correlation_id);
   `);
 
+  // ── Automatización del checklist (Fase 4): traza del flujo completo ───────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integration_checklist_runs (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      correlation_id TEXT NOT NULL,
+      work_order_id TEXT,
+      checklist_id TEXT,
+      incident_id TEXT NOT NULL,
+      category TEXT,
+      status TEXT NOT NULL,              -- COMPLETED | PARTIAL | FAILED
+      vehicle_ref TEXT,
+      selected_part_ref TEXT,
+      oe_references JSONB,
+      best_offer JSONB,
+      mobilink_quote_id TEXT,
+      external_quote_number TEXT,
+      quote_amount NUMERIC(12,2),
+      decision JSONB,                    -- resultado del Rules Engine
+      steps JSONB,                       -- traza paso a paso
+      created_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ihcr_tenant_idx ON integration_checklist_runs(tenant_id);
+    CREATE INDEX IF NOT EXISTS ihcr_correlation_idx ON integration_checklist_runs(correlation_id);
+    CREATE INDEX IF NOT EXISTS ihcr_wo_idx ON integration_checklist_runs(work_order_id);
+  `);
+
   // ── Contador diario para CorrelationId (COR-YYYYMMDD-NNNNNN) ───────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS integration_correlation_counters (

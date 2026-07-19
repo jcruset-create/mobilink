@@ -59,6 +59,7 @@ export type OperationType =
   | "TECH_GET_OE_REFERENCES"
   | "SUPPLIER_SEARCH_PART"
   | "SUPPLIER_CREATE_PURCHASE_ORDER"
+  | "CHECKLIST_PROCESS_NON_CONFORMITY"
   | "COMM_SEND_QUOTE";
 
 /** Categorías de conector (mapean a los "Hubs" del §2.3). */

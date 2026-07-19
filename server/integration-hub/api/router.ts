@@ -12,6 +12,7 @@ import express, { type Request, type Response, type Router } from "express";
 import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteService.ts";
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
+import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
@@ -153,6 +154,32 @@ export function createIntegrationHubRouter(): Router {
       const tenantId = tenantOf(req);
       const { lines, reference } = req.body ?? {};
       const result = await createSupplierPurchaseOrder(tenantId ?? "", String(req.params.key), lines, reference);
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Automatización del checklist (Fase 4) ─────────────────────────────────
+  // Un ítem "No conforme" dispara todo el flujo: incidencia → vehículo → OE →
+  // oferta → presupuesto BC, con un único correlationId y aplicando el Rules Engine.
+  router.post("/checklist/non-conformity", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const b = req.body ?? {};
+      const result = await processNonConformity({
+        tenantId: tenantId ?? "",
+        workOrderId: b.workOrderId,
+        checklistId: b.checklistId,
+        category: b.category,
+        customerId: b.customerId,
+        customerTier: b.customerTier,
+        plate: b.plate,
+        vin: b.vin,
+        vehicleRef: b.vehicleRef,
+        quantity: b.quantity,
+        localStock: b.localStock,
+      });
       res.status(201).json(result);
     } catch (err) {
       sendError(res, err);

@@ -13,17 +13,26 @@ import { resolveTechnicalConnector } from "../../connectors/ConnectorRegistry.ts
 import { runOperation } from "./IntegrationOperationsService.ts";
 import { nextCorrelationId } from "../../infrastructure/repositories.ts";
 
-async function ctxFor(tenantId: string, extra: Partial<OperationContext> = {}): Promise<OperationContext> {
-  if (!tenantId) throw IntegrationError.validation("MISSING_TENANT", "tenantId es obligatorio");
-  return { tenantId, correlationId: await nextCorrelationId(), ...extra };
+/** Opciones comunes: permite propagar un CorrelationId externo (orquestación Fase 4). */
+export interface TechnicalOpts {
+  correlationId?: string;
 }
 
-export async function identifyVehicle(tenantId: string, query: VehicleQuery) {
+async function ctxFor(
+  tenantId: string,
+  opts: TechnicalOpts = {},
+  extra: Partial<OperationContext> = {}
+): Promise<OperationContext> {
+  if (!tenantId) throw IntegrationError.validation("MISSING_TENANT", "tenantId es obligatorio");
+  return { tenantId, correlationId: opts.correlationId ?? (await nextCorrelationId()), ...extra };
+}
+
+export async function identifyVehicle(tenantId: string, query: VehicleQuery, opts: TechnicalOpts = {}) {
   if (!query.plate && !query.vin) {
     throw IntegrationError.validation("MISSING_VEHICLE_QUERY", "Se requiere matrícula (plate) o VIN");
   }
   const resolved = await resolveTechnicalConnector(tenantId, "identifyVehicle");
-  const ctx = await ctxFor(tenantId);
+  const ctx = await ctxFor(tenantId, opts);
   const { result } = await runOperation(
     ctx,
     {
@@ -41,10 +50,15 @@ export async function identifyVehicle(tenantId: string, query: VehicleQuery) {
   return { correlationId: ctx.correlationId, connector: resolved.key, simulated: resolved.usingDefault, candidates: result };
 }
 
-export async function getCompatibleParts(tenantId: string, vehicleRef: string, category?: string) {
+export async function getCompatibleParts(
+  tenantId: string,
+  vehicleRef: string,
+  category?: string,
+  opts: TechnicalOpts = {}
+) {
   if (!vehicleRef) throw IntegrationError.validation("MISSING_VEHICLE_REF", "vehicleRef es obligatorio");
   const resolved = await resolveTechnicalConnector(tenantId, "getCompatibleParts");
-  const ctx = await ctxFor(tenantId, { vehicleId: vehicleRef });
+  const ctx = await ctxFor(tenantId, opts, { vehicleId: vehicleRef });
   const { result } = await runOperation(
     ctx,
     {
@@ -62,10 +76,10 @@ export async function getCompatibleParts(tenantId: string, vehicleRef: string, c
   return { correlationId: ctx.correlationId, connector: resolved.key, simulated: resolved.usingDefault, parts: result };
 }
 
-export async function getOeReferences(tenantId: string, partRef: string) {
+export async function getOeReferences(tenantId: string, partRef: string, opts: TechnicalOpts = {}) {
   if (!partRef) throw IntegrationError.validation("MISSING_PART_REF", "partRef es obligatorio");
   const resolved = await resolveTechnicalConnector(tenantId, "getOeReferences");
-  const ctx = await ctxFor(tenantId);
+  const ctx = await ctxFor(tenantId, opts);
   const { result } = await runOperation(
     ctx,
     {
