@@ -11,11 +11,14 @@
 import express, { type Request, type Response, type Router } from "express";
 import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteService.ts";
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
+import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
   knownTechnicalConnectorKeys,
+  knownSupplierConnectorKeys,
   buildTechnicalConnector,
+  buildSupplierConnector,
 } from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
@@ -70,6 +73,7 @@ export function createIntegrationHubRouter(): Router {
       service: "mobilink-integration-hub",
       erpConnectors: knownErpConnectorKeys(),
       technicalConnectors: knownTechnicalConnectorKeys(),
+      supplierConnectors: knownSupplierConnectorKeys(),
     });
   });
 
@@ -130,6 +134,31 @@ export function createIntegrationHubRouter(): Router {
     }
   });
 
+  // ── Supplier Hub (Fase 3) ─────────────────────────────────────────────────
+  // Buscar ofertas de recambista(s) por OE / referencia / texto. Devuelve ranking + mejor oferta.
+  router.post("/suppliers/offers", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const { oeReference, manufacturerReference, text, quantity } = req.body ?? {};
+      const result = await searchOffers(tenantId ?? "", { oeReference, manufacturerReference, text, quantity });
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Crear pedido de compra en un recambista concreto.
+  router.post("/suppliers/:key/purchase-orders", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const { lines, reference } = req.body ?? {};
+      const result = await createSupplierPurchaseOrder(tenantId ?? "", String(req.params.key), lines, reference);
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
   // ── Administración: conectores ────────────────────────────────────────────
   router.get("/admin/connectors", async (req, res) => {
     if (!requireAdmin(req, res)) return;
@@ -170,6 +199,11 @@ export function createIntegrationHubRouter(): Router {
       }
       if (knownTechnicalConnectorKeys().includes(key)) {
         const connector = await buildTechnicalConnector(tenantId, key);
+        const result = await connector.testConnection(ctx);
+        return res.json({ key, ...result });
+      }
+      if (knownSupplierConnectorKeys().includes(key)) {
+        const connector = await buildSupplierConnector(tenantId, key);
         const result = await connector.testConnection(ctx);
         return res.json({ key, ...result });
       }

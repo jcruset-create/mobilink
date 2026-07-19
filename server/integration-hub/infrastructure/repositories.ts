@@ -229,6 +229,62 @@ export async function linkDocument(params: {
   );
 }
 
+// ── Ofertas de proveedor (supplier_offers) ──────────────────────────────────
+export interface SupplierOfferInput {
+  supplierId: string;
+  supplierPartNumber: string;
+  manufacturerReference?: string;
+  oeReferences?: string[];
+  unitCost: number;
+  currency: string;
+  availableQuantity: number;
+  estimatedDelivery?: string;
+  validUntil?: string;
+}
+
+export async function saveSupplierOffers(
+  tenantId: string,
+  correlationId: string,
+  offers: SupplierOfferInput[]
+): Promise<void> {
+  if (!offers.length) return;
+  const ts = now();
+  for (const o of offers) {
+    await pool.query(
+      `INSERT INTO supplier_offers
+         (tenant_id, correlation_id, supplier_id, supplier_part_number, manufacturer_reference,
+          oe_references, unit_cost, currency, available_quantity, estimated_delivery, valid_until, created_at_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        tenantId,
+        correlationId,
+        o.supplierId,
+        o.supplierPartNumber,
+        o.manufacturerReference ?? null,
+        o.oeReferences ? JSON.stringify(o.oeReferences) : null,
+        o.unitCost,
+        o.currency,
+        o.availableQuantity,
+        o.estimatedDelivery ?? null,
+        o.validUntil ?? null,
+        ts,
+      ]
+    );
+  }
+}
+
+export async function listSupplierOffers(tenantId: string, correlationId?: string) {
+  const args: unknown[] = [tenantId];
+  let sql = `SELECT * FROM supplier_offers WHERE tenant_id = $1`;
+  if (correlationId) {
+    args.push(correlationId);
+    sql += ` AND correlation_id = $2`;
+  }
+  sql += ` ORDER BY created_at_ms DESC LIMIT 200`;
+  const { rows } = await pool.query(sql, args);
+  return rows;
+}
+
 // ── Configuración de conectores por tenant ──────────────────────────────────
 export async function getConnectorConfig(tenantId: string, connectorKey: string) {
   const { rows } = await pool.query(

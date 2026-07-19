@@ -28,6 +28,14 @@ import type {
   MaintenancePlan,
   TyreSpecification,
 } from "./technical.ts";
+import type {
+  SupplierSearchQuery,
+  CreateSupplierCartInput,
+  SupplierCartResult,
+  CreateSupplierOrderInput,
+  SupplierOrderResult,
+  SupplierOrderStatusResult,
+} from "./supplier.ts";
 import type { OperationContext } from "./identifiers.ts";
 import type { ConnectorKind } from "./operation.ts";
 
@@ -81,9 +89,17 @@ export interface ITechnicalConnector extends Connector {
   getTyreSpecifications(ctx: OperationContext, vehicleRef: string): Promise<TyreSpecification[]>;
 }
 
-/** Contrato del Supplier Hub (recambistas). Se implementará en Fase 3. */
+/**
+ * Contrato del Supplier Hub (recambistas/distribuidores). Refleja las funciones del §2.3.
+ * Toda respuesta se normaliza (SupplierOffer / SupplierOrderResult...).
+ */
 export interface ISupplierConnector extends Connector {
-  searchPart(ctx: OperationContext, query: { oeReference?: string; text?: string }): Promise<SupplierOffer[]>;
+  searchPart(ctx: OperationContext, query: SupplierSearchQuery): Promise<SupplierOffer[]>;
   getPrice(ctx: OperationContext, supplierPartNumber: string): Promise<SupplierOffer | null>;
-  createPurchaseOrder(ctx: OperationContext, input: CreatePurchaseOrderInput): Promise<PurchaseOrderResult>;
+  getAvailability(ctx: OperationContext, supplierPartNumber: string): Promise<SupplierOffer | null>;
+  getDeliveryTime(ctx: OperationContext, supplierPartNumber: string, quantity: number): Promise<string | undefined>;
+  createSupplierCart(ctx: OperationContext, input: CreateSupplierCartInput): Promise<SupplierCartResult>;
+  createPurchaseOrder(ctx: OperationContext, input: CreateSupplierOrderInput): Promise<SupplierOrderResult>;
+  getOrderStatus(ctx: OperationContext, supplierOrderId: string): Promise<SupplierOrderStatusResult>;
+  cancelOrder(ctx: OperationContext, supplierOrderId: string): Promise<SupplierOrderStatusResult>;
 }
