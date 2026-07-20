@@ -70,6 +70,15 @@ class _InicioTab extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
+          // Logo de la marca en la portada de inicio.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 18),
+            child: Image.asset(
+              'assets/logo_cabecera.png',
+              height: 84,
+              fit: BoxFit.contain,
+            ),
+          ),
           _BigTile(
             icon: Icons.add_circle,
             label: 'Nueva revisión',
