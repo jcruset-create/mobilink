@@ -1,0 +1,147 @@
+// Fleet Integration Hub - esquema multi-tenant (PostgreSQL / Supabase)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id          String               @id @default(uuid())
+  name        String
+  active      Boolean              @default(true)
+  createdAt   DateTime             @default(now()) @map("created_at")
+  connections ProviderConnection[]
+  vehicles    Vehicle[]
+
+  @@map("fih_tenants")
+}
+
+model ProviderConnection {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  provider  String // movertis | webfleet | geotab | mte | ...
+  label     String?
+  /// Credenciales cifradas (AES-256-GCM) serializadas
+  credentialsEncrypted String @map("credentials_encrypted")
+  status    String   @default("pending") // pending | active | auth_error | disabled
+  /// Estado de sincronización incremental por recurso: { vehicles: {since, cursor}, ... }
+  syncState Json     @default("{}") @map("sync_state")
+  webhookSecret String? @map("webhook_secret")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  syncRuns  SyncRun[]
+
+  @@unique([tenantId, provider, label])
+  @@map("fih_provider_connections")
+}
+
+model Vehicle {
+  id         String  @id @default(uuid())
+  tenantId   String  @map("tenant_id")
+  tenant     Tenant  @relation(fields: [tenantId], references: [id])
+  provider   String
+  externalId String  @map("external_id")
+  plate      String?
+  vin        String?
+  name       String?
+  brand      String?
+  model      String?
+  category   String  @default("other")
+  active     Boolean @default(true)
+  raw        Json?
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  odometerReadings OdometerReading[]
+  engineHours      EngineHoursReading[]
+
+  @@unique([tenantId, provider, externalId])
+  @@index([tenantId, plate])
+  @@map("fih_vehicles")
+}
+
+model OdometerReading {
+  id             BigInt   @id @default(autoincrement())
+  vehicleId      String   @map("vehicle_id")
+  vehicle        Vehicle  @relation(fields: [vehicleId], references: [id])
+  ts             DateTime
+  odometerMeters BigInt   @map("odometer_meters")
+  source         String   @default("unknown")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([vehicleId, ts])
+  @@index([vehicleId, ts(sort: Desc)])
+  @@map("fih_odometer_readings")
+}
+
+model EngineHoursReading {
+  id          BigInt   @id @default(autoincrement())
+  vehicleId   String   @map("vehicle_id")
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id])
+  ts          DateTime
+  engineHours Float    @map("engine_hours")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([vehicleId, ts])
+  @@map("fih_engine_hours_readings")
+}
+
+model Driver {
+  id         String  @id @default(uuid())
+  tenantId   String  @map("tenant_id")
+  provider   String
+  externalId String  @map("external_id")
+  name       String?
+  phone      String?
+  email      String?
+  currentVehicleExternalId String? @map("current_vehicle_external_id")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, provider, externalId])
+  @@map("fih_drivers")
+}
+
+model SyncRun {
+  id           String   @id @default(uuid())
+  connectionId String   @map("connection_id")
+  connection   ProviderConnection @relation(fields: [connectionId], references: [id])
+  resource     String // vehicles | odometer | engineHours | drivers | positions | ...
+  startedAt    DateTime @default(now()) @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+  status       String   @default("running") // running | ok | error
+  itemsSynced  Int      @default(0) @map("items_synced")
+  error        String?
+
+  @@index([connectionId, startedAt(sort: Desc)])
+  @@map("fih_sync_runs")
+}
+
+model WebhookEvent {
+  id           String   @id @default(uuid())
+  connectionId String   @map("connection_id")
+  provider     String
+  type         String
+  payload      Json
+  processedAt  DateTime? @map("processed_at")
+  receivedAt   DateTime @default(now()) @map("received_at")
+
+  @@index([connectionId, receivedAt(sort: Desc)])
+  @@map("fih_webhook_events")
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  tenantId  String?  @map("tenant_id")
+  actor     String // user id / system / webhook
+  action    String
+  entity    String?
+  entityId  String?  @map("entity_id")
+  detail    Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("fih_audit_logs")
+}

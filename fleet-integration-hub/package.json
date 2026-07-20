@@ -1,0 +1,21 @@
+{
+  "name": "mobilink-fleet-integration-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobilink Fleet Integration Hub (FIH) - integración multi-proveedor de plataformas de gestión de flotas mediante adaptadores",
+  "workspaces": [
+    "packages/domain",
+    "packages/adapters",
+    "apps/api"
+  ],
+  "scripts": {
+    "build": "npm run build -w @fih/domain && npm run build -w @fih/adapters && npm run build -w @fih/api",
+    "test": "npm run test -w @fih/adapters",
+    "start": "npm run start -w @fih/api",
+    "dev": "npm run dev -w @fih/api",
+    "prisma:generate": "npm run prisma:generate -w @fih/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
