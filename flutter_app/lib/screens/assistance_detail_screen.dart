@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import 'arrival_photos_screen.dart';
 import 'cobros_screen.dart';
 import 'finish_screen.dart';
+import 'media_viewer_screen.dart';
 import 'navigation_screen.dart';
 
 class AssistanceDetailScreen extends StatefulWidget {
@@ -847,7 +848,12 @@ class _WhatsAppCaptureCard extends StatelessWidget {
                 itemCount: imageUrls.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 8),
                 itemBuilder: (context, i) => GestureDetector(
-                  onTap: () => _openUrl(context, imageUrls[i]),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => PhotoViewerScreen(
+                      imageUrls: imageUrls,
+                      initialIndex: i,
+                    ),
+                  )),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: Image.network(
@@ -885,7 +891,9 @@ class _WhatsAppCaptureCard extends StatelessWidget {
               children: videoUrls.map((url) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: GestureDetector(
-                  onTap: () => _openUrl(context, url),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => VideoViewerScreen(videoUrl: url),
+                  )),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     decoration: BoxDecoration(
@@ -903,7 +911,7 @@ class _WhatsAppCaptureCard extends StatelessWidget {
                             style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
                           ),
                         ),
-                        Icon(Icons.open_in_new, color: Colors.white38, size: 16),
+                        Icon(Icons.fullscreen, color: Colors.white38, size: 18),
                       ],
                     ),
                   ),
@@ -921,13 +929,6 @@ class _WhatsAppCaptureCard extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  void _openUrl(BuildContext context, String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
   }
 
   Widget _row(IconData icon, String text) => Row(
