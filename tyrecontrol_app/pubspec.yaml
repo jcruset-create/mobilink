@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "Mobilink TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.16.0+42
+version: 0.17.0+43
 
 environment:
   sdk: ^3.8.1
@@ -54,5 +54,5 @@ flutter:
     - assets/logo.png
     - assets/logo_transparent.png
     - assets/icono_app.png
-    - assets/logo_login.png
+    # logo_login.png ya no se empaqueta: el login usa el logo horizontal.
     - assets/logo_cabecera.png

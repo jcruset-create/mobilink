@@ -77,7 +77,8 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.asset('assets/logo_login.png', width: 340, fit: BoxFit.contain),
+                  // Logo horizontal de Mobilink TyreControl (sin fondo).
+                  Image.asset('assets/logo_cabecera.png', width: 420, fit: BoxFit.contain),
                   const SizedBox(height: 32),
 
                   TextField(
