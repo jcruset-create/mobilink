@@ -9590,19 +9590,43 @@ app.post(
         let resolvedAddress: string | null = req.body.Label ?? null;
 
         if (msgType === "text" && Body) {
+          // Coordenadas DMS escritas en el propio mensaje (ubicaciones reenviadas de
+          // Google Maps: `41°04'55.2"N 1°08'54.6"E`). Es la vía más fiable: sin red.
+          const dms = Body.match(
+            /(\d{1,3})°(\d{1,2})'([\d.]+)"?\s*([NS])[\s,+]+(\d{1,3})°(\d{1,2})'([\d.]+)"?\s*([EW])/
+          );
+          if (dms) {
+            const latAbs = Number(dms[1]) + Number(dms[2]) / 60 + Number(dms[3]) / 3600;
+            const lngAbs = Number(dms[5]) + Number(dms[6]) / 60 + Number(dms[7]) / 3600;
+            lat = dms[4].toUpperCase() === "S" ? -latAbs : latAbs;
+            lng = dms[8].toUpperCase() === "W" ? -lngAbs : lngAbs;
+            effectiveMsgType = "location";
+          }
           const mapsUrlMatch = Body.match(/https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.com|www\.google\.com\/maps)[^\s]*/i);
-          if (mapsUrlMatch) {
+          if (mapsUrlMatch && lat == null) {
             try {
               // Follow redirects to get the final URL with coordinates
               const mapsResp = await fetch(mapsUrlMatch[0], { redirect: "follow", signal: AbortSignal.timeout(5000) });
-              const finalUrl = mapsResp.url;
-              // Extract lat/lng from URL patterns like @41.123,1.456 or ?q=41.123,1.456 or ll=41.123,1.456
+              const finalUrl = decodeURIComponent(mapsResp.url);
+              // Extract lat/lng from URL patterns like @41.123,1.456, ?q=41.123,1.456, ll=..., !3d..!4d..,
+              // or DMS in the place name of the final URL
               const coordMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
                                  finalUrl.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
-                                 finalUrl.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/);
-              if (coordMatch) {
-                lat = parseFloat(coordMatch[1]);
-                lng = parseFloat(coordMatch[2]);
+                                 finalUrl.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+                                 finalUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+              const urlDms = coordMatch ? null : finalUrl.match(
+                /(\d{1,3})°(\d{1,2})'([\d.]+)"?([NS])\+?(\d{1,3})°(\d{1,2})'([\d.]+)"?([EW])/
+              );
+              if (coordMatch || urlDms) {
+                if (coordMatch) {
+                  lat = parseFloat(coordMatch[1]);
+                  lng = parseFloat(coordMatch[2]);
+                } else if (urlDms) {
+                  const latAbs = Number(urlDms[1]) + Number(urlDms[2]) / 60 + Number(urlDms[3]) / 3600;
+                  const lngAbs = Number(urlDms[5]) + Number(urlDms[6]) / 60 + Number(urlDms[7]) / 3600;
+                  lat = urlDms[4].toUpperCase() === "S" ? -latAbs : latAbs;
+                  lng = urlDms[8].toUpperCase() === "W" ? -lngAbs : lngAbs;
+                }
                 effectiveMsgType = "location";
                 // Reverse geocode
                 try {
@@ -9623,7 +9647,8 @@ app.post(
         }
 
         // Reverse geocode native GPS location using Nominatim
-        if (msgType === "location" && lat != null && lng != null && !resolvedAddress) {
+        // (effectiveMsgType cubre también las coordenadas DMS extraídas del texto)
+        if (effectiveMsgType === "location" && lat != null && lng != null && !resolvedAddress) {
           try {
             const geoResp = await fetch(
               `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
@@ -10168,10 +10193,13 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     for (const msg of msgs.rows) {
       if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
         const url = msg.media_stored_url || msg.media_url;
+        // Evitar duplicados al reabrir y volver a cerrar la sesión: solo insertar si esa URL aún no está guardada
         await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT DO NOTHING`,
+           SELECT $1, $2, $3, $4, $5
+           WHERE NOT EXISTS (
+             SELECT 1 FROM roadside_assistance_files WHERE "assistanceId" = $1 AND url = $3
+           )`,
           [jobId, `whatsapp_${msg.message_type}`, url, `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`, now]
         ).catch(() => {});
       }
@@ -10186,8 +10214,12 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     if (noteLines.length > 0) {
       const existing = await db.query(`SELECT notes FROM roadside_assistances WHERE id = $1`, [jobId]);
       const prevNotes = existing.rows[0]?.notes ?? "";
-      const newNotes = [prevNotes, ...noteLines].filter(Boolean).join("\n");
-      await db.query(`UPDATE roadside_assistances SET notes = $2, "updatedAtMs" = $3 WHERE id = $1`, [jobId, newNotes, now]);
+      // Evitar duplicar notas ya añadidas en un cierre anterior de la misma sesión
+      const freshLines = noteLines.filter((l) => !prevNotes.includes(l));
+      if (freshLines.length > 0) {
+        const newNotes = [prevNotes, ...freshLines].filter(Boolean).join("\n");
+        await db.query(`UPDATE roadside_assistances SET notes = $2, "updatedAtMs" = $3 WHERE id = $1`, [jobId, newNotes, now]);
+      }
     }
 
     // Run AI analysis asynchronously — don't block the response

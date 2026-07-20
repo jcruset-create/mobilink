@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -122,7 +122,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       uri = Uri.parse(
           'https://www.google.com/maps/dir/?api=1&destination=${Uri.encodeComponent(_address)}&travelmode=driving');
     } else {
-      _showSnack('No hay ubicación disponible para navegar.', Colors.orange);
+      _showSnack('No hay ubicaciÃ³n disponible para navegar.', Colors.orange);
       return;
     }
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
@@ -137,11 +137,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
     } else if (_address.isNotEmpty) {
       text = _address;
     } else {
-      _showSnack('No hay ubicación disponible', Colors.orange);
+      _showSnack('No hay ubicaciÃ³n disponible', Colors.orange);
       return;
     }
     await Clipboard.setData(ClipboardData(text: text));
-    _showSnack('Ubicación copiada', Colors.green);
+    _showSnack('UbicaciÃ³n copiada', Colors.green);
   }
 
   Future<void> _sendEtaWhatsApp() async {
@@ -153,7 +153,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         distanciaKm: _distanciaKm,
       );
       setState(() => _etaSent = true);
-      _showSnack('ETA enviado al cliente por WhatsApp ✓', Colors.green);
+      _showSnack('ETA enviado al cliente por WhatsApp âœ“', Colors.green);
     } catch (_) {
       _showSnack('No se pudo enviar el WhatsApp', Colors.red);
     } finally {
@@ -175,13 +175,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
         toolbarHeight: 110,
-        title: Image.asset('assets/logo_horizontal.png', height: 90),
+        title: Image.asset('assets/logo_horizontal2.png', height: 100),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),
       body: Row(
         children: [
-          // ── Mapa ──────────────────────────────────────
+          // â”€â”€ Mapa â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           Expanded(
             flex: 3,
             child: hasCoords
@@ -238,7 +238,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   ),
           ),
 
-          // ── Panel lateral ─────────────────────────────
+          // â”€â”€ Panel lateral â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           Container(
             width: 280,
             color: const Color(0xFF16213e),
@@ -275,7 +275,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     ))
                   else if (!_loadingLocation && _operatorPos == null)
                     _warningBox(
-                        'No se ha podido obtener la ubicación actual del operario.')
+                        'No se ha podido obtener la ubicaciÃ³n actual del operario.')
                   else if (_etaError != null)
                     _warningBox(_etaError!)
                   else if (_etaMinutos != null) ...[
@@ -289,7 +289,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Botones de acción
+                  // Botones de acciÃ³n
                   _actionButton(
                     icon: Icons.map,
                     label: 'Abrir en Google Maps',
@@ -299,7 +299,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   const SizedBox(height: 8),
                   _actionButton(
                     icon: Icons.content_copy,
-                    label: 'Copiar ubicación',
+                    label: 'Copiar ubicaciÃ³n',
                     color: Colors.indigo,
                     onPressed: _copyLocation,
                   ),
@@ -307,7 +307,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   _actionButton(
                     icon: Icons.chat,
                     label: _etaSent
-                        ? 'ETA enviado ✓'
+                        ? 'ETA enviado âœ“'
                         : 'Enviar ETA por WhatsApp',
                     color: _etaSent ? Colors.green.shade700 : Colors.green,
                     onPressed: _sendingEta || _etaSent ? null : _sendEtaWhatsApp,
@@ -317,7 +317,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   if (_operatorPos == null && !_loadingLocation)
                     _actionButton(
                       icon: Icons.my_location,
-                      label: 'Reintentar ubicación',
+                      label: 'Reintentar ubicaciÃ³n',
                       color: Colors.teal,
                       onPressed: _initLocation,
                     ),

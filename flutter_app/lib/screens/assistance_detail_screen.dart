@@ -398,7 +398,7 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 80,
-        title: Image.asset('assets/logo_horizontal.png', height: 56),
+        title: Image.asset('assets/logo_horizontal2.png', height: 70),
         backgroundColor: AppColors.background,
         foregroundColor: Colors.white,
       ),

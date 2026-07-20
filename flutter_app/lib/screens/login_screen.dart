@@ -80,7 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.asset('assets/logo_horizontal.png', width: 280),
+                  Image.asset('assets/logo_horizontal2.png', width: 360),
                   const SizedBox(height: 12),
                   Text(
                     'Acceso operarios',

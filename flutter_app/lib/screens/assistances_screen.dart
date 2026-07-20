@@ -167,8 +167,8 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Image.asset(
-                              'assets/logo_horizontal.png',
-                              height: isExterior ? 56 : 50,
+                              'assets/logo_horizontal2.png',
+                              height: isExterior ? 70 : 62,
                               fit: BoxFit.contain,
                               alignment: Alignment.centerLeft,
                             ),
