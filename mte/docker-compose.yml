@@ -1,0 +1,8 @@
+services:
+  mte:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5027:5027"   # TCP Teltonika
+      - "8080:8080"   # API REST + WebSocket

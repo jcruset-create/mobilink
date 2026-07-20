@@ -1,0 +1,18 @@
+[Unit]
+Description=Mobilink Telematics Engine (MTE)
+After=network.target
+
+[Service]
+Type=simple
+User=mte
+WorkingDirectory=/opt/mte
+EnvironmentFile=/opt/mte/.env
+ExecStart=/usr/bin/node /opt/mte/dist/index.js
+Restart=always
+RestartSec=5
+# Logs estructurados JSON a journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
