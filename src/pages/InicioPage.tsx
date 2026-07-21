@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, type LucideIcon } from "lucide-react";
+import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, type LucideIcon } from "lucide-react";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 
@@ -8,6 +8,8 @@ import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/mo
 // Ponlas a false para ocultarlas del hub.
 const MOSTRAR_PANEL_TALLER = true;
 const MOSTRAR_ASISTENCIAS = true;
+// Licencias: solo para superadmin (gestión comercial de contratos)
+const MOSTRAR_LICENCIAS = true;
 
 const ICONOS: Record<string, LucideIcon> = {
   administracion: Wallet,
@@ -64,6 +66,7 @@ export default function InicioPage() {
   const [nombre, setNombre] = useState("");
   const [username, setUsername] = useState("");
   const [tarjetas, setTarjetas] = useState<TarjetaModulo[]>([]);
+  const [esSuperadmin, setEsSuperadmin] = useState(false);
   const [cargando, setCargando] = useState(true);
 
   useEffect(() => {
@@ -121,7 +124,7 @@ export default function InicioPage() {
           : m.pantallas;
         lista.push({ modulo: m, rolLabel, pantallas: permitidas });
       }
-      if (activo) { setTarjetas(lista); setCargando(false); }
+      if (activo) { setTarjetas(lista); setEsSuperadmin(esSuperadmin); setCargando(false); }
     })();
     return () => { activo = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -216,6 +219,27 @@ export default function InicioPage() {
                 <button
                   onClick={() => navigate("/asistencias")}
                   className="mt-auto rounded-xl bg-red-600/90 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
+                >
+                  Entrar
+                </button>
+              </div>
+            )}
+
+            {MOSTRAR_LICENCIAS && esSuperadmin && (
+              <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/15">
+                    <ShieldCheck className="h-5 w-5 text-indigo-400" />
+                  </div>
+                  <span className="text-sm font-bold">Licencias</span>
+                  <span className="ml-auto whitespace-nowrap rounded-full bg-indigo-500/15 px-2 py-0.5 text-[11px] font-bold text-indigo-300">Superadmin</span>
+                </div>
+                <p className="mb-3 text-[12px] text-slate-500">
+                  Gestión de licencias: activación, renovación, caducidad a 4 años y avisos.
+                </p>
+                <button
+                  onClick={() => navigate("/licencias")}
+                  className="mt-auto rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
                 >
                   Entrar
                 </button>
