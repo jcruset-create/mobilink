@@ -5398,6 +5398,28 @@ async function fetchRoutePolyline(
   }
 }
 
+// Carga un icono de marcador desde public/, lo redimensiona y hace transparente
+// el fondo blanco para poder superponerlo sobre el mapa
+async function loadMapMarker(file: string, size: number): Promise<Buffer | null> {
+  try {
+    const p = path.join(process.cwd(), "public", file);
+    if (!fs.existsSync(p)) return null;
+    const { data, info } = await sharp(p)
+      .resize(size, size, { fit: "inside" })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] > 235 && data[i + 1] > 235 && data[i + 2] > 235) data[i + 3] = 0;
+    }
+    return await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } })
+      .png()
+      .toBuffer();
+  } catch {
+    return null;
+  }
+}
+
 // Builds a map showing the assistance point (red pin) and the van departure
 // point (blue van) on the SAME image, with the real driving route between them
 // (falls back to a straight dashed line). Auto-zoom to fit everything.
@@ -5502,18 +5524,41 @@ async function buildRouteMapImage(
       })()
     : `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="${3 * S}" stroke-dasharray="${7 * S},${5 * S}" opacity="0.85"/>`;
 
-  // Ruta + pin rojo (avería) + furgoneta azul (salida), todo en un SVG superpuesto
+  // Ruta en SVG + iconos de taller y avería como imágenes superpuestas
+  const markerSize = 34 * S;
+  const [tallerIcon, averiaIcon] = await Promise.all([
+    loadMapMarker("marker_taller.png", markerSize),
+    loadMapMarker("marker_averia.png", markerSize),
+  ]);
+
   const overlaySvg = Buffer.from(
     `<svg width="${outWR}" height="${outHR}" xmlns="http://www.w3.org/2000/svg">` +
     routeSvg +
-    // Furgoneta (salida) — cuadro azul
-    `<rect x="${bx-11*S}" y="${by-9*S}" width="${22*S}" height="${18*S}" rx="${3*S}" fill="#2563eb" stroke="white" stroke-width="${2*S}"/>` +
-    `<rect x="${bx-6*S}" y="${by-5*S}" width="${9*S}" height="${6*S}" fill="white" opacity="0.9"/>` +
-    // Pin rojo (avería)
-    `<circle cx="${ax}" cy="${ay}" r="${9*S}" fill="red" stroke="white" stroke-width="${2.5*S}"/>` +
+    // Respaldo si faltan los iconos
+    (tallerIcon ? "" :
+      `<rect x="${bx-11*S}" y="${by-9*S}" width="${22*S}" height="${18*S}" rx="${3*S}" fill="#2563eb" stroke="white" stroke-width="${2*S}"/>` +
+      `<rect x="${bx-6*S}" y="${by-5*S}" width="${9*S}" height="${6*S}" fill="white" opacity="0.9"/>`) +
+    (averiaIcon ? "" :
+      `<circle cx="${ax}" cy="${ay}" r="${9*S}" fill="red" stroke="white" stroke-width="${2.5*S}"/>`) +
     `</svg>`
   );
   compositeInputs.push({ input: overlaySvg, left: 0, top: 0 });
+
+  // Los pines se anclan con la punta en la coordenada exacta
+  if (tallerIcon) {
+    compositeInputs.push({
+      input: tallerIcon,
+      left: Math.round(bx - markerSize / 2),
+      top: Math.round(by - markerSize * 0.92),
+    });
+  }
+  if (averiaIcon) {
+    compositeInputs.push({
+      input: averiaIcon,
+      left: Math.round(ax - markerSize / 2),
+      top: Math.round(ay - markerSize * 0.92),
+    });
+  }
 
   try {
     return await sharp({
@@ -5924,8 +5969,8 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
             doc.y += mapH + 4;
             doc.fontSize(7.5).font("Helvetica").fillColor("#64748b")
               .text(workshopCoords
-                ? "● Punto de avería (rojo)   ■ Salida furgoneta / taller (azul)   — Ruta seguida"
-                : "● Punto de avería", M, doc.y);
+                ? "Pin rojo: punto de avería   ·   Pin verde: taller / salida furgoneta   ·   Línea azul: ruta seguida"
+                : "Pin: punto de avería", M, doc.y);
             doc.fillColor("#000000");
           }
         } catch { /* sin mapa: las coordenadas ya están en la tarjeta de ubicación */ }
