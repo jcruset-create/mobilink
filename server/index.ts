@@ -5430,10 +5430,10 @@ async function buildRouteMapImage(
     zoom = z;
   }
 
-  // Render a doble resolución: mismo encuadre geográfico con tiles del zoom
-  // siguiente y lienzo 2x, para que en el PDF (mostrado más pequeño) se vea nítido
-  const S = 2;
-  const zoomR = Math.min(zoom + 1, 18);
+  // Render a alta resolución: mismo encuadre geográfico con tiles de 2 niveles
+  // más de zoom y lienzo 4x, para que en el PDF (mostrado más pequeño) se vea nítido
+  const S = 4;
+  const zoomR = Math.min(zoom + 2, 19);
   const outWR = outW * S;
   const outHR = outH * S;
 
@@ -5498,7 +5498,7 @@ async function buildRouteMapImage(
         const coords = routePoints.map((p) =>
           `${Math.round(lngToWorldX(p.lng, zoomR) - originX)},${Math.round(latToWorldY(p.lat, zoomR) - originY)}`
         );
-        return `<polyline points="${coords.join(" ")}" fill="none" stroke="#1e3a8a" stroke-width="${4 * S}" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>`;
+        return `<polyline points="${coords.join(" ")}" fill="none" stroke="#1d4ed8" stroke-width="${1.6 * S}" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>`;
       })()
     : `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="${3 * S}" stroke-dasharray="${7 * S},${5 * S}" opacity="0.85"/>`;
 
@@ -5920,7 +5920,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
             const mapH = workshopCoords ? Math.round(mapW * 300 / 480) : Math.round(mapW * 260 / 480);
             if (doc.y + mapH + 30 > 800) doc.addPage();
             sectionTitle("Ruta de la asistencia");
-            doc.image(mapBuf, M, doc.y, { fit: [mapW, mapH] });
+            doc.image(mapBuf, M + (contentW - mapW) / 2, doc.y, { fit: [mapW, mapH] });
             doc.y += mapH + 4;
             doc.fontSize(7.5).font("Helvetica").fillColor("#64748b")
               .text(workshopCoords
