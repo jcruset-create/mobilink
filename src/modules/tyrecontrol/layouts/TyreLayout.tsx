@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Menu, LogOut, Truck, Home } from "lucide-react";
+import { Menu, LogOut, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { NAV, navVisible } from "../config/navigation";
 import { ROL_LABELS } from "../types";
@@ -32,12 +32,22 @@ export default function TyreLayout() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       {/* Topbar */}
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 md:gap-3">
           <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setOpen((v) => !v)}>
             <Menu className="h-5 w-5" />
           </button>
-          <Truck className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">Mobilink TyreControl</span>
+          <img src="/tyrecontrol-emblem.png" alt="" className="h-9 w-auto" />
+          <span className="whitespace-nowrap text-sm font-black leading-none">
+            <span className="text-white">Mobi</span>
+            <span className="text-blue-400">link</span>{" "}
+            <span className="text-green-400">Tyre</span>
+            <span className="text-slate-100">Control</span>
+          </span>
+          <img
+            src="/tyrecontrol-features.png"
+            alt="Flotas, neumáticos, mantenimiento, informes"
+            className="ml-2 hidden h-7 w-auto lg:block"
+          />
         </div>
         <div className="flex items-center gap-3">
           <AlertasWebfleet />
