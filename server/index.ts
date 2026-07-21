@@ -5344,8 +5344,63 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
     .toBuffer();
 }
 
+// Decodifica una polilínea de Google (encoded polyline algorithm) a lista de puntos
+function decodeGooglePolyline(encoded: string): { lat: number; lng: number }[] {
+  const points: { lat: number; lng: number }[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    for (const which of [0, 1] as const) {
+      let result = 0, shift = 0, b: number;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const delta = (result & 1) ? ~(result >> 1) : (result >> 1);
+      if (which === 0) lat += delta; else lng += delta;
+    }
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
+// Pide a Google Routes la polilínea de la ruta real en coche entre dos puntos.
+// Devuelve null si no hay API key o falla (el mapa cae a la línea recta).
+async function fetchRoutePolyline(
+  origen: { lat: number; lng: number },
+  destino: { lat: number; lng: number }
+): Promise<{ lat: number; lng: number }[] | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": "routes.polyline.encodedPolyline",
+      },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: origen.lat, longitude: origen.lng } } },
+        destination: { location: { latLng: { latitude: destino.lat, longitude: destino.lng } } },
+        travelMode: "DRIVE",
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    const encoded = data.routes?.[0]?.polyline?.encodedPolyline;
+    if (!encoded) return null;
+    const points = decodeGooglePolyline(encoded);
+    return points.length >= 2 ? points : null;
+  } catch {
+    return null;
+  }
+}
+
 // Builds a map showing the assistance point (red pin) and the van departure
-// point (blue van) on the SAME image, with a line connecting them. Auto-zoom to fit both.
+// point (blue van) on the SAME image, with the real driving route between them
+// (falls back to a straight dashed line). Auto-zoom to fit everything.
 async function buildRouteMapImage(
   point: { lat: number; lng: number },
   departure: { lat: number; lng: number }
@@ -5360,11 +5415,17 @@ async function buildRouteMapImage(
     return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 256 * Math.pow(2, z);
   };
 
-  // Elegir el zoom máximo (<=16) que contenga ambos puntos dentro del recuadro
+  // Ruta real en coche (si Google Routes responde); si no, línea recta discontinua
+  const routePoints = await fetchRoutePolyline(departure, point);
+  const fitPoints = routePoints ?? [point, departure];
+
+  // Elegir el zoom máximo (<=16) que contenga toda la ruta dentro del recuadro
   let zoom = 16;
   for (let z = 16; z >= 3; z--) {
-    const dx = Math.abs(lngToWorldX(point.lng, z) - lngToWorldX(departure.lng, z));
-    const dy = Math.abs(latToWorldY(point.lat, z) - latToWorldY(departure.lat, z));
+    const xs = fitPoints.map((p) => lngToWorldX(p.lng, z));
+    const ys = fitPoints.map((p) => latToWorldY(p.lat, z));
+    const dx = Math.max(...xs) - Math.min(...xs);
+    const dy = Math.max(...ys) - Math.min(...ys);
     if (dx <= outW - pad && dy <= outH - pad) { zoom = z; break; }
     zoom = z;
   }
@@ -5374,8 +5435,11 @@ async function buildRouteMapImage(
   const p2x = lngToWorldX(departure.lng, zoom);
   const p2y = latToWorldY(departure.lat, zoom);
 
-  const centerX = (p1x + p2x) / 2;
-  const centerY = (p1y + p2y) / 2;
+  // Centro del recuadro: el centro del bounding box de toda la ruta
+  const fitXs = fitPoints.map((p) => lngToWorldX(p.lng, zoom));
+  const fitYs = fitPoints.map((p) => latToWorldY(p.lat, zoom));
+  const centerX = (Math.max(...fitXs) + Math.min(...fitXs)) / 2;
+  const centerY = (Math.max(...fitYs) + Math.min(...fitYs)) / 2;
 
   // Origen del lienzo de salida (esquina sup-izq) en píxeles de mundo
   const originX = centerX - outW / 2;
@@ -5421,10 +5485,20 @@ async function buildRouteMapImage(
   const bx = Math.round(p2x - originX); // salida furgoneta
   const by = Math.round(p2y - originY);
 
-  // Línea + pin rojo (avería) + furgoneta azul (salida), todo en un SVG superpuesto
+  // Trazado de la ruta: polilínea real si la tenemos, si no línea recta discontinua
+  const routeSvg = routePoints
+    ? (() => {
+        const coords = routePoints.map((p) =>
+          `${Math.round(lngToWorldX(p.lng, zoom) - originX)},${Math.round(latToWorldY(p.lat, zoom) - originY)}`
+        );
+        return `<polyline points="${coords.join(" ")}" fill="none" stroke="#1e3a8a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>`;
+      })()
+    : `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="3" stroke-dasharray="7,5" opacity="0.85"/>`;
+
+  // Ruta + pin rojo (avería) + furgoneta azul (salida), todo en un SVG superpuesto
   const overlaySvg = Buffer.from(
     `<svg width="${outW}" height="${outH}" xmlns="http://www.w3.org/2000/svg">` +
-    `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="3" stroke-dasharray="7,5" opacity="0.85"/>` +
+    routeSvg +
     // Furgoneta (salida) — cuadro azul
     `<rect x="${bx-11}" y="${by-9}" width="22" height="18" rx="3" fill="#2563eb" stroke="white" stroke-width="2"/>` +
     `<rect x="${bx-6}" y="${by-5}" width="9" height="6" fill="white" opacity="0.9"/>` +
