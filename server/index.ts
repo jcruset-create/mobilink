@@ -5668,48 +5668,10 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         doc.on("end", () => resolve(Buffer.concat(chunks)));
       });
 
-      // Header
-      doc
-        .fontSize(18)
-        .font("Helvetica-Bold")
-        .text("Mobilink – Informe de Asistencia", { align: "center" });
+      const M = 40;
+      const contentW = doc.page.width - M * 2;
 
-      doc.moveDown(0.3);
-      doc
-        .fontSize(11)
-        .font("Helvetica")
-        .text(`Asistencia nº ${a.id}   |   ${formatDateEs(a.createdAtMs)}`, { align: "center" });
-
-      doc.moveDown(1);
-
-      // Helper to draw a row
-      function row(label: string, value: string) {
-        doc
-          .fontSize(10)
-          .font("Helvetica-Bold")
-          .text(label, { continued: true, width: 160 });
-        doc.font("Helvetica").text(value);
-      }
-
-      doc.fontSize(13).font("Helvetica-Bold").text("Datos del cliente");
-      doc.moveDown(0.3);
-      row("Nombre:", a.customerName || "-");
-      row("Teléfono:", a.customerPhone || "-");
-      row("Dirección:", a.address || "-");
-      // Asistencia al remolque (check del formulario, o sin matrícula de camión):
-      // la matrícula del remolque es la principal y la tractora sale como dato adicional
-      if ((a.esRemolque || !a.plate) && a.plateRemolque) {
-        row("Matrícula remolque:", a.plateRemolque);
-        if (a.plate) row("Matrícula tractora:", a.plate);
-      } else {
-        row("Matrícula camión:", a.plate || "-");
-        if (a.plateRemolque) row("Matrícula remolque:", a.plateRemolque);
-      }
-      row("Vehículo:", a.vehicleDescription || "-");
-      row("Prioridad:", a.priority === "urgente" ? "URGENTE" : "Normal");
-      if (a.notes) row("Notas:", a.notes);
-
-      // Mapa estático: punto de avería (rojo) + salida furgoneta (azul) en la misma imagen
+      // ── Datos previos que necesitan las tarjetas ──
       let workshopCoords: { lat: number; lng: number } | null = null;
       try {
         const wcfg = await getWorkshopConfig();
@@ -5718,35 +5680,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshopCoords = { lat: wlat, lng: wlng };
       } catch { /* sin config taller */ }
 
-      if (a.latitude != null && a.longitude != null) {
-        doc.moveDown(0.5);
-        doc.fontSize(10).font("Helvetica-Bold").text("Localización de la avería:");
-        doc.moveDown(0.3);
-        try {
-          const mapBuf = workshopCoords
-            ? await buildRouteMapImage({ lat: a.latitude, lng: a.longitude }, workshopCoords)
-            : await buildMapImage(a.latitude, a.longitude);
-          if (mapBuf) {
-            doc.image(mapBuf, { fit: [480, 300], align: "left" });
-            doc.moveDown(0.2);
-            // Leyenda
-            doc.fontSize(8).font("Helvetica")
-              .text(workshopCoords
-                ? "● Punto de avería (rojo)   ■ Salida furgoneta / taller (azul)"
-                : "● Punto de avería");
-          } else {
-            doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
-          }
-        } catch {
-          doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
-        }
-        // Coordenadas GPS del punto de avería
-        doc.fontSize(9).font("Helvetica-Bold").text("GPS punto de avería: ", { continued: true });
-        doc.font("Helvetica").text(`${a.latitude.toFixed(6)}, ${a.longitude.toFixed(6)}`);
-      }
-
-      // Matrícula de la furgoneta asignada (desde roadside_vehicles)
-      let vanPlate = "-";
+      let vanPlate = "";
       if (a.webfleetVehicleId) {
         try {
           const vp = await db.query(
@@ -5757,15 +5691,12 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         } catch { /* sin matrícula */ }
       }
 
-      // Kilómetros recorridos (ida y vuelta: taller -> avería -> taller)
-      let kmTotal = "-";
+      let kmTotal = "";
       if (workshopCoords && a.latitude != null && a.longitude != null) {
         try {
           const etaIda = await calcularETA(workshopCoords, { lat: a.latitude, lng: a.longitude });
           const ida = parseFloat(etaIda.kilometros);
-
           if (a.status === "redirigida" && a.redirectionLat != null && a.redirectionLng != null) {
-            // Redirigida: ida (taller->avería) + vuelta teórica (punto de desvío -> taller)
             const etaVuelta = await calcularETA(
               { lat: a.redirectionLat, lng: a.redirectionLng },
               workshopCoords
@@ -5775,83 +5706,220 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
               kmTotal = `${(ida + vuelta).toFixed(1)} km (ida + vuelta desde desvío)`;
             }
           } else if (Number.isFinite(ida)) {
-            // Normal: ida y vuelta completas
             kmTotal = `${(ida * 2).toFixed(1)} km (ida y vuelta)`;
           }
         } catch { /* sin ruta */ }
       }
 
-      doc.moveDown(1);
-      doc.fontSize(13).font("Helvetica-Bold").text("Asignación");
-      doc.moveDown(0.3);
-      row("Operario:", a.assignedTechName || "-");
-      row("Vehículo asignado:", a.assignedVehicleName || "-");
-      row("Matrícula furgoneta:", vanPlate);
-      row("Kilómetros recorridos:", kmTotal);
-      if (a.redirectedToId) row("Redirigida a asistencia:", `#${a.redirectedToId}`);
-      if (a.redirectedFromId) row("Procede de asistencia:", `#${a.redirectedFromId}`);
+      // Notas: las líneas de WhatsApp van a un anexo al final, no mezcladas
+      const rawNoteLines = String(a.notes || "").split(/\r?\n/).filter((l: string) => l.trim());
+      const officeNotes = rawNoteLines.filter((l: string) => !/^\[(WhatsApp|Ubicación GPS)/i.test(l.trim()));
+      const waNotes = rawNoteLines.filter((l: string) => /^\[(WhatsApp|Ubicación GPS)/i.test(l.trim()));
 
-      doc.moveDown(1);
-      doc.fontSize(13).font("Helvetica-Bold").text("Tiempos");
-      doc.moveDown(0.3);
-      row("Creación:", formatDateEs(a.createdAtMs));
-      row("Asignada:", formatDateEs(a.assignedAtMs));
-      row("Salida taller:", formatDateEs(a.departedAtMs));
-      row("Llegada punto:", formatDateEs(a.arrivedAtPointMs));
-      row("Finalización:", formatDateEs(a.finishedAtMs));
-      row("Llegada taller:", formatDateEs(a.arrivedAtWorkshopMs));
+      // ── Cabecera con banda y logo ──
+      doc.rect(0, 0, doc.page.width, 62).fill("#101a33");
+      try {
+        const logoPath = path.join(process.cwd(), "public", "logo_horizontal.png");
+        if (fs.existsSync(logoPath)) doc.image(logoPath, M, 14, { height: 34 });
+      } catch { /* sin logo */ }
+      doc.fillColor("#ffffff").fontSize(12).font("Helvetica-Bold")
+        .text(`Informe de asistencia #${a.id}`, 280, 18, { width: doc.page.width - 280 - M, align: "right" });
+      doc.fillColor("#cbd5e1").fontSize(9).font("Helvetica")
+        .text(formatDateEs(a.createdAtMs), 280, 35, { width: doc.page.width - 280 - M, align: "right" });
+      doc.fillColor("#000000");
+      doc.x = M;
+      doc.y = 74;
 
-      doc.moveDown(0.5);
-      doc.fontSize(10).font("Helvetica-Bold").text("Tiempos calculados:");
-      doc.font("Helvetica");
-      doc.text(`  · Salida -> Llegada al punto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}`);
-      doc.text(`  · Punto -> Finalización: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}`);
-      doc.text(`  · Tiempo total (salida -> taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
+      // ── Etiquetas de estado y matrículas ──
+      function badge(text: string, x: number, y: number, bg: string, fg: string): number {
+        doc.fontSize(8.5).font("Helvetica-Bold");
+        const w = doc.widthOfString(text) + 14;
+        doc.roundedRect(x, y, w, 15, 7.5).fill(bg);
+        doc.fillColor(fg).text(text, x + 7, y + 4, { lineBreak: false });
+        doc.fillColor("#000000");
+        return w;
+      }
+      const STATUS_LABELS_PDF: Record<string, string> = {
+        pendiente: "Pendiente", asignada: "Asignada", en_camino: "En camino",
+        en_punto: "En punto", reparando: "Reparando", finalizada: "Finalizada",
+        en_camino_base: "En camino a taller", llegada_taller: "En taller",
+        cancelada: "Cancelada", redirigida: "Redirigida",
+      };
+      const by0 = doc.y;
+      let bx = M;
+      bx += badge(STATUS_LABELS_PDF[a.status] ?? String(a.status), bx, by0, "#dcfce7", "#166534") + 6;
+      const remolquePrincipal = (a.esRemolque || !a.plate) && a.plateRemolque;
+      const mainPlate = remolquePrincipal ? `Remolque ${a.plateRemolque}` : (a.plate || "");
+      if (mainPlate) bx += badge(mainPlate, bx, by0, "#dbeafe", "#1e40af") + 6;
+      if (a.priority === "urgente") bx += badge("URGENTE", bx, by0, "#fee2e2", "#991b1b") + 6;
+      const secondaryBits: string[] = [];
+      if (remolquePrincipal && a.plate) secondaryBits.push(`Tractora ${a.plate}`);
+      if (!remolquePrincipal && a.plateRemolque) secondaryBits.push(`Remolque ${a.plateRemolque}`);
+      if (a.vehicleDescription) secondaryBits.push(a.vehicleDescription);
+      if (secondaryBits.length) {
+        doc.fontSize(8.5).font("Helvetica").fillColor("#475569")
+          .text(secondaryBits.join(" · "), bx + 2, by0 + 4, { lineBreak: false });
+        doc.fillColor("#000000");
+      }
+      doc.x = M;
+      doc.y = by0 + 24;
 
-      // Events
-      // Transcripciones de audios recibidos por WhatsApp
-      const audioRows = await db.query(
-        `SELECT transcript, received_at FROM whatsapp_capture_messages
-         WHERE job_id = $1 AND message_type = 'audio' AND transcript IS NOT NULL AND transcript <> ''
-         ORDER BY received_at ASC`,
-        [id]
-      );
-      if (audioRows.rows.length > 0) {
-        doc.moveDown(1);
-        doc.fontSize(13).font("Helvetica-Bold").text("Transcripción de audios (WhatsApp)");
-        doc.moveDown(0.3);
-        for (const a of audioRows.rows) {
-          doc.fontSize(9).font("Helvetica-Bold")
-            .text(`🎤 Transcripción de audio · ${formatDateEs(Number(a.received_at))}`);
-          doc.fontSize(9).font("Helvetica").text(a.transcript, { indent: 10 });
-          doc.moveDown(0.4);
+      // ── Helpers de maquetación ──
+      function sectionTitle(t: string) {
+        if (doc.y > 760) doc.addPage();
+        doc.moveDown(0.5);
+        doc.fontSize(8).font("Helvetica-Bold").fillColor("#64748b")
+          .text(t.toUpperCase(), M, doc.y, { characterSpacing: 0.5 });
+        doc.fillColor("#000000");
+        doc.moveDown(0.25);
+      }
+
+      type PdfCard = { title: string; lines: [string, string][] };
+      function drawCards(cards: PdfCard[]) {
+        const gap = 10;
+        const cw = (contentW - gap) / 2;
+        for (let i = 0; i < cards.length; i += 2) {
+          const pair = cards.slice(i, i + 2);
+          const heights = pair.map((c) => {
+            let h = 24;
+            doc.fontSize(9).font("Helvetica");
+            for (const [label, value] of c.lines) {
+              h += doc.heightOfString(`${label} ${value}`, { width: cw - 20 }) + 2;
+            }
+            return h + 6;
+          });
+          const rowH = Math.max(...heights);
+          if (doc.y + rowH > 790) doc.addPage();
+          const y0 = doc.y;
+          pair.forEach((c, j) => {
+            const x0 = M + j * (cw + gap);
+            doc.roundedRect(x0, y0, cw, rowH, 6).fill("#f1f5f9");
+            doc.fillColor("#64748b").fontSize(7.5).font("Helvetica-Bold")
+              .text(c.title.toUpperCase(), x0 + 10, y0 + 8, { characterSpacing: 0.5, width: cw - 20 });
+            let yy = y0 + 21;
+            for (const [label, value] of c.lines) {
+              doc.fontSize(9).font("Helvetica-Bold").fillColor("#0f172a")
+                .text(label, x0 + 10, yy, { continued: true, width: cw - 20 });
+              doc.font("Helvetica").fillColor("#334155").text(` ${value}`);
+              yy = doc.y + 2;
+            }
+          });
+          doc.fillColor("#000000");
+          doc.x = M;
+          doc.y = y0 + rowH + 8;
         }
       }
 
+      // ── Tarjetas de datos (solo campos con contenido) ──
+      const clienteLines: [string, string][] = [];
+      if (a.customerName) clienteLines.push(["Nombre:", a.customerName]);
+      if (a.customerPhone) clienteLines.push(["Teléfono:", a.customerPhone]);
+      if (a.conductorNombre) clienteLines.push(["Conductor:", a.conductorNombre]);
+      if (!clienteLines.length) clienteLines.push(["Nombre:", "-"]);
+
+      const intervencionLines: [string, string][] = [];
+      if (a.descripcionAveria) intervencionLines.push(["Avería:", a.descripcionAveria]);
+      if (a.trabajosARealizar) intervencionLines.push(["Trabajos:", a.trabajosARealizar]);
+      if (!intervencionLines.length && officeNotes.length) intervencionLines.push(["Notas:", officeNotes.join(" ")]);
+      if (!intervencionLines.length) intervencionLines.push(["Avería:", "-"]);
+
+      const ubicacionLines: [string, string][] = [];
+      if (a.address) ubicacionLines.push(["Dirección:", a.address]);
+      if (a.latitude != null && a.longitude != null) {
+        ubicacionLines.push(["GPS:", `${a.latitude.toFixed(6)}, ${a.longitude.toFixed(6)}`]);
+      }
+      if (!ubicacionLines.length) ubicacionLines.push(["Dirección:", "-"]);
+
+      const operativoLines: [string, string][] = [];
+      if (a.assignedTechName) operativoLines.push(["Operario:", a.assignedTechName]);
+      const furgo = [a.assignedVehicleName, vanPlate].filter(Boolean).join(" · ");
+      if (furgo) operativoLines.push(["Furgoneta:", furgo]);
+      if (kmTotal) operativoLines.push(["Kilómetros:", kmTotal]);
+      if (a.redirectedToId) operativoLines.push(["Redirigida a:", `#${a.redirectedToId}`]);
+      if (a.redirectedFromId) operativoLines.push(["Procede de:", `#${a.redirectedFromId}`]);
+      if (!operativoLines.length) operativoLines.push(["Operario:", "-"]);
+
+      drawCards([
+        { title: "Cliente", lines: clienteLines },
+        { title: "Intervención", lines: intervencionLines },
+        { title: "Ubicación", lines: ubicacionLines },
+        { title: "Operativo", lines: operativoLines },
+      ]);
+
+      // ── Notas de oficina (sin las líneas de WhatsApp) ──
+      if (officeNotes.length && (a.descripcionAveria || a.trabajosARealizar)) {
+        sectionTitle("Notas de oficina");
+        doc.fontSize(9).font("Helvetica").fillColor("#334155")
+          .text(officeNotes.join("\n"), M, doc.y, { width: contentW, lineGap: 2 });
+        doc.fillColor("#000000");
+      }
+
+      // ── Tiempos en línea ──
+      const hourFmt = (ms: number | null) =>
+        ms
+          ? new Date(Number(ms)).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })
+          : "–";
+      sectionTitle("Tiempos");
+      doc.fontSize(9).font("Helvetica").fillColor("#0f172a").text(
+        `Aviso ${hourFmt(a.createdAtMs)}   →   Salida ${hourFmt(a.departedAtMs)}   →   En punto ${hourFmt(a.arrivedAtPointMs)}   →   Finalizada ${hourFmt(a.finishedAtMs)}   →   Taller ${hourFmt(a.arrivedAtWorkshopMs)}`,
+        M, doc.y, { width: contentW }
+      );
+      doc.moveDown(0.2);
+      doc.fontSize(8).fillColor("#64748b").text(
+        `Trayecto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}   ·   Intervención: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}   ·   Total: ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`,
+        M, doc.y, { width: contentW }
+      );
+      doc.fillColor("#000000");
+
+      // ── Mapa con la ruta real ──
+      if (a.latitude != null && a.longitude != null) {
+        try {
+          const mapBuf = workshopCoords
+            ? await buildRouteMapImage({ lat: a.latitude, lng: a.longitude }, workshopCoords)
+            : await buildMapImage(a.latitude, a.longitude);
+          if (mapBuf) {
+            const mapH = workshopCoords ? 300 : 260;
+            if (doc.y + mapH + 30 > 800) doc.addPage();
+            sectionTitle("Ruta de la asistencia");
+            doc.image(mapBuf, M, doc.y, { fit: [contentW, mapH] });
+            doc.y += mapH + 4;
+            doc.fontSize(7.5).font("Helvetica").fillColor("#64748b")
+              .text(workshopCoords
+                ? "● Punto de avería (rojo)   ■ Salida furgoneta / taller (azul)   — Ruta seguida"
+                : "● Punto de avería", M, doc.y);
+            doc.fillColor("#000000");
+          }
+        } catch { /* sin mapa: las coordenadas ya están en la tarjeta de ubicación */ }
+      }
+
       if (eventsResult.rows.length > 0) {
-        doc.moveDown(1);
-        doc.fontSize(13).font("Helvetica-Bold").text("Historial de estados");
-        doc.moveDown(0.3);
+        sectionTitle("Historial de estados");
         for (const ev of eventsResult.rows) {
-          const label = ev.status;
+          if (doc.y > 790) doc.addPage();
+          const label = STATUS_LABELS_PDF[ev.status] ?? ev.status;
           const by = ev.createdBy ? ` (${ev.createdBy})` : "";
           const note = ev.note ? ` – ${ev.note}` : "";
           doc
-            .fontSize(9)
+            .fontSize(8.5)
             .font("Helvetica")
-            .text(`${formatDateEs(Number(ev.createdAtMs))}  ->  ${label}${by}${note}`);
+            .fillColor("#334155")
+            .text(`${formatDateEs(Number(ev.createdAtMs))}   ${label}${by}${note}`, M, doc.y, { width: contentW });
         }
+        doc.fillColor("#000000");
       }
 
       // Photos
       const photos = filesResult.rows.filter((f: any) => f.kind !== "firma");
       const signature = filesResult.rows.find((f: any) => f.kind === "firma");
 
-      if (photos.length > 0) {
-        doc.addPage();
-        doc.fontSize(13).font("Helvetica-Bold").text("Fotografías");
-        doc.moveDown(0.5);
+      if (a.observacionesReparacion) {
+        sectionTitle("Trabajos realizados");
+        doc.fontSize(9.5).font("Helvetica").fillColor("#0f172a")
+          .text(a.observacionesReparacion, M, doc.y, { width: contentW, lineGap: 3 });
+        doc.fillColor("#000000");
+      }
 
+      if (photos.length > 0) {
         const kindLabels: Record<string, string> = {
           matricula_camion: "Matrícula camión",
           matricula_remolque: "Matrícula remolque",
@@ -5859,47 +5927,80 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           foto_extra: "Foto adicional",
           foto_reparacion: "Reparación finalizada",
           foto_or: "OR manual (técnico)",
+          whatsapp_image: "Recibida por WhatsApp",
+          whatsapp_video: "Vídeo WhatsApp",
+          whatsapp_document: "Documento WhatsApp",
         };
 
-        const maxW = 480;
-        const maxH = 320;
-
+        // Cuadrícula de 2 columnas para aprovechar el papel
+        const gap = 10;
+        const cellW = (contentW - gap) / 2;
+        const cellH = 190;
+        sectionTitle(`Fotografías (${photos.length})`);
+        let col = 0;
+        let rowY = doc.y;
         for (const photo of photos) {
+          let buf: Buffer;
           try {
-            const buf = await fetchImageForPdf(photo.url);
-            doc.fontSize(9).font("Helvetica-Bold")
-              .text(kindLabels[photo.kind] ?? photo.kind);
-            doc.moveDown(0.2);
-            doc.image(buf, { fit: [maxW, maxH], align: "center" });
-            doc.moveDown(0.8);
-          } catch { /* skip */ }
-
-          // Nueva página si queda poco espacio
-          if (doc.y > 680) doc.addPage();
+            buf = await fetchImageForPdf(photo.url);
+          } catch { continue; }
+          if (col === 0 && rowY + cellH > 800) {
+            doc.addPage();
+            rowY = doc.y;
+          }
+          const x0 = M + col * (cellW + gap);
+          doc.fontSize(7.5).font("Helvetica-Bold").fillColor("#64748b")
+            .text((kindLabels[photo.kind] ?? photo.kind).toUpperCase(), x0, rowY, { width: cellW, lineBreak: false });
+          doc.fillColor("#000000");
+          try {
+            doc.image(buf, x0, rowY + 11, { fit: [cellW, cellH - 16] });
+          } catch { /* imagen no soportada */ }
+          col = 1 - col;
+          if (col === 0) rowY += cellH;
         }
+        doc.x = M;
+        doc.y = col === 1 ? rowY + cellH : rowY;
       }
 
-      if (a.observacionesReparacion) {
-        doc.moveDown(1);
-        doc.fontSize(13).font("Helvetica-Bold").text("Trabajos realizados");
-        doc.moveDown(0.3);
-        doc.fontSize(11).font("Helvetica").text(a.observacionesReparacion, {
-          lineGap: 4,
-        });
+      // ── Anexo: WhatsApp (mensajes y audios), separado de los datos ──
+      const audioRows = await db.query(
+        `SELECT transcript, received_at FROM whatsapp_capture_messages
+         WHERE job_id = $1 AND message_type = 'audio' AND transcript IS NOT NULL AND transcript <> ''
+         ORDER BY received_at ASC`,
+        [id]
+      );
+      if (waNotes.length > 0 || audioRows.rows.length > 0) {
+        sectionTitle("Anexo · Conversación WhatsApp");
+        if (waNotes.length > 0) {
+          for (const line of waNotes) {
+            if (doc.y > 790) doc.addPage();
+            doc.fontSize(8.5).font("Helvetica").fillColor("#334155")
+              .text(line, M, doc.y, { width: contentW, lineGap: 1 });
+          }
+          doc.fillColor("#000000");
+        }
+        for (const au of audioRows.rows) {
+          if (doc.y > 770) doc.addPage();
+          doc.moveDown(0.3);
+          doc.fontSize(8.5).font("Helvetica-Bold").fillColor("#334155")
+            .text(`Audio transcrito · ${formatDateEs(Number(au.received_at))}`, M, doc.y, { width: contentW });
+          doc.fontSize(8.5).font("Helvetica").text(au.transcript, M + 10, doc.y, { width: contentW - 10 });
+          doc.fillColor("#000000");
+          doc.x = M;
+        }
       }
 
       if (signature) {
-        doc.addPage();
-        doc.fontSize(13).font("Helvetica-Bold").text("Firma del conductor");
-        doc.moveDown(0.5);
+        if (doc.y + 200 > 800) doc.addPage();
+        sectionTitle("Firma del conductor");
         if (a.conductorNombre || a.conductorDni) {
-          doc.fontSize(11).font("Helvetica-Bold").text(a.conductorNombre ?? "", { continued: false });
-          doc.fontSize(10).font("Helvetica").text(`DNI / NIE: ${a.conductorDni ?? "-"}`);
-          doc.moveDown(0.5);
+          doc.fontSize(10).font("Helvetica-Bold").text(a.conductorNombre ?? "", M, doc.y);
+          doc.fontSize(9).font("Helvetica").text(`DNI / NIE: ${a.conductorDni ?? "-"}`);
+          doc.moveDown(0.4);
         }
         try {
           const buffer = await fetchImageForPdf(signature.url);
-          doc.image(buffer, { fit: [400, 150], align: "left" });
+          doc.image(buffer, M, doc.y, { fit: [360, 130] });
         } catch {
           doc.fontSize(9).font("Helvetica").text(`[Firma no disponible]`);
         }
