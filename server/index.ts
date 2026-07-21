@@ -5871,12 +5871,38 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           ? new Date(Number(ms)).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })
           : "–";
       sectionTitle("Tiempos");
-      doc.fontSize(9).font("Helvetica").fillColor("#0f172a").text(
-        `Aviso ${hourFmt(a.createdAtMs)}   →   Salida ${hourFmt(a.departedAtMs)}   →   En punto ${hourFmt(a.arrivedAtPointMs)}   →   Finalizada ${hourFmt(a.finishedAtMs)}   →   Taller ${hourFmt(a.arrivedAtWorkshopMs)}`,
-        M, doc.y, { width: contentW }
-      );
-      doc.moveDown(0.2);
-      doc.fontSize(8).fillColor("#64748b").text(
+      {
+        const steps: { label: string; ms: number | null }[] = [
+          { label: "Aviso", ms: a.createdAtMs },
+          { label: "Salida", ms: a.departedAtMs },
+          { label: "En punto", ms: a.arrivedAtPointMs },
+          { label: "Finalizada", ms: a.finishedAtMs },
+          { label: "Taller", ms: a.arrivedAtWorkshopMs },
+        ];
+        if (doc.y + 46 > 790) doc.addPage();
+        const y0 = doc.y + 4;
+        const yLine = y0 + 14;
+        const stepW = contentW / steps.length;
+        steps.forEach((s, i) => {
+          const cx = M + stepW * i + stepW / 2;
+          if (i < steps.length - 1) {
+            const nx = M + stepW * (i + 1) + stepW / 2;
+            doc.moveTo(cx + 7, yLine).lineTo(nx - 7, yLine)
+              .lineWidth(1.2).stroke(s.ms && steps[i + 1].ms ? "#94a3b8" : "#e2e8f0");
+          }
+          doc.circle(cx, yLine, 4.5)
+            .lineWidth(1.5)
+            .fillAndStroke(s.ms ? "#1e3a8a" : "#ffffff", s.ms ? "#1e3a8a" : "#cbd5e1");
+          doc.fontSize(9).font("Helvetica-Bold").fillColor(s.ms ? "#0f172a" : "#94a3b8")
+            .text(hourFmt(s.ms), cx - stepW / 2, y0 - 4, { width: stepW, align: "center", lineBreak: false });
+          doc.fontSize(7.5).font("Helvetica").fillColor("#64748b")
+            .text(s.label, cx - stepW / 2, yLine + 8, { width: stepW, align: "center", lineBreak: false });
+        });
+        doc.fillColor("#000000");
+        doc.x = M;
+        doc.y = yLine + 20;
+      }
+      doc.fontSize(8).font("Helvetica").fillColor("#64748b").text(
         `Trayecto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}   ·   Intervención: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}   ·   Total: ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`,
         M, doc.y, { width: contentW }
       );
