@@ -786,8 +786,8 @@ export default function RoadsideAssistanceView({
       <div className="mx-auto max-w-[1500px] space-y-5">
         <header className="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-red-200 bg-red-50">
-              <Ambulance className="h-6 w-6 text-red-700" />
+            <div className="flex h-14 items-center justify-center rounded-lg bg-[#101a33] px-3">
+              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-11" />
             </div>
             <div>
               <h1 className="text-xl font-black">Asistencias carretera</h1>
