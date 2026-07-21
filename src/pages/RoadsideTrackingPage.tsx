@@ -99,6 +99,16 @@ function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
 
 // ── Photos section ───────────────────────────────────────────────────────────
 
+// Grupos de fotos con su etiqueta, en orden de aparición
+const PHOTO_GROUPS: { label: string; kinds: string[] }[] = [
+  { label: "Enviadas por el cliente", kinds: ["cliente", "whatsapp"] },
+  { label: "Matrícula del camión", kinds: ["matricula_camion"] },
+  { label: "Matrícula del remolque", kinds: ["matricula_remolque"] },
+  { label: "Antes de la reparación", kinds: ["averia", "foto_averia"] },
+  { label: "Reparación finalizada", kinds: ["trabajo_realizado", "foto_reparacion"] },
+  { label: "Documentación (OR)", kinds: ["foto_or"] },
+];
+
 function PhotosSection({ files }: { files: RoadsideAssistanceFile[] }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
 
@@ -107,28 +117,50 @@ function PhotosSection({ files }: { files: RoadsideAssistanceFile[] }) {
 
   if (photos.length === 0 && !signature) return null;
 
+  // Agrupa las fotos por categoría; lo que no encaje va a "Otras fotografías"
+  const knownKinds = new Set(PHOTO_GROUPS.flatMap((g) => g.kinds));
+  const groups = PHOTO_GROUPS.map((g) => ({
+    label: g.label,
+    items: photos.filter((f) => g.kinds.includes(f.kind)),
+  })).filter((g) => g.items.length > 0);
+  const otras = photos.filter((f) => !knownKinds.has(f.kind));
+  if (otras.length > 0) groups.push({ label: "Otras fotografías", items: otras });
+
+  const renderGrid = (items: RoadsideAssistanceFile[]) => (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {items.map((f) => (
+        <button
+          key={f.id}
+          type="button"
+          onClick={() => setLightbox(f.url)}
+          className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 focus:outline-none"
+        >
+          <img
+            src={f.url}
+            alt="foto asistencia"
+            className="h-32 w-full object-cover transition-opacity hover:opacity-90"
+          />
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <>
       {photos.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
+          <div className="mb-4 flex items-center gap-2 text-sm font-black uppercase text-slate-500">
             <ImageIcon className="h-4 w-4" />
             Fotografías ({photos.length})
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {photos.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => setLightbox(f.url)}
-                className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 focus:outline-none"
-              >
-                <img
-                  src={f.url}
-                  alt="foto asistencia"
-                  className="h-32 w-full object-cover transition-opacity hover:opacity-90"
-                />
-              </button>
+          <div className="space-y-5">
+            {groups.map((g) => (
+              <div key={g.label}>
+                <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">
+                  {g.label} ({g.items.length})
+                </div>
+                {renderGrid(g.items)}
+              </div>
             ))}
           </div>
         </section>
@@ -378,19 +410,24 @@ export default function RoadsideTrackingPage() {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-2 grid-cols-2 md:grid-cols-7">
             {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
-              const done = index <= currentStep;
+              const done = index < currentStep;
+              const current = index === currentStep;
               return (
                 <div
                   key={status}
                   className={`rounded-lg border px-3 py-3 ${
                     done
                       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : current
+                      ? "border-orange-300 bg-orange-50 text-orange-800"
                       : "border-slate-200 bg-slate-50 text-slate-400"
                   }`}
                 >
                   <div className="flex items-center gap-2">
                     {done ? (
                       <CheckCircle2 className="h-4 w-4" />
+                    ) : current ? (
+                      <Clock3 className="h-4 w-4 animate-pulse" />
                     ) : (
                       <Clock3 className="h-4 w-4" />
                     )}
