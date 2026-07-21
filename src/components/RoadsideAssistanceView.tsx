@@ -94,6 +94,64 @@ const STATUS_BADGES: Record<RoadsideAssistanceStatus, string> = {
   cancelada: "border-red-500/30 bg-red-500/15 text-red-300",
 };
 
+// Etiquetas cortas para la línea de estados de la tarjeta
+const STEP_LABELS: Partial<Record<RoadsideAssistanceStatus, string>> = {
+  pendiente: "Pendiente",
+  asignada: "Asignada",
+  en_camino: "En camino",
+  en_punto: "En punto",
+  inicio_reparacion: "Reparando",
+  finalizada: "Finalizada",
+  en_camino_base: "A taller",
+  llegada_taller: "En taller",
+};
+
+/** Línea de estados: verde = completado, naranja = en curso, gris = pendiente. */
+function StatusStepper({ status }: { status: RoadsideAssistanceStatus }) {
+  const currentIndex = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
+  // Estados fuera del flujo (cancelada / redirigida): badge simple
+  if (currentIndex === -1) {
+    return (
+      <span className={`inline-block rounded-full border px-2.5 py-1 text-[11px] font-bold ${STATUS_BADGES[status]}`}>
+        {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
+      </span>
+    );
+  }
+  const last = ROADSIDE_ASSISTANCE_STATUS_FLOW.length - 1;
+  return (
+    <div className="flex items-start">
+      {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((st, i) => {
+        const done = i < currentIndex;
+        const current = i === currentIndex;
+        const circle = done
+          ? "bg-emerald-500 text-emerald-950"
+          : current
+          ? "bg-orange-500 text-orange-950 ring-4 ring-orange-500/25"
+          : "border border-slate-600 bg-slate-900 text-slate-600";
+        const label = done
+          ? "text-emerald-300"
+          : current
+          ? "text-orange-300 font-bold"
+          : "text-slate-500";
+        return (
+          <div key={st} className="flex min-w-0 flex-1 flex-col items-center">
+            <div className="flex w-full items-center">
+              <div className={`h-0.5 flex-1 ${i === 0 ? "opacity-0" : i <= currentIndex ? "bg-emerald-500" : "bg-slate-700"}`} />
+              <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${circle}`}>
+                {done ? "✓" : i + 1}
+              </div>
+              <div className={`h-0.5 flex-1 ${i === last ? "opacity-0" : i < currentIndex ? "bg-emerald-500" : "bg-slate-700"}`} />
+            </div>
+            <span className={`mt-1 text-center text-[9px] leading-tight ${label}`}>
+              {STEP_LABELS[st] ?? ROADSIDE_ASSISTANCE_STATUS_LABELS[st]}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function formatTime(value?: number | string | null) {
   if (!value) return "-";
   const d = new Date(value as number);
@@ -799,12 +857,7 @@ export default function RoadsideAssistanceView({
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
       {/* ── Barra lateral ── */}
       <aside className="flex w-52 flex-shrink-0 flex-col border-r border-slate-800 bg-slate-950">
-        <div className="border-b border-slate-800 px-3 py-3">
-          <div className="flex h-14 items-center justify-center rounded-lg bg-[#101a33] px-2">
-            <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-10" />
-          </div>
-        </div>
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 text-sm">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 pt-3 text-sm">
           {([
             ["nueva", "Nueva asistencia", Plus, null],
             ["activas", "Activas", Clock3, activeAssistances.length],
@@ -1385,45 +1438,39 @@ export default function RoadsideAssistanceView({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full border px-2 py-1 text-[11px] font-bold ${STATUS_BADGES[assistance.status]}`}
-                          >
-                            {
-                              ROADSIDE_ASSISTANCE_STATUS_LABELS[
-                                assistance.status
-                              ]
-                            }
-                          </span>
+                        <div className="flex items-center gap-2">
+                          <h3 className="truncate text-lg font-black">
+                            {assistance.plate ? (
+                              <a
+                                href={`/vehiculo?plate=${encodeURIComponent(assistance.plate)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-slate-100 underline decoration-dotted hover:text-red-400"
+                                title="Ver historial del vehículo"
+                              >
+                                {assistance.plate}
+                              </a>
+                            ) : "Sin matricula"}
+                          </h3>
                           {assistance.priority === "urgente" && (
-                            <span className="rounded-full border border-red-500/40 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-300">
+                            <span className="shrink-0 rounded-full border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[11px] font-bold text-red-300">
                               Urgente
                             </span>
                           )}
                         </div>
-
-                        <h3 className="mt-3 truncate text-lg font-black">
-                          {assistance.plate ? (
-                            <a
-                              href={`/vehiculo?plate=${encodeURIComponent(assistance.plate)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-slate-100 underline decoration-dotted hover:text-red-400"
-                              title="Ver historial del vehículo"
-                            >
-                              {assistance.plate}
-                            </a>
-                          ) : "Sin matricula"}
-                        </h3>
                         <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
                         </div>
                       </div>
 
-                      <div className="text-right text-xs font-bold text-slate-500">
+                      <div className="shrink-0 text-right text-xs font-bold text-slate-500">
                         #{assistance.id}
                         <div>{formatTime(assistance.createdAtMs)}</div>
                       </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <StatusStepper status={assistance.status} />
                     </div>
 
                     <div className="mt-4 grid gap-2 text-sm">
