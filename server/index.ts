@@ -18,6 +18,7 @@ import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
+import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -12354,6 +12355,12 @@ function startRecobrosNotifierChecker() {
 mountIntegrationHub(app);
 
 /* =========================================================
+   MOBILINK LICENCIAS (API bajo /api/licenses)
+========================================================= */
+
+mountLicenses(app, requireAdminRole);
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
@@ -12384,6 +12391,7 @@ app.use(
 ========================================================= */
 initDb()
   .then(() => initIntegrationHub())
+  .then(() => initLicenses())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -12393,6 +12401,7 @@ initDb()
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
+      startLicenseWorker(); // estados y avisos de vencimiento de licencias
     });
   })
   .catch((error) => {
