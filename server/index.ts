@@ -5430,26 +5430,33 @@ async function buildRouteMapImage(
     zoom = z;
   }
 
-  const p1x = lngToWorldX(point.lng, zoom);
-  const p1y = latToWorldY(point.lat, zoom);
-  const p2x = lngToWorldX(departure.lng, zoom);
-  const p2y = latToWorldY(departure.lat, zoom);
+  // Render a doble resolución: mismo encuadre geográfico con tiles del zoom
+  // siguiente y lienzo 2x, para que en el PDF (mostrado más pequeño) se vea nítido
+  const S = 2;
+  const zoomR = Math.min(zoom + 1, 18);
+  const outWR = outW * S;
+  const outHR = outH * S;
+
+  const p1x = lngToWorldX(point.lng, zoomR);
+  const p1y = latToWorldY(point.lat, zoomR);
+  const p2x = lngToWorldX(departure.lng, zoomR);
+  const p2y = latToWorldY(departure.lat, zoomR);
 
   // Centro del recuadro: el centro del bounding box de toda la ruta
-  const fitXs = fitPoints.map((p) => lngToWorldX(p.lng, zoom));
-  const fitYs = fitPoints.map((p) => latToWorldY(p.lat, zoom));
+  const fitXs = fitPoints.map((p) => lngToWorldX(p.lng, zoomR));
+  const fitYs = fitPoints.map((p) => latToWorldY(p.lat, zoomR));
   const centerX = (Math.max(...fitXs) + Math.min(...fitXs)) / 2;
   const centerY = (Math.max(...fitYs) + Math.min(...fitYs)) / 2;
 
   // Origen del lienzo de salida (esquina sup-izq) en píxeles de mundo
-  const originX = centerX - outW / 2;
-  const originY = centerY - outH / 2;
+  const originX = centerX - outWR / 2;
+  const originY = centerY - outHR / 2;
 
   // Tiles que cubren el recuadro de salida
   const tileMinX = Math.floor(originX / 256);
-  const tileMaxX = Math.floor((originX + outW) / 256);
+  const tileMaxX = Math.floor((originX + outWR) / 256);
   const tileMinY = Math.floor(originY / 256);
-  const tileMaxY = Math.floor((originY + outH) / 256);
+  const tileMaxY = Math.floor((originY + outHR) / 256);
 
   const tiles: { tx: number; ty: number; buf: Buffer | null }[] = await Promise.all(
     (() => {
@@ -5459,7 +5466,7 @@ async function buildRouteMapImage(
           jobs.push((async () => {
             try {
               const r = await fetch(
-                `https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`,
+                `https://tile.openstreetmap.org/${zoomR}/${tx}/${ty}.png`,
                 { headers: { "User-Agent": "SEATarragona-Informe/1.0 (internal)" }, signal: AbortSignal.timeout(6000) }
               );
               return { tx, ty, buf: r.ok ? Buffer.from(await r.arrayBuffer()) : null };
@@ -5489,28 +5496,28 @@ async function buildRouteMapImage(
   const routeSvg = routePoints
     ? (() => {
         const coords = routePoints.map((p) =>
-          `${Math.round(lngToWorldX(p.lng, zoom) - originX)},${Math.round(latToWorldY(p.lat, zoom) - originY)}`
+          `${Math.round(lngToWorldX(p.lng, zoomR) - originX)},${Math.round(latToWorldY(p.lat, zoomR) - originY)}`
         );
-        return `<polyline points="${coords.join(" ")}" fill="none" stroke="#1e3a8a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>`;
+        return `<polyline points="${coords.join(" ")}" fill="none" stroke="#1e3a8a" stroke-width="${4 * S}" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>`;
       })()
-    : `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="3" stroke-dasharray="7,5" opacity="0.85"/>`;
+    : `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="${3 * S}" stroke-dasharray="${7 * S},${5 * S}" opacity="0.85"/>`;
 
   // Ruta + pin rojo (avería) + furgoneta azul (salida), todo en un SVG superpuesto
   const overlaySvg = Buffer.from(
-    `<svg width="${outW}" height="${outH}" xmlns="http://www.w3.org/2000/svg">` +
+    `<svg width="${outWR}" height="${outHR}" xmlns="http://www.w3.org/2000/svg">` +
     routeSvg +
     // Furgoneta (salida) — cuadro azul
-    `<rect x="${bx-11}" y="${by-9}" width="22" height="18" rx="3" fill="#2563eb" stroke="white" stroke-width="2"/>` +
-    `<rect x="${bx-6}" y="${by-5}" width="9" height="6" fill="white" opacity="0.9"/>` +
+    `<rect x="${bx-11*S}" y="${by-9*S}" width="${22*S}" height="${18*S}" rx="${3*S}" fill="#2563eb" stroke="white" stroke-width="${2*S}"/>` +
+    `<rect x="${bx-6*S}" y="${by-5*S}" width="${9*S}" height="${6*S}" fill="white" opacity="0.9"/>` +
     // Pin rojo (avería)
-    `<circle cx="${ax}" cy="${ay}" r="9" fill="red" stroke="white" stroke-width="2.5"/>` +
+    `<circle cx="${ax}" cy="${ay}" r="${9*S}" fill="red" stroke="white" stroke-width="${2.5*S}"/>` +
     `</svg>`
   );
   compositeInputs.push({ input: overlaySvg, left: 0, top: 0 });
 
   try {
     return await sharp({
-      create: { width: outW, height: outH, channels: 4, background: { r: 220, g: 220, b: 220, alpha: 1 } },
+      create: { width: outWR, height: outHR, channels: 4, background: { r: 220, g: 220, b: 220, alpha: 1 } },
     })
       .composite(compositeInputs)
       .png()
@@ -5716,19 +5723,23 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       const officeNotes = rawNoteLines.filter((l: string) => !/^\[(WhatsApp|Ubicación GPS)/i.test(l.trim()));
       const waNotes = rawNoteLines.filter((l: string) => /^\[(WhatsApp|Ubicación GPS)/i.test(l.trim()));
 
-      // ── Cabecera con banda y logo ──
-      doc.rect(0, 0, doc.page.width, 62).fill("#101a33");
-      try {
-        const logoPath = path.join(process.cwd(), "public", "logo_horizontal.png");
-        if (fs.existsSync(logoPath)) doc.image(logoPath, M, 14, { height: 34 });
-      } catch { /* sin logo */ }
-      doc.fillColor("#ffffff").fontSize(12).font("Helvetica-Bold")
-        .text(`Informe de asistencia #${a.id}`, 280, 18, { width: doc.page.width - 280 - M, align: "right" });
-      doc.fillColor("#cbd5e1").fontSize(9).font("Helvetica")
-        .text(formatDateEs(a.createdAtMs), 280, 35, { width: doc.page.width - 280 - M, align: "right" });
-      doc.fillColor("#000000");
-      doc.x = M;
-      doc.y = 74;
+      // ── Cabecera con banda y logo (en todas las páginas) ──
+      function drawHeader() {
+        doc.rect(0, 0, doc.page.width, 62).fill("#101a33");
+        try {
+          const logoPath = path.join(process.cwd(), "public", "logo_horizontal.png");
+          if (fs.existsSync(logoPath)) doc.image(logoPath, M, 14, { height: 34 });
+        } catch { /* sin logo */ }
+        doc.fillColor("#ffffff").fontSize(12).font("Helvetica-Bold")
+          .text(`Informe de asistencia #${a.id}`, 280, 18, { width: doc.page.width - 280 - M, align: "right", lineBreak: false });
+        doc.fillColor("#cbd5e1").fontSize(9).font("Helvetica")
+          .text(formatDateEs(a.createdAtMs), 280, 35, { width: doc.page.width - 280 - M, align: "right", lineBreak: false });
+        doc.fillColor("#000000");
+        doc.x = M;
+        doc.y = 74;
+      }
+      drawHeader();
+      doc.on("pageAdded", drawHeader);
 
       // ── Etiquetas de estado y matrículas ──
       function badge(text: string, x: number, y: number, bg: string, fg: string): number {
@@ -5878,10 +5889,12 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
             ? await buildRouteMapImage({ lat: a.latitude, lng: a.longitude }, workshopCoords)
             : await buildMapImage(a.latitude, a.longitude);
           if (mapBuf) {
-            const mapH = workshopCoords ? 300 : 260;
+            // Se muestra más pequeño que su resolución real (2x) para que quede nítido
+            const mapW = 390;
+            const mapH = workshopCoords ? Math.round(mapW * 300 / 480) : Math.round(mapW * 260 / 480);
             if (doc.y + mapH + 30 > 800) doc.addPage();
             sectionTitle("Ruta de la asistencia");
-            doc.image(mapBuf, M, doc.y, { fit: [contentW, mapH] });
+            doc.image(mapBuf, M, doc.y, { fit: [mapW, mapH] });
             doc.y += mapH + 4;
             doc.fontSize(7.5).font("Helvetica").fillColor("#64748b")
               .text(workshopCoords
