@@ -5526,9 +5526,11 @@ async function buildRouteMapImage(
 
   // Ruta en SVG + iconos de taller y avería como imágenes superpuestas
   const markerSize = 34 * S;
+  // El icono de avería es más ancho de dibujo: se reduce para igualar anchuras
+  const averiaSize = Math.round(markerSize * 0.85);
   const [tallerIcon, averiaIcon] = await Promise.all([
     loadMapMarker("marker_taller.png", markerSize),
-    loadMapMarker("marker_averia.png", markerSize),
+    loadMapMarker("marker_averia.png", averiaSize),
   ]);
 
   const overlaySvg = Buffer.from(
@@ -5555,8 +5557,8 @@ async function buildRouteMapImage(
   if (averiaIcon) {
     compositeInputs.push({
       input: averiaIcon,
-      left: Math.round(ax - markerSize / 2),
-      top: Math.round(ay - markerSize * 0.92),
+      left: Math.round(ax - averiaSize / 2),
+      top: Math.round(ay - averiaSize * 0.92),
     });
   }
 
