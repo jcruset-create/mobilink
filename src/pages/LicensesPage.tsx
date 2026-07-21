@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { supabase } from "../modules/administracion/services/supabase";
 
 const API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 
@@ -56,11 +57,23 @@ function fmtDate(ms: number | null) {
   return new Date(ms).toLocaleDateString("es-ES");
 }
 
-function authHeaders(): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    "x-admin-token": localStorage.getItem("sea-admin-token") ?? "",
-  };
+/**
+ * Cabeceras de autenticación: token de sesión de Supabase (Bearer), igual que
+ * el resto de módulos del hub. Mantiene el token de admin clásico como respaldo
+ * para quien entre desde el panel de taller.
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    /* sin sesión Supabase: se usa el respaldo clásico */
+  }
+  const classic = localStorage.getItem("sea-admin-token");
+  if (classic) headers["x-admin-token"] = classic;
+  return headers;
 }
 
 export default function LicensesPage() {
@@ -80,7 +93,7 @@ export default function LicensesPage() {
       const params = new URLSearchParams();
       if (statusFilter) params.set("status", statusFilter);
       if (query.trim()) params.set("q", query.trim());
-      const res = await fetch(`${API_BASE}/api/licenses?${params}`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/licenses?${params}`, { headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Error cargando licencias");
       setLicenses(data);
@@ -101,7 +114,7 @@ export default function LicensesPage() {
     try {
       const res = await fetch(`${API_BASE}/api/licenses/${lic.id}/${path}`, {
         method: "POST",
-        headers: authHeaders(),
+        headers: await authHeaders(),
         body: JSON.stringify(body ?? {}),
       });
       const data = await res.json();
@@ -118,7 +131,7 @@ export default function LicensesPage() {
     setHistoryFor(lic);
     setHistory(null);
     try {
-      const res = await fetch(`${API_BASE}/api/licenses/${lic.id}/history`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/licenses/${lic.id}/history`, { headers: await authHeaders() });
       const data = await res.json();
       if (res.ok) setHistory(data);
     } catch {
@@ -402,7 +415,7 @@ function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCre
     try {
       const res = await fetch(`${API_BASE}/api/licenses`, {
         method: "POST",
-        headers: authHeaders(),
+        headers: await authHeaders(),
         body: JSON.stringify({
           customerName: form.customerName.trim(),
           companyName: form.companyName.trim(),

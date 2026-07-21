@@ -12358,7 +12358,24 @@ mountIntegrationHub(app);
    MOBILINK LICENCIAS (API bajo /api/licenses)
 ========================================================= */
 
-mountLicenses(app, requireAdminRole);
+// Las licencias se gestionan desde el hub (login Supabase), no desde el panel
+// clásico: se valida la sesión Supabase de un superadmin/admin, igual que el
+// resto de módulos del hub. Acepta también el token de admin clásico como respaldo.
+const requireLicensesAdmin: express.RequestHandler = (req, res, next) => {
+  void (async () => {
+    const admin = await verificarAdminApp(req);
+    if (admin.ok) return next();
+    // Respaldo: token de admin clásico (x-admin-token / ?token=)
+    const role = await getRoleFromRequestAsync(req);
+    if (role === "admin") return next();
+    return res.status(403).json({ error: admin.error || "Permisos insuficientes" });
+  })().catch((error) => {
+    console.error("requireLicensesAdmin error:", error);
+    res.status(500).json({ error: "Error de autorización" });
+  });
+};
+
+mountLicenses(app, requireLicensesAdmin);
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
