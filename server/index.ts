@@ -5971,10 +5971,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           whatsapp_document: "Documento WhatsApp",
         };
 
-        // Cuadrícula de 2 columnas para aprovechar el papel
-        const gap = 10;
-        const cellW = (contentW - gap) / 2;
-        const cellH = 190;
+        // Cuadrícula de 3 columnas × 4 filas (12 fotos por página), miniaturas
+        // normalizadas al mismo tamaño con recorte centrado
+        const gap = 8;
+        const cols = 3;
+        const cellW = (contentW - gap * (cols - 1)) / cols;
+        const thumbH = 155;
+        const cellH = thumbH + 16;
         sectionTitle(`Fotografías (${photos.length})`);
         let col = 0;
         let rowY = doc.y;
@@ -5983,22 +5986,31 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           try {
             buf = await fetchImageForPdf(photo.url);
           } catch { continue; }
+          // Miniatura uniforme a 2x para que quede nítida en el PDF
+          let thumb: Buffer;
+          try {
+            thumb = await sharp(buf)
+              .rotate()
+              .resize(Math.round(cellW * 2), thumbH * 2, { fit: "cover" })
+              .jpeg({ quality: 72 })
+              .toBuffer();
+          } catch { thumb = buf; }
           if (col === 0 && rowY + cellH > 800) {
             doc.addPage();
             rowY = doc.y;
           }
           const x0 = M + col * (cellW + gap);
-          doc.fontSize(7.5).font("Helvetica-Bold").fillColor("#64748b")
+          doc.fontSize(6.5).font("Helvetica-Bold").fillColor("#64748b")
             .text((kindLabels[photo.kind] ?? photo.kind).toUpperCase(), x0, rowY, { width: cellW, lineBreak: false });
           doc.fillColor("#000000");
           try {
-            doc.image(buf, x0, rowY + 11, { fit: [cellW, cellH - 16] });
+            doc.image(thumb, x0, rowY + 10, { fit: [cellW, thumbH] });
           } catch { /* imagen no soportada */ }
-          col = 1 - col;
+          col = (col + 1) % cols;
           if (col === 0) rowY += cellH;
         }
         doc.x = M;
-        doc.y = col === 1 ? rowY + cellH : rowY;
+        doc.y = col === 0 ? rowY : rowY + cellH;
       }
 
       // ── Anexo: WhatsApp (mensajes y audios), separado de los datos ──
