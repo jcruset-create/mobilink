@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, type LucideIcon } from "lucide-react";
+import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, type LucideIcon } from "lucide-react";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 
-// Tarjeta fija del Panel de taller (tiene su propio login interno).
-// Ponlo a false si no quieres que aparezca en el hub.
+// Tarjetas fijas con login interno propio (no dependen de app_usuario_modulos).
+// Ponlas a false para ocultarlas del hub.
 const MOSTRAR_PANEL_TALLER = true;
+const MOSTRAR_ASISTENCIAS = true;
 
 const ICONOS: Record<string, LucideIcon> = {
   administracion: Wallet,
@@ -155,7 +156,7 @@ export default function InicioPage() {
 
         {cargando ? (
           <div className="p-6 text-center text-sm text-slate-500">Cargando…</div>
-        ) : tarjetas.length === 0 && !MOSTRAR_PANEL_TALLER ? (
+        ) : tarjetas.length === 0 && !MOSTRAR_PANEL_TALLER && !MOSTRAR_ASISTENCIAS ? (
           <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-300">
             Tu usuario no tiene módulos asignados. Contacta con un administrador.
           </div>
@@ -201,6 +202,26 @@ export default function InicioPage() {
               );
             })}
 
+            {MOSTRAR_ASISTENCIAS && (
+              <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-500/15">
+                    <LifeBuoy className="h-5 w-5 text-red-400" />
+                  </div>
+                  <span className="text-sm font-bold">Asistencias</span>
+                </div>
+                <p className="mb-3 text-[12px] text-slate-500">
+                  Asistencias en carretera: avisos, operarios, seguimiento y cierre.
+                </p>
+                <button
+                  onClick={() => navigate("/asistencias")}
+                  className="mt-auto rounded-xl bg-red-600/90 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
+                >
+                  Entrar
+                </button>
+              </div>
+            )}
+
             {MOSTRAR_PANEL_TALLER && (
               <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                 <div className="mb-2 flex items-center gap-2">
@@ -223,7 +244,7 @@ export default function InicioPage() {
           </div>
         )}
 
-        {!cargando && tarjetas.length === 0 && MOSTRAR_PANEL_TALLER && (
+        {!cargando && tarjetas.length === 0 && (MOSTRAR_PANEL_TALLER || MOSTRAR_ASISTENCIAS) && (
           <div className="mt-4 max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-300">
             Tu usuario no tiene módulos asignados. Contacta con un administrador.
           </div>

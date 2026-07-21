@@ -128,6 +128,8 @@ export default function App() {
       <Route path="/vehiculo" element={<VehiculoHistorialPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />
+      {/* Asistencias en carretera como módulo aparte del operativo */}
+      <Route path="/asistencias" element={<SeaTarragonaV1 initialView="asistencias" />} />
       <Route path="/login" element={<Login />} />
       <Route path="/almacen-neumaticos/login" element={<Login />} />
 
