@@ -4569,6 +4569,7 @@ if (view === "whatsapp_inbox" && canView("whatsapp_inbox")) {
           longitude: extracted.longitud ?? "",
           plate: extracted.matricula ?? "",
           plateRemolque: (extracted as any).matriculaRemolque ?? "",
+          esRemolque: false,
           descripcionAveria: (extracted as any).descripcionAveria ?? (extracted as any).tipoAveria ?? "",
           trabajosARealizar: "",
           vehicleDescription: extracted.vehiculo ?? "",
