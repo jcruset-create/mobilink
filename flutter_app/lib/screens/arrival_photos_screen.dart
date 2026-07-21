@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+?import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
@@ -47,9 +47,9 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
         (!_hasRemolque || _photoRemolque != null);
   }
 
-  /// Normaliza la foto. Las de matrÃ­cula mantienen mÃ¡s resoluciÃ³n (el OCR
-  /// del servidor necesita detalle); el resto se comprime mÃ¡s para que la
-  /// subida sea 3-4 veces mÃ¡s ligera con cobertura mala.
+  /// Normaliza la foto. Las de matrícula mantienen más resolución (el OCR
+  /// del servidor necesita detalle); el resto se comprime más para que la
+  /// subida sea 3-4 veces más ligera con cobertura mala.
   Future<File> _normalizeImage(XFile xfile, {bool plate = false}) async {
     final tmpDir = await getTemporaryDirectory();
     final outPath = '${tmpDir.path}/norm_${DateTime.now().millisecondsSinceEpoch}.jpg';
@@ -59,7 +59,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
       quality: plate ? 85 : 70,
       minWidth: plate ? 1920 : 1600,
       minHeight: plate ? 1080 : 900,
-      keepExif: false, // elimina EXIF â€” la foto queda ya rotada correctamente
+      keepExif: false, // elimina EXIF — la foto queda ya rotada correctamente
     );
     return result == null ? File(xfile.path) : File(result.path);
   }
@@ -102,13 +102,13 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.camera_alt, color: Colors.white70),
-              title: const Text('CÃ¡mara',
+              title: const Text('Cámara',
                   style: TextStyle(color: Colors.white70)),
               onTap: () => Navigator.pop(context, ImageSource.camera),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library, color: Colors.white70),
-              title: const Text('GalerÃ­a',
+              title: const Text('Galería',
                   style: TextStyle(color: Colors.white70)),
               onTap: () => Navigator.pop(context, ImageSource.gallery),
             ),
@@ -125,9 +125,9 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     final current = result['currentPlate'] as String?;
     final remolque = result['detectedRemolquePlate'] as String?;
 
-    // Aviso si la IA ha detectado tambiÃ©n la matrÃ­cula roja del remolque
+    // Aviso si la IA ha detectado también la matrícula roja del remolque
     final remolqueMsg = (remolque != null && remolque.isNotEmpty)
-        ? '\n\nðŸš› MatrÃ­cula roja detectada: $remolque â†’ asignada automÃ¡ticamente al remolque.'
+        ? '\n\n🚛 Matrícula roja detectada: $remolque → asignada automáticamente al remolque.'
         : '';
 
     if (action == 'none') {
@@ -153,15 +153,15 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     Color color;
 
     if (action == 'assigned') {
-      title = 'MatrÃ­cula detectada';
-      message = 'La IA ha leÃ­do la matrÃ­cula ${detected ?? ''} y la ha asignado a esta asistencia.$remolqueMsg';
+      title = 'Matrícula detectada';
+      message = 'La IA ha leído la matrícula ${detected ?? ''} y la ha asignado a esta asistencia.$remolqueMsg';
       color = Colors.green;
     } else if (action == 'match') {
-      title = 'âœ“ MatrÃ­cula correcta';
-      message = 'La matrÃ­cula detectada (${detected ?? ''}) coincide con la registrada.$remolqueMsg';
+      title = '✓ Matrícula correcta';
+      message = 'La matrícula detectada (${detected ?? ''}) coincide con la registrada.$remolqueMsg';
       color = Colors.green;
     } else {
-      // MatrÃ­cula no coincide â†’ diÃ¡logo con opciones
+      // Matrícula no coincide → diálogo con opciones
       await _showPlateMismatchDialog(detected: detected, current: current);
       return;
     }
@@ -192,7 +192,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
           backgroundColor: const Color(0xFF16213e),
-          title: const Text('âš ï¸ MatrÃ­cula no coincide',
+          title: const Text('⚠️ Matrícula no coincide',
               style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -202,28 +202,28 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                 text: TextSpan(
                   style: const TextStyle(color: Colors.white70, fontSize: 14),
                   children: [
-                    const TextSpan(text: 'IA detectÃ³: '),
+                    const TextSpan(text: 'IA detectó: '),
                     TextSpan(
                         text: detected ?? '(no legible)',
                         style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
                     const TextSpan(text: '\nAsistencia tiene: '),
                     TextSpan(
-                        text: current ?? '(sin matrÃ­cula)',
+                        text: current ?? '(sin matrícula)',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
               const SizedBox(height: 16),
-              const Text('Â¿QuÃ© quieres hacer?',
+              const Text('¿Qué quieres hacer?',
                   style: TextStyle(color: Colors.white54, fontSize: 13)),
               const SizedBox(height: 10),
-              // Campo para cambiar matrÃ­cula
+              // Campo para cambiar matrícula
               TextField(
                 controller: plateCtrl,
                 style: const TextStyle(color: Colors.white),
                 textCapitalization: TextCapitalization.characters,
                 decoration: InputDecoration(
-                  labelText: 'Nueva matrÃ­cula',
+                  labelText: 'Nueva matrícula',
                   labelStyle: const TextStyle(color: Colors.white38),
                   filled: true,
                   fillColor: Colors.white10,
@@ -236,7 +236,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
               if (reported)
                 const Padding(
                   padding: EdgeInsets.only(top: 10),
-                  child: Text('âœ“ Incidencia notificada a la oficina',
+                  child: Text('✓ Incidencia notificada a la oficina',
                       style: TextStyle(color: Colors.green, fontSize: 13)),
                 ),
             ],
@@ -264,10 +264,10 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                       setS(() => reporting = false);
                     },
             ),
-            // Cambiar matrÃ­cula
+            // Cambiar matrícula
             ElevatedButton.icon(
               icon: const Icon(Icons.edit, size: 16),
-              label: const Text('Cambiar matrÃ­cula'),
+              label: const Text('Cambiar matrícula'),
               style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
               onPressed: () async {
                 final newPlate = plateCtrl.text.trim().toUpperCase();
@@ -281,7 +281,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
             // Continuar sin cambiar
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Continuar asÃ­', style: TextStyle(color: Colors.white38)),
+              child: const Text('Continuar así', style: TextStyle(color: Colors.white38)),
             ),
           ],
         ),
@@ -298,15 +298,15 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
 
     try {
       if (!widget.extraMode) {
-        // La matrÃ­cula del camiÃ³n se sube EN EL MOMENTO: el servidor hace OCR
-        // y puede pedir confirmaciÃ³n al operario (matrÃ­cula distinta,
+        // La matrícula del camión se sube EN EL MOMENTO: el servidor hace OCR
+        // y puede pedir confirmación al operario (matrícula distinta,
         // remolque detectado). El resto de fotos no bloquea.
-        setState(() => _uploadingLabel = 'Verificando matrÃ­cula camiÃ³n...');
+        setState(() => _uploadingLabel = 'Verificando matrícula camión...');
         final plateResult = await widget.api.uploadFile(
             widget.assistanceId, _photoCamion!, 'matricula_camion');
         await _handlePlateResult(plateResult);
 
-        // Remolque y averÃ­a: en segundo plano (cola con reintentos).
+        // Remolque y avería: en segundo plano (cola con reintentos).
         if (_hasRemolque && _photoRemolque != null) {
           await widget.api.uploadFileInBackground(
               widget.assistanceId, _photoRemolque!, 'matricula_remolque');
@@ -369,8 +369,8 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                 children: [
                   Text(
                     widget.extraMode
-                        ? 'AÃ±ade las fotos que necesites durante la reparaciÃ³n.'
-                        : 'FotografÃ­a el vehÃ­culo antes de iniciar la reparaciÃ³n.',
+                        ? 'Añade las fotos que necesites durante la reparación.'
+                        : 'Fotografía el vehículo antes de iniciar la reparación.',
                     style: const TextStyle(color: Colors.white54, fontSize: 13),
                   ),
                   const SizedBox(height: 24),
@@ -392,8 +392,8 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'MatrÃ­cula BLANCA = camiÃ³n Â· MatrÃ­cula ROJA = remolque.\n'
-                              'Si en la foto salen las dos, la blanca es del camiÃ³n y la roja del remolque.',
+                              'Matrícula BLANCA = camión · Matrícula ROJA = remolque.\n'
+                              'Si en la foto salen las dos, la blanca es del camión y la roja del remolque.',
                               style: TextStyle(color: Colors.white60, fontSize: 12, height: 1.4),
                             ),
                           ),
@@ -402,9 +402,9 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                     ),
                     _PhotoTile(
                       icon: Icons.local_shipping,
-                      label: 'MatrÃ­cula del camiÃ³n *',
+                      label: 'Matrícula del camión *',
                       photo: _photoCamion,
-                      onTap: () => _pickPhoto('MatrÃ­cula del camiÃ³n',
+                      onTap: () => _pickPhoto('Matrícula del camión',
                           (f) => _photoCamion = f, plate: true),
                     ),
                     const SizedBox(height: 16),
@@ -419,19 +419,19 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                       const SizedBox(height: 16),
                       _PhotoTile(
                         icon: Icons.rv_hookup,
-                        label: 'MatrÃ­cula del remolque *',
+                        label: 'Matrícula del remolque *',
                         photo: _photoRemolque,
-                        onTap: () => _pickPhoto('MatrÃ­cula del remolque',
+                        onTap: () => _pickPhoto('Matrícula del remolque',
                             (f) => _photoRemolque = f, plate: true),
                       ),
                     ],
                     const SizedBox(height: 16),
                     _PhotoTile(
                       icon: Icons.warning_amber,
-                      label: 'Foto de la averÃ­a *',
+                      label: 'Foto de la avería *',
                       photo: _photoAveria,
                       onTap: () => _pickPhoto(
-                          'Foto de la averÃ­a', (f) => _photoAveria = f),
+                          'Foto de la avería', (f) => _photoAveria = f),
                     ),
                     const SizedBox(height: 24),
                     _label('Fotos adicionales (opcional)'),
@@ -452,7 +452,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                         ),
                       )),
 
-                  // BotÃ³n aÃ±adir foto extra
+                  // Botón añadir foto extra
                   GestureDetector(
                     onTap: _pickExtraPhoto,
                     child: Container(
@@ -469,7 +469,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                           Icon(Icons.add_a_photo,
                               color: Colors.indigo, size: 20),
                           SizedBox(width: 8),
-                          Text('AÃ±adir otra foto',
+                          Text('Añadir otra foto',
                               style: TextStyle(
                                   color: Colors.indigo, fontSize: 13)),
                         ],
@@ -487,7 +487,7 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
                           : Icons.build),
                       label: Text(widget.extraMode
                           ? 'Subir fotos'
-                          : 'Confirmar e iniciar reparaciÃ³n'),
+                          : 'Confirmar e iniciar reparación'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _canConfirm
                             ? (widget.extraMode
@@ -625,7 +625,7 @@ class _RemolqueToggle extends StatelessWidget {
             children: [
               Icon(Icons.rv_hookup, color: Colors.white54, size: 20),
               SizedBox(width: 10),
-              Text('Â¿Lleva remolque?',
+              Text('¿Lleva remolque?',
                   style: TextStyle(color: Colors.white70)),
             ],
           ),

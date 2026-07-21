@@ -279,10 +279,9 @@ export default function RoadsideTrackingPage() {
               </div>
               <h1 className="mt-4 text-2xl font-black">Seguimiento asistencia</h1>
               <div className="mt-2 text-sm font-semibold text-slate-500">
-                {assistance.plate ||
-                  (assistance.plateRemolque ? `Remolque ${assistance.plateRemolque}` : null) ||
-                  assistance.vehicleDescription ||
-                  "Vehiculo"}
+                {(assistance.esRemolque || !assistance.plate) && assistance.plateRemolque
+                  ? `Remolque ${assistance.plateRemolque}${assistance.plate ? ` · Tractora ${assistance.plate}` : ""}`
+                  : assistance.plate || assistance.vehicleDescription || "Vehiculo"}
               </div>
             </div>
 

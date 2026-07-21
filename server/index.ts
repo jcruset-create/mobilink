@@ -1,4 +1,4 @@
-﻿import dotenv from "dotenv";
+?import dotenv from "dotenv";
 dotenv.config();
 import express from "express";
 import cors from "cors";
@@ -41,7 +41,7 @@ app.post(
       if (event.type === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
 
-        console.log("âœ… STRIPE PAGO COMPLETADO:", {
+        console.log("✅ STRIPE PAGO COMPLETADO:", {
           sessionId: session.id,
           jobId: session.metadata?.jobId,
           customerName: session.metadata?.customerName,
@@ -68,7 +68,7 @@ app.post(
   ]
 );
 
-console.log("âœ… PAGO GUARDADO EN PAYMENTS:", {
+console.log("✅ PAGO GUARDADO EN PAYMENTS:", {
   reference: session.metadata?.reference || session.metadata?.jobId,
   amount: session.amount_total,
   sessionId: session.id,
@@ -99,19 +99,19 @@ if (Number.isFinite(jobId)) {
     ]
   );
 
-  console.log("âœ… SEÃ‘AL GUARDADA EN JOB:", {
+  console.log("✅ SEÑAL GUARDADA EN JOB:", {
     jobId,
     amount: session.amount_total,
     sessionId: session.id,
   });
 }
 
-        // AquÃ­ despuÃ©s actualizaremos la asistencia como seÃ±al pagada
+        // Aquí después actualizaremos la asistencia como señal pagada
       }
 
       res.json({ received: true });
     } catch (error: any) {
-      console.error("âŒ STRIPE WEBHOOK ERROR:", error.message);
+      console.error("❌ STRIPE WEBHOOK ERROR:", error.message);
       res.status(400).send(`Webhook Error: ${error.message}`);
     }
   }
@@ -135,7 +135,7 @@ app.post("/api/payments/create-deposit", async (req, res) => {
     if (!amountCents || amountCents < 100) {
       return res.status(400).json({
         success: false,
-        message: "El importe mÃ­nimo es 1 â‚¬",
+        message: "El importe mínimo es 1 €",
       });
     }
 
@@ -147,7 +147,7 @@ app.post("/api/payments/create-deposit", async (req, res) => {
           price_data: {
             currency: "eur",
             product_data: {
-              name: desc ? `${desc} (ref. ${reference})` : `Paga y seÃ±al ${reference}`,
+              name: desc ? `${desc} (ref. ${reference})` : `Paga y señal ${reference}`,
               ...(desc ? { description: desc } : {}),
             },
             unit_amount: amountCents,
@@ -220,7 +220,7 @@ app.get("/api/payments/deposit-status/:jobId", async (req, res) => {
     if (!Number.isFinite(jobId)) {
       return res.status(400).json({
         success: false,
-        message: "ID asistencia no vÃ¡lido",
+        message: "ID asistencia no válido",
       });
     }
 
@@ -267,7 +267,7 @@ app.get("/api/payments/status/:reference", async (req, res) => {
     if (!reference) {
       return res.status(400).json({
         success: false,
-        message: "Referencia no vÃ¡lida",
+        message: "Referencia no válida",
       });
     }
 
@@ -301,7 +301,7 @@ app.get("/api/payments/status/:reference", async (req, res) => {
     }
 
     const row = result.rows[0];
-    // BIGINT columns arrive as strings from pg â€” convert to number
+    // BIGINT columns arrive as strings from pg — convert to number
     if (row.paid_at_ms != null) row.paid_at_ms = Number(row.paid_at_ms);
     if (row.created_at_ms != null) row.created_at_ms = Number(row.created_at_ms);
 
@@ -361,7 +361,7 @@ app.delete("/api/payments/:id", async (req, res) => {
     if (!Number.isFinite(id)) {
       return res.status(400).json({
         success: false,
-        message: "ID de cobro no vÃ¡lido",
+        message: "ID de cobro no válido",
       });
     }
 
@@ -647,6 +647,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     plateRemolque: row.plateRemolque ?? null,
+    esRemolque: row.esRemolque === true || row.esRemolque === "true",
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -814,7 +815,7 @@ async function sendRoadsideTrackingWhatsApp(
     process.env.TWILIO_ROADSIDE_CONTENT_SID || ""
   ).trim();
 
-  // URL de callback para que Twilio nos informe de entregado/leÃ­do
+  // URL de callback para que Twilio nos informe de entregado/leído
   const statusCallback = `${getPublicAppBaseUrl(req, preferredBaseUrl)}/api/whatsapp/status`;
 
   if (contentSid) {
@@ -901,11 +902,11 @@ async function sendRoadsideStatusWhatsApp(
 
   const name = assistance.customerName || "cliente";
   const tech = assistance.assignedTechName || "nuestro operario";
-  const plate = assistance.plate || "tu vehÃ­culo";
+  const plate = assistance.plate || "tu vehículo";
   const to = `whatsapp:${normalizeSpanishPhone(customerPhone)}`;
   const from = getWhatsAppFromNumber();
 
-  // â”€â”€ asignada â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── asignada ────────────────────────────────────────────────────────────────
   if (status === "asignada") {
     const templateSid = String(process.env.TWILIO_TEMPLATE_ASIGNADA || "").trim();
     if (!templateSid) return { status: "skipped", reason: "no_template_asignada" };
@@ -916,7 +917,7 @@ async function sendRoadsideStatusWhatsApp(
         contentSid: templateSid,
         contentVariables: JSON.stringify({ "1": name, "2": plate, "3": tech }),
       });
-      console.log(`[WhatsApp] asignada enviado â†’ ${customerPhone} asistencia#${assistance.id}`);
+      console.log(`[WhatsApp] asignada enviado → ${customerPhone} asistencia#${assistance.id}`);
       return { status: "sent" };
     } catch (err: any) {
       console.error(`[WhatsApp] asignada error asistencia#${assistance.id}:`, err.message);
@@ -924,7 +925,7 @@ async function sendRoadsideStatusWhatsApp(
     }
   }
 
-  // â”€â”€ en_camino â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── en_camino ───────────────────────────────────────────────────────────────
   if (status === "en_camino") {
     const templateSid = String(
       process.env.TWILIO_TEMPLATE_EN_CAMINO || process.env.TWILIO_ROADSIDE_CONTENT_SID || ""
@@ -943,7 +944,7 @@ async function sendRoadsideStatusWhatsApp(
           "4": tech,
         }),
       });
-      console.log(`[WhatsApp] en_camino enviado â†’ ${customerPhone} asistencia#${assistance.id} url=${extra.trackingUrl}`);
+      console.log(`[WhatsApp] en_camino enviado → ${customerPhone} asistencia#${assistance.id} url=${extra.trackingUrl}`);
       return { status: "sent" };
     } catch (err: any) {
       console.error(`[WhatsApp] en_camino error asistencia#${assistance.id}:`, err.message);
@@ -951,7 +952,7 @@ async function sendRoadsideStatusWhatsApp(
     }
   }
 
-  // â”€â”€ finalizada â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── finalizada ──────────────────────────────────────────────────────────────
   if (status === "finalizada") {
     const templateSid = String(process.env.TWILIO_TEMPLATE_FINALIZADA || "").trim();
     if (!templateSid) return { status: "skipped", reason: "no_template_finalizada" };
@@ -963,7 +964,7 @@ async function sendRoadsideStatusWhatsApp(
         contentSid: templateSid,
         contentVariables: JSON.stringify({ "1": name, "2": plate, "3": extra.reportUrl }),
       });
-      console.log(`[WhatsApp] finalizada enviado â†’ ${customerPhone} asistencia#${assistance.id} url=${extra.reportUrl}`);
+      console.log(`[WhatsApp] finalizada enviado → ${customerPhone} asistencia#${assistance.id} url=${extra.reportUrl}`);
       return { status: "sent" };
     } catch (err: any) {
       console.error(`[WhatsApp] finalizada error asistencia#${assistance.id}:`, err.message);
@@ -1005,7 +1006,7 @@ async function calcularETA(
 
   const data = await response.json();
   const ruta = data.routes?.[0];
-  if (!ruta) throw new Error("No se encontrÃ³ ruta entre los puntos indicados");
+  if (!ruta) throw new Error("No se encontró ruta entre los puntos indicados");
 
   const segundos = parseInt(String(ruta.duration).replace("s", ""), 10);
   const minutos = Math.round(segundos / 60);
@@ -1033,7 +1034,7 @@ app.post("/api/geocode", async (req, res) => {
   try {
     const address = String(req.body?.address || "").trim();
     if (!address) {
-      return res.status(400).json({ error: "Indica una direcciÃ³n" });
+      return res.status(400).json({ error: "Indica una dirección" });
     }
 
     if (/^https?:\/\//i.test(address)) {
@@ -1065,7 +1066,7 @@ app.post("/api/geocode", async (req, res) => {
     res.json({ lat, lng, formattedAddress: result.formatted_address as string });
   } catch (error: any) {
     console.error("POST /api/geocode error:", error);
-    res.status(500).json({ error: error?.message || "Error geocodificando direcciÃ³n" });
+    res.status(500).json({ error: error?.message || "Error geocodificando dirección" });
   }
 });
 
@@ -1079,7 +1080,7 @@ async function getWebfleetConfigForEmpresa(empresaId: string): Promise<WebfleetC
   return { account: d.account, username: d.username, password: d.password, apikey: d.apikey, baseUrl: d.base_url };
 }
 
-// Credenciales globales (variables de entorno) si estÃ¡n definidas.
+// Credenciales globales (variables de entorno) si están definidas.
 function globalWebfleetCreds(): WebfleetCreds | null {
   if (!process.env.WEBFLEET_ACCOUNT || !process.env.WEBFLEET_USERNAME || !process.env.WEBFLEET_PASSWORD) return null;
   return {
@@ -1090,7 +1091,7 @@ function globalWebfleetCreds(): WebfleetCreds | null {
 }
 
 // Credenciales a usar para una empresa: las suyas propias o, si no tiene, las
-// globales (con las que ya funciona el mÃ³dulo de asistencia). null si no hay ninguna.
+// globales (con las que ya funciona el módulo de asistencia). null si no hay ninguna.
 async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
   return (await getWebfleetConfigForEmpresa(empresaId)) ?? globalWebfleetCreds();
 }
@@ -1103,7 +1104,7 @@ function buildWebfleetRequest(action: string, extra: Record<string, string> = {}
   const baseUrl = creds?.baseUrl || process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
 
   if (!account || !username || !password) {
-    throw new Error("Credenciales Webfleet no configuradas (cuenta, usuario y contraseÃ±a)");
+    throw new Error("Credenciales Webfleet no configuradas (cuenta, usuario y contraseña)");
   }
 
   const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
@@ -1138,14 +1139,14 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
   const vehicles = Array.isArray(data) ? data : data?.data ?? [];
   const vehicle = vehicles.find((v: any) => String(v.objectno) === String(vehicleId));
 
-  if (!vehicle) throw new Error(`VehÃ­culo ${vehicleId} no encontrado en Webfleet`);
+  if (!vehicle) throw new Error(`Vehículo ${vehicleId} no encontrado en Webfleet`);
 
-  // Webfleet devuelve posiciÃ³n en milÃ©simas de grado
+  // Webfleet devuelve posición en milésimas de grado
   const lat = Number(vehicle.latitude_mdeg) / 1_000_000;
   const lng = Number(vehicle.longitude_mdeg) / 1_000_000;
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    throw new Error(`PosiciÃ³n invÃ¡lida para vehÃ­culo ${vehicleId}`);
+    throw new Error(`Posición inválida para vehículo ${vehicleId}`);
   }
 
   const rawSpeed = Number(vehicle.speed);
@@ -1162,7 +1163,7 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
   };
 }
 
-// â”€â”€ Webfleet: viajes y recorrido para informe de seguimiento â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Webfleet: viajes y recorrido para informe de seguimiento ──────────────────
 function webfleetRange(fromMs: number, toMs: number): Record<string, string> {
   return {
     range_pattern: "ud",
@@ -1357,7 +1358,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 
   if (!expectedToken) {
     return res.status(500).json({
-      error: "ADMIN_TOKEN no estÃ¡ configurado",
+      error: "ADMIN_TOKEN no está configurado",
     });
   }
 
@@ -1373,7 +1374,7 @@ type UserRole = "admin" | "supervisor" | "pantallas" | "tv75";
 
 function getRoleFromRequest(req: express.Request): UserRole | null {
   const rawToken = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
-  // La cabecera puede venir codificada (contraseÃ±as con acentos/sÃ­mbolos no caben crudas en headers HTTP)
+  // La cabecera puede venir codificada (contraseñas con acentos/símbolos no caben crudas en headers HTTP)
   let token = rawToken;
   try { token = decodeURIComponent(rawToken); } catch { token = rawToken; }
 
@@ -1433,7 +1434,7 @@ async function getExpectedRoadsideOperatorCode(techName: string) {
 
 async function getRoadsideOperatorFromRequest(req: express.Request) {
   const techNameRaw = String(req.headers["x-roadside-operator-name"] ?? "").trim();
-  // La APK envÃ­a el nombre codificado (las cabeceras HTTP no admiten acentos)
+  // La APK envía el nombre codificado (las cabeceras HTTP no admiten acentos)
   let techName = techNameRaw;
   try { techName = decodeURIComponent(techNameRaw); } catch { /* nombre sin codificar (APK antigua) */ }
   const code = String(req.headers["x-roadside-operator-code"] ?? "").trim();
@@ -1490,7 +1491,7 @@ function requireRole(allowedRoles: UserRole[]) {
       next();
     })().catch((error) => {
       console.error("requireRole error:", error);
-      res.status(500).json({ error: "Error de autorizaciÃ³n" });
+      res.status(500).json({ error: "Error de autorización" });
     });
   };
 }
@@ -1525,14 +1526,14 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// â”€â”€ TyreControl: cerrar una intervenciÃ³n de cambio de neumÃ¡tico â”€â”€
-// Agrupa las operaciones de la sesiÃ³n, redacta un informe con IA y lo guarda.
+// ── TyreControl: cerrar una intervención de cambio de neumático ──
+// Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
 app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
   try {
     const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
-    // Operaciones de la sesiÃ³n aÃºn sin intervenciÃ³n.
+    // Operaciones de la sesión aún sin intervención.
     const { data: ops, error } = await supabase
       .from("operaciones_neumaticos")
       .select("id, empresa_id, tecnico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
@@ -1548,21 +1549,21 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
     if (activas.length === 0) return res.json({ id: null, resumen: "", resumen_ia: "", n: 0 });
 
     // Resumen determinista (mismas frases que en el front).
-    const MOTIVO: Record<string, string> = { desgaste: "desgaste", pinchazo: "pinchazo", rotura: "rotura", preventivo: "preventivo", desgaste_irregular: "desgaste irregular", cambio_estacional: "cambio estacional", reparacion: "reparaciÃ³n", fin_vida: "fin de vida", error_montaje: "error de montaje", otro: "otro" };
-    const VERBO: Record<string, [string, string]> = { montaje: ["Montado", "Montados"], desmontaje: ["Desmontado", "Desmontados"], sustitucion: ["Sustituido", "Sustituidos"], rotacion: ["Rotado", "Rotados"], cambio_posicion: ["Cambiado de posiciÃ³n", "Cambiados de posiciÃ³n"], intercambio: ["Intercambiado", "Intercambiados"], descarte: ["Descartado", "Descartados"] };
+    const MOTIVO: Record<string, string> = { desgaste: "desgaste", pinchazo: "pinchazo", rotura: "rotura", preventivo: "preventivo", desgaste_irregular: "desgaste irregular", cambio_estacional: "cambio estacional", reparacion: "reparación", fin_vida: "fin de vida", error_montaje: "error de montaje", otro: "otro" };
+    const VERBO: Record<string, [string, string]> = { montaje: ["Montado", "Montados"], desmontaje: ["Desmontado", "Desmontados"], sustitucion: ["Sustituido", "Sustituidos"], rotacion: ["Rotado", "Rotados"], cambio_posicion: ["Cambiado de posición", "Cambiados de posición"], intercambio: ["Intercambiado", "Intercambiados"], descarte: ["Descartado", "Descartados"] };
     const posLabel = (o: any) => { const p = o.posicion_destino ?? o.posicion_origen; return p?.nombre ?? p?.codigo_posicion ?? o.neumatico?.medida ?? ""; };
     const unirY = (xs: string[]) => { const a = xs.filter(Boolean); if (!a.length) return ""; if (a.length === 1) return a[0]; return `${a.slice(0, -1).join(", ")} y ${a[a.length - 1]}`; };
     const porTipo = new Map<string, string[]>(); const reps = new Map<string, string[]>();
     for (const o of activas as any[]) {
-      if (o.tipo_operacion === "reparacion") { const m = o.motivo ? (MOTIVO[o.motivo] ?? o.motivo) : "reparaciÃ³n"; const a = reps.get(m) ?? []; const pl = posLabel(o); if (pl) a.push(pl); reps.set(m, a); continue; }
+      if (o.tipo_operacion === "reparacion") { const m = o.motivo ? (MOTIVO[o.motivo] ?? o.motivo) : "reparación"; const a = reps.get(m) ?? []; const pl = posLabel(o); if (pl) a.push(pl); reps.set(m, a); continue; }
       const a = porTipo.get(o.tipo_operacion) ?? []; const pl = posLabel(o); if (pl) a.push(pl); porTipo.set(o.tipo_operacion, a);
     }
     const lineas: string[] = [];
-    for (const [tipo, poss] of porTipo) { const v = VERBO[tipo]; const n = poss.length || (activas as any[]).filter((o) => o.tipo_operacion === tipo).length; const s = n === 1 ? "neumÃ¡tico" : "neumÃ¡ticos"; const verbo = v ? (n === 1 ? v[0] : v[1]) : tipo; lineas.push(`${verbo} ${n} ${s}${poss.length ? ": " + unirY(poss) : ""}`); }
-    for (const [m, poss] of reps) lineas.push(`ReparaciÃ³n (${m})${poss.length ? ": " + unirY(poss) : ""}`);
+    for (const [tipo, poss] of porTipo) { const v = VERBO[tipo]; const n = poss.length || (activas as any[]).filter((o) => o.tipo_operacion === tipo).length; const s = n === 1 ? "neumático" : "neumáticos"; const verbo = v ? (n === 1 ? v[0] : v[1]) : tipo; lineas.push(`${verbo} ${n} ${s}${poss.length ? ": " + unirY(poss) : ""}`); }
+    for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
     const resumen = lineas.join("\n");
 
-    // Estado del vehÃ­culo DESPUÃ‰S: montajes actuales por posiciÃ³n.
+    // Estado del vehículo DESPUÉS: montajes actuales por posición.
     const curPorPos = new Map<string, any>();
     try {
       const { data: md } = await supabase
@@ -1571,10 +1572,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
           "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje, pos_x, pos_y, pos_w, pos_h)")
         .eq("vehiculo_id", vehiculoId);
       for (const r of (md ?? []) as any[]) curPorPos.set(r.posicion_id, r);
-    } catch (e) { console.error("montaje despuÃ©s fallÃ³:", e); }
+    } catch (e) { console.error("montaje después falló:", e); }
 
-    // El plano "despuÃ©s" reutiliza el esqueleto del "antes" (mismas posiciones y
-    // coordenadas), sustituyendo el neumÃ¡tico por el actual y limpiando averÃ­as.
+    // El plano "después" reutiliza el esqueleto del "antes" (mismas posiciones y
+    // coordenadas), sustituyendo el neumático por el actual y limpiando averías.
     let montajeDespues: any[] = [];
     if (Array.isArray(montajeAntes) && montajeAntes.length) {
       montajeDespues = (montajeAntes as any[]).map((a) => {
@@ -1608,25 +1609,25 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
     const origen = Array.isArray(incidencias)
       ? (incidencias as any[])
           .filter((i) => Array.isArray(i?.averias) && i.averias.length)
-          .map((i) => `${i.codigo ?? "â€”"}: ${i.averias.join(", ")}${i.gravedad ? ` (${i.gravedad})` : ""}`)
+          .map((i) => `${i.codigo ?? "—"}: ${i.averias.join(", ")}${i.gravedad ? ` (${i.gravedad})` : ""}`)
       : [];
 
-    // RedacciÃ³n con IA (informe tÃ©cnico con trazabilidad antesâ†’despuÃ©s).
+    // Redacción con IA (informe técnico con trazabilidad antes→después).
     let resumenIa = resumen;
     try {
       const partes = [
-        origen.length ? `AverÃ­as de origen:\n${origen.join("\n")}` : "",
+        origen.length ? `Averías de origen:\n${origen.join("\n")}` : "",
         `Acciones realizadas:\n${resumen}`,
       ].filter(Boolean).join("\n\n");
       const r = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "Eres un tÃ©cnico de neumÃ¡ticos. Redacta un informe breve (2-4 frases, espaÃ±ol, tono profesional) de la intervenciÃ³n: de quÃ© averÃ­a se partÃ­a, quÃ© se hizo y cÃ³mo quedÃ³ el vehÃ­culo. No inventes datos ni cifras que no aparezcan." },
+          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. No inventes datos ni cifras que no aparezcan." },
           { role: "user", content: partes },
         ],
       });
       resumenIa = r.choices[0]?.message?.content?.trim() || resumen;
-    } catch (e) { console.error("IA intervenciÃ³n fallÃ³, se guarda solo el resumen:", e); }
+    } catch (e) { console.error("IA intervención falló, se guarda solo el resumen:", e); }
 
     const empresaId = (activas[0] as any).empresa_id;
     const tecnicoId = (activas[0] as any).tecnico_id ?? null;
@@ -1646,7 +1647,7 @@ app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
 
     res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
-    console.error("cerrar intervenciÃ³n:", error);
+    console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
   }
 });
@@ -1656,8 +1657,8 @@ app.get("/api/ai-test", async (req, res) => {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "Eres un asistente tÃ©cnico." },
-        { role: "user", content: "Dime una recomendaciÃ³n de tecnologÃ­a para un mecÃ¡nico" }
+        { role: "system", content: "Eres un asistente técnico." },
+        { role: "user", content: "Dime una recomendación de tecnología para un mecánico" }
       ],
     });
 
@@ -1680,7 +1681,7 @@ app.post("/api/reset", requireAdminRole, async (req, res) => {
     const { password } = req.body ?? {};
 
     if (password !== RESET_PASSWORD) {
-      return res.status(401).json({ error: "ContraseÃ±a incorrecta" });
+      return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
    await db.query(`DELETE FROM jobs`);
@@ -1693,7 +1694,7 @@ await db.query(`DELETE FROM assigned_maintenance_tasks`);
 await db.query(`
   UPDATE techs
   SET
-    status = CASE WHEN name = 'RamÃ³n' THEN 'supervisor' ELSE 'disponible' END,
+    status = CASE WHEN name = 'Ramón' THEN 'supervisor' ELSE 'disponible' END,
     blocked = false,
     "currentJobId" = NULL
 `);
@@ -1738,19 +1739,19 @@ app.post("/api/ai/taller", async (req, res) => {
     });
 
     const prompt = `
-Eres un asistente de asignaciÃ³n para un taller.
+Eres un asistente de asignación para un taller.
 
 Objetivo:
-Recomendar el mejor tÃ©cnico para cada trabajo en espera o activo.
+Recomendar el mejor técnico para cada trabajo en espera o activo.
 
 Reglas obligatorias:
-- No asignar tÃ©cnicos bloqueados.
-- No asignar tÃ©cnicos ocupados como responsables.
-- Respetar competencias por Ã¡rea y operaciÃ³n.
-- RamÃ³n solo como Ãºltimo recurso y con confirmaciÃ³n.
-- Proteger tÃ©cnicos de mÃ³vil si quedan pocos libres.
-- En trabajos "1 tÃ©cnico", no proponer apoyo.
-- En camiÃ³n normal, proponer responsable y apoyo si procede.
+- No asignar técnicos bloqueados.
+- No asignar técnicos ocupados como responsables.
+- Respetar competencias por área y operación.
+- Ramón solo como último recurso y con confirmación.
+- Proteger técnicos de móvil si quedan pocos libres.
+- En trabajos "1 técnico", no proponer apoyo.
+- En camión normal, proponer responsable y apoyo si procede.
 
 Datos actuales:
 ${JSON.stringify({
@@ -1778,8 +1779,8 @@ Responde SOLO en JSON con este formato:
     {
       "jobId": 1,
       "plate": "1234ABC",
-      "responsable": "JosÃ©",
-      "apoyo": "IvÃ¡n",
+      "responsable": "José",
+      "apoyo": "Iván",
       "confidence": "alta",
       "reason": "Motivo breve"
     }
@@ -1790,9 +1791,9 @@ Responde SOLO en JSON con este formato:
   "summary": "Resumen general breve"
 }
 
-No inventes tÃ©cnicos.
+No inventes técnicos.
 No propongas saltarte reglas.
-Si no hay tÃ©cnico vÃ¡lido, responsable debe ser null.
+Si no hay técnico válido, responsable debe ser null.
 `;
 
     const response = await openai.responses.create({
@@ -1825,7 +1826,7 @@ app.get("/api/techs", async (_req, res) => {
     res.json(result.rows.map(normalizeTechRow));
   } catch (error) {
     console.error("GET /api/techs error:", error);
-    res.status(500).json({ error: "Error obteniendo tÃ©cnicos" });
+    res.status(500).json({ error: "Error obteniendo técnicos" });
   }
 });
 
@@ -1938,7 +1939,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
     res.json(normalizeTechRow(tech));
   } catch (error) {
     console.error("PUT /api/techs/:name error:", error);
-    res.status(500).json({ error: "Error actualizando tÃ©cnico" });
+    res.status(500).json({ error: "Error actualizando técnico" });
   }
 });
 
@@ -1969,20 +1970,20 @@ app.delete("/api/techs/:name", requireAdminRole, async (req, res) => {
   try {
     const name = String(req.params.name);
 
-    if (name === "RamÃ³n") {
-      return res.status(400).json({ error: "No se puede eliminar a RamÃ³n" });
+    if (name === "Ramón") {
+      return res.status(400).json({ error: "No se puede eliminar a Ramón" });
     }
 
     const result = await db.query(`DELETE FROM techs WHERE name = $1 RETURNING name`, [name]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+      return res.status(404).json({ error: "Técnico no encontrado" });
     }
 
     res.json({ ok: true });
   } catch (error) {
     console.error("DELETE /api/techs/:name error:", error);
-    res.status(500).json({ error: "Error eliminando tÃ©cnico" });
+    res.status(500).json({ error: "Error eliminando técnico" });
   }
 });
 
@@ -1995,7 +1996,7 @@ app.post(
       const name = String(req.params.name);
 
       if (!req.file) {
-        return res.status(400).json({ error: "No se recibiÃ³ archivo" });
+        return res.status(400).json({ error: "No se recibió archivo" });
       }
 
       const existsResult = await db.query(
@@ -2006,7 +2007,7 @@ app.post(
       const exists = existsResult.rows[0];
 
       if (!exists) {
-        return res.status(404).json({ error: "TÃ©cnico no encontrado" });
+        return res.status(404).json({ error: "Técnico no encontrado" });
       }
 
       const safeName = name
@@ -2070,8 +2071,8 @@ app.post(
 app.get("/api/jobs", async (req, res) => {
   try {
     // scope=live (por defecto para el operativo y su auto-sync): solo trabajos
-    // no cerrados + cerrados de los Ãºltimos 3 dÃ­as (cubre las estadÃ­sticas del
-    // dÃ­a). El histÃ³rico/ranking piden ?scope=all para el listado completo.
+    // no cerrados + cerrados de los últimos 3 días (cubre las estadísticas del
+    // día). El histórico/ranking piden ?scope=all para el listado completo.
     // Esto evita descargar cientos de trabajos cerrados en cada refresco.
     const scope = String((req.query?.scope as string) || "live");
     let result;
@@ -2102,7 +2103,7 @@ app.post("/api/jobs", requireSupervisorRole, async (req, res) => {
     const incomingPlate = String(job.plate ?? "").trim().toUpperCase();
 
     if (!incomingPlate) {
-      res.status(400).json({ error: "La matrÃ­cula es obligatoria" });
+      res.status(400).json({ error: "La matrícula es obligatoria" });
       return;
     }
 
@@ -2148,7 +2149,7 @@ const blockedOutsideMaintenanceTechNames =
 if (blockedOutsideMaintenanceTechNames.length > 0) {
   return res.status(409).json({
     error:
-      "AsignaciÃ³n bloqueada: tÃ©cnico en mantenimiento fuera de taller",
+      "Asignación bloqueada: técnico en mantenimiento fuera de taller",
     blockedTechNames: blockedOutsideMaintenanceTechNames,
   });
 }
@@ -2252,13 +2253,13 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
     const job = req.body ?? {};
 
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "ID de trabajo no vÃ¡lido" });
+      return res.status(400).json({ error: "ID de trabajo no válido" });
     }
 
     const incomingPlate = String(job.plate ?? "").trim().toUpperCase();
 
     if (!incomingPlate) {
-      return res.status(400).json({ error: "La matrÃ­cula es obligatoria" });
+      return res.status(400).json({ error: "La matrícula es obligatoria" });
     }
 
     const assignedNames = Array.isArray(job.assignedNames)
@@ -2272,7 +2273,7 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
 
     if (blockedOutsideMaintenanceTechNames.length > 0) {
       return res.status(409).json({
-        error: "AsignaciÃ³n bloqueada: tÃ©cnico en mantenimiento fuera de taller",
+        error: "Asignación bloqueada: técnico en mantenimiento fuera de taller",
         blockedTechNames: blockedOutsideMaintenanceTechNames,
       });
     }
@@ -2282,7 +2283,7 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
 
     if (interruptedMaintenanceTasks.length > 0) {
       console.log(
-        "Mantenimiento en taller interrumpido por actualizaciÃ³n de trabajo:",
+        "Mantenimiento en taller interrumpido por actualización de trabajo:",
         {
           jobId: id,
           assignedNames,
@@ -2486,7 +2487,7 @@ app.get("/api/workshop-config", requireAdminRole, async (_req, res) => {
     res.json(await getWorkshopConfig());
   } catch (error) {
     console.error("GET /api/workshop-config error:", error);
-    res.status(500).json({ error: "Error cargando configuraciÃ³n" });
+    res.status(500).json({ error: "Error cargando configuración" });
   }
 });
 
@@ -2509,7 +2510,7 @@ app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error("POST /api/workshop-config error:", error);
-    res.status(500).json({ error: "Error guardando configuraciÃ³n" });
+    res.status(500).json({ error: "Error guardando configuración" });
   }
 });
 
@@ -2784,7 +2785,7 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
     let assistance = normalizeRoadsideAssistanceRow(assistanceResult.rows[0]);
 
-    // Recalcular ETA en tiempo real si la furgoneta estÃ¡ en camino
+    // Recalcular ETA en tiempo real si la furgoneta está en camino
     let etaWarning: string | null = null;
     let vehiclePosition: {
       lat: number;
@@ -2805,7 +2806,7 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       try {
         vehiclePosition = await getWebfleetVehiclePosition(assistance.webfleetVehicleId!);
 
-        // Destino: si vuelve al taller, ETA al taller; si no, al punto de averÃ­a
+        // Destino: si vuelve al taller, ETA al taller; si no, al punto de avería
         let destino = { lat: assistance.latitude!, lng: assistance.longitude! };
         if (enCaminoBase) {
           const wcfg = await getWorkshopConfig();
@@ -2853,7 +2854,7 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       ),
     ]);
 
-    // MatrÃ­cula de NUESTRA furgoneta (no la del camiÃ³n asistido)
+    // Matrícula de NUESTRA furgoneta (no la del camión asistido)
     let vanPlate: string | null = null;
     if (assistance.webfleetVehicleId) {
       try {
@@ -2862,7 +2863,7 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
           [assistance.webfleetVehicleId]
         );
         vanPlate = vp.rows[0]?.plate ?? null;
-      } catch { /* sin matrÃ­cula */ }
+      } catch { /* sin matrícula */ }
     }
 
     // Coordenadas del taller (destino en vuelta al taller)
@@ -3088,7 +3089,7 @@ app.delete(
   }
 );
 
-/* â”€â”€ ETA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── ETA ─────────────────────────────────────────────────────────────── */
 app.post("/api/maps/eta", async (req, res) => {
   try {
     const { origen, destino } = req.body;
@@ -3147,7 +3148,7 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
     const data = await response.json();
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
-    // Cruzar con matrÃ­cula de nuestra BD
+    // Cruzar con matrícula de nuestra BD
     const dbVehicles = await db.query(
       `SELECT "webfleetVehicleId", plate FROM roadside_vehicles WHERE "webfleetVehicleId" IS NOT NULL`
     );
@@ -3169,7 +3170,7 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
       }))
     );
   } catch (error: any) {
-    res.status(500).json({ error: error?.message || "Error listando vehÃ­culos Webfleet" });
+    res.status(500).json({ error: error?.message || "Error listando vehículos Webfleet" });
   }
 });
 
@@ -3180,42 +3181,42 @@ app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
     res.json(position);
   } catch (error: any) {
     const noConfig = error?.message?.includes("no configuradas");
-    res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error obteniendo posiciÃ³n Webfleet" });
+    res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error obteniendo posición Webfleet" });
   }
 });
 
-// â”€â”€ TyreControl: Webfleet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Usa las credenciales de la empresa (tc_webfleet_config) o, si aÃºn no las tiene,
-// las globales del mÃ³dulo de asistencia. AsÃ­ los vehÃ­culos de la cuenta ya
+// ── TyreControl: Webfleet ─────────────────────────────────────────────────────
+// Usa las credenciales de la empresa (tc_webfleet_config) o, si aún no las tiene,
+// las globales del módulo de asistencia. Así los vehículos de la cuenta ya
 // disponible funcionan hoy y cada cliente se conecta al entregar su propia API.
 
-// OdÃ³metro TOTAL del vehÃ­culo en km. Webfleet (showObjectReportExtern) da:
-//   odometer_long â†’ metros (preciso)
-//   odometer      â†’ hectÃ³metros (0,1 km)
-// Ambos son el cuentakilÃ³metros real del vehÃ­culo, no un parcial.
+// Odómetro TOTAL del vehículo en km. Webfleet (showObjectReportExtern) da:
+//   odometer_long → metros (preciso)
+//   odometer      → hectómetros (0,1 km)
+// Ambos son el cuentakilómetros real del vehículo, no un parcial.
 function webfleetOdometerKm(o: any): number | null {
   const long = Number(o?.odometer_long);
-  if (Number.isFinite(long) && long > 0) return Math.round(long / 1000); // metros â†’ km
+  if (Number.isFinite(long) && long > 0) return Math.round(long / 1000); // metros → km
   const hm = Number(o?.odometer);
-  if (Number.isFinite(hm) && hm > 0) return Math.round(hm / 10); // hectÃ³metros â†’ km
+  if (Number.isFinite(hm) && hm > 0) return Math.round(hm / 10); // hectómetros → km
   const cand = Number(o?.can_odometer ?? o?.dashboard_odometer ?? o?.mileage ?? o?.milage);
   if (Number.isFinite(cand) && cand > 0) return cand > 200000 ? Math.round(cand / 1000) : Math.round(cand);
   return null;
 }
 
-// Fuerza un ciclo de sincronizaciÃ³n de "vehÃ­culos en base" y devuelve el nÂº
-// de vehÃ­culos actualizados. Para el botÃ³n "Sincronizar ahora" de la config.
+// Fuerza un ciclo de sincronización de "vehículos en base" y devuelve el nº
+// de vehículos actualizados. Para el botón "Sincronizar ahora" de la config.
 app.post("/api/tyrecontrol/webfleet/sync", async (_req, res) => {
   const r = await syncWebfleetOnce();
   if ("error" in r) return res.status(502).json(r);
   res.json(r);
 });
 
-// Lista de objetos Webfleet de una empresa (para enlazar vehÃ­culos por su ID).
+// Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
   try {
     const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parÃ¡metro empresa" });
+    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
@@ -3233,7 +3234,7 @@ app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 
-// Estado de un objeto: km (odÃ³metro) + posiciÃ³n. Para sincronizar un vehÃ­culo.
+// Estado de un objeto: km (odómetro) + posición. Para sincronizar un vehículo.
 app.get("/api/tyrecontrol/webfleet/odometer", async (req, res) => {
   try {
     const empresa = String(req.query.empresa || "");
@@ -3315,7 +3316,7 @@ app.post("/api/asistencias/:id/en-camino", async (req, res) => {
 
     const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-    // Enviar WhatsApp si tiene telÃ©fono y no se ha enviado ya
+    // Enviar WhatsApp si tiene teléfono y no se ha enviado ya
     let whatsappWarning: string | undefined;
     if (updated.customerPhone && !row.whatsappEnCaminoEnviado) {
       try {
@@ -3469,7 +3470,7 @@ app.post(
         [id, lat, lng, Date.now()]
       );
 
-      // Geofencing automÃ¡tico: si el operario estÃ¡ dentro del radio del taller, pasar a llegada_taller
+      // Geofencing automático: si el operario está dentro del radio del taller, pasar a llegada_taller
       const cfg = await getWorkshopConfig();
       const tallerLat = parseFloat(cfg.taller_lat);
       const tallerLng = parseFloat(cfg.taller_lng);
@@ -3491,7 +3492,7 @@ app.post(
           `,
           [id, Date.now()]
         );
-        // Liberar al tÃ©cnico al cerrar la asistencia
+        // Liberar al técnico al cerrar la asistencia
         if (upd.rows[0]?.assignedTechName) {
           await freeTechFromRoadside(upd.rows[0].assignedTechName, id);
         }
@@ -3505,7 +3506,7 @@ app.post(
   }
 );
 
-// Lote de posiciones capturadas offline (migas de pan). Se envÃ­an al recuperar seÃ±al.
+// Lote de posiciones capturadas offline (migas de pan). Se envían al recuperar señal.
 app.post(
   "/api/roadside-operator/assistances/:id/locations-batch",
   requireRoadsideOperator,
@@ -3514,7 +3515,7 @@ app.post(
       const operator = (req as any).roadsideOperator as { techName: string };
       const id = Number(req.params.id);
       const points = Array.isArray(req.body?.points) ? req.body.points : [];
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no vÃ¡lido" });
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
 
       const check = await db.query(
         `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
@@ -3537,7 +3538,7 @@ app.post(
         );
       }
 
-      // Aplicar la ÃšLTIMA posiciÃ³n como ubicaciÃ³n actual + geovalla de taller
+      // Aplicar la ÚLTIMA posición como ubicación actual + geovalla de taller
       if (valid.length > 0) {
         const last = valid[valid.length - 1];
         await db.query(
@@ -3588,16 +3589,16 @@ app.post(
         return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
       }
 
-      // ReenvÃ­o offline ya procesado â†’ devolver estado actual sin reaplicar
+      // Reenvío offline ya procesado → devolver estado actual sin reaplicar
       if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
         return res.json(normalizeRoadsideAssistanceRow(check.rows[0]));
       }
 
       if (check.rows[0].status !== "asignada") {
-        return res.status(400).json({ error: "La asistencia no estÃ¡ en estado asignada" });
+        return res.status(400).json({ error: "La asistencia no está en estado asignada" });
       }
 
-      // Reutilizar lÃ³gica de en-camino (Webfleet + ETA)
+      // Reutilizar lógica de en-camino (Webfleet + ETA)
       const internalRes = await fetch(
         `http://localhost:${process.env.PORT || 3000}/api/asistencias/${id}/en-camino`,
         { method: "POST" }
@@ -3642,7 +3643,7 @@ app.get(
 
       const rows = result.rows.map(normalizeRoadsideAssistanceRow) as any[];
 
-      // Adjuntar fotos (archivos subidos + imÃ¡genes recibidas por WhatsApp) a cada asistencia
+      // Adjuntar fotos (archivos subidos + imágenes recibidas por WhatsApp) a cada asistencia
       const ids = rows.map((r) => r.id);
       if (ids.length > 0) {
         const photos = await db.query(
@@ -3681,7 +3682,7 @@ app.patch(
     try {
       const id = Number(req.params.id);
       const plate = String(req.body?.plate || "").trim().toUpperCase();
-      if (!plate) return res.status(400).json({ error: "MatrÃ­cula requerida" });
+      if (!plate) return res.status(400).json({ error: "Matrícula requerida" });
       const result = await db.query(
         `UPDATE roadside_assistances SET plate = $2 WHERE id = $1 RETURNING *`,
         [id, plate]
@@ -3690,7 +3691,7 @@ app.patch(
       res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
     } catch (error) {
       console.error("PATCH /api/roadside-operator/assistances/:id/plate error:", error);
-      res.status(500).json({ error: "Error actualizando matrÃ­cula" });
+      res.status(500).json({ error: "Error actualizando matrícula" });
     }
   }
 );
@@ -3706,7 +3707,7 @@ app.post(
       await db.query(
         `INSERT INTO roadside_assistance_events ("assistanceId", status, "createdBy", note, "createdAtMs")
          VALUES ($1, 'incidencia_matricula', $2, $3, $4)`,
-        [id, operator.techName, `MatrÃ­cula no coincide: IA detectÃ³ "${detected ?? '?'}", asistencia tiene "${current ?? '?'}"`, Date.now()]
+        [id, operator.techName, `Matrícula no coincide: IA detectó "${detected ?? '?'}", asistencia tiene "${current ?? '?'}"`, Date.now()]
       );
       res.json({ ok: true });
     } catch (error) {
@@ -3729,7 +3730,7 @@ app.post(
 
       const a = normalizeRoadsideAssistanceRow(result.rows[0]);
       const customerPhone = a.customerPhone;
-      if (!customerPhone) return res.status(400).json({ error: "Sin telÃ©fono de cliente" });
+      if (!customerPhone) return res.status(400).json({ error: "Sin teléfono de cliente" });
 
       const waResult = await sendRoadsideStatusWhatsApp(a, "en_camino", {
         etaMinutos: etaMinutos ?? null,
@@ -3827,7 +3828,7 @@ app.get(
   }
 );
 
-/* â”€â”€ COBROS (operario) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── COBROS (operario) ──────────────────────────────────────────────────── */
 
 // GET cobros asignados al operario (por operario_name o por asistencia asignada)
 app.get(
@@ -3900,7 +3901,7 @@ app.post(
 
       const METODOS_VALIDOS = ["efectivo", "tarjeta", "transferencia", "bizum", "pendiente_facturar"];
       if (!metodoPago || !METODOS_VALIDOS.includes(metodoPago)) {
-        return res.status(400).json({ error: "MÃ©todo de pago no vÃ¡lido" });
+        return res.status(400).json({ error: "Método de pago no válido" });
       }
       const importe = parseFloat(importeCobrado);
       if (!importe || importe <= 0) {
@@ -3921,7 +3922,7 @@ app.post(
         return res.status(404).json({ error: "Cobro no encontrado" });
       }
       if (check.rows[0].estado === "cobrado") {
-        return res.status(409).json({ error: "Este cobro ya estÃ¡ marcado como cobrado" });
+        return res.status(409).json({ error: "Este cobro ya está marcado como cobrado" });
       }
 
       const now = Date.now();
@@ -3945,7 +3946,7 @@ app.post(
   }
 );
 
-/* â”€â”€ PAGOS STRIPE (operario) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── PAGOS STRIPE (operario) ────────────────────────────────────────────── */
 
 // POST crear enlace de pago Stripe desde la APK
 app.post(
@@ -3959,14 +3960,14 @@ app.post(
       const desc = String(description || "").trim();
 
       if (!reference) return res.status(400).json({ success: false, message: "Referencia obligatoria" });
-      if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mÃ­nimo 1 â‚¬" });
+      if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mínimo 1 €" });
 
       const session = await stripe.checkout.sessions.create({
         line_items: [{
           price_data: {
             currency: "eur",
             product_data: {
-              name: desc ? `${desc} (ref. ${reference})` : `Paga y seÃ±al ${reference}`,
+              name: desc ? `${desc} (ref. ${reference})` : `Paga y señal ${reference}`,
               ...(desc ? { description: desc } : {}),
             },
             unit_amount: amountCents,
@@ -3993,7 +3994,7 @@ app.post(
   }
 );
 
-// GET historial de pagos Stripe (Ãºltimos 50)
+// GET historial de pagos Stripe (últimos 50)
 app.get(
   "/api/roadside-operator/payments/history",
   requireRoadsideOperator,
@@ -4023,7 +4024,7 @@ app.delete(
   async (req, res) => {
     try {
       const id = Number(req.params.id);
-      if (!Number.isFinite(id)) return res.status(400).json({ success: false, message: "ID invÃ¡lido" });
+      if (!Number.isFinite(id)) return res.status(400).json({ success: false, message: "ID inválido" });
       const existing = await db.query(`SELECT id, status FROM payments WHERE id = $1`, [id]);
       if (existing.rows.length === 0) return res.status(404).json({ success: false, message: "Cobro no encontrado" });
       if (existing.rows[0].status === "paid") return res.status(400).json({ success: false, message: "No se puede cancelar un cobro pagado" });
@@ -4036,7 +4037,7 @@ app.delete(
   }
 );
 
-/* â”€â”€ COBROS (admin) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── COBROS (admin) ─────────────────────────────────────────────────────── */
 
 // POST crear cobro desde el panel admin (para asignar al operario de una asistencia)
 app.post("/api/cobros", requireAdminRole, async (req, res) => {
@@ -4078,8 +4079,8 @@ app.get("/api/cobros", requireAdminRole, async (_req, res) => {
   }
 });
 
-// Idempotencia: evita aplicar dos veces la misma acciÃ³n reenviada desde la APK
-// (modo offline). Devuelve true si ya se procesÃ³.
+// Idempotencia: evita aplicar dos veces la misma acción reenviada desde la APK
+// (modo offline). Devuelve true si ya se procesó.
 async function isDuplicateAction(actionId: unknown): Promise<boolean> {
   const aid = String(actionId ?? "").trim();
   if (!aid) return false;
@@ -4137,7 +4138,7 @@ app.post(
         return res.status(404).json({ error: "Asistencia no encontrada" });
       }
 
-      // AcciÃ³n ya procesada (reenvÃ­o offline) â†’ devolver estado actual sin reaplicar
+      // Acción ya procesada (reenvío offline) → devolver estado actual sin reaplicar
       if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
         const cur = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
         return res.json(normalizeRoadsideAssistanceRow(cur.rows[0]));
@@ -4201,11 +4202,11 @@ app.post(
         updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
       }
 
-      // Auto-transiciÃ³n: al finalizar la reparaciÃ³n, pasar automÃ¡ticamente a en_camino_base
+      // Auto-transición: al finalizar la reparación, pasar automáticamente a en_camino_base
       if (status === "finalizada") {
         await db.query(
           `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
-           VALUES ($1, 'en_camino_base', 'Vuelta al taller automÃ¡tica', $2, $3)`,
+           VALUES ($1, 'en_camino_base', 'Vuelta al taller automática', $2, $3)`,
           [id, operator.techName, now + 1]
         );
         const baseResult = await db.query(
@@ -4249,7 +4250,7 @@ app.post(
         : null;
 
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "ID no vÃ¡lido" });
+        return res.status(400).json({ error: "ID no válido" });
       }
       if (!nombre || !dni) {
         return res.status(400).json({ error: "Nombre y DNI obligatorios" });
@@ -4263,7 +4264,7 @@ app.post(
         return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
       }
 
-      // ReenvÃ­o offline ya procesado â†’ devolver actual sin reaplicar
+      // Reenvío offline ya procesado → devolver actual sin reaplicar
       if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
         const cur = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
         return res.json(normalizeRoadsideAssistanceRow(cur.rows[0]));
@@ -4336,12 +4337,12 @@ app.get("/api/roadside-assistances/:id", async (req, res) => {
   }
 });
 
-// PosiciÃ³n en vivo (Webfleet) + velocidad + ETA al destino correcto.
-// Para en_camino â†’ ETA al punto de averÃ­a; en_camino_base â†’ ETA al taller.
+// Posición en vivo (Webfleet) + velocidad + ETA al destino correcto.
+// Para en_camino → ETA al punto de avería; en_camino_base → ETA al taller.
 app.get("/api/roadside-assistances/:id/live-position", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no vÃ¡lido" });
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
 
     const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
     if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
@@ -4387,16 +4388,16 @@ app.get("/api/roadside-assistances/:id/live-position", async (req, res) => {
     });
   } catch (error: any) {
     console.error("GET /api/roadside-assistances/:id/live-position error:", error);
-    return res.status(500).json({ error: error?.message || "Error obteniendo posiciÃ³n" });
+    return res.status(500).json({ error: error?.message || "Error obteniendo posición" });
   }
 });
 
 // Redirigir una asistencia en camino al taller a una nueva sin pasar por el taller.
-// Cierra la actual como "redirigida" guardando la posiciÃ³n GPS del momento.
+// Cierra la actual como "redirigida" guardando la posición GPS del momento.
 app.post("/api/roadside-assistances/:id/redirect", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no vÃ¡lido" });
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
 
     const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
     if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
@@ -4406,7 +4407,7 @@ app.post("/api/roadside-assistances/:id/redirect", requireSupervisorRole, async 
       return res.status(409).json({ error: "Solo se puede redirigir una asistencia 'En camino a taller'" });
     }
 
-    // PosiciÃ³n actual: Webfleet â†’ fallback a Ãºltima conocida (operatorLat/Lng)
+    // Posición actual: Webfleet → fallback a última conocida (operatorLat/Lng)
     let redirectLat: number | null = null;
     let redirectLng: number | null = null;
     if (a.webfleetVehicleId) {
@@ -4500,6 +4501,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           longitude,
           plate,
           "plateRemolque",
+          "esRemolque",
           "descripcionAveria",
           "trabajosARealizar",
           "vehicleDescription",
@@ -4520,7 +4522,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
         )
         RETURNING *
       `,
@@ -4537,6 +4539,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         longitude,
         String(body.plate || "").trim().toUpperCase(),
         body.plateRemolque ? String(body.plateRemolque).trim().toUpperCase() : null,
+        body.esRemolque === true,
         body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
         body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
         body.vehicleDescription ? String(body.vehicleDescription).trim() : null,
@@ -4558,16 +4561,16 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-    // Si en la creaciÃ³n se rellenÃ³ el Back Office, copiarlo a la nueva asistencia
+    // Si en la creación se rellenó el Back Office, copiarlo a la nueva asistencia
     if (backofficeHasData(body.backoffice)) {
       try {
         await upsertBackoffice(assistance.id, body.backoffice);
       } catch (e) {
-        console.error("Error guardando backoffice en creaciÃ³n:", e);
+        console.error("Error guardando backoffice en creación:", e);
       }
     }
 
-    // Enlace de redirecciÃ³n: si viene de otra asistencia, vincular ambas
+    // Enlace de redirección: si viene de otra asistencia, vincular ambas
     const redirectedFromId = Number(body.redirectedFromId);
     if (Number.isFinite(redirectedFromId) && redirectedFromId > 0) {
       await db.query(
@@ -4600,12 +4603,12 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
       ]
     );
 
-    // NotificaciÃ³n push al tÃ©cnico asignado
+    // Notificación push al técnico asignado
     if (assistance.assignedTechName && assistance.status === "asignada") {
       void sendFcmNotification(
         assistance.assignedTechName,
         "Nueva asistencia asignada",
-        `${assistance.plate || "VehÃ­culo"} Â· ${assistance.address || assistance.customerName}`
+        `${assistance.plate || "Vehículo"} · ${assistance.address || assistance.customerName}`
       );
     }
 
@@ -4676,6 +4679,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "plateRemolque" = $18,
           "descripcionAveria" = $19,
           "trabajosARealizar" = $20,
+          "esRemolque" = $21,
           "updatedAtMs" = $17
           ${
             timestampField
@@ -4706,6 +4710,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.plateRemolque ? String(body.plateRemolque).trim().toUpperCase() : null,
         body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
         body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
+        body.esRemolque === true,
       ]
     );
 
@@ -4733,12 +4738,12 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
 
     const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-    // NotificaciÃ³n push al tÃ©cnico si se le asigna la asistencia
+    // Notificación push al técnico si se le asigna la asistencia
     if (updated.assignedTechName && previousStatus === "pendiente" && status === "asignada") {
       void sendFcmNotification(
         updated.assignedTechName,
         "Nueva asistencia asignada",
-        `${updated.plate || "VehÃ­culo"} Â· ${updated.address || updated.customerName}`
+        `${updated.plate || "Vehículo"} · ${updated.address || updated.customerName}`
       );
     }
 
@@ -4913,7 +4918,7 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // â”€â”€ Generar reportToken si se finaliza y no existe ya â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── Generar reportToken si se finaliza y no existe ya ──────────────────
       if (status === "finalizada" && !updated.reportToken) {
         const { randomUUID } = await import("crypto");
         const reportToken = randomUUID();
@@ -4927,7 +4932,7 @@ app.post(
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
 
-      // â”€â”€ WhatsApp con deduplicaciÃ³n â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
         const waResult = await sendRoadsideStatusWhatsApp(updated, "asignada");
         if (waResult?.status === "sent") {
@@ -4976,10 +4981,10 @@ async function detectPlateFromImage(
   try {
     const colorInstruction =
       preferColor === "red"
-        ? "En EspaÃ±a, la matrÃ­cula ROJA es la del REMOLQUE. " +
-          "Si en la imagen aparecen varias matrÃ­culas (blanca y roja), devuelve SOLO la matrÃ­cula ROJA (la del remolque). "
-        : "En EspaÃ±a, la matrÃ­cula BLANCA es la del CAMIÃ“N/vehÃ­culo tractor y la matrÃ­cula ROJA es la del REMOLQUE. " +
-          "Si en la imagen aparecen varias matrÃ­culas (blanca y roja), devuelve SOLO la matrÃ­cula BLANCA (la del camiÃ³n), ignorando la roja. ";
+        ? "En España, la matrícula ROJA es la del REMOLQUE. " +
+          "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula ROJA (la del remolque). "
+        : "En España, la matrícula BLANCA es la del CAMIÓN/vehículo tractor y la matrícula ROJA es la del REMOLQUE. " +
+          "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula BLANCA (la del camión), ignorando la roja. ";
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -4990,10 +4995,10 @@ async function detectPlateFromImage(
             {
               type: "text",
               text:
-                "Esta es una foto de la matrÃ­cula de un vehÃ­culo espaÃ±ol. " +
+                "Esta es una foto de la matrícula de un vehículo español. " +
                 colorInstruction +
-                "Responde EXCLUSIVAMENTE con el texto de la matrÃ­cula (sin espacios ni guiones), " +
-                "o con la palabra NONE si no se puede leer ninguna matrÃ­cula en la imagen.",
+                "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
+                "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
             },
             { type: "image_url", image_url: { url: imageUrl } },
           ] as any,
@@ -5011,8 +5016,8 @@ async function detectPlateFromImage(
   }
 }
 
-// Detecta a la vez la matrÃ­cula BLANCA (camiÃ³n) y la ROJA (remolque) de una sola foto.
-// Devuelve { white, red } con cada matrÃ­cula normalizada o null si no se lee.
+// Detecta a la vez la matrícula BLANCA (camión) y la ROJA (remolque) de una sola foto.
+// Devuelve { white, red } con cada matrícula normalizada o null si no se lee.
 async function detectBothPlatesFromImage(
   imageUrl: string
 ): Promise<{ white: string | null; red: string | null }> {
@@ -5026,13 +5031,13 @@ async function detectBothPlatesFromImage(
             {
               type: "text",
               text:
-                "Foto de matrÃ­culas de vehÃ­culos espaÃ±oles. En EspaÃ±a la matrÃ­cula BLANCA es del CAMIÃ“N " +
-                "y la matrÃ­cula ROJA es del REMOLQUE. " +
-                "La matrÃ­cula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dÃ­gitos y 3 letras (ej. R0000BBB, R1234BCD). " +
-                "Identifica las matrÃ­culas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
+                "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
+                "y la matrícula ROJA es del REMOLQUE. " +
+                "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
+                "Identifica las matrículas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
                 '{"blanca":"XXXX","roja":"RYYYYZZZ"}. ' +
-                "La 'roja' debe empezar por R y seguir el formato R+4 dÃ­gitos+3 letras. " +
-                "Usa null en el campo si esa matrÃ­cula no aparece o no es legible. Sin espacios ni guiones.",
+                "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
+                "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
             },
             { type: "image_url", image_url: { url: imageUrl } },
           ] as any,
@@ -5067,14 +5072,14 @@ app.post(
       const kind = String(req.body?.kind || "foto").trim();
 
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "ID no vÃ¡lido" });
+        return res.status(400).json({ error: "ID no válido" });
       }
 
       if (!req.file) {
-        return res.status(400).json({ error: "No se recibiÃ³ archivo" });
+        return res.status(400).json({ error: "No se recibió archivo" });
       }
 
-      // ReenvÃ­o offline ya procesado â†’ no duplicar el archivo
+      // Reenvío offline ya procesado → no duplicar el archivo
       if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
         return res.json({ ok: true, deduped: true });
       }
@@ -5103,7 +5108,7 @@ app.post(
       let detectedPlate: string | null = null;
       let detectedRemolquePlate: string | null = null;
       if (kind === "matricula_camion") {
-        // Detecta blanca (camiÃ³n) y roja (remolque) a la vez
+        // Detecta blanca (camión) y roja (remolque) a la vez
         const both = await detectBothPlatesFromImage(publicData.publicUrl);
         detectedPlate = both.white;
         detectedRemolquePlate = both.red;
@@ -5117,8 +5122,8 @@ app.post(
         [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
 
-      // Si en la foto del camiÃ³n tambiÃ©n sale matrÃ­cula roja â†’ asignar al remolque
-      // automÃ¡ticamente (registro matricula_remolque apuntando a la misma foto)
+      // Si en la foto del camión también sale matrícula roja → asignar al remolque
+      // automáticamente (registro matricula_remolque apuntando a la misma foto)
       if (kind === "matricula_camion" && detectedRemolquePlate) {
         await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate")
@@ -5182,7 +5187,7 @@ app.post(
       const kind: string = String(req.body?.kind ?? "whatsapp").trim();
       const filename: string = String(req.body?.filename ?? "archivo").trim();
 
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no vÃ¡lido" });
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
       if (!mediaUrl) return res.status(400).json({ error: "URL requerida" });
 
       // Descargar el archivo desde la URL
@@ -5264,7 +5269,7 @@ app.delete(
    ROADSIDE PDF REPORT
 ========================================================= */
 
-// Builds a 480Ã—260 map image by compositing a 3Ã—3 grid of OSM tiles + red marker
+// Builds a 480×260 map image by compositing a 3×3 grid of OSM tiles + red marker
 async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
   const zoom = 15;
   const n = Math.pow(2, zoom);
@@ -5276,7 +5281,7 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
   const tileX = Math.floor(cx);
   const tileY = Math.floor(cy);
 
-  // Fetch 3Ã—3 tiles in parallel
+  // Fetch 3×3 tiles in parallel
   const positions: { dx: number; dy: number; buf: Buffer | null }[] = await Promise.all(
     [-1, 0, 1].flatMap(dy =>
       [-1, 0, 1].map(async dx => {
@@ -5297,7 +5302,7 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
   const px = Math.round((cx - tileX) * 256);
   const py = Math.round((cy - tileY) * 256);
 
-  // Marker SVG (red pin 20Ã—20)
+  // Marker SVG (red pin 20×20)
   const m = 10;
   const markerSvg = Buffer.from(
     `<svg width="${m*2}" height="${m*2}" xmlns="http://www.w3.org/2000/svg">` +
@@ -5313,7 +5318,7 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
     }
   }
 
-  // Absolute pixel of the point on the 3Ã—3 canvas (768Ã—768)
+  // Absolute pixel of the point on the 3×3 canvas (768×768)
   const pointX = 256 + px; // center tile starts at x=256
   const pointY = 256 + py;
 
@@ -5324,7 +5329,7 @@ async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
     top: pointY - m,
   });
 
-  // Crop 480Ã—260 centered on the point, clamped to canvas bounds
+  // Crop 480×260 centered on the point, clamped to canvas bounds
   const outW = 480;
   const outH = 260;
   const cropLeft = Math.max(0, Math.min(768 - outW, pointX - Math.round(outW / 2)));
@@ -5355,7 +5360,7 @@ async function buildRouteMapImage(
     return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 256 * Math.pow(2, z);
   };
 
-  // Elegir el zoom mÃ¡ximo (<=16) que contenga ambos puntos dentro del recuadro
+  // Elegir el zoom máximo (<=16) que contenga ambos puntos dentro del recuadro
   let zoom = 16;
   for (let z = 16; z >= 3; z--) {
     const dx = Math.abs(lngToWorldX(point.lng, z) - lngToWorldX(departure.lng, z));
@@ -5372,7 +5377,7 @@ async function buildRouteMapImage(
   const centerX = (p1x + p2x) / 2;
   const centerY = (p1y + p2y) / 2;
 
-  // Origen del lienzo de salida (esquina sup-izq) en pÃ­xeles de mundo
+  // Origen del lienzo de salida (esquina sup-izq) en píxeles de mundo
   const originX = centerX - outW / 2;
   const originY = centerY - outH / 2;
 
@@ -5411,19 +5416,19 @@ async function buildRouteMapImage(
     }
   }
 
-  const ax = Math.round(p1x - originX); // punto averÃ­a
+  const ax = Math.round(p1x - originX); // punto avería
   const ay = Math.round(p1y - originY);
   const bx = Math.round(p2x - originX); // salida furgoneta
   const by = Math.round(p2y - originY);
 
-  // LÃ­nea + pin rojo (averÃ­a) + furgoneta azul (salida), todo en un SVG superpuesto
+  // Línea + pin rojo (avería) + furgoneta azul (salida), todo en un SVG superpuesto
   const overlaySvg = Buffer.from(
     `<svg width="${outW}" height="${outH}" xmlns="http://www.w3.org/2000/svg">` +
     `<line x1="${bx}" y1="${by}" x2="${ax}" y2="${ay}" stroke="#1e3a8a" stroke-width="3" stroke-dasharray="7,5" opacity="0.85"/>` +
-    // Furgoneta (salida) â€” cuadro azul
+    // Furgoneta (salida) — cuadro azul
     `<rect x="${bx-11}" y="${by-9}" width="22" height="18" rx="3" fill="#2563eb" stroke="white" stroke-width="2"/>` +
     `<rect x="${bx-6}" y="${by-5}" width="9" height="6" fill="white" opacity="0.9"/>` +
-    // Pin rojo (averÃ­a)
+    // Pin rojo (avería)
     `<circle cx="${ax}" cy="${ay}" r="9" fill="red" stroke="white" stroke-width="2.5"/>` +
     `</svg>`
   );
@@ -5593,13 +5598,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       doc
         .fontSize(18)
         .font("Helvetica-Bold")
-        .text("Mobilink â€“ Informe de Asistencia", { align: "center" });
+        .text("Mobilink – Informe de Asistencia", { align: "center" });
 
       doc.moveDown(0.3);
       doc
         .fontSize(11)
         .font("Helvetica")
-        .text(`Asistencia nÂº ${a.id}   |   ${formatDateEs(a.createdAtMs)}`, { align: "center" });
+        .text(`Asistencia nº ${a.id}   |   ${formatDateEs(a.createdAtMs)}`, { align: "center" });
 
       doc.moveDown(1);
 
@@ -5615,21 +5620,22 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       doc.fontSize(13).font("Helvetica-Bold").text("Datos del cliente");
       doc.moveDown(0.3);
       row("Nombre:", a.customerName || "-");
-      row("TelÃ©fono:", a.customerPhone || "-");
-      row("DirecciÃ³n:", a.address || "-");
-      // Si la asistencia es solo al remolque (sin matrÃ­cula de camiÃ³n), la del
-      // remolque pasa a ser la principal del informe
-      if (!a.plate && a.plateRemolque) {
-        row("MatrÃ­cula remolque:", a.plateRemolque);
+      row("Teléfono:", a.customerPhone || "-");
+      row("Dirección:", a.address || "-");
+      // Asistencia al remolque (check del formulario, o sin matrícula de camión):
+      // la matrícula del remolque es la principal y la tractora sale como dato adicional
+      if ((a.esRemolque || !a.plate) && a.plateRemolque) {
+        row("Matrícula remolque:", a.plateRemolque);
+        if (a.plate) row("Matrícula tractora:", a.plate);
       } else {
-        row("MatrÃ­cula camiÃ³n:", a.plate || "-");
-        if (a.plateRemolque) row("MatrÃ­cula remolque:", a.plateRemolque);
+        row("Matrícula camión:", a.plate || "-");
+        if (a.plateRemolque) row("Matrícula remolque:", a.plateRemolque);
       }
-      row("VehÃ­culo:", a.vehicleDescription || "-");
+      row("Vehículo:", a.vehicleDescription || "-");
       row("Prioridad:", a.priority === "urgente" ? "URGENTE" : "Normal");
       if (a.notes) row("Notas:", a.notes);
 
-      // Mapa estÃ¡tico: punto de averÃ­a (rojo) + salida furgoneta (azul) en la misma imagen
+      // Mapa estático: punto de avería (rojo) + salida furgoneta (azul) en la misma imagen
       let workshopCoords: { lat: number; lng: number } | null = null;
       try {
         const wcfg = await getWorkshopConfig();
@@ -5640,7 +5646,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
 
       if (a.latitude != null && a.longitude != null) {
         doc.moveDown(0.5);
-        doc.fontSize(10).font("Helvetica-Bold").text("LocalizaciÃ³n de la averÃ­a:");
+        doc.fontSize(10).font("Helvetica-Bold").text("Localización de la avería:");
         doc.moveDown(0.3);
         try {
           const mapBuf = workshopCoords
@@ -5652,20 +5658,20 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
             // Leyenda
             doc.fontSize(8).font("Helvetica")
               .text(workshopCoords
-                ? "â— Punto de averÃ­a (rojo)   â–  Salida furgoneta / taller (azul)"
-                : "â— Punto de averÃ­a");
+                ? "● Punto de avería (rojo)   ■ Salida furgoneta / taller (azul)"
+                : "● Punto de avería");
           } else {
             doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
           }
         } catch {
           doc.fontSize(9).font("Helvetica").text(`Coordenadas: ${a.latitude}, ${a.longitude}`);
         }
-        // Coordenadas GPS del punto de averÃ­a
-        doc.fontSize(9).font("Helvetica-Bold").text("GPS punto de averÃ­a: ", { continued: true });
+        // Coordenadas GPS del punto de avería
+        doc.fontSize(9).font("Helvetica-Bold").text("GPS punto de avería: ", { continued: true });
         doc.font("Helvetica").text(`${a.latitude.toFixed(6)}, ${a.longitude.toFixed(6)}`);
       }
 
-      // MatrÃ­cula de la furgoneta asignada (desde roadside_vehicles)
+      // Matrícula de la furgoneta asignada (desde roadside_vehicles)
       let vanPlate = "-";
       if (a.webfleetVehicleId) {
         try {
@@ -5674,10 +5680,10 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
             [a.webfleetVehicleId]
           );
           if (vp.rows[0]?.plate) vanPlate = vp.rows[0].plate;
-        } catch { /* sin matrÃ­cula */ }
+        } catch { /* sin matrícula */ }
       }
 
-      // KilÃ³metros recorridos (ida y vuelta: taller -> averÃ­a -> taller)
+      // Kilómetros recorridos (ida y vuelta: taller -> avería -> taller)
       let kmTotal = "-";
       if (workshopCoords && a.latitude != null && a.longitude != null) {
         try {
@@ -5685,14 +5691,14 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           const ida = parseFloat(etaIda.kilometros);
 
           if (a.status === "redirigida" && a.redirectionLat != null && a.redirectionLng != null) {
-            // Redirigida: ida (taller->averÃ­a) + vuelta teÃ³rica (punto de desvÃ­o -> taller)
+            // Redirigida: ida (taller->avería) + vuelta teórica (punto de desvío -> taller)
             const etaVuelta = await calcularETA(
               { lat: a.redirectionLat, lng: a.redirectionLng },
               workshopCoords
             );
             const vuelta = parseFloat(etaVuelta.kilometros);
             if (Number.isFinite(ida) && Number.isFinite(vuelta)) {
-              kmTotal = `${(ida + vuelta).toFixed(1)} km (ida + vuelta desde desvÃ­o)`;
+              kmTotal = `${(ida + vuelta).toFixed(1)} km (ida + vuelta desde desvío)`;
             }
           } else if (Number.isFinite(ida)) {
             // Normal: ida y vuelta completas
@@ -5702,31 +5708,31 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       }
 
       doc.moveDown(1);
-      doc.fontSize(13).font("Helvetica-Bold").text("AsignaciÃ³n");
+      doc.fontSize(13).font("Helvetica-Bold").text("Asignación");
       doc.moveDown(0.3);
       row("Operario:", a.assignedTechName || "-");
-      row("VehÃ­culo asignado:", a.assignedVehicleName || "-");
-      row("MatrÃ­cula furgoneta:", vanPlate);
-      row("KilÃ³metros recorridos:", kmTotal);
+      row("Vehículo asignado:", a.assignedVehicleName || "-");
+      row("Matrícula furgoneta:", vanPlate);
+      row("Kilómetros recorridos:", kmTotal);
       if (a.redirectedToId) row("Redirigida a asistencia:", `#${a.redirectedToId}`);
       if (a.redirectedFromId) row("Procede de asistencia:", `#${a.redirectedFromId}`);
 
       doc.moveDown(1);
       doc.fontSize(13).font("Helvetica-Bold").text("Tiempos");
       doc.moveDown(0.3);
-      row("CreaciÃ³n:", formatDateEs(a.createdAtMs));
+      row("Creación:", formatDateEs(a.createdAtMs));
       row("Asignada:", formatDateEs(a.assignedAtMs));
       row("Salida taller:", formatDateEs(a.departedAtMs));
       row("Llegada punto:", formatDateEs(a.arrivedAtPointMs));
-      row("FinalizaciÃ³n:", formatDateEs(a.finishedAtMs));
+      row("Finalización:", formatDateEs(a.finishedAtMs));
       row("Llegada taller:", formatDateEs(a.arrivedAtWorkshopMs));
 
       doc.moveDown(0.5);
       doc.fontSize(10).font("Helvetica-Bold").text("Tiempos calculados:");
       doc.font("Helvetica");
-      doc.text(`  Â· Salida -> Llegada al punto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}`);
-      doc.text(`  Â· Punto -> FinalizaciÃ³n: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}`);
-      doc.text(`  Â· Tiempo total (salida -> taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
+      doc.text(`  · Salida -> Llegada al punto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}`);
+      doc.text(`  · Punto -> Finalización: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}`);
+      doc.text(`  · Tiempo total (salida -> taller): ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`);
 
       // Events
       // Transcripciones de audios recibidos por WhatsApp
@@ -5738,11 +5744,11 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       );
       if (audioRows.rows.length > 0) {
         doc.moveDown(1);
-        doc.fontSize(13).font("Helvetica-Bold").text("TranscripciÃ³n de audios (WhatsApp)");
+        doc.fontSize(13).font("Helvetica-Bold").text("Transcripción de audios (WhatsApp)");
         doc.moveDown(0.3);
         for (const a of audioRows.rows) {
           doc.fontSize(9).font("Helvetica-Bold")
-            .text(`ðŸŽ¤ TranscripciÃ³n de audio Â· ${formatDateEs(Number(a.received_at))}`);
+            .text(`🎤 Transcripción de audio · ${formatDateEs(Number(a.received_at))}`);
           doc.fontSize(9).font("Helvetica").text(a.transcript, { indent: 10 });
           doc.moveDown(0.4);
         }
@@ -5755,7 +5761,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         for (const ev of eventsResult.rows) {
           const label = ev.status;
           const by = ev.createdBy ? ` (${ev.createdBy})` : "";
-          const note = ev.note ? ` â€“ ${ev.note}` : "";
+          const note = ev.note ? ` – ${ev.note}` : "";
           doc
             .fontSize(9)
             .font("Helvetica")
@@ -5769,16 +5775,16 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
 
       if (photos.length > 0) {
         doc.addPage();
-        doc.fontSize(13).font("Helvetica-Bold").text("FotografÃ­as");
+        doc.fontSize(13).font("Helvetica-Bold").text("Fotografías");
         doc.moveDown(0.5);
 
         const kindLabels: Record<string, string> = {
-          matricula_camion: "MatrÃ­cula camiÃ³n",
-          matricula_remolque: "MatrÃ­cula remolque",
-          foto_averia: "AverÃ­a (antes de reparar)",
+          matricula_camion: "Matrícula camión",
+          matricula_remolque: "Matrícula remolque",
+          foto_averia: "Avería (antes de reparar)",
           foto_extra: "Foto adicional",
-          foto_reparacion: "ReparaciÃ³n finalizada",
-          foto_or: "OR manual (tÃ©cnico)",
+          foto_reparacion: "Reparación finalizada",
+          foto_or: "OR manual (técnico)",
         };
 
         const maxW = 480;
@@ -5794,7 +5800,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
             doc.moveDown(0.8);
           } catch { /* skip */ }
 
-          // Nueva pÃ¡gina si queda poco espacio
+          // Nueva página si queda poco espacio
           if (doc.y > 680) doc.addPage();
         }
       }
@@ -5838,7 +5844,7 @@ app.get(
       const id = Number(req.params.id);
 
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "ID no vÃ¡lido" });
+        return res.status(400).json({ error: "ID no válido" });
       }
 
       const { buffer } = await buildAssistanceReportPdfBuffer(id);
@@ -5861,7 +5867,7 @@ app.get(
   }
 );
 
-// â”€â”€ Informe de seguimiento de furgoneta (recorrido + paradas, estilo Webfleet) â”€â”€
+// ── Informe de seguimiento de furgoneta (recorrido + paradas, estilo Webfleet) ──
 async function buildVehicleTrackingPdfBuffer(
   objectno: string,
   fromMs: number,
@@ -5888,13 +5894,13 @@ async function buildVehicleTrackingPdfBuffer(
   doc.on("data", (c) => chunks.push(c));
   const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  doc.fontSize(18).font("Helvetica-Bold").text("Mobilink â€“ Seguimiento de furgoneta", { align: "center" });
+  doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Seguimiento de furgoneta", { align: "center" });
   doc.moveDown(0.3);
   doc.fontSize(11).font("Helvetica").text(
-    `${opts.plate || objectno}${opts.titleExtra ? ` Â· ${opts.titleExtra}` : ""}`,
+    `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`,
     { align: "center" }
   );
-  doc.fontSize(10).text(`${formatDateEs(fromMs)}  â€“  ${formatDateEs(toMs)}`, { align: "center" });
+  doc.fontSize(10).text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, { align: "center" });
   doc.moveDown(1);
 
   function row(label: string, value: string) {
@@ -5908,9 +5914,9 @@ async function buildVehicleTrackingPdfBuffer(
   row("Km recorridos:", `${totalKm.toFixed(1)} km`);
   row("Tiempo en marcha:", fmtDuration(driveSec));
   row("Tiempo parado total:", fmtDuration(stoppedSec));
-  row("NÂº de paradas:", String(stops.length));
+  row("Nº de paradas:", String(stops.length));
   row("Primera salida:", firstStart ? formatDateEs(firstStart) : "-");
-  row("Ãšltima llegada:", lastEnd ? formatDateEs(lastEnd) : "-");
+  row("Última llegada:", lastEnd ? formatDateEs(lastEnd) : "-");
 
   if (track.length > 0 || stops.length > 0) {
     doc.moveDown(0.8);
@@ -5931,7 +5937,7 @@ async function buildVehicleTrackingPdfBuffer(
     for (const s of stops) {
       doc.fontSize(10).font("Helvetica-Bold").text(`${s.n}. ${s.place}`);
       doc.fontSize(9).font("Helvetica").text(
-        `   Llegada: ${formatDateEs(s.arrival)}  Â·  Salida: ${formatDateEs(s.departure)}  Â·  Parado: ${fmtDuration(s.durationSec)}`
+        `   Llegada: ${formatDateEs(s.arrival)}  ·  Salida: ${formatDateEs(s.departure)}  ·  Parado: ${fmtDuration(s.durationSec)}`
       );
       doc.moveDown(0.2);
     }
@@ -5945,9 +5951,9 @@ async function buildVehicleTrackingPdfBuffer(
   } else {
     for (const t of trips) {
       doc.fontSize(9).font("Helvetica").text(
-        `${formatDateEs(new Date(t.start_time).getTime())} â†’ ${formatDateEs(new Date(t.end_time).getTime())}  Â·  ` +
-        `${((t.distance || 0) / 1000).toFixed(1)} km  Â·  ${fmtDuration(t.duration || 0)}  Â·  ` +
-        `mÃ¡x ${t.max_speed ?? "-"} km/h  Â·  ${t.end_postext || ""}`
+        `${formatDateEs(new Date(t.start_time).getTime())} → ${formatDateEs(new Date(t.end_time).getTime())}  ·  ` +
+        `${((t.distance || 0) / 1000).toFixed(1)} km  ·  ${fmtDuration(t.duration || 0)}  ·  ` +
+        `máx ${t.max_speed ?? "-"} km/h  ·  ${t.end_postext || ""}`
       );
     }
   }
@@ -5964,7 +5970,7 @@ app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole,
     const to = Number(req.query.to);
     const minStop = req.query.minStop ? Number(req.query.minStop) : 180;
     if (!Number.isFinite(from) || !Number.isFinite(to)) {
-      return res.status(400).json({ error: "ParÃ¡metros from/to (ms) requeridos" });
+      return res.status(400).json({ error: "Parámetros from/to (ms) requeridos" });
     }
     const vp = await db.query(`SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`, [objectno]);
     const buffer = await buildVehicleTrackingPdfBuffer(objectno, from, to, { minStopSec: minStop, plate: vp.rows[0]?.plate });
@@ -5977,11 +5983,11 @@ app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole,
   }
 });
 
-// Por asistencia (recorrido durante la asistencia: salida â†’ llegada al taller o ahora)
+// Por asistencia (recorrido durante la asistencia: salida → llegada al taller o ahora)
 app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no vÃ¡lido" });
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
     const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
     if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
     const a = normalizeRoadsideAssistanceRow(r.rows[0]);
@@ -6030,11 +6036,11 @@ app.post(
       const email = String(req.body?.email || "").trim();
 
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "ID no vÃ¡lido" });
+        return res.status(400).json({ error: "ID no válido" });
       }
 
       if (channels.length === 0) {
-        return res.status(400).json({ error: "Selecciona al menos un canal de envÃ­o" });
+        return res.status(400).json({ error: "Selecciona al menos un canal de envío" });
       }
 
       if (channels.includes("email") && !email) {
@@ -6048,7 +6054,7 @@ app.post(
       if (channels.includes("whatsapp")) {
         const customerPhone = String(assistance.customerPhone || "").trim();
         if (!customerPhone) {
-          result.whatsapp = "skipped: sin telÃ©fono";
+          result.whatsapp = "skipped: sin teléfono";
         } else if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
           result.whatsapp = "skipped: Twilio no configurado";
         } else {
@@ -6121,7 +6127,7 @@ app.get(
   async (req, res) => {
     try {
       const id = Number(req.params.id);
-      if (!id) return res.status(400).json({ error: "ID invÃ¡lido" });
+      if (!id) return res.status(400).json({ error: "ID inválido" });
       const result = await db.query(
         `SELECT * FROM roadside_backoffice WHERE "assistanceId" = $1`,
         [id]
@@ -6134,7 +6140,7 @@ app.get(
   }
 );
 
-// Â¿Tiene el back office algÃºn dato relevante? (para no crear filas vacÃ­as al crear asistencia)
+// ¿Tiene el back office algún dato relevante? (para no crear filas vacías al crear asistencia)
 function backofficeHasData(b: any): boolean {
   if (!b || typeof b !== "object") return false;
   for (const [k, v] of Object.entries(b)) {
@@ -6244,7 +6250,7 @@ app.put(
   async (req, res) => {
     try {
       const id = Number(req.params.id);
-      if (!id) return res.status(400).json({ error: "ID invÃ¡lido" });
+      if (!id) return res.status(400).json({ error: "ID inválido" });
       const saved = await upsertBackoffice(id, req.body);
       return res.json(saved);
     } catch (error) {
@@ -6254,7 +6260,7 @@ app.put(
   }
 );
 
-/* â”€â”€ Companies â”€â”€ */
+/* ── Companies ── */
 
 app.get("/api/companies", requireSupervisorRole, async (req, res) => {
   try {
@@ -6335,7 +6341,7 @@ const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
   },
   {
     id: "ordenar_almacen",
-    label: "Ordenar almacÃ©n",
+    label: "Ordenar almacén",
     type: "en_taller",
   },
   {
@@ -6345,7 +6351,7 @@ const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
   },
   {
     id: "cargar_baterias",
-    label: "Cargar baterÃ­as",
+    label: "Cargar baterías",
     type: "en_taller",
   },
   {
@@ -6378,7 +6384,7 @@ async function ensureMaintenanceTables() {
   `);
 }
 
-// â”€â”€ Usuarios de aplicaciÃ³n (gestiÃ³n de accesos por pantalla) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Usuarios de aplicación (gestión de accesos por pantalla) ──────────────────
 type DbAppUser = {
   id: string;
   name: string;
@@ -6660,7 +6666,7 @@ app.post("/api/maintenance-tasks", async (req, res) => {
 
     if (!task) {
       return res.status(400).json({
-        error: "Tarea de mantenimiento no vÃ¡lida",
+        error: "Tarea de mantenimiento no válida",
       });
     }
 
@@ -6692,7 +6698,7 @@ app.put("/api/maintenance-tasks/:id", async (req, res) => {
     const id = String(req.params.id || "").trim();
 
     if (!id) {
-      return res.status(400).json({ error: "ID de tarea no vÃ¡lido" });
+      return res.status(400).json({ error: "ID de tarea no válido" });
     }
 
     const existingResult = await db.query(
@@ -6719,7 +6725,7 @@ app.put("/api/maintenance-tasks/:id", async (req, res) => {
 
     if (!task) {
       return res.status(400).json({
-        error: "Tarea de mantenimiento no vÃ¡lida",
+        error: "Tarea de mantenimiento no válida",
       });
     }
 
@@ -6750,7 +6756,7 @@ app.delete("/api/maintenance-tasks/:id", async (req, res) => {
     const id = String(req.params.id || "").trim();
 
     if (!id) {
-      return res.status(400).json({ error: "ID de tarea no vÃ¡lido" });
+      return res.status(400).json({ error: "ID de tarea no válido" });
     }
 
     await db.query(`DELETE FROM maintenance_tasks WHERE id = $1`, [id]);
@@ -6858,7 +6864,7 @@ app.post("/api/assigned-maintenance-tasks", async (req, res) => {
 
     if (!task) {
       return res.status(400).json({
-        error: "AsignaciÃ³n de mantenimiento no vÃ¡lida",
+        error: "Asignación de mantenimiento no válida",
       });
     }
 
@@ -6875,7 +6881,7 @@ app.post("/api/assigned-maintenance-tasks", async (req, res) => {
 
     if (existingPending.rows.length > 0) {
       return res.status(409).json({
-        error: "El tÃ©cnico ya tiene una tarea de mantenimiento pendiente",
+        error: "El técnico ya tiene una tarea de mantenimiento pendiente",
         assignedTask: existingPending.rows[0].data,
       });
     }
@@ -6960,7 +6966,7 @@ app.put("/api/assigned-maintenance-tasks/:id/finish", async (req, res) => {
     const task = await updateAssignedMaintenanceTaskStatus(id, "finalizada");
 
     if (!task) {
-      return res.status(404).json({ error: "AsignaciÃ³n no encontrada" });
+      return res.status(404).json({ error: "Asignación no encontrada" });
     }
 
     res.json(task);
@@ -6977,7 +6983,7 @@ app.put("/api/assigned-maintenance-tasks/:id/interrupt", async (req, res) => {
     const task = await updateAssignedMaintenanceTaskStatus(id, "interrumpida");
 
     if (!task) {
-      return res.status(404).json({ error: "AsignaciÃ³n no encontrada" });
+      return res.status(404).json({ error: "Asignación no encontrada" });
     }
 
     res.json(task);
@@ -6999,7 +7005,7 @@ app.put("/api/assigned-maintenance-tasks/:id/resume", async (req, res) => {
     });
 
     if (!task) {
-      return res.status(404).json({ error: "AsignaciÃ³n no encontrada" });
+      return res.status(404).json({ error: "Asignación no encontrada" });
     }
 
     res.json(task);
@@ -7100,7 +7106,7 @@ app.delete("/api/assigned-maintenance-tasks/:id", async (req, res) => {
     const id = String(req.params.id || "").trim();
 
     if (!id) {
-      return res.status(400).json({ error: "ID de asignaciÃ³n no vÃ¡lido" });
+      return res.status(400).json({ error: "ID de asignación no válido" });
     }
 
     await db.query(`DELETE FROM assigned_maintenance_tasks WHERE id = $1`, [
@@ -7110,7 +7116,7 @@ app.delete("/api/assigned-maintenance-tasks/:id", async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error("DELETE /api/assigned-maintenance-tasks/:id error:", error);
-    res.status(500).json({ error: "Error eliminando asignaciÃ³n" });
+    res.status(500).json({ error: "Error eliminando asignación" });
   }
 });
 /* =========================================================
@@ -7173,31 +7179,31 @@ app.get("/api/quick-templates", async (_req, res) => {
     const defaults = [
       {
         key: "alineacion_camion",
-        label: "AlineaciÃ³n CamiÃ³n",
+        label: "Alineación Camión",
         area: "camion",
         mode: "single",
-        allowedTechs: JSON.stringify(["Anthoni", "Alejandro", "JosÃ©"]),
-        priorityOrder: JSON.stringify(["Anthoni", "Alejandro", "JosÃ©"]),
+        allowedTechs: JSON.stringify(["Anthoni", "Alejandro", "José"]),
+        priorityOrder: JSON.stringify(["Anthoni", "Alejandro", "José"]),
         standardMinutes: 90,
       },
       {
         key: "pinchazo_camion",
-        label: "Pinchazo camiÃ³n",
+        label: "Pinchazo camión",
         area: "camion",
         mode: "single",
         allowedTechs: JSON.stringify([
-          "JosÃ©",
-          "IvÃ¡n",
+          "José",
+          "Iván",
           "Alejandro",
-          "JesÃºs",
+          "Jesús",
           "Anthoni",
           "David",
         ]),
         priorityOrder: JSON.stringify([
-          "JosÃ©",
-          "IvÃ¡n",
+          "José",
+          "Iván",
           "Alejandro",
-          "JesÃºs",
+          "Jesús",
           "Anthoni",
           "David",
         ]),
@@ -7205,22 +7211,22 @@ app.get("/api/quick-templates", async (_req, res) => {
       },
       {
         key: "cambio_4_neumaticos_camion",
-        label: "Cambio de 4 neumÃ¡ticos de camiÃ³n",
+        label: "Cambio de 4 neumáticos de camión",
         area: "camion",
         mode: "team",
         allowedTechs: JSON.stringify([
-          "JosÃ©",
-          "IvÃ¡n",
+          "José",
+          "Iván",
           "Alejandro",
-          "JesÃºs",
+          "Jesús",
           "Anthoni",
           "David",
         ]),
         priorityOrder: JSON.stringify([
-          "JosÃ©",
-          "IvÃ¡n",
+          "José",
+          "Iván",
           "Alejandro",
-          "JesÃºs",
+          "Jesús",
           "Anthoni",
           "David",
         ]),
@@ -7257,7 +7263,7 @@ app.get("/api/quick-templates", async (_req, res) => {
     res.json(result.rows.map(normalizeQuickTemplateRow));
   } catch (error) {
     console.error("GET /api/quick-templates error:", error);
-    res.status(500).json({ error: "Error obteniendo entradas rÃ¡pidas" });
+    res.status(500).json({ error: "Error obteniendo entradas rápidas" });
   }
 });
 
@@ -7314,7 +7320,7 @@ app.post("/api/quick-templates", requireSupervisorRole, async (req, res) => {
     res.json(normalizeQuickTemplateRow(result.rows[0]));
   } catch (error) {
     console.error("POST /api/quick-templates error:", error);
-    res.status(500).json({ error: "Error creando entrada rÃ¡pida" });
+    res.status(500).json({ error: "Error creando entrada rápida" });
   }
 });
 
@@ -7324,7 +7330,7 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
     const body = req.body || {};
 
     if (!key) {
-      return res.status(400).json({ error: "Key invÃ¡lida" });
+      return res.status(400).json({ error: "Key inválida" });
     }
 
     const standardMinutes =
@@ -7389,7 +7395,7 @@ app.put("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
     res.json(normalizeQuickTemplateRow(result.rows[0]));
   } catch (error) {
     console.error("PUT /api/quick-templates/:key error:", error);
-    res.status(500).json({ error: "Error guardando entrada rÃ¡pida" });
+    res.status(500).json({ error: "Error guardando entrada rápida" });
   }
 });
 
@@ -7402,7 +7408,7 @@ app.delete("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error("DELETE /api/quick-templates/:key error:", error);
-    res.status(500).json({ error: "Error eliminando entrada rÃ¡pida" });
+    res.status(500).json({ error: "Error eliminando entrada rápida" });
   }
 });
 
@@ -7447,7 +7453,7 @@ app.get("/api/scheduled-tech-statuses", async (_req, res) => {
   } catch (error) {
     console.error("GET /api/scheduled-tech-statuses error:", error);
     res.status(500).json({
-      error: "Error cargando estados tÃ©cnicos programados",
+      error: "Error cargando estados técnicos programados",
     });
   }
 });
@@ -7641,7 +7647,7 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
 
     console.error("PUT /api/scheduled-tech-statuses error:", error);
     res.status(500).json({
-      error: "Error guardando estados tÃ©cnicos programados",
+      error: "Error guardando estados técnicos programados",
     });
   }
 });
@@ -7654,7 +7660,7 @@ app.put("/api/scheduled-jobs", async (req, res) => {
 
     if (items.length === 0) {
       console.warn(
-        "PUT /api/scheduled-jobs recibido vacÃ­o. No se borra la agenda por seguridad."
+        "PUT /api/scheduled-jobs recibido vacío. No se borra la agenda por seguridad."
       );
 
       const current = await db.query(`
@@ -7745,7 +7751,7 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
     const id = Number(req.params.id);
 
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "ID de cita invÃ¡lido" });
+      return res.status(400).json({ error: "ID de cita inválido" });
     }
 
     const deletedAtMs = Date.now();
@@ -7831,7 +7837,7 @@ app.post("/api/login", async (req, res) => {
 
     if (!user) {
       return res.status(401).json({
-        error: "ContraseÃ±a incorrecta",
+        error: "Contraseña incorrecta",
       });
     }
 
@@ -7841,21 +7847,21 @@ app.post("/api/login", async (req, res) => {
     });
   } catch (error) {
     console.error("POST /api/login error:", error);
-    res.status(500).json({ error: "Error iniciando sesiÃ³n" });
+    res.status(500).json({ error: "Error iniciando sesión" });
   }
 });
 
-// Puente SSO: entra al panel de taller con la sesiÃ³n unificada (Supabase).
+// Puente SSO: entra al panel de taller con la sesión unificada (Supabase).
 // Empareja el usuario unificado con un usuario del panel por nombre
 // (username o nombre completo). Los superadmin entran como admin.
 app.post("/api/login-sso", async (req, res) => {
   try {
     const auth = String(req.headers.authorization || "");
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (!token) return res.status(401).json({ error: "Falta el token de sesiÃ³n" });
+    if (!token) return res.status(401).json({ error: "Falta el token de sesión" });
 
     const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) return res.status(401).json({ error: "SesiÃ³n no vÃ¡lida" });
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
 
     const r = await db.query(
       `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
@@ -7864,7 +7870,7 @@ app.post("/api/login-sso", async (req, res) => {
       [data.user.id]
     );
     const u = r.rows[0];
-    if (!u || !u.activo) return res.status(403).json({ error: "Usuario no activo en la aplicaciÃ³n" });
+    if (!u || !u.activo) return res.status(403).json({ error: "Usuario no activo en la aplicación" });
 
     // 1) Usuario del panel con el mismo nombre (username o nombre completo)
     try {
@@ -7884,7 +7890,7 @@ app.post("/api/login-sso", async (req, res) => {
       console.error("login-sso db users error:", e);
     }
 
-    // 2) Superadmin / admin de administraciÃ³n â†’ admin del panel
+    // 2) Superadmin / admin de administración → admin del panel
     if ((u.es_superadmin || u.adm_admin) && process.env.ADMIN_PASSWORD) {
       return res.json({
         ok: true,
@@ -7898,12 +7904,12 @@ app.post("/api/login-sso", async (req, res) => {
     return res.status(404).json({ error: "Tu usuario no tiene acceso al panel de taller" });
   } catch (error) {
     console.error("POST /api/login-sso error:", error);
-    res.status(500).json({ error: "Error iniciando sesiÃ³n" });
+    res.status(500).json({ error: "Error iniciando sesión" });
   }
 });
 
 /* =========================================================
-   USUARIOS (gestiÃ³n de accesos)
+   USUARIOS (gestión de accesos)
 ========================================================= */
 
 app.get("/api/users", requireAdminRole, async (_req, res) => {
@@ -7920,7 +7926,7 @@ app.post("/api/users", requireAdminRole, async (req, res) => {
   try {
     const { name, password, role, allowedViews } = req.body ?? {};
     if (!name || !password) {
-      return res.status(400).json({ error: "Nombre y contraseÃ±a obligatorios" });
+      return res.status(400).json({ error: "Nombre y contraseña obligatorios" });
     }
     await ensureAppUsersTable();
     const id = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -7986,13 +7992,13 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
 
     if (!expectedPassword) {
       return res.status(500).json({
-        error: "BACKUP_PASSWORD no estÃ¡ configurada",
+        error: "BACKUP_PASSWORD no está configurada",
       });
     }
 
     if (password !== expectedPassword) {
       return res.status(401).json({
-        error: "ContraseÃ±a de backup incorrecta",
+        error: "Contraseña de backup incorrecta",
       });
     }
     const tables = [
@@ -8129,7 +8135,7 @@ function buildReminderMessage(job: any, reminderLabel: string) {
   const jobDescription = getScheduledJobLabel(job);
   const date = formatSpanishDate(job.date || "");
   const time = job.startTime || "";
-  const plate = job.plate ? `MatrÃ­cula: ${job.plate}\n` : "";
+  const plate = job.plate ? `Matrícula: ${job.plate}\n` : "";
 const notes = job.notes ? `Observaciones: ${job.notes}\n` : "";
 
 return (
@@ -8147,7 +8153,7 @@ return (
 
 async function sendWhatsAppAgendaReminder(job: any, reminderLabel: string) {
   if (!job.customerPhone || !String(job.customerPhone).trim()) {
-    // Sin telÃ©fono â€” saltar silenciosamente sin lanzar error
+    // Sin teléfono — saltar silenciosamente sin lanzar error
     return null;
   }
 
@@ -8266,7 +8272,7 @@ async function checkAgendaWhatsAppReminders() {
           const message = await sendWhatsAppAgendaReminder(job, reminder.label);
 
           if (!message) {
-            // Sin telÃ©fono, saltar
+            // Sin teléfono, saltar
             continue;
           }
 
@@ -8407,7 +8413,7 @@ async function pauseActiveWorkshopJobsForStandby(triggerTime: string) {
     const reason = String(row.reason || "Trabajo");
     const nextReason = reason.includes("STAND BY")
       ? reason
-      : `${reason} Â· STAND BY automatico ${triggerTime}.`;
+      : `${reason} · STAND BY automatico ${triggerTime}.`;
 
     await db.query(
       `
@@ -8487,7 +8493,7 @@ function startWorkshopAutoStandbyChecker() {
 
 
 /* =========================================================
-   GEOFENCING WEBFLEET â€” llegada al taller via posiciÃ³n Webfleet
+   GEOFENCING WEBFLEET — llegada al taller via posición Webfleet
 ========================================================= */
 
 async function checkWebfleetWorkshopArrival() {
@@ -8514,7 +8520,7 @@ async function checkWebfleetWorkshopArrival() {
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
         console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
 
-        // Actualizar posiciÃ³n del operario para que el mapa del panel estÃ© en vivo
+        // Actualizar posición del operario para que el mapa del panel esté en vivo
         await db.query(
           `UPDATE roadside_assistances
            SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
@@ -8536,11 +8542,11 @@ async function checkWebfleetWorkshopArrival() {
              VALUES ($1, 'llegada_taller', 'Llegada al taller detectada por Webfleet GPS', 'sistema', $2)`,
             [row.id, now]
           );
-          // Liberar al tÃ©cnico al cerrar la asistencia
+          // Liberar al técnico al cerrar la asistencia
           if (upd.rows[0]?.assignedTechName) {
             await freeTechFromRoadside(upd.rows[0].assignedTechName, row.id);
           }
-          console.log(`âœ“ Asistencia #${row.id} â†’ llegada_taller (Webfleet geofence)`);
+          console.log(`✓ Asistencia #${row.id} → llegada_taller (Webfleet geofence)`);
         }
       } catch (err) {
         console.warn(`Webfleet geofence error para asistencia #${row.id}:`, err);
@@ -8551,7 +8557,7 @@ async function checkWebfleetWorkshopArrival() {
   }
 }
 
-// Libera tÃ©cnicos cuya asistencia de carretera ya estÃ¡ cerrada o no existe (autocuraciÃ³n)
+// Libera técnicos cuya asistencia de carretera ya está cerrada o no existe (autocuración)
 async function reconcileTechRoadsideOccupation() {
   try {
     const r = await db.query(
@@ -8567,10 +8573,10 @@ async function reconcileTechRoadsideOccupation() {
        RETURNING name`
     );
     if (r.rows.length > 0) {
-      console.log(`TÃ©cnicos liberados (asistencia cerrada): ${r.rows.map((x: any) => x.name).join(", ")}`);
+      console.log(`Técnicos liberados (asistencia cerrada): ${r.rows.map((x: any) => x.name).join(", ")}`);
     }
 
-    // Cerrar capturas WhatsApp huÃ©rfanas (asistencia cerrada o inexistente)
+    // Cerrar capturas WhatsApp huérfanas (asistencia cerrada o inexistente)
     const cs = await db.query(
       `UPDATE whatsapp_capture_sessions s
        SET status = 'CLOSED', ended_at = $1
@@ -8592,7 +8598,7 @@ async function reconcileTechRoadsideOccupation() {
   }
 }
 
-// Check-in automÃ¡tico: la furgoneta entra en la geozona de la base de una OTF
+// Check-in automático: la furgoneta entra en la geozona de la base de una OTF
 async function checkOtfBaseArrival() {
   try {
     const r = await db.query(`
@@ -8610,7 +8616,7 @@ async function checkOtfBaseArrival() {
              WHERE id = $1 AND status = 'planificada' AND "arrivedAtBaseMs" IS NULL`,
             [o.id, Date.now()]
           );
-          console.log(`âœ“ OTF #${o.id} â†’ en_curso (check-in automÃ¡tico en base, ${Math.round(dist)}m)`);
+          console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${Math.round(dist)}m)`);
         }
       } catch (err) {
         console.warn(`OTF check-in error #${o.id}:`, err);
@@ -8707,8 +8713,8 @@ function normalizarDatosAlbaran(datos: any, indice: number): DatosAlbaranAlmacen
     numeroVehiculo: normalizarTextoSimple(
       datos?.numeroVehiculo ??
         datos?.numero_vehiculo ??
-        datos?.numeroVehÃ­culo ??
-        datos?.["NÂºVEHICULO"]
+        datos?.numeroVehículo ??
+        datos?.["NºVEHICULO"]
     ),
     producto: normalizarTextoSimple(datos?.producto),
     cantidad: normalizarCantidad(datos?.cantidad),
@@ -8770,7 +8776,7 @@ app.post(
       if (!req.file) {
         return res.status(400).json({
           success: false,
-          message: "No se recibiÃ³ ningÃºn PDF.",
+          message: "No se recibió ningún PDF.",
         });
       }
 
@@ -8786,9 +8792,9 @@ app.post(
       const prompt = `
 Eres un extractor de datos para albaranes escaneados de Comercial Sea / Grupo Soledad.
 
-El PDF puede contener 1 o varios albaranes. Normalmente cada pÃ¡gina es un albarÃ¡n distinto.
+El PDF puede contener 1 o varios albaranes. Normalmente cada página es un albarán distinto.
 
-Devuelve SOLO JSON vÃ¡lido, sin markdown, con esta estructura exacta:
+Devuelve SOLO JSON válido, sin markdown, con esta estructura exacta:
 
 {
   "albaranes": [
@@ -8808,20 +8814,20 @@ Devuelve SOLO JSON vÃ¡lido, sin markdown, con esta estructura exacta:
 }
 
 Reglas obligatorias:
-- Si el PDF tiene varias pÃ¡ginas, devuelve un objeto por cada albarÃ¡n detectado.
-- No mezcles datos de pÃ¡ginas distintas.
-- El nÃºmero de albarÃ¡n estÃ¡ junto a "AlbarÃ¡n:".
-- La fecha estÃ¡ junto a "Fecha:".
-- La matrÃ­cula estÃ¡ en el bloque "VehÃ­culo".
-- El cliente estÃ¡ en el bloque "Cliente".
-- El producto y la cantidad salen de la lÃ­nea que empieza por "Salidas Almacen Cliente".
+- Si el PDF tiene varias páginas, devuelve un objeto por cada albarán detectado.
+- No mezcles datos de páginas distintas.
+- El número de albarán está junto a "Albarán:".
+- La fecha está junto a "Fecha:".
+- La matrícula está en el bloque "Vehículo".
+- El cliente está en el bloque "Cliente".
+- El producto y la cantidad salen de la línea que empieza por "Salidas Almacen Cliente".
 - La cantidad puede venir negativa, por ejemplo -2,00. Devuelve siempre cantidad positiva.
 - Normaliza medidas: 295/80x22.5 y 295/80R22.5 deben devolverse como 295/80R22.5.
-- Si aparece "NÂºVEHICULO:", "NÂº VEHICULO:", "NUMERO VEHICULO:" o "NÂº VEHÃCULO:", extrae ese valor en "numeroVehiculo".
-- Si no aparece nÃºmero de vehÃ­culo, devuelve "numeroVehiculo": null.
+- Si aparece "NºVEHICULO:", "Nº VEHICULO:", "NUMERO VEHICULO:" o "Nº VEHÍCULO:", extrae ese valor en "numeroVehiculo".
+- Si no aparece número de vehículo, devuelve "numeroVehiculo": null.
 - Devuelve null si un campo no se puede leer.
 - "confianza" debe ser "alta", "media" o "baja".
-- Si una pÃ¡gina no parece un albarÃ¡n, no la incluyas.
+- Si una página no parece un albarán, no la incluyas.
 `;
 
       const response = await (openai.responses.create as any)({
@@ -8888,7 +8894,7 @@ Reglas obligatorias:
         if (datos.duplicado) {
           datos.observaciones = [
             ...datos.observaciones,
-            "AlbarÃ¡n duplicado: ya existe una salida registrada con este nÃºmero.",
+            "Albarán duplicado: ya existe una salida registrada con este número.",
           ];
         }
 
@@ -8903,7 +8909,7 @@ Reglas obligatorias:
       if (albaranes.length === 0) {
         return res.status(422).json({
           success: false,
-          message: "No se detectÃ³ ningÃºn albarÃ¡n vÃ¡lido en el PDF.",
+          message: "No se detectó ningún albarán válido en el PDF.",
         });
       }
 
@@ -8918,7 +8924,7 @@ Reglas obligatorias:
       return res.status(500).json({
         success: false,
         message:
-          error?.message || "Error leyendo el albarÃ¡n PDF con OCR.",
+          error?.message || "Error leyendo el albarán PDF con OCR.",
       });
     }
   }
@@ -8932,7 +8938,7 @@ app.post(
       if (!req.file) {
         return res.status(400).json({
           success: false,
-          message: "No se recibiÃ³ ningÃºn PDF.",
+          message: "No se recibió ningún PDF.",
         });
       }
 
@@ -8946,24 +8952,24 @@ app.post(
       const base64Pdf = req.file.buffer.toString("base64");
 
       const prompt = `
-Eres un extractor de datos para ALBARANES DE ENTRADA de neumÃ¡ticos en el almacÃ©n de un CLIENTE.
+Eres un extractor de datos para ALBARANES DE ENTRADA de neumáticos en el almacén de un CLIENTE.
 
 IMPORTANTE:
 Estos documentos NO son compras a proveedor.
-Son entradas de neumÃ¡ticos al almacÃ©n de un cliente.
+Son entradas de neumáticos al almacén de un cliente.
 
-El PDF puede contener 1 o varios albaranes. Normalmente cada pÃ¡gina es un albarÃ¡n distinto.
+El PDF puede contener 1 o varios albaranes. Normalmente cada página es un albarán distinto.
 
 Debes leer:
-- nÃºmero de albarÃ¡n
+- número de albarán
 - fecha
-- nÃºmero/cÃ³digo de cliente
+- número/código de cliente
 - nombre del cliente
-- direcciÃ³n del cliente
-- SOLO los neumÃ¡ticos resaltados, subrayados o marcados en amarillo o gris
-- cantidad de cada neumÃ¡tico resaltado
+- dirección del cliente
+- SOLO los neumáticos resaltados, subrayados o marcados en amarillo o gris
+- cantidad de cada neumático resaltado
 
-Devuelve SOLO JSON vÃ¡lido, sin markdown, con esta estructura exacta:
+Devuelve SOLO JSON válido, sin markdown, con esta estructura exacta:
 
 {
   "entradas": [
@@ -8984,25 +8990,25 @@ Devuelve SOLO JSON vÃ¡lido, sin markdown, con esta estructura exacta:
 }
 
 Reglas obligatorias:
-- Extrae el nÃºmero de albarÃ¡n.
+- Extrae el número de albarán.
 - Extrae la fecha.
-- Extrae el nÃºmero o cÃ³digo de cliente si aparece.
+- Extrae el número o código de cliente si aparece.
 - Extrae el nombre del cliente.
-- Extrae la direcciÃ³n del cliente si aparece.
-- Los productos vÃ¡lidos son SOLO neumÃ¡ticos resaltados, subrayados o marcados en amarillo o gris.
-- Ignora neumÃ¡ticos no resaltados.
-- Si hay varias lÃ­neas resaltadas, devuelve una entrada por cada lÃ­nea.
-- Si una lÃ­nea resaltada contiene medida, marca, modelo y cantidad, extrae todo.
-- Si no puedes confirmar visualmente que una lÃ­nea estÃ¡ resaltada, aÃ±ade en observaciones: "No se pudo confirmar resaltado".
-- Extrae producto/neumÃ¡tico completo.
+- Extrae la dirección del cliente si aparece.
+- Los productos válidos son SOLO neumáticos resaltados, subrayados o marcados en amarillo o gris.
+- Ignora neumáticos no resaltados.
+- Si hay varias líneas resaltadas, devuelve una entrada por cada línea.
+- Si una línea resaltada contiene medida, marca, modelo y cantidad, extrae todo.
+- Si no puedes confirmar visualmente que una línea está resaltada, añade en observaciones: "No se pudo confirmar resaltado".
+- Extrae producto/neumático completo.
 - Extrae cantidad.
 - Si la cantidad aparece negativa, devuelve siempre cantidad positiva.
 - Normaliza medidas: 295/80x22.5 debe ser 295/80R22.5.
-- Si aparece ubicaciÃ³n o almacÃ©n, devuÃ©lvelo en "ubicacion".
-- Si no aparece ubicaciÃ³n, devuelve null.
+- Si aparece ubicación o almacén, devuélvelo en "ubicacion".
+- Si no aparece ubicación, devuelve null.
 - Devuelve null si un campo no se puede leer.
 - "confianza" debe ser "alta", "media" o "baja".
-- Si una pÃ¡gina no parece un albarÃ¡n de entrada de cliente, no la incluyas.
+- Si una página no parece un albarán de entrada de cliente, no la incluyas.
 `;
 
       const response = await (openai.responses.create as any)({
@@ -9103,7 +9109,7 @@ Reglas obligatorias:
         if (duplicado) {
           estado = "duplicado";
           observaciones.push(
-            "AlbarÃ¡n duplicado: ya existe una entrada registrada con este nÃºmero."
+            "Albarán duplicado: ya existe una entrada registrada con este número."
           );
         } else if (!codigoCliente && !cliente) {
           estado = "sin_cliente";
@@ -9133,7 +9139,7 @@ Reglas obligatorias:
         return res.status(422).json({
           success: false,
           message:
-            "No se detectÃ³ ningÃºn albarÃ¡n de entrada vÃ¡lido en el PDF.",
+            "No se detectó ningún albarán de entrada válido en el PDF.",
         });
       }
 
@@ -9148,7 +9154,7 @@ Reglas obligatorias:
       return res.status(500).json({
         success: false,
         message:
-          error?.message || "Error leyendo el albarÃ¡n de entrada PDF con OCR.",
+          error?.message || "Error leyendo el albarán de entrada PDF con OCR.",
       });
     }
   }
@@ -9279,7 +9285,7 @@ app.post(
       const { techName } = (req as any).workshopOperator as { techName: string };
       const breakType = String(req.body?.breakType || "").trim();
       if (!["cigarro", "cafe", "descanso", "otro"].includes(breakType)) {
-        return res.status(400).json({ error: "Tipo de pausa invÃ¡lido" });
+        return res.status(400).json({ error: "Tipo de pausa inválido" });
       }
       const nowMs = Date.now();
       // End any open break
@@ -9373,12 +9379,12 @@ async function extractAssistanceFromMessage(body: string, mediaUrls: string[]): 
   const systemPrompt = `Eres un asistente especializado en asistencias en carretera.
 Analiza el mensaje de WhatsApp y extrae los datos de la asistencia en formato JSON.
 Reglas estrictas:
-- NO inventes datos. Si un campo no estÃ¡ presente, devuelve null.
-- Normaliza el telÃ©fono al formato espaÃ±ol (+34XXXXXXXXX o 6XXXXXXXX).
-- Normaliza la matrÃ­cula al formato espaÃ±ol (4 dÃ­gitos + 3 letras, o antiguo formato).
-- Si hay un enlace de Google Maps, extrÃ¡elo en googleMapsUrl.
-- Si el texto tiene muy poca informaciÃ³n Ãºtil, marca confidence como "low".
-- Si tiene informaciÃ³n suficiente para crear una asistencia, marca confidence "high".
+- NO inventes datos. Si un campo no está presente, devuelve null.
+- Normaliza el teléfono al formato español (+34XXXXXXXXX o 6XXXXXXXX).
+- Normaliza la matrícula al formato español (4 dígitos + 3 letras, o antiguo formato).
+- Si hay un enlace de Google Maps, extráelo en googleMapsUrl.
+- Si el texto tiene muy poca información útil, marca confidence como "low".
+- Si tiene información suficiente para crear una asistencia, marca confidence "high".
 - En caso intermedio, "medium".
 
 Devuelve SOLO el JSON sin texto adicional:
@@ -9439,7 +9445,7 @@ app.post(
       if (authToken && twilioSig) {
         const valid = twilio.validateRequest(authToken, twilioSig, fullUrl, req.body);
         if (!valid) {
-          console.warn("Invalid Twilio signature on /api/whatsapp/inbound â€” procesando igualmente");
+          console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente");
         }
       }
 
@@ -9493,8 +9499,8 @@ app.post(
       );
       const msgId = msgResult.rows[0].id;
 
-      // â”€â”€ Respuesta de un cliente con expediente de recobro abierto â”€â”€â”€â”€â”€
-      // Si el remitente coincide con el telÃ©fono de un cliente con recobro
+      // ── Respuesta de un cliente con expediente de recobro abierto ─────
+      // Si el remitente coincide con el teléfono de un cliente con recobro
       // abierto, la respuesta se registra en el historial del expediente.
       try {
         const digits = String(From).replace(/[^0-9]/g, "");
@@ -9526,7 +9532,7 @@ app.post(
         console.error("[Recobros] error registrando respuesta WhatsApp:", e);
       }
 
-      // â”€â”€ Route to active capture session if one exists â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── Route to active capture session if one exists ─────────────────
       const activeSession = await db.query(
         `SELECT id, job_id FROM whatsapp_capture_sessions WHERE status = 'ACTIVE' LIMIT 1`
       );
@@ -9597,9 +9603,9 @@ app.post(
 
         if (msgType === "text" && Body) {
           // Coordenadas DMS escritas en el propio mensaje (ubicaciones reenviadas de
-          // Google Maps: `41Â°04'55.2"N 1Â°08'54.6"E`). Es la vÃ­a mÃ¡s fiable: sin red.
+          // Google Maps: `41°04'55.2"N 1°08'54.6"E`). Es la vía más fiable: sin red.
           const dms = Body.match(
-            /(\d{1,3})Â°(\d{1,2})'([\d.]+)"?\s*([NS])[\s,+]+(\d{1,3})Â°(\d{1,2})'([\d.]+)"?\s*([EW])/
+            /(\d{1,3})°(\d{1,2})'([\d.]+)"?\s*([NS])[\s,+]+(\d{1,3})°(\d{1,2})'([\d.]+)"?\s*([EW])/
           );
           if (dms) {
             const latAbs = Number(dms[1]) + Number(dms[2]) / 60 + Number(dms[3]) / 3600;
@@ -9621,7 +9627,7 @@ app.post(
                                  finalUrl.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
                                  finalUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
               const urlDms = coordMatch ? null : finalUrl.match(
-                /(\d{1,3})Â°(\d{1,2})'([\d.]+)"?([NS])\+?(\d{1,3})Â°(\d{1,2})'([\d.]+)"?([EW])/
+                /(\d{1,3})°(\d{1,2})'([\d.]+)"?([NS])\+?(\d{1,3})°(\d{1,2})'([\d.]+)"?([EW])/
               );
               if (coordMatch || urlDms) {
                 if (coordMatch) {
@@ -9653,7 +9659,7 @@ app.post(
         }
 
         // Reverse geocode native GPS location using Nominatim
-        // (effectiveMsgType cubre tambiÃ©n las coordenadas DMS extraÃ­das del texto)
+        // (effectiveMsgType cubre también las coordenadas DMS extraídas del texto)
         if (effectiveMsgType === "location" && lat != null && lng != null && !resolvedAddress) {
           try {
             const geoResp = await fetch(
@@ -9695,7 +9701,7 @@ app.post(
         );
         console.log(`WhatsApp capture: message ${MessageSid} routed to session #${sessionId} (job ${jobId})`);
 
-        // Audio â†’ transcribir en segundo plano (no bloquea la respuesta a Twilio)
+        // Audio → transcribir en segundo plano (no bloquea la respuesta a Twilio)
         if (effectiveMsgType === "audio" && mediaUrl0 && capMsg.rows[0]?.id) {
           void transcribeCaptureAudio(capMsg.rows[0].id, mediaUrl0);
         }
@@ -9719,7 +9725,7 @@ app.post(
       );
       const draftId = draftResult.rows[0].id;
 
-      // Link message â†’ draft
+      // Link message → draft
       await db.query(
         `UPDATE whatsapp_messages SET processed = true, assistance_draft_id = $1 WHERE id = $2`,
         [draftId, msgId]
@@ -9742,10 +9748,10 @@ app.post(
   async (req, res) => {
     try {
       const { MessageSid, MessageStatus, ErrorCode } = req.body;
-      console.log(`WhatsApp status update: ${MessageSid} â†’ ${MessageStatus}${ErrorCode ? ` (err ${ErrorCode})` : ""}`);
+      console.log(`WhatsApp status update: ${MessageSid} → ${MessageStatus}${ErrorCode ? ` (err ${ErrorCode})` : ""}`);
 
       // Actualizar estado del WhatsApp de seguimiento en la asistencia correspondiente.
-      // Ranking para no rebajar (p.ej. un 'delivered' tardÃ­o no debe pisar 'read').
+      // Ranking para no rebajar (p.ej. un 'delivered' tardío no debe pisar 'read').
       if (MessageSid && MessageStatus) {
         await db.query(
           `UPDATE roadside_assistances
@@ -9896,11 +9902,11 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
     const tr = await openai.audio.transcriptions.create({
       file,
       model: "whisper-1",
-      prompt: "Asistencia en carretera: matrÃ­cula, averÃ­a, ubicaciÃ³n, chofer, autorizaciÃ³n.",
+      prompt: "Asistencia en carretera: matrícula, avería, ubicación, chofer, autorización.",
     });
     const transcript = (tr.text || "").trim();
 
-    // Guardamos la transcripciÃ³n y la usamos como text_content para que el anÃ¡lisis IA la incluya
+    // Guardamos la transcripción y la usamos como text_content para que el análisis IA la incluya
     const upd = await db.query(
       `UPDATE whatsapp_capture_messages
        SET transcript = $2, transcript_status = 'done',
@@ -9909,15 +9915,15 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
        RETURNING job_id`,
       [captureMessageId, transcript]
     );
-    console.log(`WhatsApp audio transcrito (capture msg #${captureMessageId}): ${transcript.slice(0, 80)}â€¦`);
+    console.log(`WhatsApp audio transcrito (capture msg #${captureMessageId}): ${transcript.slice(0, 80)}…`);
 
-    // Si el audio empieza por "trabajos a realizar", aÃ±adir el resto al campo de la asistencia
+    // Si el audio empieza por "trabajos a realizar", añadir el resto al campo de la asistencia
     const jobId = upd.rows[0]?.job_id;
     if (jobId) {
       const norm = transcript
         .toLowerCase()
         .normalize("NFD")
-        .replace(/[Ì€-Í¯]/g, ""); // sin acentos
+        .replace(/[̀-ͯ]/g, ""); // sin acentos
       if (norm.startsWith("trabajos a realizar")) {
         // Quita el encabezado "trabajos a realizar" (y posible ":" o "-") del texto original
         const cuerpo = transcript.replace(/^\s*trabajos a realizar\s*[:.\-]?\s*/i, "").trim();
@@ -9932,7 +9938,7 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
              WHERE id = $1`,
             [jobId, cuerpo, Date.now()]
           );
-          console.log(`Trabajos a realizar aÃ±adidos a asistencia #${jobId} desde audio`);
+          console.log(`Trabajos a realizar añadidos a asistencia #${jobId} desde audio`);
         }
       }
     }
@@ -9957,7 +9963,7 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
   const messages = result.rows;
   if (!messages.length) return {};
 
-  // Build context for AI â€” text lines + image URLs for vision
+  // Build context for AI — text lines + image URLs for vision
   const lines: string[] = [];
   const imageUrls: string[] = [];
   for (const m of messages) {
@@ -9974,21 +9980,21 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
   }
 
   const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
-Analiza los mensajes e imÃ¡genes de WhatsApp de una incidencia y extrae la informaciÃ³n relevante.
+Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
 
-INSTRUCCIONES CRÃTICAS para imÃ¡genes:
-1. Busca matrÃ­culas de vehÃ­culos en todas las imÃ¡genes (en la placa fÃ­sica, documentos, capturas de pantalla).
-2. Busca coordenadas GPS en cualquier formato: decimal (41.123, 1.456), DMS (41Â°19'20.4"N 1Â°15'57.8"E), o en capturas de mapas.
-   - Si encuentras coordenadas DMS, conviÃ©rtelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
-3. Busca direcciones, nombres de calles, municipios visibles en imÃ¡genes de mapas o capturas de pantalla.
+INSTRUCCIONES CRÍTICAS para imágenes:
+1. Busca matrículas de vehículos en todas las imágenes (en la placa física, documentos, capturas de pantalla).
+2. Busca coordenadas GPS en cualquier formato: decimal (41.123, 1.456), DMS (41°19'20.4"N 1°15'57.8"E), o en capturas de mapas.
+   - Si encuentras coordenadas DMS, conviértelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
+3. Busca direcciones, nombres de calles, municipios visibles en imágenes de mapas o capturas de pantalla.
 
-MATRÃCULAS (EspaÃ±a):
-- MatrÃ­cula BLANCA = camiÃ³n/vehÃ­culo tractor â†’ campo "plate".
-- MatrÃ­cula ROJA = REMOLQUE â†’ campo "plateRemolque". Formato del remolque: una "R" seguida de 4 dÃ­gitos y 3 letras (ej. R0000BBB, R1234BCD). DevuÃ©lvela sin espacios ni guiones, empezando por R.
-- Si en una imagen aparecen la blanca y la roja juntas: la blanca es del camiÃ³n ("plate") y la roja del remolque ("plateRemolque").
-- No pongas una matrÃ­cula roja (que empieza por R con formato R+4 dÃ­gitos+3 letras) en "plate"; esa va siempre en "plateRemolque".
+MATRÍCULAS (España):
+- Matrícula BLANCA = camión/vehículo tractor → campo "plate".
+- Matrícula ROJA = REMOLQUE → campo "plateRemolque". Formato del remolque: una "R" seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). Devuélvela sin espacios ni guiones, empezando por R.
+- Si en una imagen aparecen la blanca y la roja juntas: la blanca es del camión ("plate") y la roja del remolque ("plateRemolque").
+- No pongas una matrícula roja (que empieza por R con formato R+4 dígitos+3 letras) en "plate"; esa va siempre en "plateRemolque".
 
-Responde SOLO con JSON vÃ¡lido, sin markdown.
+Responde SOLO con JSON válido, sin markdown.
 Campos a extraer (null si no disponible):
 {
   "customerName": string,
@@ -9996,13 +10002,13 @@ Campos a extraer (null si no disponible):
   "empresa": string,
   "contactoNombre": string,
   "contactoTelefono": string,
-  "plate": string (matrÃ­cula BLANCA del vehÃ­culo averiado/camiÃ³n, sin espacios ni guiones),
-  "plateRemolque": string (matrÃ­cula ROJA del remolque, formato R+4 dÃ­gitos+3 letras, ej. R0000BBB, o null),
+  "plate": string (matrícula BLANCA del vehículo averiado/camión, sin espacios ni guiones),
+  "plateRemolque": string (matrícula ROJA del remolque, formato R+4 dígitos+3 letras, ej. R0000BBB, o null),
   "vehicleBrand": string,
   "vehicleModel": string,
   "vehicleDescription": string,
-  "latitude": number (decimal, extraÃ­do de texto, imagen de mapa o coordenadas DMS),
-  "longitude": number (decimal, extraÃ­do de texto, imagen de mapa o coordenadas DMS),
+  "latitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
+  "longitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
   "address": string,
   "municipio": string,
   "provincia": string,
@@ -10018,7 +10024,7 @@ Campos a extraer (null si no disponible):
     | { type: "image_url"; image_url: { url: string; detail: "auto" } };
 
   const userContent: ContentPart[] = [
-    { type: "text", text: `Mensajes de la sesiÃ³n:\n${lines.join("\n")}` },
+    { type: "text", text: `Mensajes de la sesión:\n${lines.join("\n")}` },
     ...imageUrls.map((url) => ({
       type: "image_url" as const,
       image_url: { url, detail: "auto" as const },
@@ -10082,7 +10088,7 @@ app.get("/api/whatsapp-capture/active", requireAdminRole, async (_req, res) => {
     return res.json(result.rows[0] ?? null);
   } catch (error) {
     console.error("GET /api/whatsapp-capture/active error:", error);
-    return res.status(500).json({ error: "Error obteniendo sesiÃ³n activa" });
+    return res.status(500).json({ error: "Error obteniendo sesión activa" });
   }
 });
 
@@ -10114,7 +10120,7 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
     return res.json({ ...session, messages });
   } catch (error) {
     console.error("GET /api/whatsapp-capture/by-job error:", error);
-    return res.status(500).json({ error: "Error obteniendo sesiÃ³n" });
+    return res.status(500).json({ error: "Error obteniendo sesión" });
   }
 });
 
@@ -10125,7 +10131,7 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
     if (!job_id) return res.status(400).json({ error: "job_id requerido" });
 
     // Solo puede haber una captura activa a la vez (los WhatsApp entrantes se
-    // enrutan a la sesiÃ³n activa). Si la que bloquea es de una asistencia ya
+    // enrutan a la sesión activa). Si la que bloquea es de una asistencia ya
     // cerrada, se cierra sola y se permite la nueva.
     const existing = await db.query(
       `SELECT s.id, s.job_id, COALESCE(NULLIF(ra.plate, ''), ra."plateRemolque") AS plate, ra."customerName", ra.status AS job_status
@@ -10139,7 +10145,7 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
       if (Number(active.job_id) === Number(job_id)) {
         return res.status(409).json({ error: "Esta asistencia ya tiene una captura activa" });
       }
-      // Captura huÃ©rfana (asistencia cerrada o inexistente) â†’ cerrarla automÃ¡ticamente
+      // Captura huérfana (asistencia cerrada o inexistente) → cerrarla automáticamente
       if (!active.job_status || CLOSED.has(active.job_status)) {
         await db.query(
           `UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`,
@@ -10147,10 +10153,10 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
         );
         continue;
       }
-      // Captura activa de otra asistencia AÃšN ABIERTA â†’ bloquear
+      // Captura activa de otra asistencia AÚN ABIERTA → bloquear
       const label = active.plate || active.customerName || `#${active.job_id}`;
       return res.status(409).json({
-        error: `Ya hay una captura activa en la asistencia ${label}. CiÃ©rrala antes de empezar otra.`,
+        error: `Ya hay una captura activa en la asistencia ${label}. Ciérrala antes de empezar otra.`,
         activeSession: active,
       });
     }
@@ -10168,7 +10174,7 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
     return res.json(row);
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions error:", error);
-    return res.status(500).json({ error: "Error iniciando sesiÃ³n" });
+    return res.status(500).json({ error: "Error iniciando sesión" });
   }
 });
 
@@ -10180,8 +10186,8 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       `SELECT * FROM whatsapp_capture_sessions WHERE id = $1`,
       [id]
     );
-    if (!session.rows.length) return res.status(404).json({ error: "SesiÃ³n no encontrada" });
-    if (session.rows[0].status === "CLOSED") return res.status(400).json({ error: "SesiÃ³n ya cerrada" });
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
+    if (session.rows[0].status === "CLOSED") return res.status(400).json({ error: "Sesión ya cerrada" });
 
     const now = Date.now();
     await db.query(
@@ -10199,7 +10205,7 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     for (const msg of msgs.rows) {
       if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
         const url = msg.media_stored_url || msg.media_url;
-        // Evitar duplicados al reabrir y volver a cerrar la sesiÃ³n: solo insertar si esa URL aÃºn no estÃ¡ guardada
+        // Evitar duplicados al reabrir y volver a cerrar la sesión: solo insertar si esa URL aún no está guardada
         await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
            SELECT $1, $2, $3, $4, $5
@@ -10213,14 +10219,14 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
         noteLines.push(`[WhatsApp ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}] ${msg.text_content}`);
       }
       if (msg.message_type === "location" && msg.address) {
-        noteLines.push(`[UbicaciÃ³n GPS] ${msg.address}`);
+        noteLines.push(`[Ubicación GPS] ${msg.address}`);
       }
     }
     // Append WhatsApp notes to assistance notes field
     if (noteLines.length > 0) {
       const existing = await db.query(`SELECT notes FROM roadside_assistances WHERE id = $1`, [jobId]);
       const prevNotes = existing.rows[0]?.notes ?? "";
-      // Evitar duplicar notas ya aÃ±adidas en un cierre anterior de la misma sesiÃ³n
+      // Evitar duplicar notas ya añadidas en un cierre anterior de la misma sesión
       const freshLines = noteLines.filter((l) => !prevNotes.includes(l));
       if (freshLines.length > 0) {
         const newNotes = [prevNotes, ...freshLines].filter(Boolean).join("\n");
@@ -10228,7 +10234,7 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       }
     }
 
-    // Run AI analysis asynchronously â€” don't block the response
+    // Run AI analysis asynchronously — don't block the response
     analyzeCaptureSesionWithAI(id).then(async (suggestions) => {
       if (Object.keys(suggestions).length > 0) {
         await db.query(
@@ -10243,7 +10249,7 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     return res.json(updated.rows[0]);
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions/:id/close error:", error);
-    return res.status(500).json({ error: "Error cerrando sesiÃ³n" });
+    return res.status(500).json({ error: "Error cerrando sesión" });
   }
 });
 
@@ -10252,13 +10258,13 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
   try {
     const id = Number(req.params.id);
 
-    // No puede haber otra sesiÃ³n activa
+    // No puede haber otra sesión activa
     const existing = await db.query(
       `SELECT id FROM whatsapp_capture_sessions WHERE status = 'ACTIVE' AND id != $1 LIMIT 1`,
       [id]
     );
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: "Ya existe otra captura activa. CiÃ©rrala primero." });
+      return res.status(409).json({ error: "Ya existe otra captura activa. Ciérrala primero." });
     }
 
     const result = await db.query(
@@ -10268,14 +10274,14 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
        RETURNING *`,
       [id]
     );
-    if (result.rows.length === 0) return res.status(404).json({ error: "SesiÃ³n no encontrada" });
+    if (result.rows.length === 0) return res.status(404).json({ error: "Sesión no encontrada" });
     const row = result.rows[0];
     row.started_at = row.started_at ? Number(row.started_at) : null;
     row.ended_at = null;
     return res.json(row);
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions/:id/reopen error:", error);
-    return res.status(500).json({ error: "Error reabriendo sesiÃ³n" });
+    return res.status(500).json({ error: "Error reabriendo sesión" });
   }
 });
 
@@ -10287,7 +10293,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       `SELECT * FROM whatsapp_capture_sessions WHERE id = $1`,
       [id]
     );
-    if (!session.rows.length) return res.status(404).json({ error: "SesiÃ³n no encontrada" });
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
 
     const { field, value } = req.body;
     if (!field || value === undefined) return res.status(400).json({ error: "field y value requeridos" });
@@ -10338,7 +10344,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
 });
 
 /* =========================================================
-   LUGARES CONOCIDOS (parkings, bases de clienteâ€¦)
+   LUGARES CONOCIDOS (parkings, bases de cliente…)
 ========================================================= */
 
 const KNOWN_PLACE_RADIUS_M = 300;
@@ -10359,7 +10365,7 @@ function normalizeKnownPlace(row: any) {
   };
 }
 
-// Devuelve el lugar conocido activo mÃ¡s cercano dentro del radio, o null
+// Devuelve el lugar conocido activo más cercano dentro del radio, o null
 async function findNearbyKnownPlace(lat: number, lng: number, radiusM = KNOWN_PLACE_RADIUS_M) {
   const r = await db.query(`SELECT * FROM roadside_known_places WHERE active = true`);
   let best: any = null;
@@ -10371,7 +10377,7 @@ async function findNearbyKnownPlace(lat: number, lng: number, radiusM = KNOWN_PL
   return best ? { place: normalizeKnownPlace(best), distM: Math.round(bestDist) } : null;
 }
 
-// Crea un lugar conocido evitando duplicados por cercanÃ­a. Devuelve {place, reused}
+// Crea un lugar conocido evitando duplicados por cercanía. Devuelve {place, reused}
 async function createKnownPlaceDedup(data: {
   nombre: string; tipo?: string; direccion?: string | null;
   lat: number; lng: number; clientId?: number | null; clientName?: string | null;
@@ -10397,7 +10403,7 @@ async function createKnownPlaceDedup(data: {
   return { place: normalizeKnownPlace(r.rows[0]), reused: false };
 }
 
-// â”€â”€ Admin CRUD â”€â”€
+// ── Admin CRUD ──
 app.get("/api/roadside-known-places", requireAdminRole, async (req, res) => {
   try {
     const clientId = req.query.clientId ? Number(req.query.clientId) : null;
@@ -10479,8 +10485,8 @@ app.delete("/api/roadside-known-places/:id", requireAdminRole, async (req, res) 
   }
 });
 
-// â”€â”€ Operario: capturar destino al llegar + crear lugar â”€â”€
-// Captura el GPS de destino (si la asistencia no tenÃ­a) y comprueba si ya es un lugar conocido.
+// ── Operario: capturar destino al llegar + crear lugar ──
+// Captura el GPS de destino (si la asistencia no tenía) y comprueba si ya es un lugar conocido.
 app.post("/api/roadside-operator/assistances/:id/capture-destination", requireRoadsideOperator, async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -10494,7 +10500,7 @@ app.post("/api/roadside-operator/assistances/:id/capture-destination", requireRo
     const cur = await db.query(`SELECT latitude, longitude, "clientName" FROM roadside_assistances WHERE id = $1`, [id]);
     if (!cur.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });
 
-    // Si no tenÃ­a coordenadas, guardamos el destino capturado
+    // Si no tenía coordenadas, guardamos el destino capturado
     if (cur.rows[0].latitude == null || cur.rows[0].longitude == null) {
       await db.query(
         `UPDATE roadside_assistances SET latitude = $2, longitude = $3, "updatedAtMs" = $4 WHERE id = $1`,
@@ -10502,7 +10508,7 @@ app.post("/api/roadside-operator/assistances/:id/capture-destination", requireRo
       );
     }
 
-    // Â¿Ya es un lugar conocido?
+    // ¿Ya es un lugar conocido?
     const nearby = await findNearbyKnownPlace(lat, lng);
     if (nearby) {
       await db.query(`UPDATE roadside_assistances SET "knownPlaceId" = $2 WHERE id = $1`, [id, nearby.place.id]);
@@ -10546,7 +10552,7 @@ app.post("/api/roadside-operator/known-places", requireRoadsideOperator, async (
 });
 
 /* =========================================================
-   OTF â€” Ã“rdenes de Trabajo de Flota
+   OTF — Órdenes de Trabajo de Flota
 ========================================================= */
 
 function normalizeOtf(row: any) {
@@ -10618,7 +10624,7 @@ async function otfWithDetails(id: number) {
   return { ...normalizeOtf(h.rows[0]), trabajos, progreso: { hechos, total } };
 }
 
-// â”€â”€ Oficina â”€â”€
+// ── Oficina ──
 app.get("/api/otf", requireAdminRole, async (req, res) => {
   try {
     const status = req.query.status ? String(req.query.status) : null;
@@ -10721,7 +10727,7 @@ app.post("/api/otf/:id/trabajos", requireSupervisorRole, async (req, res) => {
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
     console.error("POST /api/otf/:id/trabajos error:", e);
-    res.status(500).json({ error: "Error aÃ±adiendo trabajo" });
+    res.status(500).json({ error: "Error añadiendo trabajo" });
   }
 });
 
@@ -10759,7 +10765,7 @@ app.delete("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => 
   }
 });
 
-// â”€â”€ Operario (APK) â”€â”€
+// ── Operario (APK) ──
 app.get("/api/roadside-operator/otf", requireRoadsideOperator, async (req, res) => {
   try {
     const operator = (req as any).roadsideOperator as { techName: string };
@@ -10795,7 +10801,7 @@ app.get("/api/roadside-operator/otf/:id", requireRoadsideOperator, async (req, r
   }
 });
 
-// Check-in manual a la base (si el GPS automÃ¡tico falla)
+// Check-in manual a la base (si el GPS automático falla)
 app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -10813,14 +10819,14 @@ app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, asyn
   }
 });
 
-// Trabajo aÃ±adido EN CAMPO por el tÃ©cnico (directo, sin aprobaciÃ³n)
+// Trabajo añadido EN CAMPO por el técnico (directo, sin aprobación)
 app.post("/api/roadside-operator/otf/:id/trabajos", requireRoadsideOperator, async (req, res) => {
   try {
     const operator = (req as any).roadsideOperator as { techName: string };
     const otfId = Number(req.params.id);
     const b = req.body ?? {};
     if (!b.plate || !b.tipoVehiculo || (!b.trabajoPlantilla && !b.detalleManual) || !b.motivoAltaCampo) {
-      return res.status(400).json({ error: "MatrÃ­cula, tipo, trabajo y motivo son obligatorios" });
+      return res.status(400).json({ error: "Matrícula, tipo, trabajo y motivo son obligatorios" });
     }
     if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
       const dup = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id DESC LIMIT 1`, [otfId]);
@@ -10839,7 +10845,7 @@ app.post("/api/roadside-operator/otf/:id/trabajos", requireRoadsideOperator, asy
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
     console.error("POST operator otf trabajos error:", e);
-    res.status(500).json({ error: "Error aÃ±adiendo trabajo en campo" });
+    res.status(500).json({ error: "Error añadiendo trabajo en campo" });
   }
 });
 
@@ -10848,7 +10854,7 @@ app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperat
     const tid = Number(req.params.tid);
     const status = String(req.body?.status ?? "");
     const allowed = new Set(["pendiente", "en_proceso", "finalizado", "no_realizado"]);
-    if (!allowed.has(status)) return res.status(400).json({ error: "Estado no vÃ¡lido" });
+    if (!allowed.has(status)) return res.status(400).json({ error: "Estado no válido" });
     if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
       const cur = await db.query(`SELECT * FROM otf_trabajos WHERE id = $1`, [tid]);
       return res.json(cur.rows[0] ? normalizeOtfTrabajo(cur.rows[0]) : { ok: true });
@@ -10874,7 +10880,7 @@ app.post(
     try {
       const tid = Number(req.params.tid);
       const kind = String(req.body?.kind || "foto").trim();
-      if (!req.file) return res.status(400).json({ error: "No se recibiÃ³ archivo" });
+      if (!req.file) return res.status(400).json({ error: "No se recibió archivo" });
       if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
         return res.json({ ok: true, deduped: true });
       }
@@ -10901,7 +10907,7 @@ app.post(
   }
 );
 
-// Finalizar OTF con firma Ãºnica del responsable (operario)
+// Finalizar OTF con firma única del responsable (operario)
 app.post(
   "/api/roadside-operator/otf/:id/finalizar",
   requireRoadsideOperator,
@@ -10953,9 +10959,9 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     doc.on("data", (c) => chunks.push(c));
     const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-    doc.fontSize(18).font("Helvetica-Bold").text("Mobilink â€“ Orden de Trabajo de Flota", { align: "center" });
+    doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Orden de Trabajo de Flota", { align: "center" });
     doc.moveDown(0.3);
-    doc.fontSize(11).font("Helvetica").text(`OTF nÂº ${data.id}   |   ${formatDateEs(data.createdAtMs)}`, { align: "center" });
+    doc.fontSize(11).font("Helvetica").text(`OTF nº ${data.id}   |   ${formatDateEs(data.createdAtMs)}`, { align: "center" });
     doc.moveDown(1);
 
     const row = (l: string, v: string) => {
@@ -10978,7 +10984,7 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
 
     const printT = (t: any) => {
-      doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "â€”"} Â· ${t.tipoVehiculo || ""}  [${t.status}]`);
+      doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
       doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
       if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
       doc.moveDown(0.2);
@@ -10989,11 +10995,11 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     planificados.forEach(printT);
 
     doc.moveDown(0.4);
-    doc.fontSize(11).font("Helvetica-Bold").text("AÃ±adidos en campo por el tÃ©cnico:");
+    doc.fontSize(11).font("Helvetica-Bold").text("Añadidos en campo por el técnico:");
     if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
     enCampo.forEach(printT);
 
-    // Firma Ãºnica
+    // Firma única
     if (data.firmaUrl || data.firmanteNombre) {
       doc.moveDown(1);
       doc.fontSize(13).font("Helvetica-Bold").text("Conformidad del responsable");
@@ -11020,7 +11026,7 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
   }
 });
 
-// Escaneo de matrÃ­cula con IA (operario): foto â†’ matrÃ­cula â†’ asistencia abierta
+// Escaneo de matrícula con IA (operario): foto → matrícula → asistencia abierta
 app.post(
   "/api/roadside-operator/scan-plate",
   requireRoadsideOperator,
@@ -11028,7 +11034,7 @@ app.post(
   async (req, res) => {
     try {
       const operator = (req as any).roadsideOperator as { techName: string };
-      if (!req.file) return res.status(400).json({ error: "No se recibiÃ³ imagen" });
+      if (!req.file) return res.status(400).json({ error: "No se recibió imagen" });
 
       // Subir a Supabase para tener una URL que la IA pueda leer
       const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as Record<string, string>)[req.file.mimetype] ?? "jpg";
@@ -11042,7 +11048,7 @@ app.post(
       const plate = await detectPlateFromImage(pub.publicUrl);
       if (!plate) return res.json({ plate: null });
 
-      // Buscar asistencia ABIERTA del tÃ©cnico con esa matrÃ­cula
+      // Buscar asistencia ABIERTA del técnico con esa matrícula
       const norm = plate.toUpperCase().replace(/[^A-Z0-9]/g, "");
       const r = await db.query(
         `SELECT id FROM roadside_assistances
@@ -11055,17 +11061,17 @@ app.post(
       return res.json({ plate, assistanceId: r.rows[0]?.id ?? null });
     } catch (e: any) {
       console.error("POST scan-plate error:", e);
-      res.status(500).json({ error: e?.message || "Error escaneando matrÃ­cula" });
+      res.status(500).json({ error: e?.message || "Error escaneando matrícula" });
     }
   }
 );
 
-// â”€â”€ App mÃ³vil TyreControl (tyrecontrol_app, Flutter) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── App móvil TyreControl (tyrecontrol_app, Flutter) ────────────
 // A diferencia del resto de TyreControl (que habla directo con
-// Supabase desde el cliente, con RLS), el reconocimiento de matrÃ­cula
+// Supabase desde el cliente, con RLS), el reconocimiento de matrícula
 // necesita la clave de OpenAI y por eso pasa por este servidor. La
-// autenticaciÃ³n es el propio JWT de Supabase Auth del tÃ©cnico (la app
-// ya iniciÃ³ sesiÃ³n contra Supabase, no un usuario/cÃ³digo aparte).
+// autenticación es el propio JWT de Supabase Auth del técnico (la app
+// ya inició sesión contra Supabase, no un usuario/código aparte).
 function requireTyreControlUser(
   req: express.Request,
   res: express.Response,
@@ -11077,7 +11083,7 @@ function requireTyreControlUser(
     if (!token) return res.status(401).json({ error: "No autenticado" });
 
     const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) return res.status(401).json({ error: "SesiÃ³n no vÃ¡lida" });
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
 
     const { data: perfil } = await supabase
       .from("tc_usuarios")
@@ -11092,15 +11098,15 @@ function requireTyreControlUser(
     next();
   })().catch((error) => {
     console.error("requireTyreControlUser error:", error);
-    res.status(500).json({ error: "Error de autenticaciÃ³n" });
+    res.status(500).json({ error: "Error de autenticación" });
   });
 }
 
-// Login unificado: el tÃ©cnico usa el MISMO nombre + PIN que en la app
+// Login unificado: el técnico usa el MISMO nombre + PIN que en la app
 // de asistencias (tabla techs / roadsideOperatorCode). Este endpoint
-// valida ese PIN y crea/sincroniza por detrÃ¡s el usuario de Supabase
+// valida ese PIN y crea/sincroniza por detrás el usuario de Supabase
 // Auth + tc_usuarios que TyreControl necesita para que funcione la RLS.
-// Devuelve el email sintÃ©tico con el que la app hace signInWithPassword.
+// Devuelve el email sintético con el que la app hace signInWithPassword.
 app.post("/api/tyrecontrol/login-operario", async (req, res) => {
   try {
     const techName = String(req.body?.techName || "").trim();
@@ -11108,18 +11114,18 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
     const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 
     if (!techName || !code || !expectedCode || code !== expectedCode) {
-      return res.status(401).json({ error: "Operario o cÃ³digo incorrecto" });
+      return res.status(401).json({ error: "Operario o código incorrecto" });
     }
 
     const slug = techName
       .toLowerCase()
       .normalize("NFD")
-      .replace(/[Ì€-Í¯]/g, "")
+      .replace(/[̀-ͯ]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
     const email = `apk-${slug}@seatyrecheck.app`;
 
-    // Â¿Ya existe el usuario? (tc_usuarios.id == auth.users.id)
+    // ¿Ya existe el usuario? (tc_usuarios.id == auth.users.id)
     const { data: existente } = await supabase
       .from("tc_usuarios")
       .select("id")
@@ -11129,7 +11135,7 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
     let userId: string;
     if (existente) {
       userId = existente.id;
-      // Mantener la contraseÃ±a de Supabase sincronizada con el PIN actual
+      // Mantener la contraseña de Supabase sincronizada con el PIN actual
       await supabase.auth.admin.updateUserById(userId, { password: code });
       await supabase
         .from("tc_usuarios")
@@ -11147,12 +11153,12 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       userId = created.user.id;
 
       // Empresa de referencia: Mobilink Tarragona (nombre legacy "SEA Tarragona"
-      // aceptado hasta ejecutar la migraciÃ³n de datos; si no, la mÃ¡s antigua).
+      // aceptado hasta ejecutar la migración de datos; si no, la más antigua).
       const { data: empresa } = await supabase
         .from("tc_empresas")
         .select("id")
         .in("nombre", ["Mobilink Tarragona", "SEA Tarragona"])
-        .order("nombre", { ascending: true }) // "Mobilink..." < "SEA..." â†’ prioriza el nuevo
+        .order("nombre", { ascending: true }) // "Mobilink..." < "SEA..." → prioriza el nuevo
         .limit(1)
         .maybeSingle();
       let empresaId = empresa?.id;
@@ -11180,9 +11186,9 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       if (insertErr) throw new Error(insertErr.message);
     }
 
-    // El tÃ©cnico de SEA atiende a todas las flotas: asignar todas las
+    // El técnico de SEA atiende a todas las flotas: asignar todas las
     // empresas activas (la RLS de operador solo muestra las asignadas).
-    // EXCEPTO si el usuario tiene asignaciÃ³n manual desde el panel
+    // EXCEPTO si el usuario tiene asignación manual desde el panel
     // (empresas_manual): entonces sus empresas las gestiona el administrador
     // y el login no las toca.
     const { data: perfilUsuario } = await supabase
@@ -11206,11 +11212,11 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
     res.json({ ok: true, email, techName });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/login-operario error:", error);
-    res.status(500).json({ error: error?.message || "Error iniciando sesiÃ³n" });
+    res.status(500).json({ error: error?.message || "Error iniciando sesión" });
   }
 });
 
-// â”€â”€ GestiÃ³n de usuarios desde el panel (admin/super-admin) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Gestión de usuarios desde el panel (admin/super-admin) ──────────────
 // Igual que requireTyreControlUser pero exige rol administrador (o
 // super-admin) con acceso al panel. Deja el perfil en req.
 function requireTyreControlAdmin(
@@ -11224,7 +11230,7 @@ function requireTyreControlAdmin(
     if (!token) return res.status(401).json({ error: "No autenticado" });
 
     const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) return res.status(401).json({ error: "SesiÃ³n no vÃ¡lida" });
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
 
     const { data: perfil } = await supabase
       .from("tc_usuarios")
@@ -11239,13 +11245,13 @@ function requireTyreControlAdmin(
     next();
   })().catch((error) => {
     console.error("requireTyreControlAdmin error:", error);
-    res.status(500).json({ error: "Error de autenticaciÃ³n" });
+    res.status(500).json({ error: "Error de autenticación" });
   });
 }
 
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
-// un 409 y se recomienda desactivarlo en su lugar: no se pierde histÃ³rico.
+// un 409 y se recomienda desactivarlo en su lugar: no se pierde histórico.
 app.delete("/api/tyrecontrol/usuarios/:id", requireTyreControlAdmin, async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -11263,19 +11269,19 @@ app.delete("/api/tyrecontrol/usuarios/:id", requireTyreControlAdmin, async (req,
     // Asignaciones de empresas: fuera siempre.
     await supabase.from("tc_operador_empresas").delete().eq("usuario_id", id);
 
-    // Perfil: si tiene historial enlazado por FK (revisiones, planesâ€¦),
-    // Postgres lo rechaza â†’ informamos en claro.
+    // Perfil: si tiene historial enlazado por FK (revisiones, planes…),
+    // Postgres lo rechaza → informamos en claro.
     const { error: delPerfil } = await supabase.from("tc_usuarios").delete().eq("id", id);
     if (delPerfil) {
       if (/foreign key|violates/i.test(delPerfil.message)) {
         return res.status(409).json({
-          error: `"${objetivo.nombre}" tiene historial (revisiones u operaciones). DesactÃ­valo en lugar de eliminarlo.`,
+          error: `"${objetivo.nombre}" tiene historial (revisiones u operaciones). Desactívalo en lugar de eliminarlo.`,
         });
       }
       throw new Error(delPerfil.message);
     }
 
-    // Usuario de autenticaciÃ³n (best-effort: el perfil ya no existe).
+    // Usuario de autenticación (best-effort: el perfil ya no existe).
     try { await supabase.auth.admin.deleteUser(id); } catch (e) {
       console.error("auth.admin.deleteUser:", e);
     }
@@ -11294,7 +11300,7 @@ app.post(
   async (req, res) => {
     try {
       const userId = (req as any).tyreControlUserId as string;
-      if (!req.file) return res.status(400).json({ error: "No se recibiÃ³ imagen" });
+      if (!req.file) return res.status(400).json({ error: "No se recibió imagen" });
 
       const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as Record<string, string>)[req.file.mimetype] ?? "jpg";
       const storagePath = `scan/${userId}/${Date.now()}.${ext}`;
@@ -11308,12 +11314,12 @@ app.post(
       return res.json({ plate });
     } catch (e: any) {
       console.error("POST /api/tyrecontrol/scan-plate error:", e);
-      res.status(500).json({ error: e?.message || "Error escaneando matrÃ­cula" });
+      res.status(500).json({ error: e?.message || "Error escaneando matrícula" });
     }
   }
 );
 
-// KPIs / Dashboard de direcciÃ³n
+// KPIs / Dashboard de dirección
 app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
   try {
     const days = Math.max(1, Math.min(365, Number(req.query.days) || 30));
@@ -11397,14 +11403,14 @@ app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
   }
 });
 
-// Historial completo de un vehÃ­culo por matrÃ­cula (asistencias + trabajos OTF)
+// Historial completo de un vehículo por matrícula (asistencias + trabajos OTF)
 app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
   try {
     const raw = String(req.query.plate ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!raw || raw.length < 4) return res.status(400).json({ error: "MatrÃ­cula no vÃ¡lida" });
+    if (!raw || raw.length < 4) return res.status(400).json({ error: "Matrícula no válida" });
     const norm = `UPPER(REPLACE(REPLACE(COALESCE(%COL%,''),' ',''),'-','')) = $1`;
 
-    // Asistencias (por matrÃ­cula del camiÃ³n o del remolque)
+    // Asistencias (por matrícula del camión o del remolque)
     const asis = await db.query(
       `SELECT * FROM roadside_assistances
        WHERE ${norm.replace("%COL%", "plate")} OR ${norm.replace("%COL%", '"plateRemolque"')}
@@ -11434,10 +11440,10 @@ app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
       ...trabajosOtf.map((t: any) => t.clientName).filter(Boolean),
     ]));
 
-    // Incidencias repetidas: â‰¥2 asistencias en los Ãºltimos 90 dÃ­as
+    // Incidencias repetidas: ≥2 asistencias en los últimos 90 días
     const hace90 = Date.now() - 90 * 24 * 60 * 60 * 1000;
     const recientes = asistencias.filter((a: any) => (a.createdAtMs ?? 0) >= hace90).length;
-    const alerta = recientes >= 2 ? `âš ï¸ ${recientes} intervenciones en los Ãºltimos 90 dÃ­as` : null;
+    const alerta = recientes >= 2 ? `⚠️ ${recientes} intervenciones en los últimos 90 días` : null;
 
     res.json({
       plate: raw,
@@ -11458,7 +11464,7 @@ app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
 });
 
 /* =========================================================
-   SEA ADMINISTRACIÃ“N â€” analizar imagen de impagado (devoluciÃ³n
+   SEA ADMINISTRACIÓN — analizar imagen de impagado (devolución
    de recibo bancario) y extraer datos para crear el recobro
 ========================================================= */
 app.post(
@@ -11467,7 +11473,7 @@ app.post(
   async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({ success: false, message: "No se recibiÃ³ ninguna imagen." });
+        return res.status(400).json({ success: false, message: "No se recibió ninguna imagen." });
       }
       if (!req.file.mimetype.startsWith("image/")) {
         return res.status(400).json({ success: false, message: "El archivo debe ser una imagen." });
@@ -11476,30 +11482,30 @@ app.post(
       const base64 = req.file.buffer.toString("base64");
       const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
 
-      const systemPrompt = `Eres un extractor de datos de administraciÃ³n de un taller.
-RecibirÃ¡s la imagen de un aviso de devoluciÃ³n de recibo bancario o de una factura pendiente
+      const systemPrompt = `Eres un extractor de datos de administración de un taller.
+Recibirás la imagen de un aviso de devolución de recibo bancario o de una factura pendiente
 (normalmente un email del banco o de contabilidad con campos como CLIENTE, FACTURA,
 VENCIMIENTO, NOMINAL, GASTOS, TOTAL).
 
-Responde SOLO con JSON vÃ¡lido, sin markdown, con esta estructura exacta:
+Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
 {
-  "clienteCodigo": string | null,      // cÃ³digo numÃ©rico del cliente si aparece (ej. "100506")
-  "clienteNombre": string | null,      // razÃ³n social (ej. "DENIS EXPRESS CARGO, S.L.")
-  "numeroFactura": string | null,      // nÃºmero de la factura o recibo (ej. "0000001535")
+  "clienteCodigo": string | null,      // código numérico del cliente si aparece (ej. "100506")
+  "clienteNombre": string | null,      // razón social (ej. "DENIS EXPRESS CARGO, S.L.")
+  "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
   "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
-  "numeroVencimiento": string | null,  // si la factura estÃ¡ partida en varios vencimientos, cuÃ¡l es (ej. "2/3", "1/2"); null si no aparece
-  "fechaContabilizacion": string | null, // FECHA CONTABILIZACIÃ“N del aviso en ISO yyyy-mm-dd
-  "fechaFactura": string | null,       // fecha de emisiÃ³n de la factura en ISO yyyy-mm-dd; SOLO si aparece explÃ­citamente como fecha de factura (no confundir con la contabilizaciÃ³n)
+  "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3", "1/2"); null si no aparece
+  "fechaContabilizacion": string | null, // FECHA CONTABILIZACIÓN del aviso en ISO yyyy-mm-dd
+  "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
   "nominal": number | null,            // importe nominal en euros
-  "gastos": number | null,             // gastos de devoluciÃ³n en euros
+  "gastos": number | null,             // gastos de devolución en euros
   "total": number | null,              // importe total en euros (nominal + gastos)
   "confianza": "alta" | "media" | "baja"
 }
 
 Reglas:
-- Fechas tipo "30.06.26" o "2.07.26" son dd.mm.aa â†’ conviÃ©rtelas a ISO (2026-06-30, 2026-07-02).
-- Importes en formato espaÃ±ol "1.997,32" â†’ 1997.32 (nÃºmero, punto decimal).
-- Si el total no aparece pero sÃ­ nominal y gastos, calcula total = nominal + gastos.
+- Fechas tipo "30.06.26" o "2.07.26" son dd.mm.aa → conviértelas a ISO (2026-06-30, 2026-07-02).
+- Importes en formato español "1.997,32" → 1997.32 (número, punto decimal).
+- Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
       const response = await openai.chat.completions.create({
@@ -11538,7 +11544,7 @@ Reglas:
 );
 
 /* =========================================================
-   SEA ADMINISTRACIÃ“N â€” analizar captura de ficha de cliente
+   SEA ADMINISTRACIÓN — analizar captura de ficha de cliente
    (ERP GENES u otro) y extraer datos para el alta de cliente
 ========================================================= */
 app.post(
@@ -11548,37 +11554,37 @@ app.post(
     try {
       const files = (req.files as Express.Multer.File[] | undefined) ?? [];
       if (!files.length) {
-        return res.status(400).json({ success: false, message: "No se recibiÃ³ ninguna imagen." });
+        return res.status(400).json({ success: false, message: "No se recibió ninguna imagen." });
       }
       if (files.some((f) => !f.mimetype.startsWith("image/"))) {
-        return res.status(400).json({ success: false, message: "Todos los archivos deben ser imÃ¡genes." });
+        return res.status(400).json({ success: false, message: "Todos los archivos deben ser imágenes." });
       }
 
       const dataUrls = files.map((f) => `data:${f.mimetype};base64,${f.buffer.toString("base64")}`);
 
-      const systemPrompt = `Eres un extractor de datos de administraciÃ³n de un taller.
-RecibirÃ¡s UNA O VARIAS capturas de la MISMA ficha de cliente de un ERP (normalmente CEINOR GENES):
-pueden ser distintas pestaÃ±as de la misma ficha ("Datos Generales", "Delegaciones", "Forma de Pago",
-"Observ. y Coment."...). Combina la informaciÃ³n de TODAS las capturas en un Ãºnico cliente.
-Campos habituales: "CÃ³digo Cliente", "Nombre Comercial", "Nombre Fiscal", "NÂº Documento" (NIF/CIF),
-"Email Envio Docs", telÃ©fonos, delegaciones con direcciÃ³n y contactos.
+      const systemPrompt = `Eres un extractor de datos de administración de un taller.
+Recibirás UNA O VARIAS capturas de la MISMA ficha de cliente de un ERP (normalmente CEINOR GENES):
+pueden ser distintas pestañas de la misma ficha ("Datos Generales", "Delegaciones", "Forma de Pago",
+"Observ. y Coment."...). Combina la información de TODAS las capturas en un único cliente.
+Campos habituales: "Código Cliente", "Nombre Comercial", "Nombre Fiscal", "Nº Documento" (NIF/CIF),
+"Email Envio Docs", teléfonos, delegaciones con dirección y contactos.
 
-Responde SOLO con JSON vÃ¡lido, sin markdown, con esta estructura exacta:
+Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
 {
-  "codigo": string | null,           // CÃ³digo Cliente (ej. "100506")
+  "codigo": string | null,           // Código Cliente (ej. "100506")
   "nombre": string | null,           // Nombre fiscal o comercial (ej. "DENIS EXPRESS CARGO, S.L.")
-  "nif": string | null,              // NÂº Documento / NIF / CIF (ej. "B56809189")
-  "telefono": string | null,         // telÃ©fono principal o del contacto
-  "email": string | null,            // email (ej. de "Email Envio Docs"), en minÃºsculas
-  "contacto": string | null,         // nombre de la persona de contacto si aparece y es distinto de la razÃ³n social
+  "nif": string | null,              // Nº Documento / NIF / CIF (ej. "B56809189")
+  "telefono": string | null,         // teléfono principal o del contacto
+  "email": string | null,            // email (ej. de "Email Envio Docs"), en minúsculas
+  "contacto": string | null,         // nombre de la persona de contacto si aparece y es distinto de la razón social
   "formaPago": string | null,        // forma de pago si es visible (ej. "Giro bancario", "Transferencia")
   "confianza": "alta" | "media" | "baja"
 }
 
 Reglas:
-- El cÃ³digo de cliente es numÃ©rico y suele estar junto a "CÃ³digo Cliente".
-- Devuelve el email en minÃºsculas.
-- Si el contacto es la misma razÃ³n social, devuelve contacto = null.
+- El código de cliente es numérico y suele estar junto a "Código Cliente".
+- Devuelve el email en minúsculas.
+- Si el contacto es la misma razón social, devuelve contacto = null.
 - Si un dato aparece en varias capturas con valores distintos, prioriza el de "Datos Generales".
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
@@ -11618,7 +11624,7 @@ Reglas:
 );
 
 /* =========================================================
-   SEA ADMINISTRACIÃ“N â€” envÃ­os automÃ¡ticos de recobros
+   SEA ADMINISTRACIÓN — envíos automáticos de recobros
    (WhatsApp/email programados + avisos diarios).
    Requiere plantillas de WhatsApp aprobadas en Twilio:
    TWILIO_RECOBROS_CONTENT_SID (deudor) y
@@ -11702,7 +11708,7 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
       let twilioSid: string | null = null;
       if (n.canal === "whatsapp_deudor" || n.canal === "whatsapp_deudor_aviso1") {
         const tel = normalizarTelefonoWhatsApp(n.telefono);
-        if (!tel) throw new Error("Cliente sin telÃ©fono");
+        if (!tel) throw new Error("Cliente sin teléfono");
         const contentSidEnv = n.canal === "whatsapp_deudor_aviso1" ? "TWILIO_RECOBROS_AVISO1_SID" : "TWILIO_RECOBROS_AVISO2_SID";
         twilioSid = await enviarWhatsAppRecobro(tel, {
           "1": n.contacto || n.cliente_nombre || "cliente",
@@ -11717,8 +11723,8 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
           `Le recordamos que ${doc}, con vencimiento ${fmtFechaServer(n.vencimiento)}, ` +
           `tiene un importe pendiente de ${fmtEurServer(Number(n.pendiente ?? 0))}.\n\n` +
           (n.mensaje ? `${n.mensaje}\n\n` : "") +
-          `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministraciÃ³n Mobilink`;
-        await enviarEmailRecobro(n.email, `Recordatorio de pago â€” ${doc}`, cuerpo);
+          `Si ya ha realizado el pago, ignore este mensaje.\n\nGracias,\nAdministración Mobilink`;
+        await enviarEmailRecobro(n.email, `Recordatorio de pago — ${doc}`, cuerpo);
       }
       await db.query(
         `UPDATE adm_notificaciones SET estado='enviado', enviado_at=now(), twilio_sid=$2, twilio_status=$3 WHERE id=$1`,
@@ -11732,13 +11738,13 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
           [
             n.recovery_case_id,
             esWhatsapp ? "whatsapp" : "recordatorio_email",
-            `EnvÃ­o automÃ¡tico programado (${esWhatsapp ? "WhatsApp" : "email"})`,
+            `Envío automático programado (${esWhatsapp ? "WhatsApp" : "email"})`,
           ]
         );
       }
-      console.log(`[Recobros] enviado ${n.canal} Â· notificaciÃ³n ${n.id}`);
+      console.log(`[Recobros] enviado ${n.canal} · notificación ${n.id}`);
     } catch (e: any) {
-      console.error(`[Recobros] error en notificaciÃ³n ${n.id}:`, e?.message);
+      console.error(`[Recobros] error en notificación ${n.id}:`, e?.message);
       await db.query(
         `UPDATE adm_notificaciones SET estado='error', error_text=$2 WHERE id=$1`,
         [n.id, String(e?.message ?? e)]
@@ -11748,7 +11754,7 @@ async function procesarNotificacionesProgramadasRecobros(hoy: string) {
 }
 
 async function procesarAvisosDiariosRecobros(hoy: string) {
-  // DeduplicaciÃ³n: si ya hay marcador de resumen para hoy, el trabajo diario ya corriÃ³
+  // Deduplicación: si ya hay marcador de resumen para hoy, el trabajo diario ya corrió
   const marker = await db.query(
     `SELECT 1 FROM adm_notificaciones
      WHERE canal='resumen_interno' AND fecha_programada=$1 AND estado IN ('enviado','error') LIMIT 1`,
@@ -11785,10 +11791,10 @@ async function procesarAvisosDiariosRecobros(hoy: string) {
       );
       await db.query(
         `INSERT INTO adm_recovery_actions (recovery_case_id, action_type, notes)
-         VALUES ($1,'whatsapp','Recordatorio automÃ¡tico: hoy vence su compromiso de pago')`,
+         VALUES ($1,'whatsapp','Recordatorio automático: hoy vence su compromiso de pago')`,
         [r.id]
       );
-      console.log(`[Recobros] recordatorio de compromiso enviado Â· expediente ${r.id}`);
+      console.log(`[Recobros] recordatorio de compromiso enviado · expediente ${r.id}`);
     } catch (e: any) {
       console.error(`[Recobros] error en compromiso ${r.id}:`, e?.message);
     }
@@ -11805,9 +11811,9 @@ async function procesarAvisosDiariosRecobros(hoy: string) {
   );
   const s = resumen.rows[0];
   const texto =
-    `Compromisos que vencen hoy: ${s.compromisos_hoy} Â· ` +
-    `Acciones vencidas: ${s.acciones_vencidas} Â· ` +
-    `Pagos previstos hoy: ${s.pagos_previstos} Â· ` +
+    `Compromisos que vencen hoy: ${s.compromisos_hoy} · ` +
+    `Acciones vencidas: ${s.acciones_vencidas} · ` +
+    `Pagos previstos hoy: ${s.pagos_previstos} · ` +
     `Total pendiente en recobro: ${fmtEurServer(Number(s.total_pendiente))}`;
 
   const dest = await db.query(
@@ -11837,11 +11843,11 @@ async function procesarAvisosDiariosRecobros(hoy: string) {
       errorTxt,
     ]
   );
-  console.log(`[Recobros] resumen interno ${hoy}: ${texto} â†’ ${enviados} enviado(s)`);
+  console.log(`[Recobros] resumen interno ${hoy}: ${texto} → ${enviados} enviado(s)`);
 }
 
 // Callback de Twilio con el estado de entrega de los WhatsApp de recobros
-// (queued â†’ sent â†’ delivered â†’ read / failed)
+// (queued → sent → delivered → read / failed)
 app.post(
   "/api/administracion/whatsapp-status",
   express.urlencoded({ extended: false }),
@@ -11865,13 +11871,13 @@ app.post(
 
 // Escalada manual de cobro por WhatsApp (avisos 1 a 4, disparados a mano
 // desde el expediente): 1) recibo devuelto, 2) recordatorio, 3) aviso previo
-// de traslado a CrÃ©dito y CauciÃ³n, 4) confirmaciÃ³n del traslado.
+// de traslado a Crédito y Caución, 4) confirmación del traslado.
 app.post("/api/administracion/recobro-whatsapp", async (req, res) => {
   try {
     const recoveryCaseId = String(req.body?.recoveryCaseId || "").trim();
     const aviso = Number(req.body?.aviso);
     if (!recoveryCaseId || ![1, 2, 3, 4].includes(aviso)) {
-      return res.status(400).json({ success: false, message: "Datos invÃ¡lidos" });
+      return res.status(400).json({ success: false, message: "Datos inválidos" });
     }
 
     const { rows } = await db.query(
@@ -11889,7 +11895,7 @@ app.post("/api/administracion/recobro-whatsapp", async (req, res) => {
     const r = rows[0];
 
     const tel = normalizarTelefonoWhatsApp(r.telefono);
-    if (!tel) return res.status(400).json({ success: false, message: "El cliente no tiene telÃ©fono" });
+    if (!tel) return res.status(400).json({ success: false, message: "El cliente no tiene teléfono" });
     if (Number(r.pending_amount ?? 0) <= 0) {
       return res.status(400).json({ success: false, message: "El expediente no tiene importe pendiente" });
     }
@@ -11946,20 +11952,20 @@ app.post("/api/administracion/recobro-whatsapp", async (req, res) => {
 });
 
 /* =========================================================
-   USUARIOS UNIFICADOS â€” gestiÃ³n de cuentas de Auth desde la
+   USUARIOS UNIFICADOS — gestión de cuentas de Auth desde la
    pantalla Usuarios (solo administradores). El login es por
-   USERNAME + contraseÃ±a; internamente Supabase Auth usa un
-   email sintÃ©tico {username}@usuarios.sea.
+   USERNAME + contraseña; internamente Supabase Auth usa un
+   email sintético {username}@usuarios.sea.
 ========================================================= */
 
 // Verifica que quien llama es admin (superadmin de app_usuarios
-// o rol admin de adm_usuarios) a partir de su token de sesiÃ³n.
+// o rol admin de adm_usuarios) a partir de su token de sesión.
 async function verificarAdminApp(req: express.Request): Promise<{ ok: boolean; userId?: string; error?: string }> {
   const auth = String(req.headers.authorization || "");
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!token) return { ok: false, error: "Falta el token de sesiÃ³n" };
+  if (!token) return { ok: false, error: "Falta el token de sesión" };
   const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return { ok: false, error: "SesiÃ³n no vÃ¡lida" };
+  if (error || !data.user) return { ok: false, error: "Sesión no válida" };
   const r = await db.query(
     `SELECT
        coalesce((SELECT es_superadmin FROM app_usuarios WHERE id = $1 AND activo), false)
@@ -11975,7 +11981,7 @@ function emailSintetico(username: string): string {
 }
 
 // Crear cuenta de Auth para un usuario nuevo (la ficha y los accesos
-// se guardan despuÃ©s vÃ­a RPC app_guardar_usuario desde el cliente).
+// se guardan después vía RPC app_guardar_usuario desde el cliente).
 app.post("/api/administracion/usuarios/crear-auth", async (req, res) => {
   try {
     const admin = await verificarAdminApp(req);
@@ -11985,7 +11991,7 @@ app.post("/api/administracion/usuarios/crear-auth", async (req, res) => {
     const nombre = String(req.body?.nombre || "").trim();
     const password = String(req.body?.password || "");
     if (username.length < 2) return res.status(400).json({ success: false, message: "Usuario demasiado corto" });
-    if (password.length < 6) return res.status(400).json({ success: false, message: "ContraseÃ±a interna demasiado corta" });
+    if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
 
     const { data, error } = await supabase.auth.admin.createUser({
       email: emailSintetico(username),
@@ -12004,7 +12010,7 @@ app.post("/api/administracion/usuarios/crear-auth", async (req, res) => {
   }
 });
 
-// Restablecer la contraseÃ±a de cualquier usuario (botÃ³n llave)
+// Restablecer la contraseña de cualquier usuario (botón llave)
 app.post("/api/administracion/usuarios/reset-password", async (req, res) => {
   try {
     const admin = await verificarAdminApp(req);
@@ -12013,14 +12019,14 @@ app.post("/api/administracion/usuarios/reset-password", async (req, res) => {
     const userId = String(req.body?.userId || "").trim();
     const password = String(req.body?.password || "");
     if (!userId) return res.status(400).json({ success: false, message: "Falta el usuario" });
-    if (password.length < 6) return res.status(400).json({ success: false, message: "ContraseÃ±a interna demasiado corta" });
+    if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
 
     const { error } = await supabase.auth.admin.updateUserById(userId, { password });
     if (error) return res.status(400).json({ success: false, message: error.message });
     return res.json({ success: true });
   } catch (e: any) {
     console.error("reset-password error:", e);
-    return res.status(500).json({ success: false, message: e?.message || "Error cambiando la contraseÃ±a" });
+    return res.status(500).json({ success: false, message: e?.message || "Error cambiando la contraseña" });
   }
 });
 
@@ -12036,7 +12042,7 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
 
     // seguridad extra: no borrar Auth si la ficha maestra sigue existiendo
     const r = await db.query(`SELECT 1 FROM app_usuarios WHERE id = $1`, [userId]);
-    if (r.rows.length) return res.status(400).json({ success: false, message: "El usuario aÃºn existe en la aplicaciÃ³n" });
+    if (r.rows.length) return res.status(400).json({ success: false, message: "El usuario aún existe en la aplicación" });
 
     const { error } = await supabase.auth.admin.deleteUser(userId);
     if (error) return res.status(400).json({ success: false, message: error.message });
@@ -12065,7 +12071,7 @@ async function checkRecobrosNotifications() {
 }
 
 function startRecobrosNotifierChecker() {
-  console.log(`EnvÃ­os automÃ¡ticos de recobros activos (a partir de las ${RECOBROS_NOTIFY_HOUR}).`);
+  console.log(`Envíos automáticos de recobros activos (a partir de las ${RECOBROS_NOTIFY_HOUR}).`);
   void checkRecobrosNotifications();
   setInterval(() => { void checkRecobrosNotifications(); }, RECOBROS_CHECK_INTERVAL_MS);
 }
@@ -12114,9 +12120,9 @@ initDb()
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
       startRecobrosNotifierChecker();
-      startWebfleetSync(); // sincronizaciÃ³n periÃ³dica de "vehÃ­culos en base"
-      startMantenimientoAvisos(); // avisos automÃ¡ticos de revisiones (prÃ³ximas/vencidas)
-      startIntegrationWorker(); // reproceso de operaciones de integraciÃ³n RETRY_PENDING
+      startWebfleetSync(); // sincronización periódica de "vehículos en base"
+      startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
+      startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
     });
   })
   .catch((error) => {

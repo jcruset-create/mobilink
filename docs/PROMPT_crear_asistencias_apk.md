@@ -35,6 +35,7 @@ Queremos que ciertos operarios (administradores) puedan **crear asistencias dire
   - Cliente y teléfono (teclado telefónico).
   - Ubicación: tres opciones — usar GPS actual (geolocator, ya en el proyecto), pegar enlace de Google Maps, o escribir dirección.
   - Matrícula camión y matrícula remolque (opcionales, mayúsculas automáticas).
+  - Interruptor «Asistencia al remolque» → campo `esRemolque` (boolean, ya existe en `roadside_assistances`): la matrícula del remolque será la principal en seguimiento e informes, y la tractora saldrá como dato adicional.
   - Descripción del vehículo, prioridad (normal/urgente), notas.
   - Interruptor «Asignármela a mí» (por defecto activado).
   - Validación mínima: cliente o teléfono + alguna forma de ubicación.

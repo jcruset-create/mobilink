@@ -57,6 +57,7 @@ const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   longitude: "",
   plate: "",
   plateRemolque: "",
+  esRemolque: false,
   descripcionAveria: "",
   trabajosARealizar: "",
   vehicleDescription: "",
@@ -184,6 +185,7 @@ function buildEditDraft(
     googleMapsUrl: assistance.googleMapsUrl || "",
     plate: assistance.plate || "",
     plateRemolque: assistance.plateRemolque || "",
+    esRemolque: assistance.esRemolque === true,
     descripcionAveria: assistance.descripcionAveria || "",
     trabajosARealizar: assistance.trabajosARealizar || "",
     vehicleDescription: assistance.vehicleDescription || "",
@@ -1126,6 +1128,23 @@ export default function RoadsideAssistanceView({
                   />
                 </label>
 
+                <label className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    checked={draft.esRemolque}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        esRemolque: event.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4"
+                  />
+                  <span className="text-xs font-bold text-slate-600">
+                    Asistencia al remolque (la matrícula del remolque será la principal)
+                  </span>
+                </label>
+
                 <label className="block">
                   <span className="mb-1 block text-xs font-bold text-slate-600">
                     Vehiculo
@@ -2041,6 +2060,23 @@ export default function RoadsideAssistanceView({
                     placeholder="Opcional"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
                   />
+                </label>
+
+                <label className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    checked={editDraft.esRemolque}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        esRemolque: event.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4"
+                  />
+                  <span className="text-xs font-bold text-slate-600">
+                    Asistencia al remolque (la matrícula del remolque será la principal)
+                  </span>
                 </label>
 
                 <label className="block">

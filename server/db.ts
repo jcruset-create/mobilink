@@ -249,6 +249,9 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "plateRemolque" TEXT;
 
     ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "esRemolque" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "descripcionAveria" TEXT;
 
     ALTER TABLE roadside_assistances

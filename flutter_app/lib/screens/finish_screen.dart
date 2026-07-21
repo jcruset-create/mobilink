@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+?import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
@@ -52,8 +52,8 @@ class _FinishScreenState extends State<FinishScreen> {
     super.dispose();
   }
 
-  /// Normaliza la foto. La OR manual mantiene mÃ¡s resoluciÃ³n (hay que poder
-  /// leer lo escrito a mano); la de reparaciÃ³n se comprime mÃ¡s para que la
+  /// Normaliza la foto. La OR manual mantiene más resolución (hay que poder
+  /// leer lo escrito a mano); la de reparación se comprime más para que la
   /// subida sea ligera con cobertura mala.
   Future<File> _normalizeImage(XFile xfile, {bool document = false}) async {
     final tmpDir = await getTemporaryDirectory();
@@ -69,7 +69,7 @@ class _FinishScreenState extends State<FinishScreen> {
   }
 
   Future<void> _pickPhoto() async {
-    final source = await _showSourceDialog('Foto de la reparaciÃ³n');
+    final source = await _showSourceDialog('Foto de la reparación');
     if (source == null) return;
     final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
     if (xfile == null) return;
@@ -106,14 +106,14 @@ class _FinishScreenState extends State<FinishScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.camera_alt, color: Colors.white70),
-              title: const Text('CÃ¡mara',
+              title: const Text('Cámara',
                   style: TextStyle(color: Colors.white70)),
               onTap: () => Navigator.pop(context, ImageSource.camera),
             ),
             ListTile(
               leading:
                   const Icon(Icons.photo_library, color: Colors.white70),
-              title: const Text('GalerÃ­a',
+              title: const Text('Galería',
                   style: TextStyle(color: Colors.white70)),
               onTap: () => Navigator.pop(context, ImageSource.gallery),
             ),
@@ -127,12 +127,12 @@ class _FinishScreenState extends State<FinishScreen> {
   Future<void> _confirm() async {
     setState(() {
       _uploading = true;
-      _uploadingLabel = 'Subiendo foto reparaciÃ³n...';
+      _uploadingLabel = 'Subiendo foto reparación...';
     });
 
     try {
-      // Fotos (reparaciÃ³n + OR manual): en segundo plano, con cola y
-      // reintentos. La firma y los datos del conductor sÃ­ se envÃ­an en el
+      // Fotos (reparación + OR manual): en segundo plano, con cola y
+      // reintentos. La firma y los datos del conductor sí se envían en el
       // momento: son ligeros y el parte los necesita al cerrar.
       await widget.api.uploadFileInBackground(
           widget.assistanceId, _photoReparacion!, 'foto_reparacion');
@@ -197,13 +197,13 @@ class _FinishScreenState extends State<FinishScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // â”€â”€ Columna izquierda: foto + datos â”€â”€
+                  // ── Columna izquierda: foto + datos ──
                   Expanded(
                     flex: 1,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _label('Foto de la reparaciÃ³n *'),
+                        _label('Foto de la reparación *'),
                         const SizedBox(height: 8),
                         _photoBox(_photoReparacion, _pickPhoto,
                             'Toca para fotografiar'),
@@ -211,7 +211,7 @@ class _FinishScreenState extends State<FinishScreen> {
                         _label('Foto de la OR manual *'),
                         const SizedBox(height: 8),
                         _photoBox(_photoOr, _pickPhotoOr,
-                            'FotografÃ­a la OR rellenada por el tÃ©cnico'),
+                            'Fotografía la OR rellenada por el técnico'),
                         const SizedBox(height: 20),
                         _label('Datos del conductor *'),
                         const SizedBox(height: 8),
@@ -263,7 +263,7 @@ class _FinishScreenState extends State<FinishScreen> {
                             child: ElevatedButton.icon(
                               onPressed: _canConfirm ? _confirm : null,
                               icon: const Icon(Icons.check_circle),
-                              label: const Text('Confirmar finalizaciÃ³n'),
+                              label: const Text('Confirmar finalización'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: _canConfirm ? Colors.teal : Colors.white12,
                                 foregroundColor: _canConfirm ? Colors.white : Colors.white38,
@@ -277,7 +277,7 @@ class _FinishScreenState extends State<FinishScreen> {
                     ),
                   ),
                   const SizedBox(width: 16),
-                  // â”€â”€ Columna derecha: firma grande â”€â”€
+                  // ── Columna derecha: firma grande ──
                   Expanded(
                     flex: 1,
                     child: Column(
