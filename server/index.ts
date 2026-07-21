@@ -5971,13 +5971,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           whatsapp_document: "Documento WhatsApp",
         };
 
-        // Cuadrícula de 3 columnas × 4 filas (12 fotos por página), miniaturas
-        // normalizadas al mismo tamaño con recorte centrado
+        // Cuadrícula de 3 columnas × 4 filas (12 fotos por página): cada foto se
+        // muestra entera, a su proporción original, centrada dentro de un marco uniforme
         const gap = 8;
         const cols = 3;
         const cellW = (contentW - gap * (cols - 1)) / cols;
-        const thumbH = 155;
-        const cellH = thumbH + 16;
+        const thumbH = 150;
+        const cellH = thumbH + 18;
         sectionTitle(`Fotografías (${photos.length})`);
         let col = 0;
         let rowY = doc.y;
@@ -5986,15 +5986,6 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           try {
             buf = await fetchImageForPdf(photo.url);
           } catch { continue; }
-          // Miniatura uniforme a 2x para que quede nítida en el PDF
-          let thumb: Buffer;
-          try {
-            thumb = await sharp(buf)
-              .rotate()
-              .resize(Math.round(cellW * 2), thumbH * 2, { fit: "cover" })
-              .jpeg({ quality: 72 })
-              .toBuffer();
-          } catch { thumb = buf; }
           if (col === 0 && rowY + cellH > 800) {
             doc.addPage();
             rowY = doc.y;
@@ -6003,8 +5994,14 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           doc.fontSize(6.5).font("Helvetica-Bold").fillColor("#64748b")
             .text((kindLabels[photo.kind] ?? photo.kind).toUpperCase(), x0, rowY, { width: cellW, lineBreak: false });
           doc.fillColor("#000000");
+          // Marco de la celda
+          doc.roundedRect(x0, rowY + 10, cellW, thumbH, 3).lineWidth(0.8).stroke("#cbd5e1");
           try {
-            doc.image(thumb, x0, rowY + 10, { fit: [cellW, thumbH] });
+            doc.image(buf, x0 + 3, rowY + 13, {
+              fit: [cellW - 6, thumbH - 6],
+              align: "center",
+              valign: "center",
+            });
           } catch { /* imagen no soportada */ }
           col = (col + 1) % cols;
           if (col === 0) rowY += cellH;
