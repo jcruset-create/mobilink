@@ -422,7 +422,14 @@ export default function RoadsideAssistanceView({
 
   // ── Pestañas panel derecho ──────────────────────────────────────────────────
   type PanelTab = "nueva" | "activas" | "cerradas" | "historial";
-  const [panelTab, setPanelTab] = useState<PanelTab>("nueva");
+  const [panelTab, setPanelTab] = useState<PanelTab>(() => {
+    // Permite abrir directamente en una pestaña con ?tab=nueva|activas|... (p.ej. desde el hub)
+    if (typeof window !== "undefined") {
+      const t = new URLSearchParams(window.location.search).get("tab");
+      if (t === "nueva" || t === "activas" || t === "cerradas" || t === "historial") return t;
+    }
+    return "nueva";
+  });
 
   // ── Historial ───────────────────────────────────────────────────────────────
   type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null };

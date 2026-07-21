@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, type LucideIcon } from "lucide-react";
+import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, type LucideIcon } from "lucide-react";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 
@@ -216,12 +216,20 @@ export default function InicioPage() {
                 <p className="mb-3 text-[12px] text-slate-500">
                   Asistencias en carretera: avisos, operarios, seguimiento y cierre.
                 </p>
-                <button
-                  onClick={() => navigate("/asistencias")}
-                  className="mt-auto rounded-xl bg-red-600/90 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
-                >
-                  Entrar
-                </button>
+                <div className="mt-auto grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => navigate("/asistencias?tab=activas")}
+                    className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-600"
+                  >
+                    Entrar
+                  </button>
+                  <button
+                    onClick={() => navigate("/asistencias?tab=nueva")}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-red-600/90 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
+                  >
+                    <Plus className="h-4 w-4" /> Crear
+                  </button>
+                </div>
               </div>
             )}
 
