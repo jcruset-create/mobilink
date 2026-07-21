@@ -20,6 +20,10 @@ import {
   X,
   XCircle,
   Briefcase,
+  Settings,
+  Map,
+  List,
+  Truck,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
@@ -78,16 +82,16 @@ const INITIAL_EDIT_DRAFT: RoadsideAssistanceEditDraft = {
 };
 
 const STATUS_BADGES: Record<RoadsideAssistanceStatus, string> = {
-  pendiente: "border-amber-200 bg-amber-50 text-amber-800",
-  asignada: "border-sky-200 bg-sky-50 text-sky-800",
-  en_camino: "border-blue-200 bg-blue-50 text-blue-800",
-  en_punto: "border-violet-200 bg-violet-50 text-violet-800",
-  inicio_reparacion: "border-orange-200 bg-orange-50 text-orange-800",
-  finalizada: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  en_camino_base: "border-teal-200 bg-teal-50 text-teal-800",
-  llegada_taller: "border-slate-200 bg-slate-100 text-slate-700",
-  redirigida: "border-orange-200 bg-orange-50 text-orange-800",
-  cancelada: "border-red-200 bg-red-50 text-red-800",
+  pendiente: "border-amber-500/30 bg-amber-500/15 text-amber-300",
+  asignada: "border-sky-500/30 bg-sky-500/15 text-sky-300",
+  en_camino: "border-blue-500/30 bg-blue-500/15 text-blue-300",
+  en_punto: "border-violet-500/30 bg-violet-500/15 text-violet-300",
+  inicio_reparacion: "border-orange-500/30 bg-orange-500/15 text-orange-300",
+  finalizada: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
+  en_camino_base: "border-teal-500/30 bg-teal-500/15 text-teal-300",
+  llegada_taller: "border-slate-500/30 bg-slate-500/20 text-slate-300",
+  redirigida: "border-orange-500/30 bg-orange-500/15 text-orange-300",
+  cancelada: "border-red-500/30 bg-red-500/15 text-red-300",
 };
 
 function formatTime(value?: number | string | null) {
@@ -241,33 +245,33 @@ function ClosedAssistanceCard({
   onOpenBackoffice: (a: RoadsideAssistance) => void;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 px-3 py-2">
+    <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
-        <div className="truncate text-sm font-black">
+        <div className="truncate text-sm font-bold text-slate-100">
           {assistance.plate || assistance.customerName}
         </div>
-        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${STATUS_BADGES[assistance.status]}`}>
+        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_BADGES[assistance.status]}`}>
           {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
         </span>
       </div>
       {assistance.customerName && (
-        <div className="mt-0.5 truncate text-xs text-slate-500">{assistance.customerName}</div>
+        <div className="mt-0.5 truncate text-xs text-slate-400">{assistance.customerName}</div>
       )}
-      <div className="mt-1 flex items-center justify-between gap-2">
+      <div className="mt-1.5 flex items-center justify-between gap-2">
         <div className="text-xs font-semibold text-slate-500">
           {formatTime(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
         </div>
         <div className="flex gap-1">
           <button
             type="button"
-            className="shrink-0 rounded bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+            className="shrink-0 rounded-lg border border-indigo-500/40 bg-indigo-500/15 px-2 py-1 text-[10px] font-semibold text-indigo-300 hover:bg-indigo-500/25"
             onClick={() => onOpenBackoffice(assistance)}
           >
             Back Office
           </button>
           <button
             type="button"
-            className="shrink-0 rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+            className="shrink-0 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-slate-700"
             onClick={() => {
               const token = localStorage.getItem("sea-admin-token") ?? "";
               window.open(`/api/roadside-assistances/${assistance.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
@@ -782,141 +786,173 @@ export default function RoadsideAssistanceView({
     }
   }
 
+  const tabTitle =
+    panelTab === "nueva"
+      ? "Nueva asistencia"
+      : panelTab === "activas"
+      ? "Asistencias activas"
+      : panelTab === "cerradas"
+      ? "Últimas cerradas"
+      : "Historial";
+
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900">
-      <div className="mx-auto max-w-[1500px] space-y-5">
-        <header className="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-14 items-center justify-center rounded-lg bg-[#101a33] px-3">
-              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-11" />
-            </div>
-            <div>
-              <h1 className="text-xl font-black">Asistencias carretera</h1>
-              <div className="text-sm font-medium text-slate-500">
-                {activeAssistances.length} activas
-              </div>
-            </div>
+    <div className="flex min-h-screen bg-slate-900 text-slate-100">
+      {/* ── Barra lateral ── */}
+      <aside className="flex w-52 flex-shrink-0 flex-col border-r border-slate-800 bg-slate-950">
+        <div className="border-b border-slate-800 px-3 py-3">
+          <div className="flex h-14 items-center justify-center rounded-lg bg-[#101a33] px-2">
+            <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-10" />
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            {onOpenSettings && (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-800 hover:bg-red-100"
-              >
-                Configuracion
-              </button>
-            )}
-            <a
-              href="/flota"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-800 hover:bg-blue-100"
-            >
-              🚐 Mapa flota
-            </a>
-            <button
-              type="button"
-              onClick={() => setShowPlacesManager(true)}
-              className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-800 hover:bg-teal-100"
-            >
-              📍 Lugares
-            </button>
-            <a
-              href="/otf"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800 hover:bg-amber-100"
-            >
-              🚛 OTF
-            </a>
-            <a
-              href="/vehiculo"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-            >
-              🔎 Historial vehículo
-            </a>
-            <a
-              href="/dashboard"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-            >
-              📊 Panel
-            </a>
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Actualizar
-            </button>
-            <button
-              type="button"
-              onClick={onBack}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
-            >
-              Volver
-            </button>
-          </div>
-        </header>
-
-        <section className="grid grid-cols-4 gap-2 sm:grid-cols-8">
-          {statusCounts.map(({ status, count }) => (
-            <div
-              key={status}
-              className={`rounded-md border px-2 py-1 ${STATUS_BADGES[status]}`}
-            >
-              <div className="text-[9px] font-black uppercase leading-tight">
-                {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
-              </div>
-              <div className="text-base font-black leading-none">{count}</div>
-            </div>
-          ))}
-        </section>
-
-        {/* ── Navegación de pantallas ── */}
-        <nav className="flex flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+        </div>
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 text-sm">
           {([
-            ["nueva", "➕ Nueva asistencia"],
-            ["activas", `📋 Activas (${activeAssistances.length})`],
-            ["cerradas", "✓ Últimas cerradas"],
-            ["historial", "🗂 Historial"],
-          ] as const).map(([tab, label]) => (
+            ["nueva", "Nueva asistencia", Plus, null],
+            ["activas", "Activas", Clock3, activeAssistances.length],
+            ["cerradas", "Últimas cerradas", CheckCircle2, null],
+            ["historial", "Historial", FileText, null],
+          ] as const).map(([tab, label, Icon, badge]) => (
             <button
               key={tab}
               type="button"
               onClick={() => setPanelTab(tab as PanelTab)}
-              className={`flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-black uppercase tracking-wide transition-colors ${
+              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium transition-colors ${
                 panelTab === tab
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-500 hover:bg-slate-50"
+                  ? "bg-red-600 text-white"
+                  : "text-slate-300 hover:bg-slate-800"
               }`}
             >
-              {label}
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="flex-1 truncate">{label}</span>
+              {badge != null && badge > 0 && (
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                    panelTab === tab ? "bg-red-800 text-white" : "bg-red-600 text-white"
+                  }`}
+                >
+                  {badge}
+                </span>
+              )}
             </button>
           ))}
+
+          <div className="my-2 border-t border-slate-800" />
+          <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            Herramientas
+          </div>
+          <a
+            href="/flota"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Map className="h-4 w-4 shrink-0" /> Mapa flota
+          </a>
+          <button
+            type="button"
+            onClick={() => setShowPlacesManager(true)}
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <MapPin className="h-4 w-4 shrink-0" /> Lugares
+          </button>
+          <a
+            href="/otf"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Truck className="h-4 w-4 shrink-0" /> OTF
+          </a>
+          <a
+            href="/vehiculo"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <List className="h-4 w-4 shrink-0" /> Historial vehículo
+          </a>
+          <a
+            href="/dashboard"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Home className="h-4 w-4 shrink-0" /> Panel
+          </a>
+          {onOpenSettings && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium text-slate-300 hover:bg-slate-800"
+            >
+              <Settings className="h-4 w-4 shrink-0" /> Configuración
+            </button>
+          )}
         </nav>
+        <div className="border-t border-slate-800 px-4 py-2 text-[10px] text-slate-500">
+          Mobilink Assist
+        </div>
+      </aside>
+
+      {/* ── Columna principal ── */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
+              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold">{tabTitle}</h1>
+              <div className="text-xs text-slate-400">{activeAssistances.length} activas</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+            >
+              <RefreshCw className="h-4 w-4" /> Actualizar
+            </button>
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+            >
+              <Home className="h-4 w-4" /> Inicio
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 space-y-4 overflow-auto p-4">
+          <section className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+            {statusCounts.map(({ status, count }) => (
+              <div
+                key={status}
+                className={`rounded-lg border px-2 py-1.5 ${STATUS_BADGES[status]}`}
+              >
+                <div className="text-[9px] font-bold uppercase leading-tight">
+                  {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
+                </div>
+                <div className="text-lg font-black leading-none">{count}</div>
+              </div>
+            ))}
+          </section>
 
         <div className="space-y-5">
           {panelTab === "nueva" && (
-          <div className="w-full">
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mx-auto w-full max-w-3xl">
+          <section className="rounded-xl border border-slate-700 bg-slate-800 p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-black uppercase text-slate-700">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-300">
                 Nueva asistencia
               </h2>
               <button
                 type="button"
                 onClick={() => setShowNewBackoffice(true)}
-                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-black ${
+                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold ${
                   draft.backoffice
-                    ? "border-indigo-300 bg-indigo-100 text-indigo-800 hover:bg-indigo-200"
-                    : "border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100"
+                    ? "border-indigo-500/50 bg-indigo-500/25 text-indigo-200 hover:bg-indigo-500/35"
+                    : "border-indigo-500/40 bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25"
                 }`}
               >
                 <Briefcase className="h-4 w-4" />
@@ -925,7 +961,7 @@ export default function RoadsideAssistanceView({
             </div>
 
             {draft.redirectedFromId && (
-              <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-800">
+              <div className="mb-4 rounded-lg border border-orange-500/40 bg-orange-500/15 px-3 py-2 text-xs font-bold text-orange-300">
                 ↪ Redirección de la asistencia #{draft.redirectedFromId}. Operario y furgoneta ya asignados.
               </div>
             )}
@@ -933,7 +969,7 @@ export default function RoadsideAssistanceView({
             <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Cliente
                   </span>
                   <input
@@ -944,12 +980,12 @@ export default function RoadsideAssistanceView({
                         customerName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Telefono WhatsApp
                   </span>
                   <input
@@ -960,13 +996,13 @@ export default function RoadsideAssistanceView({
                         customerPhone: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
               </div>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Conductor{" "}
                   <span className="font-normal text-slate-400">(opcional · la IA puede rellenarlo)</span>
                 </span>
@@ -979,11 +1015,11 @@ export default function RoadsideAssistanceView({
                     }))
                   }
                   placeholder="Nombre del conductor"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </label>
 
-              <label className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <label className="flex items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={draft.sendTrackingWhatsapp}
@@ -993,22 +1029,23 @@ export default function RoadsideAssistanceView({
                       sendTrackingWhatsapp: event.target.checked,
                     }))
                   }
+                  className="accent-emerald-500"
                 />
-                <span className="text-sm font-black text-emerald-800">
+                <span className="text-sm font-bold text-emerald-300">
                   Enviar WhatsApp con enlace privado al crear
                 </span>
               </label>
 
               {knownPlaces.length > 0 && (
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     📍 Lugar conocido{" "}
                     <span className="font-normal text-slate-400">(parking, base de cliente…)</span>
                   </span>
                   <select
                     defaultValue=""
                     onChange={(e) => { applyKnownPlaceToDraft(e.target.value, false); e.target.value = ""; }}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     <option value="">— Elegir lugar conocido —</option>
                     {knownPlaces.map((p) => (
@@ -1021,7 +1058,7 @@ export default function RoadsideAssistanceView({
               )}
 
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Direccion{" "}
                   <span className="font-normal text-slate-400">(opcional · se puede recibir por WhatsApp)</span>
                 </span>
@@ -1033,12 +1070,12 @@ export default function RoadsideAssistanceView({
                       address: event.target.value,
                     }))
                   }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Enlace Google Maps
                 </span>
                 <input
@@ -1049,7 +1086,7 @@ export default function RoadsideAssistanceView({
                       googleMapsUrl: event.target.value,
                     }))
                   }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </label>
 
@@ -1057,18 +1094,18 @@ export default function RoadsideAssistanceView({
                 type="button"
                 onClick={handleGeocodeCreate}
                 disabled={geocodingCreate}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
               >
                 <LocateFixed className="h-4 w-4" />
                 {geocodingCreate ? "Geocodificando..." : "Geocodificar dirección"}
               </button>
               {geocodeCreateError && (
-                <div className="text-xs font-bold text-red-600">{geocodeCreateError}</div>
+                <div className="text-xs font-bold text-red-400">{geocodeCreateError}</div>
               )}
 
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Latitud
                   </span>
                   <input
@@ -1076,12 +1113,12 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       setDraft((prev) => ({ ...prev, latitude: event.target.value }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Longitud
                   </span>
                   <input
@@ -1089,14 +1126,14 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       setDraft((prev) => ({ ...prev, longitude: event.target.value }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Matricula camión
                   </span>
                   <input
@@ -1107,12 +1144,12 @@ export default function RoadsideAssistanceView({
                         plate: event.target.value.toUpperCase(),
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Matrícula remolque
                   </span>
                   <input
@@ -1124,7 +1161,7 @@ export default function RoadsideAssistanceView({
                       }))
                     }
                     placeholder="Opcional"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
@@ -1146,7 +1183,7 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Vehiculo
                   </span>
                   <input
@@ -1157,14 +1194,14 @@ export default function RoadsideAssistanceView({
                         vehicleDescription: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Operario
                   </span>
                   <select
@@ -1175,7 +1212,7 @@ export default function RoadsideAssistanceView({
                         assignedTechName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {roadsideCapableTechs.map((tech) => (
@@ -1187,7 +1224,7 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Furgoneta
                   </span>
                   <select
@@ -1195,7 +1232,7 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       applyVehicleToDraft(event.target.value)
                     }
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {activeVehicles.map((vehicle) => (
@@ -1209,7 +1246,7 @@ export default function RoadsideAssistanceView({
 
               {webfleetVehicles.length > 0 && (
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Furgoneta Webfleet
                   </span>
                   <select
@@ -1220,7 +1257,7 @@ export default function RoadsideAssistanceView({
                         webfleetVehicleId: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {webfleetVehicles.map((v) => (
@@ -1243,10 +1280,10 @@ export default function RoadsideAssistanceView({
                         priority,
                       }))
                     }
-                    className={`rounded-lg border px-3 py-2 text-sm font-black ${
+                    className={`rounded-lg border px-3 py-2 text-sm font-bold ${
                       draft.priority === priority
-                        ? "border-red-300 bg-red-50 text-red-800"
-                        : "border-slate-200 bg-white text-slate-600"
+                        ? "border-red-500/50 bg-red-500/20 text-red-300"
+                        : "border-slate-700 bg-slate-950 text-slate-400 hover:bg-slate-800"
                     }`}
                   >
                     {priority === "urgente" ? "Urgente" : "Normal"}
@@ -1255,7 +1292,7 @@ export default function RoadsideAssistanceView({
               </div>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Descripción de la avería
                 </span>
                 <textarea
@@ -1264,12 +1301,12 @@ export default function RoadsideAssistanceView({
                     setDraft((prev) => ({ ...prev, descripcionAveria: event.target.value }))
                   }
                   rows={2}
-                  className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Trabajos a realizar (instrucciones para el técnico)
                 </span>
                 <textarea
@@ -1278,12 +1315,12 @@ export default function RoadsideAssistanceView({
                     setDraft((prev) => ({ ...prev, trabajosARealizar: event.target.value }))
                   }
                   rows={2}
-                  className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Observaciones
                 </span>
                 <textarea
@@ -1295,12 +1332,12 @@ export default function RoadsideAssistanceView({
                     }))
                   }
                   rows={3}
-                  className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </label>
 
               {(localError || error) && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                <div className="rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-300">
                   {localError || error}
                 </div>
               )}
@@ -1309,7 +1346,7 @@ export default function RoadsideAssistanceView({
                 type="button"
                 onClick={handleCreate}
                 disabled={saving}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
               >
                 <Plus className="h-4 w-4" />
                 {saving ? "Guardando..." : "Crear asistencia"}
@@ -1328,7 +1365,7 @@ export default function RoadsideAssistanceView({
 
             {/* ── Tab: Activas ── */}
             {panelTab === "activas" && activeAssistances.length === 0 && (
-              <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+              <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
                 Sin asistencias activas.
               </div>
             )}
@@ -1344,13 +1381,13 @@ export default function RoadsideAssistanceView({
                 return (
                   <article
                     key={assistance.id}
-                    className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+                    className="rounded-xl border border-slate-700 bg-slate-800 p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span
-                            className={`rounded-full border px-2 py-1 text-[11px] font-black ${STATUS_BADGES[assistance.status]}`}
+                            className={`rounded-full border px-2 py-1 text-[11px] font-bold ${STATUS_BADGES[assistance.status]}`}
                           >
                             {
                               ROADSIDE_ASSISTANCE_STATUS_LABELS[
@@ -1359,7 +1396,7 @@ export default function RoadsideAssistanceView({
                             }
                           </span>
                           {assistance.priority === "urgente" && (
-                            <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-black text-red-700">
+                            <span className="rounded-full border border-red-500/40 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-300">
                               Urgente
                             </span>
                           )}
@@ -1371,19 +1408,19 @@ export default function RoadsideAssistanceView({
                               href={`/vehiculo?plate=${encodeURIComponent(assistance.plate)}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-slate-900 underline decoration-dotted hover:text-blue-700"
+                              className="text-slate-100 underline decoration-dotted hover:text-red-400"
                               title="Ver historial del vehículo"
                             >
                               {assistance.plate}
                             </a>
                           ) : "Sin matricula"}
                         </h3>
-                        <div className="mt-1 truncate text-sm font-semibold text-slate-600">
+                        <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
                         </div>
                       </div>
 
-                      <div className="text-right text-xs font-bold text-slate-400">
+                      <div className="text-right text-xs font-bold text-slate-500">
                         #{assistance.id}
                         <div>{formatTime(assistance.createdAtMs)}</div>
                       </div>
@@ -1393,9 +1430,9 @@ export default function RoadsideAssistanceView({
                       {assistance.customerPhone && (
                         <a
                           href={`tel:${assistance.customerPhone}`}
-                          className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 font-semibold text-slate-700"
+                          className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 font-semibold text-slate-200"
                         >
-                          <Phone className="h-4 w-4 shrink-0 text-slate-500" />
+                          <Phone className="h-4 w-4 shrink-0 text-slate-400" />
                           <span className="truncate">
                             {assistance.customerPhone}
                           </span>
@@ -1407,9 +1444,9 @@ export default function RoadsideAssistanceView({
                           href={mapUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 font-semibold text-slate-700"
+                          className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 font-semibold text-slate-200"
                         >
-                          <MapPin className="h-4 w-4 shrink-0 text-slate-500" />
+                          <MapPin className="h-4 w-4 shrink-0 text-emerald-400" />
                           <span className="truncate">
                             {assistance.address ||
                               assistance.googleMapsUrl ||
@@ -1419,30 +1456,30 @@ export default function RoadsideAssistanceView({
                       )}
 
                       <div className="grid gap-2 sm:grid-cols-2">
-                        <div className="rounded-lg bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] font-black uppercase text-slate-400">
+                        <div className="rounded-lg bg-slate-950 px-3 py-2">
+                          <div className="text-[11px] font-bold uppercase text-slate-500">
                             Operario
                           </div>
-                          <div className="truncate font-bold text-slate-700">
+                          <div className="truncate font-bold text-slate-200">
                             {assistance.assignedTechName || "Sin asignar"}
                           </div>
                         </div>
-                        <div className="rounded-lg bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] font-black uppercase text-slate-400">
+                        <div className="rounded-lg bg-slate-950 px-3 py-2">
+                          <div className="text-[11px] font-bold uppercase text-slate-500">
                             Furgoneta
                           </div>
-                          <div className="truncate font-bold text-slate-700">
+                          <div className="truncate font-bold text-slate-200">
                             {assistance.assignedVehicleName || "-"}
                           </div>
                           {assistance.webfleetVehicleId && (
-                            <div className="mt-0.5 truncate text-[10px] font-bold text-blue-600">
+                            <div className="mt-0.5 truncate text-[10px] font-bold text-blue-400">
                               Webfleet: {assistance.webfleetVehicleId}
                             </div>
                           )}
                         </div>
                       </div>
 
-                      <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">
+                      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-300">
                         WhatsApp seguimiento:{" "}
                         {assistance.trackingWhatsappSentAtMs
                           ? `enviado ${formatTime(
@@ -1456,7 +1493,7 @@ export default function RoadsideAssistanceView({
                     </div>
 
                     {assistance.status === "en_camino" && (
-                      <div className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800">
+                      <div className="mt-4 flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300">
                         <img src="/van-icon.png" style={{height:24,width:"auto",flexShrink:0}} alt="furgoneta" />
                         <span>
                           En camino
@@ -1478,7 +1515,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => openEditor(assistance)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                       >
                         <Edit3 className="h-4 w-4" />
                         Editar
@@ -1487,7 +1524,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => copyTrackingLink(assistance)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100"
+                        className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25"
                       >
                         <Copy className="h-4 w-4" />
                         {copiedId === assistance.id ? "Copiado" : "Copiar enlace"}
@@ -1497,7 +1534,7 @@ export default function RoadsideAssistanceView({
                         href={trackingUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-800 hover:bg-emerald-100"
+                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-bold text-emerald-300 hover:bg-emerald-500/25"
                       >
                         <ExternalLink className="h-4 w-4" />
                         Seguimiento
@@ -1507,7 +1544,7 @@ export default function RoadsideAssistanceView({
                         href={`${API_BASE}/api/roadside-assistances/${assistance.id}/report.pdf`}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                       >
                         <FileText className="h-4 w-4" />
                         Informe PDF
@@ -1523,7 +1560,7 @@ export default function RoadsideAssistanceView({
                               "_blank"
                             );
                           }}
-                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                         >
                           🛰️ Seguimiento furgoneta
                         </button>
@@ -1532,7 +1569,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => openReportModal(assistance)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-800 hover:bg-indigo-100"
+                        className="inline-flex items-center gap-2 rounded-lg border border-indigo-500/40 bg-indigo-500/15 px-3 py-2 text-sm font-bold text-indigo-300 hover:bg-indigo-500/25"
                       >
                         <Send className="h-4 w-4" />
                         Enviar informe
@@ -1545,7 +1582,7 @@ export default function RoadsideAssistanceView({
                           sendingWhatsappId === assistance.id ||
                           !assistance.customerPhone
                         }
-                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-black text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-slate-800 px-3 py-2 text-sm font-bold text-emerald-300 hover:bg-emerald-500/15 disabled:opacity-50"
                       >
                         <Send className="h-4 w-4" />
                         {sendingWhatsappId === assistance.id
@@ -1579,7 +1616,7 @@ export default function RoadsideAssistanceView({
                               handleStatusChange(assistance, nextStatus)
                             }
                             disabled={changingId === assistance.id}
-                            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                            className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
                           >
                             <ActionIcon className="h-4 w-4" />
                             {getActionLabel(assistance.status)}
@@ -1590,7 +1627,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => { setPhotosAssistance(assistance); setPhotos([]); }}
-                        className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-black text-violet-800 hover:bg-violet-100"
+                        className="inline-flex items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/15 px-3 py-2 text-sm font-bold text-violet-300 hover:bg-violet-500/25"
                       >
                         <Images className="h-4 w-4" />
                         Fotos
@@ -1599,7 +1636,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => setBackofficeAssistance(assistance)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-800 hover:bg-indigo-100"
+                        className="inline-flex items-center gap-2 rounded-lg border border-indigo-500/40 bg-indigo-500/15 px-3 py-2 text-sm font-bold text-indigo-300 hover:bg-indigo-500/25"
                       >
                         <Briefcase className="h-4 w-4" />
                         Back Office
@@ -1608,7 +1645,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => setWhatsappCaptureId(whatsappCaptureId === assistance.id ? null : assistance.id)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-800 hover:bg-emerald-100"
+                        className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-bold text-emerald-300 hover:bg-emerald-500/25"
                       >
                         📲 Captura WhatsApp
                       </button>
@@ -1621,7 +1658,7 @@ export default function RoadsideAssistanceView({
                           <button
                             type="button"
                             onClick={() => setMapAssistance(assistance)}
-                            className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100"
+                            className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25"
                           >
                             <LocateFixed className="h-4 w-4" />
                             Ubicación en vivo
@@ -1633,7 +1670,7 @@ export default function RoadsideAssistanceView({
                           type="button"
                           onClick={() => handleRedirect(assistance)}
                           disabled={redirectingId === assistance.id}
-                          className="inline-flex items-center gap-2 rounded-lg border border-orange-300 bg-orange-100 px-3 py-2 text-sm font-black text-orange-800 hover:bg-orange-200 disabled:opacity-50"
+                          className="inline-flex items-center gap-2 rounded-lg border border-orange-500/40 bg-orange-500/20 px-3 py-2 text-sm font-bold text-orange-300 hover:bg-orange-500/30 disabled:opacity-50"
                         >
                           ↪ {redirectingId === assistance.id ? "Redirigiendo…" : "Redirigir a nueva asistencia"}
                         </button>
@@ -1645,7 +1682,7 @@ export default function RoadsideAssistanceView({
                           handleStatusChange(assistance, "cancelada")
                         }
                         disabled={changingId === assistance.id}
-                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-black text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 bg-slate-800 px-3 py-2 text-sm font-bold text-red-300 hover:bg-red-500/15 disabled:opacity-60"
                       >
                         <XCircle className="h-4 w-4" />
                         Cancelar
@@ -1670,7 +1707,7 @@ export default function RoadsideAssistanceView({
             {panelTab === "cerradas" && (
               <div className="space-y-3">
                 {closedAssistances.length === 0 ? (
-                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                  <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
                     Sin asistencias cerradas recientes.
                   </div>
                 ) : (
@@ -1691,22 +1728,22 @@ export default function RoadsideAssistanceView({
             {panelTab === "historial" && (
               <div className="space-y-3">
                 {/* Filtros */}
-                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="rounded-xl border border-slate-700 bg-slate-800 p-3">
                   <div className="flex flex-wrap gap-2">
-                    <div className="flex min-w-48 flex-1 items-center gap-1 rounded-lg border border-slate-200 px-2">
+                    <div className="flex min-w-48 flex-1 items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2">
                       <input
                         type="text"
                         placeholder="Buscar matrícula, cliente, teléfono, dirección…"
                         value={historialQInput}
                         onChange={(e) => setHistorialQInput(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && searchHistorial()}
-                        className="w-full py-1.5 text-sm outline-none"
+                        className="w-full bg-transparent py-1.5 text-sm text-slate-100 placeholder-slate-500 outline-none"
                       />
                     </div>
                     <select
                       value={historialStatus}
                       onChange={(e) => { setHistorialStatus(e.target.value); setHistorialPage(1); setHistorialQ(historialQInput); }}
-                      className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                      className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
                     >
                       <option value="">Todos los estados</option>
                       <option value="pendiente">Pendiente</option>
@@ -1721,7 +1758,7 @@ export default function RoadsideAssistanceView({
                     <select
                       value={historialTech}
                       onChange={(e) => { setHistorialTech(e.target.value); setHistorialPage(1); setHistorialQ(historialQInput); }}
-                      className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                      className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
                     >
                       <option value="">Todos los operarios</option>
                       {techs.map((t) => (
@@ -1731,7 +1768,7 @@ export default function RoadsideAssistanceView({
                     <button
                       type="button"
                       onClick={searchHistorial}
-                      className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-black text-white hover:bg-slate-700"
+                      className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-bold text-white hover:bg-red-500"
                     >
                       Buscar
                     </button>
@@ -1739,7 +1776,7 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => { setHistorialQ(""); setHistorialQInput(""); setHistorialStatus(""); setHistorialTech(""); setHistorialPage(1); }}
-                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                        className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm font-semibold text-slate-300 hover:bg-slate-700"
                       >
                         Limpiar
                       </button>
@@ -1748,18 +1785,18 @@ export default function RoadsideAssistanceView({
                 </div>
 
                 {historialLoading ? (
-                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                  <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
                     Cargando…
                   </div>
                 ) : historialItems.length === 0 ? (
-                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm font-bold text-slate-400">
+                  <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
                     Sin resultados.
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                  <div className="overflow-hidden rounded-xl border border-slate-700 bg-slate-800">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b border-slate-100 bg-slate-50 text-xs font-black uppercase text-slate-500">
+                        <tr className="border-b border-slate-700 bg-slate-950 text-xs font-bold uppercase text-slate-500">
                           <th className="px-3 py-2 text-left">Fecha</th>
                           <th className="px-3 py-2 text-left">Matrícula</th>
                           <th className="px-3 py-2 text-left">Cliente</th>
@@ -1768,18 +1805,18 @@ export default function RoadsideAssistanceView({
                           <th className="px-3 py-2 text-left"></th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-slate-700/60">
                         {historialItems.map((item) => (
-                          <tr key={item.id} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 text-xs text-slate-500">
+                          <tr key={item.id} className="hover:bg-slate-700/40">
+                            <td className="px-3 py-2 text-xs text-slate-400">
                               {new Date(item.createdAtMs).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit" })}
-                              <div className="text-[10px] text-slate-400">{formatTime(item.createdAtMs)}</div>
+                              <div className="text-[10px] text-slate-500">{formatTime(item.createdAtMs)}</div>
                             </td>
-                            <td className="px-3 py-2 font-black">{item.plate || "—"}</td>
-                            <td className="px-3 py-2 text-slate-700 max-w-[140px] truncate">{item.customerName || "—"}</td>
-                            <td className="px-3 py-2 text-slate-600">{item.assignedTechName || "—"}</td>
+                            <td className="px-3 py-2 font-bold text-slate-100">{item.plate || "—"}</td>
+                            <td className="px-3 py-2 text-slate-300 max-w-[140px] truncate">{item.customerName || "—"}</td>
+                            <td className="px-3 py-2 text-slate-400">{item.assignedTechName || "—"}</td>
                             <td className="px-3 py-2">
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${STATUS_BADGES[item.status]}`}>
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${STATUS_BADGES[item.status]}`}>
                                 {ROADSIDE_ASSISTANCE_STATUS_LABELS[item.status]}
                               </span>
                             </td>
@@ -1787,14 +1824,14 @@ export default function RoadsideAssistanceView({
                               <div className="flex gap-1">
                                 <button
                                   type="button"
-                                  className="rounded bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                                  className="rounded-lg border border-indigo-500/40 bg-indigo-500/15 px-2 py-1 text-[10px] font-semibold text-indigo-300 hover:bg-indigo-500/25"
                                   onClick={() => setBackofficeAssistance(item as any)}
                                 >
                                   Back Office
                                 </button>
                                 <button
                                   type="button"
-                                  className="rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+                                  className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-slate-700"
                                   onClick={() => {
                                     const token = localStorage.getItem("sea-admin-token") ?? "";
                                     window.open(`/api/roadside-assistances/${item.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
@@ -1810,11 +1847,11 @@ export default function RoadsideAssistanceView({
                     </table>
                     {/* Paginación */}
                     {historialTotal > 50 && (
-                      <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 text-xs font-semibold text-slate-500">
+                      <div className="flex items-center justify-between border-t border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">
                         <span>{historialTotal} resultados · pág. {historialPage} de {Math.ceil(historialTotal / 50)}</span>
                         <div className="flex gap-1">
-                          <button type="button" disabled={historialPage <= 1} onClick={() => setHistorialPage((p) => p - 1)} className="rounded border border-slate-200 px-2 py-1 disabled:opacity-40">←</button>
-                          <button type="button" disabled={historialPage * 50 >= historialTotal} onClick={() => setHistorialPage((p) => p + 1)} className="rounded border border-slate-200 px-2 py-1 disabled:opacity-40">→</button>
+                          <button type="button" disabled={historialPage <= 1} onClick={() => setHistorialPage((p) => p - 1)} className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-slate-300 disabled:opacity-40">←</button>
+                          <button type="button" disabled={historialPage * 50 >= historialTotal} onClick={() => setHistorialPage((p) => p + 1)} className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-slate-300 disabled:opacity-40">→</button>
                         </div>
                       </div>
                     )}
@@ -1824,25 +1861,31 @@ export default function RoadsideAssistanceView({
             )}
           </section>
         </div>
+        </main>
       </div>
 
       {editingAssistance && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
-          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
-              <div>
-                <h2 className="text-lg font-black">
-                  Editar asistencia #{editingAssistance.id}
-                </h2>
-                <div className="mt-1 text-sm font-semibold text-slate-500">
-                  {editingAssistance.plate || editingAssistance.customerName}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-700 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold">
+                    Editar asistencia #{editingAssistance.id}
+                  </h2>
+                  <div className="mt-0.5 text-sm font-semibold text-slate-400">
+                    {editingAssistance.plate || editingAssistance.customerName}
+                  </div>
                 </div>
               </div>
 
               <button
                 type="button"
                 onClick={closeEditor}
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                className="rounded-lg p-2 text-slate-400 hover:bg-slate-700"
               >
                 <XCircle className="h-5 w-5" />
               </button>
@@ -1851,7 +1894,7 @@ export default function RoadsideAssistanceView({
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Estado
                   </span>
                   <select
@@ -1862,7 +1905,7 @@ export default function RoadsideAssistanceView({
                         status: event.target.value as RoadsideAssistanceStatus,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     {[
                       ...ROADSIDE_ASSISTANCE_STATUS_FLOW,
@@ -1876,7 +1919,7 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <div>
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Prioridad
                   </span>
                   <div className="grid grid-cols-2 gap-2">
@@ -1890,10 +1933,10 @@ export default function RoadsideAssistanceView({
                             priority,
                           }))
                         }
-                        className={`rounded-lg border px-3 py-2 text-sm font-black ${
+                        className={`rounded-lg border px-3 py-2 text-sm font-bold ${
                           editDraft.priority === priority
-                            ? "border-red-300 bg-red-50 text-red-800"
-                            : "border-slate-200 bg-white text-slate-600"
+                            ? "border-red-500/50 bg-red-500/20 text-red-300"
+                            : "border-slate-700 bg-slate-950 text-slate-400 hover:bg-slate-800"
                         }`}
                       >
                         {priority === "urgente" ? "Urgente" : "Normal"}
@@ -1903,7 +1946,7 @@ export default function RoadsideAssistanceView({
                 </div>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Cliente
                   </span>
                   <input
@@ -1914,12 +1957,12 @@ export default function RoadsideAssistanceView({
                         customerName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Telefono WhatsApp
                   </span>
                   <input
@@ -1930,17 +1973,17 @@ export default function RoadsideAssistanceView({
                         customerPhone: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 {knownPlaces.length > 0 && (
                   <label className="block md:col-span-2">
-                    <span className="mb-1 block text-xs font-bold text-slate-600">📍 Lugar conocido</span>
+                    <span className="mb-1 block text-xs font-semibold text-slate-400">📍 Lugar conocido</span>
                     <select
                       defaultValue=""
                       onChange={(e) => { applyKnownPlaceToDraft(e.target.value, true); e.target.value = ""; }}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                     >
                       <option value="">— Elegir lugar conocido —</option>
                       {knownPlaces.map((p) => (
@@ -1951,7 +1994,7 @@ export default function RoadsideAssistanceView({
                 )}
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Direccion
                   </span>
                   <input
@@ -1962,12 +2005,12 @@ export default function RoadsideAssistanceView({
                         address: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Enlace Google Maps
                   </span>
                   <input
@@ -1978,7 +2021,7 @@ export default function RoadsideAssistanceView({
                         googleMapsUrl: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
@@ -1987,7 +2030,7 @@ export default function RoadsideAssistanceView({
                     type="button"
                     onClick={handleGeocodeEdit}
                     disabled={geocodingEdit}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
                   >
                     <LocateFixed className="h-4 w-4" />
                     {geocodingEdit ? "Geocodificando..." : "Geocodificar dirección"}
@@ -1998,7 +2041,7 @@ export default function RoadsideAssistanceView({
                 </div>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Latitud
                   </span>
                   <input
@@ -2009,12 +2052,12 @@ export default function RoadsideAssistanceView({
                         latitude: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Longitud
                   </span>
                   <input
@@ -2025,12 +2068,12 @@ export default function RoadsideAssistanceView({
                         longitude: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Matricula camión
                   </span>
                   <input
@@ -2041,12 +2084,12 @@ export default function RoadsideAssistanceView({
                         plate: event.target.value.toUpperCase(),
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Matrícula remolque
                   </span>
                   <input
@@ -2058,7 +2101,7 @@ export default function RoadsideAssistanceView({
                       }))
                     }
                     placeholder="Opcional"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
@@ -2080,7 +2123,7 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Vehiculo cliente
                   </span>
                   <input
@@ -2091,12 +2134,12 @@ export default function RoadsideAssistanceView({
                         vehicleDescription: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Operario
                   </span>
                   <select
@@ -2107,7 +2150,7 @@ export default function RoadsideAssistanceView({
                         assignedTechName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {editAssignableTechs.map((tech) => (
@@ -2119,7 +2162,7 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Furgoneta
                   </span>
                   <select
@@ -2127,7 +2170,7 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       applyVehicleToEditDraft(event.target.value)
                     }
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {activeVehicles.map((vehicle) => (
@@ -2139,7 +2182,7 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Furgoneta Webfleet
                   </span>
                   {webfleetVehicles.length > 0 ? (
@@ -2151,7 +2194,7 @@ export default function RoadsideAssistanceView({
                           webfleetVehicleId: event.target.value,
                         }))
                       }
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                     >
                       <option value="">Sin asignar</option>
                       {webfleetVehicles.map((v) => (
@@ -2170,25 +2213,25 @@ export default function RoadsideAssistanceView({
                         }))
                       }
                       placeholder="ID Webfleet"
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                     />
                   )}
                 </label>
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Enlace privado cliente
                   </span>
                   <div className="flex gap-2">
                     <input
                       value={getTrackingUrl(editingAssistance)}
                       readOnly
-                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600"
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-300"
                     />
                     <button
                       type="button"
                       onClick={() => copyTrackingLink(editingAssistance)}
-                      className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-black text-blue-800 hover:bg-blue-100"
+                      className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25"
                     >
                       <Copy className="h-4 w-4" />
                       Copiar
@@ -2196,7 +2239,7 @@ export default function RoadsideAssistanceView({
                   </div>
                 </label>
 
-                <label className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 md:col-span-2">
+                <label className="flex items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 md:col-span-2">
                   <input
                     type="checkbox"
                     checked={editDraft.sendTrackingWhatsapp}
@@ -2206,14 +2249,15 @@ export default function RoadsideAssistanceView({
                         sendTrackingWhatsapp: event.target.checked,
                       }))
                     }
+                    className="accent-emerald-500"
                   />
-                  <span className="text-sm font-black text-emerald-800">
+                  <span className="text-sm font-bold text-emerald-300">
                     Enviar WhatsApp con enlace privado al guardar
                   </span>
                 </label>
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Descripción de la avería
                   </span>
                   <textarea
@@ -2222,12 +2266,12 @@ export default function RoadsideAssistanceView({
                       setEditDraft((prev) => ({ ...prev, descripcionAveria: event.target.value }))
                     }
                     rows={2}
-                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Trabajos a realizar (instrucciones para el técnico)
                   </span>
                   <textarea
@@ -2236,12 +2280,12 @@ export default function RoadsideAssistanceView({
                       setEditDraft((prev) => ({ ...prev, trabajosARealizar: event.target.value }))
                     }
                     rows={2}
-                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
 
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-xs font-bold text-slate-600">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Observaciones
                   </span>
                   <textarea
@@ -2253,23 +2297,23 @@ export default function RoadsideAssistanceView({
                       }))
                     }
                     rows={3}
-                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                   />
                 </label>
               </div>
 
               {editError && (
-                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-300">
                   {editError}
                 </div>
               )}
             </div>
 
-            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-700 px-5 py-4">
               <button
                 type="button"
                 onClick={closeEditor}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
               >
                 Cancelar
               </button>
@@ -2278,7 +2322,7 @@ export default function RoadsideAssistanceView({
                 type="button"
                 onClick={handleUpdate}
                 disabled={savingEdit}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
                 {savingEdit ? "Guardando..." : "Guardar cambios"}
@@ -2291,28 +2335,33 @@ export default function RoadsideAssistanceView({
       {/* Modal fotos y firma */}
       {photosAssistance && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div>
-                <div className="text-sm font-black uppercase text-slate-400">
-                  Fotos y firma
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
                 </div>
-                <div className="font-black text-slate-800">
-                  #{photosAssistance.id} · {photosAssistance.plate || "Sin matrícula"}
+                <div>
+                  <div className="text-sm font-bold uppercase text-slate-500">
+                    Fotos y firma
+                  </div>
+                  <div className="font-bold text-slate-100">
+                    #{photosAssistance.id} · {photosAssistance.plate || "Sin matrícula"}
+                  </div>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setPhotosAssistance(null)}
-                className="rounded-full p-2 hover:bg-slate-100"
+                className="rounded-full p-2 hover:bg-slate-700"
               >
-                <X className="h-5 w-5 text-slate-500" />
+                <X className="h-5 w-5 text-slate-400" />
               </button>
             </div>
 
             <div className="overflow-y-auto p-5">
               {photosAssistance.plateMismatch && (
-                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-sm font-bold text-amber-300">
                   ⚠️ La matrícula leída por IA en la foto no coincide con la matrícula
                   registrada ({photosAssistance.plate || "sin matrícula"}). Revísalo.
                 </div>
@@ -2352,7 +2401,7 @@ export default function RoadsideAssistanceView({
                               key={file.id}
                               type="button"
                               onClick={() => setLightboxUrl(file.url)}
-                              className="overflow-hidden rounded-lg border border-slate-200 hover:opacity-90"
+                              className="overflow-hidden rounded-lg border border-slate-700 hover:opacity-90"
                             >
                               <img
                                 src={file.url}
@@ -2380,50 +2429,57 @@ export default function RoadsideAssistanceView({
       {/* Modal enviar informe */}
       {reportAssistance && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div>
-                <div className="text-sm font-black uppercase text-slate-400">
-                  Enviar informe
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
                 </div>
-                <div className="font-black text-slate-800">
-                  #{reportAssistance.id} · {reportAssistance.plate || "Sin matrícula"}
+                <div>
+                  <div className="text-sm font-bold uppercase text-slate-500">
+                    Enviar informe
+                  </div>
+                  <div className="font-bold text-slate-100">
+                    #{reportAssistance.id} · {reportAssistance.plate || "Sin matrícula"}
+                  </div>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setReportAssistance(null)}
-                className="rounded-full p-2 hover:bg-slate-100"
+                className="rounded-full p-2 hover:bg-slate-700"
               >
-                <X className="h-5 w-5 text-slate-500" />
+                <X className="h-5 w-5 text-slate-400" />
               </button>
             </div>
 
             <div className="space-y-4 p-5">
-              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+              <label className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={reportChannels.whatsapp}
                   onChange={(e) =>
                     setReportChannels((prev) => ({ ...prev, whatsapp: e.target.checked }))
                   }
+                  className="accent-red-500"
                 />
-                <Send className="h-4 w-4 text-emerald-700" />
-                <span className="text-sm font-bold text-slate-700">
+                <Send className="h-4 w-4 text-emerald-400" />
+                <span className="text-sm font-bold text-slate-200">
                   WhatsApp ({reportAssistance.customerPhone || "sin teléfono"})
                 </span>
               </label>
 
-              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+              <label className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={reportChannels.email}
                   onChange={(e) =>
                     setReportChannels((prev) => ({ ...prev, email: e.target.checked }))
                   }
+                  className="accent-red-500"
                 />
-                <Mail className="h-4 w-4 text-indigo-700" />
-                <span className="text-sm font-bold text-slate-700">Email</span>
+                <Mail className="h-4 w-4 text-indigo-400" />
+                <span className="text-sm font-bold text-slate-200">Email</span>
               </label>
 
               {reportChannels.email && (
@@ -2432,19 +2488,19 @@ export default function RoadsideAssistanceView({
                   placeholder="cliente@email.com"
                   value={reportEmail}
                   onChange={(e) => setReportEmail(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               )}
 
               {reportFeedback && (
-                <div className="text-sm font-bold text-slate-600">{reportFeedback}</div>
+                <div className="text-sm font-bold text-slate-300">{reportFeedback}</div>
               )}
 
               <button
                 type="button"
                 onClick={handleSendReport}
                 disabled={sendingReport}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-black text-white hover:bg-indigo-800 disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-50"
               >
                 <Send className="h-4 w-4" />
                 {sendingReport ? "Enviando..." : "Enviar informe"}
@@ -2457,22 +2513,27 @@ export default function RoadsideAssistanceView({
       {/* Modal ubicación en vivo */}
       {mapAssistance && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div>
-                <div className="text-sm font-black uppercase text-slate-400">
-                  Ubicación en vivo
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
                 </div>
-                <div className="font-black text-slate-800">
-                  #{mapAssistance.id} · {mapAssistance.plate || "Sin matrícula"}
+                <div>
+                  <div className="text-sm font-bold uppercase text-slate-500">
+                    Ubicación en vivo
+                  </div>
+                  <div className="font-bold text-slate-100">
+                    #{mapAssistance.id} · {mapAssistance.plate || "Sin matrícula"}
+                  </div>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setMapAssistance(null)}
-                className="rounded-full p-2 hover:bg-slate-100"
+                className="rounded-full p-2 hover:bg-slate-700"
               >
-                <X className="h-5 w-5 text-slate-500" />
+                <X className="h-5 w-5 text-slate-400" />
               </button>
             </div>
 
@@ -2495,36 +2556,36 @@ export default function RoadsideAssistanceView({
 
                   {/* Panel velocidad / km restantes / ETA */}
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-                      <div className="text-[10px] font-black uppercase text-slate-400">Velocidad</div>
-                      <div className="text-lg font-black text-slate-800">
+                    <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-center">
+                      <div className="text-[10px] font-bold uppercase text-slate-500">Velocidad</div>
+                      <div className="text-lg font-black text-slate-100">
                         {livePos?.speedKmh != null ? `${Math.round(livePos.speedKmh)}` : "-"}
-                        <span className="text-xs font-bold text-slate-400"> km/h</span>
+                        <span className="text-xs font-bold text-slate-500"> km/h</span>
                       </div>
                     </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-                      <div className="text-[10px] font-black uppercase text-slate-400">
+                    <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-center">
+                      <div className="text-[10px] font-bold uppercase text-slate-500">
                         {livePos?.destino === "taller" ? "Faltan (taller)" : "Faltan"}
                       </div>
-                      <div className="text-lg font-black text-slate-800">
+                      <div className="text-lg font-black text-slate-100">
                         {livePos?.etaKm ?? mapAssistance.etaKm ?? "-"}
-                        <span className="text-xs font-bold text-slate-400"> km</span>
+                        <span className="text-xs font-bold text-slate-500"> km</span>
                       </div>
                     </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
-                      <div className="text-[10px] font-black uppercase text-slate-400">Llegada en</div>
-                      <div className="text-lg font-black text-slate-800">
+                    <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-center">
+                      <div className="text-[10px] font-bold uppercase text-slate-500">Llegada en</div>
+                      <div className="text-lg font-black text-slate-100">
                         {(livePos?.etaMinutos ?? mapAssistance.etaMinutos) != null
                           ? `${livePos?.etaMinutos ?? mapAssistance.etaMinutos}`
                           : "-"}
-                        <span className="text-xs font-bold text-slate-400"> min</span>
+                        <span className="text-xs font-bold text-slate-500"> min</span>
                       </div>
                     </div>
                   </div>
 
                   <div className="mt-2 text-xs font-bold text-slate-500">
                     {mapAssistance.status === "en_camino_base" && (
-                      <span className="mr-2 rounded-full bg-teal-100 px-2 py-0.5 text-teal-700">🚐 Vuelta al taller · posición Webfleet</span>
+                      <span className="mr-2 rounded-full bg-teal-500/20 px-2 py-0.5 text-teal-300">🚐 Vuelta al taller · posición Webfleet</span>
                     )}
                     {livePos
                       ? `Actualizado: ${new Date().toLocaleTimeString()}`
@@ -2552,11 +2613,16 @@ export default function RoadsideAssistanceView({
       {/* Modal gestión de Lugares Conocidos */}
       {showPlacesManager && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-10">
-          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <h2 className="text-lg font-black text-slate-900">📍 Lugares conocidos</h2>
-              <button type="button" onClick={() => setShowPlacesManager(false)} className="rounded-full p-1 hover:bg-slate-100">
-                <X className="h-5 w-5 text-slate-500" />
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                </div>
+                <h2 className="text-lg font-bold text-slate-100">📍 Lugares conocidos</h2>
+              </div>
+              <button type="button" onClick={() => setShowPlacesManager(false)} className="rounded-full p-1 hover:bg-slate-700">
+                <X className="h-5 w-5 text-slate-400" />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
@@ -2567,7 +2633,7 @@ export default function RoadsideAssistanceView({
               ) : (
                 <div className="space-y-2">
                   {knownPlaces.map((p) => (
-                    <div key={p.id} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                    <div key={p.id} className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
                       <div className="min-w-0 flex-1">
                         <input
                           defaultValue={p.nombre}
@@ -2578,7 +2644,7 @@ export default function RoadsideAssistanceView({
                               setKnownPlaces((prev) => prev.map((x) => x.id === p.id ? { ...x, nombre } : x));
                             }
                           }}
-                          className="w-full rounded border border-slate-200 px-2 py-1 text-sm font-bold"
+                          className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm font-bold text-slate-100 outline-none focus:border-red-500"
                         />
                         <div className="mt-1 text-xs text-slate-500">
                           {p.tipo}{p.direccion ? ` · ${p.direccion}` : ""}{p.clientName ? ` · ${p.clientName}` : ""}
@@ -2591,7 +2657,7 @@ export default function RoadsideAssistanceView({
                           await deleteKnownPlace(p.id);
                           setKnownPlaces((prev) => prev.filter((x) => x.id !== p.id));
                         }}
-                        className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-black text-red-700 hover:bg-red-100"
+                        className="shrink-0 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-1.5 text-xs font-bold text-red-300 hover:bg-red-500/25"
                       >
                         Eliminar
                       </button>
