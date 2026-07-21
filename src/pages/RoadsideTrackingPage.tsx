@@ -101,7 +101,7 @@ function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
 
 // Grupos de fotos con su etiqueta, en orden de aparición
 const PHOTO_GROUPS: { label: string; kinds: string[] }[] = [
-  { label: "Enviadas por el cliente", kinds: ["cliente", "whatsapp"] },
+  { label: "Enviadas por el cliente", kinds: ["cliente", "whatsapp", "whatsapp_image"] },
   { label: "Matrícula del camión", kinds: ["matricula_camion"] },
   { label: "Matrícula del remolque", kinds: ["matricula_remolque"] },
   { label: "Antes de la reparación", kinds: ["averia", "foto_averia"] },
@@ -109,10 +109,18 @@ const PHOTO_GROUPS: { label: string; kinds: string[] }[] = [
   { label: "Documentación (OR)", kinds: ["foto_or"] },
 ];
 
+// Adjuntos de WhatsApp que NO son imágenes: no deben renderizarse como foto
+const NON_IMAGE_KINDS = new Set([
+  "firma",
+  "whatsapp_audio",
+  "whatsapp_video",
+  "whatsapp_document",
+]);
+
 function PhotosSection({ files }: { files: RoadsideAssistanceFile[] }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
 
-  const photos = files.filter((f) => f.kind !== "firma");
+  const photos = files.filter((f) => !NON_IMAGE_KINDS.has(f.kind));
   const signature = files.find((f) => f.kind === "firma");
 
   if (photos.length === 0 && !signature) return null;
