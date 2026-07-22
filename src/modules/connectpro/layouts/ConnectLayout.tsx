@@ -84,7 +84,7 @@ export default function ConnectLayout() {
               return (
                 <NavLink
                   key={item.key}
-                  to={item.path}
+                  to={`/connect/${item.path}`}
                   onClick={() => setOpen(false)}
                   className={({ isActive }) =>
                     `flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] transition ${
