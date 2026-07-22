@@ -36,7 +36,7 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "integraciones", path: "integraciones", label: "Partners e integraciones", icon: Plug, minRole: "cc_admin" },
   { key: "estadisticas", path: "estadisticas", label: "Estadísticas", icon: BarChart3, minRole: "analyst" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, minRole: "analyst", phase: "F2" },
-  { key: "facturacion", path: "facturacion", label: "Facturación", icon: Receipt, minRole: "cc_admin", phase: "F2" },
+  { key: "facturacion", path: "facturacion", label: "Facturación", icon: Receipt, minRole: "cc_admin" },
   { key: "usuarios", path: "usuarios", label: "Usuarios", icon: UserCog, minRole: "cc_admin" },
   { key: "auditoria", path: "auditoria", label: "Auditoría", icon: ScrollText, minRole: "cc_admin" },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, minRole: "cc_admin" },

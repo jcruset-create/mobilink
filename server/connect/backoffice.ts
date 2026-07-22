@@ -893,6 +893,82 @@ export function createConnectBackofficeRouter(): Router {
     res.json(r.rows[0]);
   });
 
+  // ── Facturación (Fase 2 S3) ───────────────────────────────
+
+  router.get("/billing/summary", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const from = Number(req.query.from) || new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const to = Number(req.query.to) || Date.now();
+    const [byClient, byProvider, totals] = await Promise.all([
+      db.query(
+        `SELECT COALESCE(c.name, ca."clientName", p.name, 'Sin cliente') AS name,
+                COUNT(*)::int AS services,
+                COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) AS amount,
+                COUNT(*) FILTER (WHERE ca."invoicedAtMs" IS NOT NULL)::int AS invoiced
+           FROM connect_assistances ca
+           LEFT JOIN connect_clients c ON c.id = ca."clientId"
+           LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+          WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+          GROUP BY 1 ORDER BY amount DESC`,
+        [from, to],
+      ),
+      db.query(
+        `SELECT COALESCE(pc.name, w.name, 'Sin proveedor') AS name,
+                COUNT(*)::int AS services,
+                COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) AS amount,
+                COUNT(*) FILTER (WHERE ca."invoicedAtMs" IS NOT NULL)::int AS invoiced
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+           LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+          WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+          GROUP BY 1 ORDER BY amount DESC`,
+        [from, to],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS services,
+                COALESCE(SUM(COALESCE("finalCost", "estimatedCost")), 0) AS amount,
+                COUNT(*) FILTER (WHERE "finalCost" IS NULL)::int AS without_final,
+                COUNT(*) FILTER (WHERE "invoicedAtMs" IS NULL)::int AS pending_invoice
+           FROM connect_assistances
+          WHERE status = 'finished' AND "createdAtMs" BETWEEN $1 AND $2`,
+        [from, to],
+      ),
+    ]);
+    res.json({ from, to, totals: totals.rows[0], by_client: byClient.rows, by_provider: byProvider.rows });
+  });
+
+  router.get("/billing/lines", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const from = Number(req.query.from) || new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const to = Number(req.query.to) || Date.now();
+    const r = await db.query(
+      `SELECT ca.id, ca."expedientNumber", ca."externalReference", ca."serviceType", ca."createdAtMs",
+              COALESCE(c.name, ca."clientName", p.name) AS "clientName",
+              COALESCE(pc.name, w.name) AS "providerName",
+              ca."customerName", ca."estimatedCost", ca."finalCost", ca."costCurrency", ca."invoicedAtMs"
+         FROM connect_assistances ca
+         LEFT JOIN connect_clients c ON c.id = ca."clientId"
+         LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+        WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+        ORDER BY ca.id DESC LIMIT 1000`,
+      [from, to],
+    );
+    res.json({ data: r.rows, from, to });
+  });
+
+  router.post("/billing/mark-invoiced", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const ids: number[] = Array.isArray(req.body?.assistanceIds) ? req.body.assistanceIds.map(Number).filter(Boolean) : [];
+    if (ids.length === 0) return err(res, 422, "validation_failed", "assistanceIds es obligatorio");
+    const r = await db.query(
+      `UPDATE connect_assistances SET "invoicedAtMs" = $1
+        WHERE id = ANY($2::int[]) AND status = 'finished' AND "invoicedAtMs" IS NULL
+        RETURNING id`,
+      [Date.now(), ids],
+    );
+    await auditConnect({ req, action: "billing.marked_invoiced", detail: { count: r.rows.length, ids: r.rows.map((x) => x.id) } });
+    res.json({ marked: r.rows.length });
+  });
+
   // ── Incidencias (Sprint 5) ────────────────────────────────
 
   const INCIDENT_TYPES = [

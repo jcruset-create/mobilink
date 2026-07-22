@@ -23,6 +23,7 @@ import Incidencias from "./pages/Incidencias";
 import Estadisticas from "./pages/Estadisticas";
 import Alertas from "./pages/Alertas";
 import Clientes from "./pages/Clientes";
+import Facturacion from "./pages/Facturacion";
 
 /** Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el Dashboard. */
 function Home() {
@@ -48,6 +49,7 @@ export default function ConnectProApp() {
             <Route path="estadisticas" element={<Estadisticas />} />
             <Route path="sla" element={<Alertas />} />
             <Route path="clientes" element={<Clientes />} />
+            <Route path="facturacion" element={<Facturacion />} />
             <Route path="empresas" element={<Empresas />} />
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />

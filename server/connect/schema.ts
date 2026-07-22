@@ -475,6 +475,9 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "finalCost" DOUBLE PRECISION;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "costCurrency" TEXT NOT NULL DEFAULT 'EUR';
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "costDetail" TEXT;
+
+    -- Fase 2 S3: marca de facturación (cierre contable de la línea)
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "invoicedAtMs" BIGINT;
   `);
 
   await seedConnectDefaults();
