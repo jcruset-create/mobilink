@@ -6,7 +6,7 @@
  * Mismo patrón que startLicenseWorker / IntegrationWorker.
  */
 
-import { syncFromCore } from "./service.ts";
+import { syncFromCore, expireOfferedAssignments } from "./service.ts";
 import { deliverPendingWebhooks } from "./webhooks.ts";
 
 const TICK_MS = 15_000;
@@ -19,6 +19,8 @@ export async function runConnectChecksOnce(): Promise<void> {
   try {
     const changed = await syncFromCore();
     if (changed > 0) console.log(`[Connect] worker: ${changed} asistencia(s) sincronizadas desde el core`);
+    const expired = await expireOfferedAssignments();
+    if (expired > 0) console.log(`[Connect] worker: ${expired} oferta(s) expiradas → cascada`);
     await deliverPendingWebhooks();
   } catch (err: any) {
     console.error("[Connect] worker error:", err?.message);

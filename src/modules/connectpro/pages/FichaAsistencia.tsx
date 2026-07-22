@@ -8,6 +8,7 @@ import { Link, useParams } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { Card, Badge, Button, ErrorBanner } from "../components/ui";
+import AsignacionTab from "../components/AsignacionTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 type Detail = {
@@ -36,7 +37,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Asignación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -104,7 +105,18 @@ export default function FichaAsistencia() {
             <div className="flex gap-2">
               {a.status === "draft" && <Button onClick={() => action("submit")} disabled={busy}>Enviar borrador</Button>}
               {["pending", "no_coverage", "assignment_failed"].includes(a.status) && (
-                <Button onClick={() => action("search-provider")} disabled={busy}>Buscar proveedor</Button>
+                <Button onClick={() => action("search-provider")} disabled={busy}>Asignación automática</Button>
+              )}
+              {["assigned", "technician_assigned", "en_route", "awaiting_acceptance"].includes(a.status) && (
+                <Button
+                  variant="ghost" disabled={busy}
+                  onClick={() => {
+                    const reason = window.prompt("Motivo de la reasignación (obligatorio):");
+                    if (reason?.trim()) action("reassign", { reason: reason.trim() });
+                  }}
+                >
+                  Reasignar
+                </Button>
               )}
               {!["finished", "cancelled"].includes(a.status) && (
                 <Button variant="danger" onClick={cancelar} disabled={busy}>Cancelar</Button>
@@ -147,6 +159,9 @@ export default function FichaAsistencia() {
             <Row label="Motivo de cancelación" value={a.cancelReason} />
             <Row label="SLA" value={a.slaMinutes ? `${a.slaMinutes} min (límite ${fmtDateTime(a.slaDeadlineAtMs)})` : null} />
           </div>
+        )}
+        {tab === "Asignación" && (
+          <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
         )}
         {tab === "Solicitante" && (
           <div>

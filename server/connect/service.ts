@@ -17,16 +17,17 @@ import { enqueueWebhookEvent } from "./webhooks.ts";
 // ---------------------------------------------------------------------------
 
 export const CONNECT_STATUSES = [
-  "draft", "pending", "searching", "assigned", "technician_assigned", "en_route",
-  "arrived", "in_progress", "finished", "cancelled", "no_coverage", "assignment_failed",
+  "draft", "pending", "searching", "awaiting_acceptance", "assigned", "technician_assigned",
+  "en_route", "arrived", "in_progress", "finished", "cancelled", "no_coverage", "assignment_failed",
 ] as const;
 export type ConnectStatus = (typeof CONNECT_STATUSES)[number];
 
 const TRANSITIONS: Record<string, ConnectStatus[]> = {
   draft: ["pending", "cancelled"],
   pending: ["searching", "cancelled"],
-  searching: ["assigned", "no_coverage", "assignment_failed", "cancelled"],
-  assigned: ["technician_assigned", "en_route", "cancelled"],
+  searching: ["awaiting_acceptance", "assigned", "no_coverage", "assignment_failed", "cancelled"],
+  awaiting_acceptance: ["assigned", "searching", "cancelled"],
+  assigned: ["technician_assigned", "en_route", "searching", "cancelled"],
   technician_assigned: ["en_route", "arrived", "cancelled"],
   en_route: ["arrived", "in_progress", "cancelled"],
   arrived: ["in_progress", "finished", "cancelled"],
@@ -213,6 +214,9 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
 export interface WorkshopCandidate {
   workshopId: number;
   name: string;
+  providerName?: string | null;
+  requiresAcceptance?: boolean;
+  acceptTimeoutMin?: number;
   distanceKm: number;
   etaMinutes: number;
   score: number;
@@ -228,10 +232,22 @@ export async function findCandidates(
   latitude: number,
   longitude: number,
   serviceType: string,
+  excludeWorkshopIds: number[] = [],
 ): Promise<WorkshopCandidate[]> {
-  const r = await db.query(`SELECT * FROM connect_workshops WHERE "connectStatus" = 'active'`);
+  const r = await db.query(
+    `SELECT w.*, pc.name AS "providerName",
+            COALESCE(a."requiresAcceptance", false) AS "requiresAcceptance",
+            COALESCE(a."acceptTimeoutMin", 10) AS "acceptTimeoutMin"
+       FROM connect_workshops w
+       LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+       LEFT JOIN connect_provider_authorizations a
+         ON a."providerCompanyId" = w."providerCompanyId" AND a."branchId" IS NULL AND a.status = 'active'
+      WHERE w."connectStatus" = 'active'
+        AND (a.id IS NULL OR a.excluded = false)`,
+  );
   const candidates: WorkshopCandidate[] = [];
   for (const w of r.rows) {
+    if (excludeWorkshopIds.includes(w.id)) continue;
     const services: string[] = JSON.parse(w.services || "[]");
     if (serviceType !== "other" && services.length > 0 && !services.includes(serviceType)) continue;
     const distanceKm = haversineKm(latitude, longitude, w.latitude, w.longitude);
@@ -243,6 +259,9 @@ export async function findCandidates(
     candidates.push({
       workshopId: w.id,
       name: w.name,
+      providerName: w.providerName ?? null,
+      requiresAcceptance: w.requiresAcceptance === true,
+      acceptTimeoutMin: Number(w.acceptTimeoutMin) || 10,
       distanceKm: Math.round(distanceKm * 10) / 10,
       etaMinutes,
       score,
@@ -252,55 +271,272 @@ export async function findCandidates(
   return candidates.sort((a, b) => b.score - a.score);
 }
 
+/** Talleres ya ofertados sin éxito para esta asistencia (no se reofertan). */
+async function excludedWorkshops(assistanceId: number): Promise<number[]> {
+  const r = await db.query(
+    `SELECT DISTINCT "workshopId" FROM connect_assignments
+      WHERE "assistanceId" = $1 AND status IN ('rejected', 'expired', 'withdrawn')`,
+    [assistanceId],
+  );
+  return r.rows.map((x) => x.workshopId);
+}
+
+interface OfferOptions {
+  mode?: "auto" | "direct" | "offer"; // auto = según la autorización del proveedor
+  byUserId?: number | null;
+  byName?: string | null;
+  rank?: number | null;
+}
+
+async function candidateForWorkshop(a: any, workshopId: number): Promise<WorkshopCandidate> {
+  if (a.latitude != null && a.longitude != null) {
+    const list = await findCandidates(a.latitude, a.longitude, a.serviceType);
+    const hit = list.find((c) => c.workshopId === workshopId);
+    if (hit) return hit;
+  }
+  const w = await db.query(
+    `SELECT w.*, pc.name AS "providerName",
+            COALESCE(auth."requiresAcceptance", false) AS "requiresAcceptance",
+            COALESCE(auth."acceptTimeoutMin", 10) AS "acceptTimeoutMin"
+       FROM connect_workshops w
+       LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+       LEFT JOIN connect_provider_authorizations auth
+         ON auth."providerCompanyId" = w."providerCompanyId" AND auth."branchId" IS NULL AND auth.status = 'active'
+      WHERE w.id = $1 AND w."connectStatus" = 'active'`,
+    [workshopId],
+  );
+  if (!w.rows[0]) throw new Error("Taller no encontrado o no activo en la red Connect");
+  const dist = a.latitude != null && a.longitude != null
+    ? haversineKm(a.latitude, a.longitude, w.rows[0].latitude, w.rows[0].longitude) : 0;
+  return {
+    workshopId: w.rows[0].id,
+    name: w.rows[0].name,
+    providerName: w.rows[0].providerName,
+    requiresAcceptance: w.rows[0].requiresAcceptance === true,
+    acceptTimeoutMin: Number(w.rows[0].acceptTimeoutMin) || 10,
+    distanceKm: Math.round(dist * 10) / 10,
+    etaMinutes: estimateEtaMinutes(dist),
+    score: 100,
+    explanation: `Selección manual: ${w.rows[0].name} (${Math.round(dist)} km)`,
+  };
+}
+
 /**
- * Asigna la asistencia: busca candidatos, elige el mejor e inyecta la
- * asistencia nativa en el core. Se invoca tras crear (modo auto) o al
- * confirmar taller (modo manual).
+ * Oferta/asigna la asistencia a un taller concreto.
+ * - modo direct: inyecta en el core inmediatamente (comportamiento actual con SEA).
+ * - modo offer: queda en awaiting_acceptance hasta que el proveedor acepte/rechace
+ *   (o venza el plazo de la autorización → cascada automática).
+ */
+export async function offerToWorkshop(assistanceId: number, workshopId: number, opts: OfferOptions = {}): Promise<void> {
+  const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const a = r.rows[0];
+  if (!a) throw new Error(`Asistencia Connect ${assistanceId} no encontrada`);
+  if (!["pending", "searching", "no_coverage", "assignment_failed"].includes(a.status)) {
+    throw new InvalidTransitionError(a.status, "awaiting_acceptance");
+  }
+  if (a.status !== "searching") await transition(assistanceId, "searching", opts.byName ? "user" : "system");
+
+  const c = await candidateForWorkshop(a, workshopId);
+  const useOffer = opts.mode === "offer" || (opts.mode !== "direct" && c.requiresAcceptance);
+  const now = Date.now();
+  const deadline = useOffer ? now + (c.acceptTimeoutMin ?? 10) * 60_000 : null;
+
+  const ins = await db.query(
+    `INSERT INTO connect_assignments
+       ("assistanceId", "workshopId", "providerCompanyId", rank, score, "scoreBreakdown", explanation,
+        mode, status, "sentAtMs", "acceptDeadlineMs", "createdByUserId", "createdAtMs")
+     SELECT $1, $2, w."providerCompanyId", $3, $4, $5, $6, $7, 'sent', $8, $9, $10, $8
+       FROM connect_workshops w WHERE w.id = $2
+     RETURNING id`,
+    [
+      assistanceId, workshopId, opts.rank ?? null, c.score,
+      JSON.stringify({ distanceKm: c.distanceKm, etaMinutes: c.etaMinutes }),
+      c.explanation, useOffer ? "offer" : "direct", now, deadline, opts.byUserId ?? null,
+    ],
+  );
+  const assignmentId = ins.rows[0].id;
+
+  if (useOffer) {
+    await db.query(
+      `UPDATE connect_assistances SET "workshopId" = $1, "assignmentExplanation" = $2, "updatedAtMs" = $3 WHERE id = $4`,
+      [workshopId, c.explanation, now, assistanceId],
+    );
+    await transition(assistanceId, "awaiting_acceptance", opts.byName ? "user" : "system",
+      `Oferta enviada a ${c.name}${c.providerName ? ` (${c.providerName})` : ""}; plazo ${c.acceptTimeoutMin} min`);
+  } else {
+    await finalizeAcceptedAssignment(assignmentId, opts.byName ?? "sistema (asignación directa)");
+  }
+}
+
+/** Inyecta en el core y consolida la asignación aceptada. */
+async function finalizeAcceptedAssignment(assignmentId: number, actorName: string): Promise<void> {
+  const r = await db.query(
+    `SELECT asg.*, ca.id AS aid FROM connect_assignments asg
+       JOIN connect_assistances ca ON ca.id = asg."assistanceId"
+      WHERE asg.id = $1`,
+    [assignmentId],
+  );
+  const asg = r.rows[0];
+  if (!asg) throw new Error("Asignación no encontrada");
+  const aRow = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [asg.assistanceId]);
+  const a = aRow.rows[0];
+  const now = Date.now();
+
+  const coreId = await injectIntoCore(a, asg.workshopId);
+  await db.query(
+    `UPDATE connect_assignments SET status = 'accepted', "respondedAtMs" = $1, "respondedBy" = $2 WHERE id = $3`,
+    [now, actorName, assignmentId],
+  );
+  await db.query(
+    `UPDATE connect_assistances
+        SET "workshopId" = $1, "coreAssistanceId" = $2, "assignmentExplanation" = $3, "updatedAtMs" = $4
+      WHERE id = $5`,
+    [asg.workshopId, coreId, asg.explanation, now, asg.assistanceId],
+  );
+  await transition(asg.assistanceId, "assigned", "system", asg.mode === "offer" ? `Aceptada por ${actorName}` : asg.explanation);
+}
+
+/** Aceptación de una oferta (portal del proveedor o aceptación telefónica del operador). */
+export async function acceptAssignment(assignmentId: number, actorName: string): Promise<void> {
+  const r = await db.query(`SELECT * FROM connect_assignments WHERE id = $1`, [assignmentId]);
+  const asg = r.rows[0];
+  if (!asg) throw new Error("Oferta no encontrada");
+  if (asg.status !== "sent") throw new Error(`La oferta ya está en estado ${asg.status}`);
+  await finalizeAcceptedAssignment(assignmentId, actorName);
+}
+
+/** Rechazo con motivo obligatorio; relanza la búsqueda en cascada. */
+export async function rejectAssignment(
+  assignmentId: number,
+  opts: { reasonCode: string; comment?: string; actorName: string; affectsScore?: boolean },
+): Promise<void> {
+  const r = await db.query(`SELECT * FROM connect_assignments WHERE id = $1`, [assignmentId]);
+  const asg = r.rows[0];
+  if (!asg) throw new Error("Oferta no encontrada");
+  if (asg.status !== "sent") throw new Error(`La oferta ya está en estado ${asg.status}`);
+  if (!opts.reasonCode) throw new Error("El motivo de rechazo es obligatorio");
+  const now = Date.now();
+
+  await db.query(
+    `UPDATE connect_assignments SET status = 'rejected', "respondedAtMs" = $1, "respondedBy" = $2 WHERE id = $3`,
+    [now, opts.actorName, assignmentId],
+  );
+  await db.query(
+    `INSERT INTO connect_rejections
+       ("assignmentId", "assistanceId", "workshopId", "providerCompanyId", "reasonCode", comment,
+        "responseMs", "affectsScore", "rejectedBy", "createdAtMs")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      assignmentId, asg.assistanceId, asg.workshopId, asg.providerCompanyId,
+      opts.reasonCode, opts.comment ?? null, now - Number(asg.sentAtMs),
+      opts.affectsScore !== false, opts.actorName, now,
+    ],
+  );
+  await db.query(`UPDATE connect_assistances SET "workshopId" = NULL, "updatedAtMs" = $1 WHERE id = $2`, [now, asg.assistanceId]);
+  await transition(asg.assistanceId, "searching", "user", `Rechazada por ${opts.actorName}: ${opts.reasonCode}${opts.comment ? ` — ${opts.comment}` : ""}`);
+  await cascadeNext(asg.assistanceId);
+}
+
+/** Tras rechazo/expiración: intenta el siguiente candidato automáticamente. */
+async function cascadeNext(assistanceId: number): Promise<void> {
+  const aRow = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const a = aRow.rows[0];
+  if (!a || a.status !== "searching") return;
+  if (a.latitude == null || a.longitude == null) {
+    await transition(assistanceId, "assignment_failed", "system", "Sin coordenadas para buscar alternativa: requiere gestión manual");
+    return;
+  }
+  const excluded = await excludedWorkshops(assistanceId);
+  const candidates = await findCandidates(a.latitude, a.longitude, a.serviceType, excluded);
+  if (candidates.length === 0) {
+    await transition(assistanceId, "assignment_failed", "system", "Cascada agotada: ningún taller alternativo disponible");
+    return;
+  }
+  await offerToWorkshop(assistanceId, candidates[0].workshopId, { mode: "auto", rank: 1 });
+}
+
+/** Reasignación: retira la asignación vigente (aceptada o pendiente) y relanza. */
+export async function withdrawAndReassign(assistanceId: number, reason: string, actorName: string): Promise<void> {
+  const aRow = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const a = aRow.rows[0];
+  if (!a) throw new Error("Asistencia no encontrada");
+  if (!["awaiting_acceptance", "assigned", "technician_assigned", "en_route"].includes(a.status)) {
+    throw new Error(`No se puede reasignar en estado ${a.status}`);
+  }
+  const now = Date.now();
+
+  await db.query(
+    `UPDATE connect_assignments SET status = 'withdrawn', "respondedAtMs" = $1, "respondedBy" = $2
+      WHERE "assistanceId" = $3 AND status IN ('sent', 'accepted')`,
+    [now, actorName, assistanceId],
+  );
+  if (a.coreAssistanceId) {
+    await db.query(
+      `UPDATE roadside_assistances SET status = 'cancelada', "cancelledAtMs" = $1, "updatedAtMs" = $1
+        WHERE id = $2 AND status NOT IN ('finalizada', 'cancelada')`,
+      [now, a.coreAssistanceId],
+    );
+    await db.query(
+      `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+       VALUES ($1, 'cancelada', $2, 'connect-pro', $3)`,
+      [a.coreAssistanceId, `Reasignada desde Connect Pro: ${reason}`, now],
+    );
+  }
+  await db.query(
+    `UPDATE connect_assistances SET "workshopId" = NULL, "coreAssistanceId" = NULL, "updatedAtMs" = $1 WHERE id = $2`,
+    [now, assistanceId],
+  );
+  await transition(assistanceId, "searching", "user", `Reasignación solicitada por ${actorName}: ${reason}`);
+  await cascadeNext(assistanceId);
+}
+
+/** Expira ofertas vencidas (worker) y lanza la cascada. */
+export async function expireOfferedAssignments(): Promise<number> {
+  const now = Date.now();
+  const r = await db.query(
+    `SELECT id, "assistanceId", "workshopId" FROM connect_assignments
+      WHERE status = 'sent' AND mode = 'offer' AND "acceptDeadlineMs" IS NOT NULL AND "acceptDeadlineMs" < $1`,
+    [now],
+  );
+  for (const asg of r.rows) {
+    try {
+      await db.query(`UPDATE connect_assignments SET status = 'expired', "respondedAtMs" = $1 WHERE id = $2`, [now, asg.id]);
+      await db.query(`UPDATE connect_assistances SET "workshopId" = NULL, "updatedAtMs" = $1 WHERE id = $2`, [now, asg.assistanceId]);
+      await transition(asg.assistanceId, "searching", "system", "Oferta expirada sin respuesta del proveedor");
+      await cascadeNext(asg.assistanceId);
+    } catch (err: any) {
+      console.error(`[Connect] expirando oferta ${asg.id}: ${err?.message}`);
+    }
+  }
+  return r.rows.length;
+}
+
+/**
+ * Asignación automática (partners API y botón "Buscar proveedor"):
+ * elige el mejor candidato no descartado y lo oferta/asigna según su autorización.
  */
 export async function assignAssistance(assistanceId: number, forcedWorkshopId?: number): Promise<void> {
   const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [assistanceId]);
   const a = r.rows[0];
   if (!a) throw new Error(`Asistencia Connect ${assistanceId} no encontrada`);
-  if (a.status !== "pending" && a.status !== "no_coverage" && a.status !== "assignment_failed") return;
+  if (!["pending", "no_coverage", "assignment_failed"].includes(a.status)) return;
 
-  await transition(assistanceId, "searching", "system");
-
-  let candidate: WorkshopCandidate | undefined;
   if (forcedWorkshopId) {
-    const w = await db.query(`SELECT * FROM connect_workshops WHERE id = $1 AND "connectStatus" = 'active'`, [forcedWorkshopId]);
-    if (!w.rows[0]) throw new Error("Taller no encontrado o no activo en la red Connect");
-    const dist = a.latitude != null && a.longitude != null
-      ? haversineKm(a.latitude, a.longitude, w.rows[0].latitude, w.rows[0].longitude)
-      : 0;
-    candidate = {
-      workshopId: w.rows[0].id,
-      name: w.rows[0].name,
-      distanceKm: Math.round(dist * 10) / 10,
-      etaMinutes: estimateEtaMinutes(dist),
-      score: 100,
-      explanation: `Asignación manual a ${w.rows[0].name}`,
-    };
-  } else {
-    if (a.latitude == null || a.longitude == null) {
-      await transition(assistanceId, "assignment_failed", "system", "Sin coordenadas: se requiere asignación manual");
-      return;
-    }
-    const candidates = await findCandidates(a.latitude, a.longitude, a.serviceType);
-    if (candidates.length === 0) {
-      await transition(assistanceId, "no_coverage", "system", "Ningún taller activo cubre la zona/servicio");
-      return;
-    }
-    candidate = candidates[0];
+    await offerToWorkshop(assistanceId, forcedWorkshopId, { mode: "auto" });
+    return;
   }
-
-  const coreId = await injectIntoCore(a, candidate.workshopId);
-  await db.query(
-    `UPDATE connect_assistances
-        SET "workshopId" = $1, "coreAssistanceId" = $2, "assignmentExplanation" = $3, "updatedAtMs" = $4
-      WHERE id = $5`,
-    [candidate.workshopId, coreId, candidate.explanation, Date.now(), assistanceId],
-  );
-  await transition(assistanceId, "assigned", "system", candidate.explanation);
+  await transition(assistanceId, "searching", "system");
+  if (a.latitude == null || a.longitude == null) {
+    await transition(assistanceId, "assignment_failed", "system", "Sin coordenadas: se requiere asignación manual");
+    return;
+  }
+  const excluded = await excludedWorkshops(assistanceId);
+  const candidates = await findCandidates(a.latitude, a.longitude, a.serviceType, excluded);
+  if (candidates.length === 0) {
+    await transition(assistanceId, "no_coverage", "system", "Ningún taller activo cubre la zona/servicio");
+    return;
+  }
+  await offerToWorkshop(assistanceId, candidates[0].workshopId, { mode: "auto", rank: 1 });
 }
 
 // ---------------------------------------------------------------------------

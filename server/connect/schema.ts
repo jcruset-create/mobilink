@@ -255,6 +255,44 @@ export async function initConnect(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_connect_audit_center_time
       ON connect_audit_logs ("controlCenterId", "createdAtMs" DESC);
 
+    -- Sprint 3: histórico de asignaciones (ofertas) y rechazos
+    CREATE TABLE IF NOT EXISTS connect_assignments (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id),
+      "providerCompanyId" INTEGER,
+      rank INTEGER,
+      score DOUBLE PRECISION,
+      "scoreBreakdown" TEXT,
+      explanation TEXT,
+      mode TEXT NOT NULL DEFAULT 'direct', -- direct (inyección inmediata) | offer (requiere aceptación)
+      status TEXT NOT NULL DEFAULT 'sent', -- sent | accepted | rejected | expired | withdrawn
+      "sentAtMs" BIGINT NOT NULL,
+      "respondedAtMs" BIGINT,
+      "respondedBy" TEXT,                 -- nombre/actor que respondió
+      "acceptDeadlineMs" BIGINT,          -- vencimiento de la oferta
+      "createdByUserId" INTEGER,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_assignments_assistance
+      ON connect_assignments ("assistanceId", status);
+    CREATE INDEX IF NOT EXISTS idx_connect_assignments_pending
+      ON connect_assignments (status, "acceptDeadlineMs");
+
+    CREATE TABLE IF NOT EXISTS connect_rejections (
+      id SERIAL PRIMARY KEY,
+      "assignmentId" INTEGER NOT NULL REFERENCES connect_assignments(id) ON DELETE CASCADE,
+      "assistanceId" INTEGER NOT NULL,
+      "workshopId" INTEGER NOT NULL,
+      "providerCompanyId" INTEGER,
+      "reasonCode" TEXT NOT NULL,
+      comment TEXT,
+      "responseMs" BIGINT,                -- tiempo empleado en responder
+      "affectsScore" BOOLEAN NOT NULL DEFAULT true,
+      "rejectedBy" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,
@@ -306,6 +344,10 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaMinutes" INTEGER;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaDeadlineAtMs" BIGINT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER;
+
+    -- Sprint 3: la autorización decide si las asistencias requieren aceptación explícita
+    ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "requiresAcceptance" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "acceptTimeoutMin" INTEGER NOT NULL DEFAULT 10;
   `);
 
   await seedConnectDefaults();

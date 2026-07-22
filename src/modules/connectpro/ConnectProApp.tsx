@@ -4,7 +4,7 @@
  */
 
 import { Navigate, Route, Routes } from "react-router-dom";
-import { ConnectAuthProvider, ConnectAccessGate } from "./contexts/ConnectAuthContext";
+import { ConnectAuthProvider, ConnectAccessGate, useConnectAuth } from "./contexts/ConnectAuthContext";
 import ConnectLayout from "./layouts/ConnectLayout";
 import Dashboard from "./pages/Dashboard";
 import Asistencias from "./pages/Asistencias";
@@ -16,6 +16,13 @@ import Integraciones from "./pages/Integraciones";
 import Usuarios from "./pages/Usuarios";
 import Auditoria from "./pages/Auditoria";
 import Configuracion from "./pages/Configuracion";
+import Ofertas from "./pages/Ofertas";
+
+/** Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el Dashboard. */
+function Home() {
+  const { user } = useConnectAuth();
+  return <Navigate to={user?.role === "provider_user" ? "ofertas" : "dashboard"} replace />;
+}
 
 export default function ConnectProApp() {
   return (
@@ -23,18 +30,19 @@ export default function ConnectProApp() {
       <ConnectAccessGate>
         <Routes>
           <Route element={<ConnectLayout />}>
-            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route index element={<Home />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="asistencias" element={<Asistencias />} />
             <Route path="asistencias/:id" element={<FichaAsistencia />} />
             <Route path="nueva" element={<NuevaAsistencia />} />
+            <Route path="ofertas" element={<Ofertas />} />
             <Route path="empresas" element={<Empresas />} />
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />
             <Route path="usuarios" element={<Usuarios />} />
             <Route path="auditoria" element={<Auditoria />} />
             <Route path="configuracion" element={<Configuracion />} />
-            <Route path="*" element={<Navigate to="dashboard" replace />} />
+            <Route path="*" element={<Home />} />
           </Route>
         </Routes>
       </ConnectAccessGate>

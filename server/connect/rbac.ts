@@ -89,6 +89,22 @@ export function requireConnectRole(role: Exclude<ConnectRole, "provider_user">):
   return [authenticate, check];
 }
 
+/** Middleware: cualquier usuario Connect activo (incluye provider_user). */
+export function requireConnectUser(): RequestHandler[] {
+  const check: RequestHandler = async (req, res, next) => {
+    try {
+      const user = await resolveConnectUser(req);
+      if (!user) return res.status(403).json({ error: { code: "no_connect_user", message: "Tu usuario no tiene acceso a Connect Pro" } });
+      req.connectUser = user;
+      next();
+    } catch (err: any) {
+      console.error("[Connect] rbac error:", err?.message);
+      res.status(500).json({ error: { code: "internal_error", message: "Error de autorización" } });
+    }
+  };
+  return [authenticate, check];
+}
+
 /** Middleware para el portal de empresa proveedora (solo su empresa). */
 export function requireProviderUser(): RequestHandler[] {
   const check: RequestHandler = async (req, res, next) => {

@@ -10,7 +10,11 @@ import crypto from "node:crypto";
 import { Router, json, type Response } from "express";
 import db from "../db.ts";
 import { requireConnectRole, auditConnect } from "./rbac.ts";
-import { createAssistance, submitDraft, assignAssistance, transition, InvalidTransitionError } from "./service.ts";
+import {
+  createAssistance, submitDraft, assignAssistance, transition, InvalidTransitionError,
+  findCandidates, offerToWorkshop, acceptAssignment, rejectAssignment, withdrawAndReassign,
+} from "./service.ts";
+import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
@@ -22,7 +26,7 @@ export function createConnectBackofficeRouter(): Router {
 
   // ── Sesión ────────────────────────────────────────────────
 
-  router.get("/me", ...requireConnectRole("analyst"), async (req, res) => {
+  router.get("/me", ...requireConnectUser(), async (req, res) => {
     const u = req.connectUser!;
     const cc = u.controlCenterId
       ? (await db.query(`SELECT id, name FROM connect_control_centers WHERE id = $1`, [u.controlCenterId])).rows[0]
@@ -329,6 +333,140 @@ export function createConnectBackofficeRouter(): Router {
     }
   });
 
+  // Comparador: candidatos ordenados con score y explicación
+  router.get("/assistances/:id/candidates", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const a = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (a.rows[0].latitude == null || a.rows[0].longitude == null) {
+      return err(res, 422, "no_coordinates", "La asistencia no tiene coordenadas; añádelas para buscar candidatos");
+    }
+    const excluded = await db.query(
+      `SELECT DISTINCT "workshopId" FROM connect_assignments WHERE "assistanceId" = $1 AND status IN ('rejected','expired','withdrawn')`,
+      [id],
+    );
+    const candidates = await findCandidates(
+      a.rows[0].latitude, a.rows[0].longitude, a.rows[0].serviceType,
+      excluded.rows.map((x) => x.workshopId),
+    );
+    res.json({ data: candidates });
+  });
+
+  // Historial de ofertas/asignaciones de la asistencia
+  router.get("/assistances/:id/assignments", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT asg.*, w.name AS "workshopName", pc.name AS "providerName",
+              rej."reasonCode", rej.comment AS "rejectionComment"
+         FROM connect_assignments asg
+         JOIN connect_workshops w ON w.id = asg."workshopId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = asg."providerCompanyId"
+         LEFT JOIN connect_rejections rej ON rej."assignmentId" = asg.id
+        WHERE asg."assistanceId" = $1 ORDER BY asg.id DESC`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  // Asignación manual a un taller (directa u oferta según autorización o forzado)
+  router.post("/assistances/:id/assign", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    const workshopId = Number(req.body?.workshopId);
+    const mode = req.body?.mode === "offer" ? "offer" : req.body?.mode === "direct" ? "direct" : "auto";
+    if (!workshopId) return err(res, 422, "validation_failed", "workshopId es obligatorio");
+    try {
+      await offerToWorkshop(id, workshopId, { mode, byUserId: u.id, byName: u.name });
+      await auditConnect({ req, action: "assistance.assigned_manual", resourceType: "assistance", resourceId: id, detail: { workshopId, mode } });
+      const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      if (e instanceof InvalidTransitionError) return err(res, 409, "invalid_state_transition", e.message);
+      return err(res, 409, "assignment_error", e?.message || "No se pudo asignar");
+    }
+  });
+
+  // Aceptación telefónica / rechazo registrado por el operador
+  router.post("/assignments/:id/accept", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    try {
+      await acceptAssignment(Number(req.params.id), `${u.name} (aceptación telefónica)`);
+      await auditConnect({ req, action: "assignment.accepted_by_operator", resourceType: "assignment", resourceId: Number(req.params.id) });
+      res.json({ ok: true });
+    } catch (e: any) { return err(res, 409, "assignment_error", e?.message); }
+  });
+
+  router.post("/assignments/:id/reject", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const { reasonCode, comment } = req.body ?? {};
+    if (!reasonCode) return err(res, 422, "validation_failed", "reasonCode es obligatorio");
+    try {
+      await rejectAssignment(Number(req.params.id), { reasonCode, comment, actorName: `${u.name} (en nombre del proveedor)` });
+      await auditConnect({ req, action: "assignment.rejected_by_operator", resourceType: "assignment", resourceId: Number(req.params.id), detail: { reasonCode } });
+      res.json({ ok: true });
+    } catch (e: any) { return err(res, 409, "assignment_error", e?.message); }
+  });
+
+  // Reasignación
+  router.post("/assistances/:id/reassign", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const reason = String(req.body?.reason || "").trim();
+    if (!reason) return err(res, 422, "validation_failed", "El motivo de la reasignación es obligatorio");
+    try {
+      await withdrawAndReassign(Number(req.params.id), reason, u.name);
+      await auditConnect({ req, action: "assistance.reassigned", resourceType: "assistance", resourceId: Number(req.params.id), detail: { reason } });
+      const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [Number(req.params.id)]);
+      res.json(r.rows[0]);
+    } catch (e: any) { return err(res, 409, "assignment_error", e?.message); }
+  });
+
+  // ── Portal del proveedor (rol provider_user) ──────────────
+
+  router.get("/provider/offers", ...requireProviderUser(), async (req, res) => {
+    const u = req.connectUser!;
+    const r = await db.query(
+      `SELECT asg.id, asg.status, asg."sentAtMs", asg."acceptDeadlineMs", asg.explanation,
+              ca.id AS "assistanceId", ca."serviceType", ca.priority, ca.address,
+              ca."customerName", ca.description, w.name AS "workshopName"
+         FROM connect_assignments asg
+         JOIN connect_assistances ca ON ca.id = asg."assistanceId"
+         JOIN connect_workshops w ON w.id = asg."workshopId"
+        WHERE ($1::int IS NULL OR asg."providerCompanyId" = $1)
+        ORDER BY asg.id DESC LIMIT 100`,
+      [u.role === "provider_user" ? u.providerCompanyId : null],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/provider/offers/:id/accept", ...requireProviderUser(), async (req, res) => {
+    const u = req.connectUser!;
+    const asg = await db.query(`SELECT "providerCompanyId" FROM connect_assignments WHERE id = $1`, [Number(req.params.id)]);
+    if (!asg.rows[0]) return err(res, 404, "not_found", "Oferta no encontrada");
+    if (u.role === "provider_user" && asg.rows[0].providerCompanyId !== u.providerCompanyId) {
+      return err(res, 403, "forbidden", "La oferta no pertenece a tu empresa");
+    }
+    try {
+      await acceptAssignment(Number(req.params.id), u.name || u.email);
+      await auditConnect({ req, action: "assignment.accepted_by_provider", resourceType: "assignment", resourceId: Number(req.params.id) });
+      res.json({ ok: true });
+    } catch (e: any) { return err(res, 409, "assignment_error", e?.message); }
+  });
+
+  router.post("/provider/offers/:id/reject", ...requireProviderUser(), async (req, res) => {
+    const u = req.connectUser!;
+    const { reasonCode, comment } = req.body ?? {};
+    if (!reasonCode) return err(res, 422, "validation_failed", "El motivo de rechazo es obligatorio");
+    const asg = await db.query(`SELECT "providerCompanyId" FROM connect_assignments WHERE id = $1`, [Number(req.params.id)]);
+    if (!asg.rows[0]) return err(res, 404, "not_found", "Oferta no encontrada");
+    if (u.role === "provider_user" && asg.rows[0].providerCompanyId !== u.providerCompanyId) {
+      return err(res, 403, "forbidden", "La oferta no pertenece a tu empresa");
+    }
+    try {
+      await rejectAssignment(Number(req.params.id), { reasonCode, comment, actorName: u.name || u.email });
+      await auditConnect({ req, action: "assignment.rejected_by_provider", resourceType: "assignment", resourceId: Number(req.params.id), detail: { reasonCode } });
+      res.json({ ok: true });
+    } catch (e: any) { return err(res, 409, "assignment_error", e?.message); }
+  });
+
   // Cancelar
   router.post("/assistances/:id/cancel", ...requireConnectRole("operator"), async (req, res) => {
     const id = Number(req.params.id);
@@ -401,13 +539,16 @@ export function createConnectBackofficeRouter(): Router {
   });
 
   router.patch("/authorizations/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const { status, preferred, excluded } = req.body ?? {};
+    const { status, preferred, excluded, requiresAcceptance, acceptTimeoutMin } = req.body ?? {};
     const r = await db.query(
       `UPDATE connect_provider_authorizations
           SET status = COALESCE($1, status), preferred = COALESCE($2, preferred),
-              excluded = COALESCE($3, excluded), "updatedAtMs" = $4
-        WHERE id = $5 RETURNING *`,
-      [status ?? null, preferred ?? null, excluded ?? null, Date.now(), Number(req.params.id)],
+              excluded = COALESCE($3, excluded),
+              "requiresAcceptance" = COALESCE($4, "requiresAcceptance"),
+              "acceptTimeoutMin" = COALESCE($5, "acceptTimeoutMin"), "updatedAtMs" = $6
+        WHERE id = $7 RETURNING *`,
+      [status ?? null, preferred ?? null, excluded ?? null, requiresAcceptance ?? null,
+       acceptTimeoutMin != null ? Number(acceptTimeoutMin) : null, Date.now(), Number(req.params.id)],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Autorización no encontrada");
     await auditConnect({ req, action: "authorization.updated", resourceType: "authorization", resourceId: r.rows[0].id, detail: req.body });
@@ -470,7 +611,7 @@ export function createConnectBackofficeRouter(): Router {
 
   // ── Catálogos ─────────────────────────────────────────────
 
-  router.get("/catalogs", ...requireConnectRole("analyst"), async (_req, res) => {
+  router.get("/catalogs", ...requireConnectUser(), async (_req, res) => {
     const [types, reasons] = await Promise.all([
       db.query(`SELECT * FROM connect_service_types ORDER BY "sortOrder"`),
       db.query(`SELECT * FROM connect_rejection_reasons ORDER BY "sortOrder"`),
