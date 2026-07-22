@@ -931,6 +931,143 @@ export function createConnectBackofficeRouter(): Router {
     }
   });
 
+  // ── Informes (por periodo, formato genérico columnas+filas) ──
+
+  router.get("/reports/:kind", ...requireConnectRole("analyst"), async (req, res) => {
+    const from = Number(req.query.from) || new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const to = Number(req.query.to) || Date.now();
+    const kind = String(req.params.kind);
+    const fmtMs = (v: unknown) => (v ? new Date(Number(v)).toISOString().replace("T", " ").slice(0, 16) : "");
+    const min = (v: unknown) => (v != null ? Math.round(Number(v)) : "");
+
+    if (kind === "actividad") {
+      const r = await db.query(
+        `SELECT ca.id, ca."expedientNumber", ca."createdAtMs",
+                COALESCE(cl.name, ca."clientName", p.name) AS client,
+                COALESCE(pc.name, w.name) AS provider,
+                ca."serviceType", ca.priority, ca.status, ca.origin,
+                acc.min AS accept_min, arr.min AS arrival_min, fin.min AS resolution_min
+           FROM connect_assistances ca
+           LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
+           LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+           LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+           LEFT JOIN LATERAL (SELECT (h2."occurredAtMs" - h1."occurredAtMs")/60000.0 AS min
+              FROM connect_status_history h1 JOIN connect_status_history h2
+                ON h1."assistanceId" = h2."assistanceId"
+             WHERE h1."assistanceId" = ca.id AND h1."toStatus" = 'pending' AND h2."toStatus" = 'assigned' LIMIT 1) acc ON true
+           LEFT JOIN LATERAL (SELECT (h2."occurredAtMs" - h1."occurredAtMs")/60000.0 AS min
+              FROM connect_status_history h1 JOIN connect_status_history h2
+                ON h1."assistanceId" = h2."assistanceId"
+             WHERE h1."assistanceId" = ca.id AND h1."toStatus" = 'assigned' AND h2."toStatus" = 'arrived' LIMIT 1) arr ON true
+           LEFT JOIN LATERAL (SELECT (h2."occurredAtMs" - h1."occurredAtMs")/60000.0 AS min
+              FROM connect_status_history h1 JOIN connect_status_history h2
+                ON h1."assistanceId" = h2."assistanceId"
+             WHERE h1."assistanceId" = ca.id AND h1."toStatus" = 'arrived' AND h2."toStatus" = 'finished' LIMIT 1) fin ON true
+          WHERE ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status <> 'draft'
+          ORDER BY ca.id`,
+        [from, to],
+      );
+      return res.json({
+        title: "Actividad de asistencias",
+        columns: ["ID", "Expediente", "Fecha", "Cliente", "Proveedor", "Servicio", "Prioridad", "Estado", "Origen", "Min. asignación", "Min. llegada", "Min. resolución"],
+        rows: r.rows.map((x) => [x.id, x.expedientNumber ?? "", fmtMs(x.createdAtMs), x.client ?? "", x.provider ?? "",
+          x.serviceType, x.priority, x.status, x.origin, min(x.accept_min), min(x.arrival_min), min(x.resolution_min)]),
+      });
+    }
+
+    if (kind === "sla") {
+      const r = await db.query(
+        `SELECT ca.id, ca."expedientNumber", ca."createdAtMs", ca."slaMinutes", ca."slaDeadlineAtMs",
+                COALESCE(cl.name, ca."clientName") AS client, w.name AS workshop, ca.status,
+                arr."occurredAtMs" AS arrived_at
+           FROM connect_assistances ca
+           LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+           LEFT JOIN LATERAL (SELECT "occurredAtMs" FROM connect_status_history
+             WHERE "assistanceId" = ca.id AND "toStatus" = 'arrived' ORDER BY id LIMIT 1) arr ON true
+          WHERE ca."createdAtMs" BETWEEN $1 AND $2 AND ca."slaDeadlineAtMs" IS NOT NULL
+          ORDER BY ca.id`,
+        [from, to],
+      );
+      return res.json({
+        title: "Cumplimiento de SLA",
+        columns: ["ID", "Expediente", "Fecha", "Cliente", "Taller", "SLA (min)", "Límite", "Llegada", "Resultado", "Desvío (min)"],
+        rows: r.rows.map((x) => {
+          const arrived = x.arrived_at ? Number(x.arrived_at) : null;
+          const deadline = Number(x.slaDeadlineAtMs);
+          const result = arrived == null
+            ? (x.status === "cancelled" ? "cancelada" : Date.now() > deadline ? "incumplido (sin llegada)" : "en curso")
+            : arrived <= deadline ? "cumplido" : "incumplido";
+          const dev = arrived != null ? Math.round((arrived - deadline) / 60000) : "";
+          return [x.id, x.expedientNumber ?? "", fmtMs(x.createdAtMs), x.client ?? "", x.workshop ?? "",
+            x.slaMinutes ?? "", fmtMs(deadline), fmtMs(arrived), result, dev];
+        }),
+      });
+    }
+
+    if (kind === "rechazos") {
+      const r = await db.query(
+        `SELECT rj."createdAtMs", rj."reasonCode", rr.label, rj.comment, rj."responseMs",
+                rj."rejectedBy", w.name AS workshop, rj."assistanceId"
+           FROM connect_rejections rj
+           LEFT JOIN connect_rejection_reasons rr ON rr.code = rj."reasonCode"
+           LEFT JOIN connect_workshops w ON w.id = rj."workshopId"
+          WHERE rj."createdAtMs" BETWEEN $1 AND $2 ORDER BY rj.id`,
+        [from, to],
+      );
+      return res.json({
+        title: "Rechazos de ofertas",
+        columns: ["Fecha", "Asistencia", "Taller", "Motivo", "Comentario", "Respondió en (min)", "Por"],
+        rows: r.rows.map((x) => [fmtMs(x.createdAtMs), x.assistanceId, x.workshop ?? "",
+          x.label ?? x.reasonCode, x.comment ?? "", min(Number(x.responseMs) / 60000), x.rejectedBy ?? ""]),
+      });
+    }
+
+    if (kind === "incidencias") {
+      const r = await db.query(
+        `SELECT i.*, pc.name AS provider, u.name AS owner
+           FROM connect_incidents i
+           LEFT JOIN connect_provider_companies pc ON pc.id = i."providerCompanyId"
+           LEFT JOIN connect_users u ON u.id = i."ownerUserId"
+          WHERE i."createdAtMs" BETWEEN $1 AND $2 ORDER BY i.id`,
+        [from, to],
+      );
+      return res.json({
+        title: "Incidencias",
+        columns: ["ID", "Fecha", "Tipo", "Gravedad", "Estado", "Asistencia", "Proveedor", "Responsable", "Descripción", "Resolución", "Resuelta"],
+        rows: r.rows.map((x) => [x.id, fmtMs(x.createdAtMs), x.type, x.severity, x.status,
+          x.assistanceId ?? "", x.provider ?? "", x.owner ?? "", x.description, x.resolution ?? "", fmtMs(x.resolvedAtMs)]),
+      });
+    }
+
+    if (kind === "proveedores") {
+      const r = await db.query(
+        `SELECT w.name AS workshop, pc.name AS provider, w."currentScore",
+                COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2)::int AS offered,
+                COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2 AND asg.status = 'accepted')::int AS accepted,
+                COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2 AND asg.status IN ('rejected','expired'))::int AS declined,
+                (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id
+                   AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status = 'finished') AS finished,
+                (SELECT COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) FROM connect_assistances ca
+                  WHERE ca."workshopId" = w.id AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status = 'finished') AS revenue
+           FROM connect_workshops w
+           LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+           LEFT JOIN connect_assignments asg ON asg."workshopId" = w.id
+          GROUP BY w.id, pc.name ORDER BY w.name`,
+        [from, to],
+      );
+      return res.json({
+        title: "Rendimiento de proveedores",
+        columns: ["Taller", "Empresa", "Score", "Ofertadas", "Aceptadas", "Rechazadas/exp.", "Finalizadas", "Importe (€)"],
+        rows: r.rows.map((x) => [x.workshop, x.provider ?? "", Math.round(x.currentScore),
+          x.offered, x.accepted, x.declined, x.finished, Number(x.revenue).toFixed(2)]),
+      });
+    }
+
+    return err(res, 404, "not_found", "Informe no disponible. Tipos: actividad, sla, rechazos, incidencias, proveedores");
+  });
+
   // ── Facturación (Fase 2 S3) ───────────────────────────────
 
   router.get("/billing/summary", ...requireConnectRole("cc_admin"), async (req, res) => {
