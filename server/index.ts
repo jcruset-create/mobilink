@@ -10397,7 +10397,7 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
 async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<string, any>> {
   const result = await db.query(
     `SELECT message_type, text_content, latitude, longitude, address,
-            contact_name, contact_phone, media_stored_url, media_url, transcript
+            contact_name, contact_phone, media_stored_url, media_url, transcript, received_at
      FROM whatsapp_capture_messages
      WHERE session_id = $1
      ORDER BY received_at ASC`,
@@ -10410,16 +10410,20 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
   const lines: string[] = [];
   const imageUrls: string[] = [];
   for (const m of messages) {
-    if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO] ${m.text_content}`);
-    else if (m.message_type === "location") lines.push(`[UBICACION] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
-    else if (m.message_type === "contact") lines.push(`[CONTACTO] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
+    const hora = m.received_at
+      ? new Date(m.received_at).toLocaleTimeString("es-ES", { hour12: false, timeZone: "Europe/Madrid" })
+      : "";
+    const ts = hora ? ` ${hora}` : "";
+    if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO${ts}] ${m.text_content}`);
+    else if (m.message_type === "location") lines.push(`[UBICACION${ts}] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
+    else if (m.message_type === "contact") lines.push(`[CONTACTO${ts}] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
     else if (m.message_type === "image") {
       const url = m.media_stored_url || m.media_url;
       if (url) imageUrls.push(url);
-      lines.push(`[IMAGEN enviada]`);
+      lines.push(`[IMAGEN${ts} enviada]`);
     }
-    else if (m.message_type === "audio") lines.push(m.transcript ? `[AUDIO transcrito] ${m.transcript}` : `[AUDIO sin transcribir]`);
-    else if (m.message_type === "document") lines.push(`[DOCUMENTO]`);
+    else if (m.message_type === "audio") lines.push(m.transcript ? `[AUDIO${ts} transcrito] ${m.transcript}` : `[AUDIO${ts} sin transcribir]`);
+    else if (m.message_type === "document") lines.push(`[DOCUMENTO${ts}]`);
   }
 
   const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
@@ -10430,6 +10434,11 @@ INSTRUCCIONES CRÍTICAS para imágenes:
 2. Busca coordenadas GPS en cualquier formato: decimal (41.123, 1.456), DMS (41°19'20.4"N 1°15'57.8"E), o en capturas de mapas.
    - Si encuentras coordenadas DMS, conviértelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
 3. Busca direcciones, nombres de calles, municipios visibles en imágenes de mapas o capturas de pantalla.
+
+UBICACIONES MÚLTIPLES:
+- Si la sesión contiene varias ubicaciones GPS, usa SIEMPRE la más reciente (la de hora más tardía) para latitude/longitude/address/municipio/provincia. Una ubicación posterior corrige a la anterior: el conductor puede haberse movido o haber enviado primero una ubicación equivocada.
+- Excepción: si un mensaje de texto o audio posterior indica lo contrario (p. ej. "la buena es la primera", "ignora la última ubicación"), obedece al texto.
+- Si las ubicaciones difieren mucho entre sí y no hay texto que lo aclare, usa la última pero baja "confidence" a "medium" y menciónalo en "resumen" (p. ej. "Se recibieron 2 ubicaciones distintas; se usa la última").
 
 MATRÍCULAS (España):
 - Matrícula BLANCA = camión/vehículo tractor → campo "plate".

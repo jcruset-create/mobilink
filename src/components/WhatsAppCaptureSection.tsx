@@ -372,6 +372,10 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const suggestions: WhatsAppAiSuggestions | null = session?.ai_suggestions ?? null;
   const messages = session?.messages ?? [];
 
+  const locationMessages = messages.filter(
+    (m) => m.message_type === "location" && m.latitude != null && m.longitude != null
+  );
+
   const mediaMessages = messages.filter(
     (m) => MEDIA_TYPES.has(m.message_type) && (m.media_stored_url || m.media_url)
   );
@@ -636,6 +640,45 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
                     )}
                     {f.applyKey && appliedFields.has(f.applyKey) && (
                       <span className="text-xs font-bold text-emerald-600">✓ Aplicado</span>
+                    )}
+                    {f.applyKey === "location" && locationMessages.length > 1 && (
+                      <div className="mt-2 border-t border-slate-200 pt-2 space-y-1.5">
+                        <div className="text-xs font-semibold text-amber-600">
+                          ⚠ Se recibieron {locationMessages.length} ubicaciones — elige la correcta:
+                        </div>
+                        {locationMessages.map((lm) => {
+                          const isSuggested =
+                            suggestions.latitude != null &&
+                            suggestions.longitude != null &&
+                            Math.abs(Number(lm.latitude) - Number(suggestions.latitude)) < 0.0005 &&
+                            Math.abs(Number(lm.longitude) - Number(suggestions.longitude)) < 0.0005;
+                          return (
+                            <div key={lm.id} className="flex items-center gap-2 text-xs">
+                              <span className="text-slate-400 font-semibold shrink-0">{fmtTime(lm.received_at)}</span>
+                              <span className="min-w-0 flex-1 truncate text-slate-700" title={lm.address ?? undefined}>
+                                {lm.address || `${lm.latitude}, ${lm.longitude}`}
+                              </span>
+                              {isSuggested ? (
+                                <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">IA</span>
+                              ) : (
+                                <button
+                                  onClick={() =>
+                                    applyField("location", {
+                                      address: lm.address,
+                                      latitude: lm.latitude,
+                                      longitude: lm.longitude,
+                                    })
+                                  }
+                                  disabled={applyingField === "location"}
+                                  className="shrink-0 rounded-lg border border-blue-300 bg-white px-2 py-0.5 font-black text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                                >
+                                  {applyingField === "location" ? "…" : "Aplicar esta"}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 );
