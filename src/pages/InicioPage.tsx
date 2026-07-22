@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, type LucideIcon } from "lucide-react";
+import logoMobilink from "../assets/logo-mobilink.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 
@@ -149,8 +150,7 @@ export default function InicioPage() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-4 py-2 backdrop-blur">
         <div className="flex items-center gap-2">
-          <KeyRound className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">Mobilink</span>
+          <img src={logoMobilink} alt="Mobilink" className="h-9 w-auto" />
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block">
@@ -258,6 +258,27 @@ export default function InicioPage() {
                 <button
                   onClick={() => navigate("/licencias")}
                   className="mt-auto rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                >
+                  Entrar
+                </button>
+              </div>
+            )}
+
+            {esSuperadmin && (
+              <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/15">
+                    <Link2 className="h-5 w-5 text-cyan-400" />
+                  </div>
+                  <span className="text-sm font-bold">Connect Pro</span>
+                  <span className="ml-auto whitespace-nowrap rounded-full bg-cyan-500/15 px-2 py-0.5 text-[11px] font-bold text-cyan-300">Superadmin</span>
+                </div>
+                <p className="mb-3 text-[12px] text-slate-500">
+                  Asistencias de partners externos (aseguradoras, renting, grúas) hacia la red de talleres.
+                </p>
+                <button
+                  onClick={() => navigate("/connect")}
+                  className="mt-auto rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500"
                 >
                   Entrar
                 </button>
