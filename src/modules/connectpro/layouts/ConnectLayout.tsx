@@ -39,12 +39,13 @@ export default function ConnectLayout() {
             <span className="text-cyan-400">Connect</span>
             <span className="text-slate-100"> Pro</span>
           </span>
-          {controlCenter && (
-            <span className="ml-2 hidden rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300 sm:inline">
-              {controlCenter.name}
-            </span>
-          )}
         </div>
+        {controlCenter && (
+          <span className="pointer-events-none absolute left-1/2 hidden -translate-x-1/2 whitespace-nowrap text-sm font-black leading-none sm:block">
+            <span className="text-white">Centro de</span>{" "}
+            <span className="text-cyan-400">Control</span>
+          </span>
+        )}
         <div className="flex items-center gap-3">
           {user && user.role !== "provider_user" && <AlertBell />}
           <button onClick={() => navigate("/inicio")} className="rounded-lg p-1.5 text-slate-300 hover:bg-slate-800" title="Volver al hub">
