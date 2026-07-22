@@ -9,6 +9,7 @@ import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from "re
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { boFetch } from "../services/api";
+import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, ErrorBanner, Badge } from "../components/ui";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES } from "../types";
 
@@ -64,10 +65,27 @@ function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
 }
 
 export default function MapaOperativo() {
+  const { user } = useConnectAuth();
+  const canEdit = hasRole(user, "cc_admin");
   const [data, setData] = useState<{ assistances: MapAssistance[]; workshops: MapWorkshop[] } | null>(null);
   const [showCoverage, setShowCoverage] = useState(false);
+  const [adjustMode, setAdjustMode] = useState(false);
   const [zoom, setZoom] = useState(9);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const moveWorkshop = async (w: MapWorkshop, lat: number, lng: number) => {
+    const ok = window.confirm(
+      `¿Fijar la posición de "${w.name}" en ${lat.toFixed(5)}, ${lng.toFixed(5)}?\n` +
+      `La distancia/ETA de futuras asignaciones se calculará desde aquí.`,
+    );
+    if (!ok) { load(); return; }
+    try {
+      await boFetch(`/workshops/${w.id}`, { method: "PATCH", body: { latitude: lat, longitude: lng } });
+      setNotice(`Posición de ${w.name} actualizada (${lat.toFixed(5)}, ${lng.toFixed(5)}).`);
+      load();
+    } catch (e: any) { setError(e.message); load(); }
+  };
 
   const load = useCallback(() => {
     boFetch<{ assistances: MapAssistance[]; workshops: MapWorkshop[] }>("/map")
@@ -76,9 +94,10 @@ export default function MapaOperativo() {
 
   useEffect(() => {
     load();
+    if (adjustMode) return; // sin auto-refresco mientras se ajustan posiciones
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, adjustMode]);
 
   const center: [number, number] = data?.workshops[0]
     ? [data.workshops[0].latitude, data.workshops[0].longitude]
@@ -90,13 +109,32 @@ export default function MapaOperativo() {
         title="Mapa operativo"
         subtitle="Asistencias en curso y talleres de la red."
         actions={
-          <label className="flex items-center gap-1.5 text-[13px] text-slate-300">
-            <input type="checkbox" checked={showCoverage} onChange={(e) => setShowCoverage(e.target.checked)} />
-            Mostrar cobertura
-          </label>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-1.5 text-[13px] text-slate-300">
+              <input type="checkbox" checked={showCoverage} onChange={(e) => setShowCoverage(e.target.checked)} />
+              Mostrar cobertura
+            </label>
+            {canEdit && (
+              <label className="flex items-center gap-1.5 text-[13px] text-amber-300">
+                <input type="checkbox" checked={adjustMode} onChange={(e) => setAdjustMode(e.target.checked)} />
+                Ajustar posición de talleres
+              </label>
+            )}
+          </div>
         }
       />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+      {notice && (
+        <div className="mb-3 flex items-center justify-between rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[13px] text-emerald-300">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="ml-3 text-emerald-400 hover:text-emerald-200">✕</button>
+        </div>
+      )}
+      {adjustMode && (
+        <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-300">
+          Modo ajuste activo: arrastra el icono 🔧 de un taller hasta su ubicación real y confirma para guardar las coordenadas GPS.
+        </div>
+      )}
 
       <div className="overflow-hidden rounded-xl border border-slate-700" style={{ height: "calc(100vh - 220px)" }}>
         <MapContainer center={center} zoom={9} style={{ height: "100%", width: "100%" }}>
@@ -107,10 +145,22 @@ export default function MapaOperativo() {
           />
           {data?.workshops.map((w) => (
             <span key={`w${w.id}`}>
-              <Marker position={[w.latitude, w.longitude]} icon={workshopIcon(zoom)}>
+              <Marker
+                position={[w.latitude, w.longitude]}
+                icon={workshopIcon(zoom)}
+                draggable={adjustMode}
+                eventHandlers={adjustMode ? {
+                  dragend: (e) => {
+                    const p = (e.target as L.Marker).getLatLng();
+                    moveWorkshop(w, p.lat, p.lng);
+                  },
+                } : undefined}
+              >
                 <Popup>
                   <b>{w.name}</b>{w.providerName ? ` · ${w.providerName}` : ""}<br />
-                  Score {Math.round(w.currentScore)}/100 · radio {w.radiusKm} km
+                  Score {Math.round(w.currentScore)}/100 · radio {w.radiusKm} km<br />
+                  {w.latitude.toFixed(5)}, {w.longitude.toFixed(5)}
+                  {adjustMode && <><br /><i>Arrástrame para recolocar el taller</i></>}
                 </Popup>
               </Marker>
               {showCoverage && (

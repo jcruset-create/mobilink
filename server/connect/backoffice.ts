@@ -360,6 +360,26 @@ export function createConnectBackofficeRouter(): Router {
     res.status(201).json(r.rows[0]);
   });
 
+  // Actualizar taller (posición GPS desde el mapa, radio, teléfono…)
+  router.patch("/workshops/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const b = req.body ?? {};
+    if ((b.latitude != null && typeof b.latitude !== "number") || (b.longitude != null && typeof b.longitude !== "number")) {
+      return err(res, 422, "validation_failed", "latitude y longitude deben ser numéricos");
+    }
+    const r = await db.query(
+      `UPDATE connect_workshops SET
+         name = COALESCE($1, name), phone = COALESCE($2, phone),
+         latitude = COALESCE($3, latitude), longitude = COALESCE($4, longitude),
+         "radiusKm" = COALESCE($5, "radiusKm"), "updatedAtMs" = $6
+       WHERE id = $7 RETURNING *`,
+      [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
+       b.radiusKm != null ? Number(b.radiusKm) : null, Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    await auditConnect({ req, action: "workshop.updated", resourceType: "workshop", resourceId: Number(req.params.id), detail: b });
+    res.json(r.rows[0]);
+  });
+
   // ── Asistencias (lectura Sprint 1; gestión completa en S2/S3) ──
 
   router.get("/assistances", ...requireConnectRole("analyst"), async (req, res) => {
