@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { boFetch } from "../services/api";
@@ -28,25 +28,45 @@ const STATUS_COLORS: Record<string, string> = {
   arrived: "#06b6d4", in_progress: "#14b8a6", no_coverage: "#f97316", assignment_failed: "#ef4444",
 };
 
-function assistanceIcon(status: string, urgent: boolean) {
+/**
+ * Los marcadores escalan con el zoom: pequeños con el mapa alejado y a
+ * tamaño completo a partir de zoom ~11 (factor 0,35–1,0).
+ */
+function zoomFactor(zoom: number): number {
+  return Math.min(1, Math.max(0.35, (zoom - 4) / 7));
+}
+
+function assistanceIcon(status: string, urgent: boolean, zoom: number) {
   const color = STATUS_COLORS[status] ?? "#94a3b8";
+  const s = Math.round(18 * zoomFactor(zoom));
+  const border = Math.max(1, Math.round(3 * zoomFactor(zoom)));
   return L.divIcon({
-    html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};
-             border:3px solid ${urgent ? "#ef4444" : "#0f172a"};box-shadow:0 1px 6px rgba(0,0,0,.5)"></div>`,
-    className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+    html: `<div style="width:${s}px;height:${s}px;border-radius:50%;background:${color};
+             border:${border}px solid ${urgent ? "#ef4444" : "#0f172a"};box-shadow:0 1px 6px rgba(0,0,0,.5)"></div>`,
+    className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2],
   });
 }
 
-const workshopIcon = L.divIcon({
-  html: `<div style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;
-           background:#0e7490;border:2px solid #67e8f9;border-radius:6px;font-size:14px;
-           box-shadow:0 1px 6px rgba(0,0,0,.5)">🔧</div>`,
-  className: "", iconSize: [26, 26], iconAnchor: [13, 13],
-});
+function workshopIcon(zoom: number) {
+  const s = Math.round(26 * zoomFactor(zoom));
+  return L.divIcon({
+    html: `<div style="width:${s}px;height:${s}px;display:flex;align-items:center;justify-content:center;
+             background:#0e7490;border:${Math.max(1, Math.round(2 * zoomFactor(zoom)))}px solid #67e8f9;border-radius:${Math.round(s / 4)}px;
+             font-size:${Math.round(s * 0.55)}px;box-shadow:0 1px 6px rgba(0,0,0,.5)">🔧</div>`,
+    className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+  });
+}
+
+/** Observa el zoom del mapa y lo propaga al estado de React. */
+function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
+  const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) });
+  return null;
+}
 
 export default function MapaOperativo() {
   const [data, setData] = useState<{ assistances: MapAssistance[]; workshops: MapWorkshop[] } | null>(null);
   const [showCoverage, setShowCoverage] = useState(false);
+  const [zoom, setZoom] = useState(9);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -80,13 +100,14 @@ export default function MapaOperativo() {
 
       <div className="overflow-hidden rounded-xl border border-slate-700" style={{ height: "calc(100vh - 220px)" }}>
         <MapContainer center={center} zoom={9} style={{ height: "100%", width: "100%" }}>
+          <ZoomWatcher onZoom={setZoom} />
           <TileLayer
             attribution='&copy; OpenStreetMap'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           {data?.workshops.map((w) => (
             <span key={`w${w.id}`}>
-              <Marker position={[w.latitude, w.longitude]} icon={workshopIcon}>
+              <Marker position={[w.latitude, w.longitude]} icon={workshopIcon(zoom)}>
                 <Popup>
                   <b>{w.name}</b>{w.providerName ? ` · ${w.providerName}` : ""}<br />
                   Score {Math.round(w.currentScore)}/100 · radio {w.radiusKm} km
@@ -101,7 +122,7 @@ export default function MapaOperativo() {
             </span>
           ))}
           {data?.assistances.map((a) => (
-            <Marker key={`a${a.id}`} position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente")}>
+            <Marker key={`a${a.id}`} position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
               <Popup>
                 <b>#{a.id} — {a.customerName}</b><br />
                 {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status} · {a.serviceType}<br />
