@@ -12,6 +12,7 @@ import OtfTvPage from "./pages/OtfTvPage";
 import VehiculoHistorialPage from "./pages/VehiculoHistorialPage";
 import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
+import ConnectPage from "./pages/ConnectPage";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -129,6 +130,7 @@ export default function App() {
       <Route path="/vehiculo" element={<VehiculoHistorialPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/licencias" element={<LicensesPage />} />
+      <Route path="/connect" element={<ConnectPage />} />
       <Route path="/operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />
       {/* Asistencias en carretera como módulo aparte del operativo */}
       <Route path="/asistencias" element={<SeaTarragonaV1 initialView="asistencias" />} />

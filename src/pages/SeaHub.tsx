@@ -118,6 +118,21 @@ const MODULOS: Modulo[] = [
       { label: "Operaciones", ruta: "/integraciones" },
     ],
   },
+  {
+    id: "connect",
+    titulo: "Connect Pro",
+    descripcion: "Asistencias de partners externos (aseguradoras, renting, grúas) hacia la red de talleres.",
+    icon: "🔗",
+    color: "bg-indigo-50",
+    colorBorder: "border-indigo-300",
+    colorIcon: "bg-indigo-600 text-white",
+    ruta: "/connect",
+    links: [
+      { label: "Asistencias", ruta: "/connect" },
+      { label: "Partners y API keys", ruta: "/connect" },
+      { label: "Talleres de la red", ruta: "/connect" },
+    ],
+  },
 ];
 
 const NIVEL_STYLE = {
