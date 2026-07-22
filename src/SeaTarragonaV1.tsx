@@ -1,3 +1,4 @@
+import { apiFetch } from "./modules/apiFetch";
 import React, {
   useEffect,
   useMemo,
@@ -1307,7 +1308,7 @@ async function askExternalAIWorkshop() {
       (job) => job.status === "espera" || job.status === "activo"
     );
 
-    const response = await fetch(`${API_BASE}/api/ai/taller`, {
+    const response = await apiFetch(`${API_BASE}/api/ai/taller`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1360,7 +1361,7 @@ useEffect(() => {
         if (!permitirLoginClasico && activo) window.location.replace("/acceso");
         return;
       }
-      const res = await fetch(`${API_BASE}/api/login-sso`, {
+      const res = await apiFetch(`${API_BASE}/api/login-sso`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1409,7 +1410,7 @@ async function handleLogin() {
   setLoginLoading(true);
 
   try {
-    const response = await fetch(`${API_BASE}/api/login`, {
+    const response = await apiFetch(`${API_BASE}/api/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2418,7 +2419,7 @@ async function deleteWaitingJob(jobId: number) {
   appendLog(`Trabajo en cola eliminado: ${target.plate}.`);
 
   try {
-await fetch(`${API_BASE}/api/jobs/${jobId}`, {
+await apiFetch(`${API_BASE}/api/jobs/${jobId}`, {
   method: "DELETE",
   headers: getAdminHeaders(),
 });
@@ -3393,7 +3394,7 @@ appendLog(
   }
 
   try {
-    const response = await fetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
+    const response = await apiFetch(`${API_BASE}/api/jobs/${jobId}/finish`, {
       method: "POST",
       headers: getAdminHeaders({
         "Content-Type": "application/json",

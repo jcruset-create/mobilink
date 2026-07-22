@@ -1,4 +1,5 @@
 // @ts-nocheck — maintenance functions kept for future re-activation (UI removed in v2.2.10)
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
@@ -420,7 +421,7 @@ function SmallJobCard({
 
 async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
   try {
-    const response = await fetch(`${API_BASE}${url}`);
+    const response = await apiFetch(`${API_BASE}${url}`);
 
     if (!response.ok) {
       return fallback;
@@ -438,7 +439,7 @@ async function sendMaintenanceJson<T>(
   fallback: T
 ): Promise<T> {
   try {
-    const response = await fetch(`${API_BASE}${url}`, {
+    const response = await apiFetch(`${API_BASE}${url}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -458,7 +459,7 @@ async function sendMaintenanceJson<T>(
 
 async function deleteMaintenanceApi(url: string) {
   try {
-    const response = await fetch(`${API_BASE}${url}`, {
+    const response = await apiFetch(`${API_BASE}${url}`, {
       method: "DELETE",
     });
 

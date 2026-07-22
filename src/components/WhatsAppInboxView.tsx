@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -197,7 +198,7 @@ function MessageCard({
     if (!replyText.trim()) return;
     setSendingReply(true);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/send`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp/send`, {
         method: "POST",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ to: msg.from_phone, body: replyText.trim() }),
@@ -399,7 +400,7 @@ export default function WhatsAppInboxView({ onBack, onCreateAssistance }: Props)
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp/messages?limit=100`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp/messages?limit=100`, {
         headers: getAdminHeaders() as HeadersInit,
       });
       if (res.ok) {
@@ -418,7 +419,7 @@ export default function WhatsAppInboxView({ onBack, onCreateAssistance }: Props)
 
   async function handleIgnore(draftId: number) {
     if (!draftId) return;
-    await fetch(`${API_BASE}/api/assistance-drafts/${draftId}/ignore`, {
+    await apiFetch(`${API_BASE}/api/assistance-drafts/${draftId}/ignore`, {
       method: "POST",
       headers: getAdminHeaders() as HeadersInit,
     });
@@ -437,7 +438,7 @@ export default function WhatsAppInboxView({ onBack, onCreateAssistance }: Props)
     if (!previewMsg) return;
     // Mark draft as converted
     if (previewMsg.draft_id) {
-      await fetch(`${API_BASE}/api/assistance-drafts/${previewMsg.draft_id}`, {
+      await apiFetch(`${API_BASE}/api/assistance-drafts/${previewMsg.draft_id}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ status: "converted" }),

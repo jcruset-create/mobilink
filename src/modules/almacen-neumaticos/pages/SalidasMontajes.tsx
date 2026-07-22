@@ -1,3 +1,4 @@
+import { apiFetch } from "../../apiFetch";
 import { useEffect, useState } from "react";
 import AlmacenMenu from "../components/AlmacenMenu";
 import { supabase } from "../services/supabase";
@@ -716,7 +717,7 @@ export default function SalidasMontajes() {
       const formData = new FormData();
       formData.append("albaran", archivoAlbaranImportar);
 
-      const response = await fetch("/api/almacen/leer-albaran-pdf", {
+      const response = await apiFetch("/api/almacen/leer-albaran-pdf", {
         method: "POST",
         body: formData,
       });

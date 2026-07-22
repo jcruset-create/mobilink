@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useState } from "react";
 import type { Job, QuickTemplate, Tech } from "../modules/workshopTypes";
 
@@ -170,7 +171,7 @@ export default function WorkRankingView({
   useEffect(() => {
     async function loadMaint() {
       try {
-        const res = await fetch(`${API_BASE}/api/assigned-maintenance-tasks`);
+        const res = await apiFetch(`${API_BASE}/api/assigned-maintenance-tasks`);
         if (!res.ok) return;
         const data = await res.json();
         if (Array.isArray(data)) setMaintTasks(data);
@@ -180,7 +181,7 @@ export default function WorkRankingView({
     }
     async function loadStatuses() {
       try {
-        const res = await fetch(`${API_BASE}/api/scheduled-tech-statuses`);
+        const res = await apiFetch(`${API_BASE}/api/scheduled-tech-statuses`);
         if (!res.ok) return;
         const data = await res.json();
         if (Array.isArray(data)) setTechStatuses(data);

@@ -1,3 +1,4 @@
+import { apiFetch } from "../../apiFetch";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Pencil, Plus, Lock, ScanLine } from "lucide-react";
@@ -300,7 +301,7 @@ export function ModalCliente({ cliente, onClose, onSaved }: {
     try {
       const fd = new FormData();
       for (const img of imagenes) fd.append("imagenes", img);
-      const res = await fetch("/api/administracion/analizar-cliente", { method: "POST", body: fd });
+      const res = await apiFetch("/api/administracion/analizar-cliente", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
       const d = data.datos as {

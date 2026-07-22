@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -77,7 +78,7 @@ export default function FlotaMapPage() {
 
   async function load() {
     try {
-      const res = await fetch(`${API_BASE}/api/webfleet/vehicles`, {
+      const res = await apiFetch(`${API_BASE}/api/webfleet/vehicles`, {
         headers: getAdminHeaders(),
       });
       if (!res.ok) throw new Error(`Error ${res.status}`);

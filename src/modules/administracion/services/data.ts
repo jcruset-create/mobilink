@@ -1,3 +1,4 @@
+import { apiFetch } from "../../apiFetch";
 import { supabase } from "./supabase";
 import type {
   Customer, WorkOrder, Invoice, Payment, PaymentMethod, PaymentTracking,
@@ -382,7 +383,7 @@ export async function listAppUsuarios(): Promise<AppUsuario[]> {
 }
 
 export async function crearUsuarioAuth(username: string, nombre: string, pin: string): Promise<string> {
-  const res = await fetch("/api/administracion/usuarios/crear-auth", {
+  const res = await apiFetch("/api/administracion/usuarios/crear-auth", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
     body: JSON.stringify({ username, nombre, password: claveInterna(pin) }),
@@ -418,7 +419,7 @@ export async function guardarAppUsuario(u: {
 }
 
 export async function resetPasswordUsuario(userId: string, pin: string): Promise<void> {
-  const res = await fetch("/api/administracion/usuarios/reset-password", {
+  const res = await apiFetch("/api/administracion/usuarios/reset-password", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
     body: JSON.stringify({ userId, password: claveInterna(pin) }),
@@ -434,7 +435,7 @@ export async function eliminarAppUsuario(userId: string): Promise<"eliminado" | 
   if (resultado === "eliminado") {
     // borrar también la cuenta de Auth (best-effort)
     try {
-      await fetch("/api/administracion/usuarios/eliminar-auth", {
+      await apiFetch("/api/administracion/usuarios/eliminar-auth", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
         body: JSON.stringify({ userId }),

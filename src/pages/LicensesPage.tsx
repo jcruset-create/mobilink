@@ -6,6 +6,7 @@
  * gráficas básicas. Usa la API /api/licenses con el token de administrador.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../modules/administracion/services/supabase";
 
@@ -93,7 +94,7 @@ export default function LicensesPage() {
       const params = new URLSearchParams();
       if (statusFilter) params.set("status", statusFilter);
       if (query.trim()) params.set("q", query.trim());
-      const res = await fetch(`${API_BASE}/api/licenses?${params}`, { headers: await authHeaders() });
+      const res = await apiFetch(`${API_BASE}/api/licenses?${params}`, { headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Error cargando licencias");
       setLicenses(data);
@@ -112,7 +113,7 @@ export default function LicensesPage() {
     setBusyId(lic.id);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/api/licenses/${lic.id}/${path}`, {
+      const res = await apiFetch(`${API_BASE}/api/licenses/${lic.id}/${path}`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify(body ?? {}),
@@ -131,7 +132,7 @@ export default function LicensesPage() {
     setHistoryFor(lic);
     setHistory(null);
     try {
-      const res = await fetch(`${API_BASE}/api/licenses/${lic.id}/history`, { headers: await authHeaders() });
+      const res = await apiFetch(`${API_BASE}/api/licenses/${lic.id}/history`, { headers: await authHeaders() });
       const data = await res.json();
       if (res.ok) setHistory(data);
     } catch {
@@ -413,7 +414,7 @@ function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCre
     setSaving(true);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/api/licenses`, {
+      const res = await apiFetch(`${API_BASE}/api/licenses`, {
         method: "POST",
         headers: await authHeaders(),
         body: JSON.stringify({

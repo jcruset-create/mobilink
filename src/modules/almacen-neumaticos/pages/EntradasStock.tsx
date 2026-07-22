@@ -1,3 +1,4 @@
+import { apiFetch } from "../../apiFetch";
 import { useEffect, useState } from "react";
 import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
@@ -490,7 +491,7 @@ export default function EntradasStock() {
       const formData = new FormData();
       formData.append("albaran", archivoPdf);
 
-      const response = await fetch("/api/almacen/leer-entrada-pdf", {
+      const response = await apiFetch("/api/almacen/leer-entrada-pdf", {
         method: "POST",
         body: formData,
       });

@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -1303,7 +1304,7 @@ area: template.area,
 
       if (draft.sendWhatsAppOnSave && scheduled.customerPhone.trim()) {
         try {
-          await fetch("/api/whatsapp/send-agenda-reminder", {
+          await apiFetch("/api/whatsapp/send-agenda-reminder", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1417,7 +1418,7 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
       template?.label ||
       "trabajo programado";
 
-    const res = await fetch("/api/whatsapp/send-agenda-reminder", {
+    const res = await apiFetch("/api/whatsapp/send-agenda-reminder", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 import { ALL_VIEWS, VIEW_LABELS, ROLE_LABELS, type AppView, type UserRole } from "../modules/permissions";
@@ -29,7 +30,7 @@ export default function UsersScreen({ onBack }: { onBack: () => void }) {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/users`, { headers: getAdminHeaders() });
+      const res = await apiFetch(`${API_BASE}/api/users`, { headers: getAdminHeaders() });
       if (!res.ok) throw new Error("No autorizado");
       setUsers(await res.json());
     } catch (e: any) {
@@ -91,7 +92,7 @@ export default function UsersScreen({ onBack }: { onBack: () => void }) {
     if (!window.confirm(`¿Eliminar el usuario "${u.name}"?`)) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/users/${u.id}`, { method: "DELETE", headers: getAdminHeaders() });
+      const res = await apiFetch(`${API_BASE}/api/users/${u.id}`, { method: "DELETE", headers: getAdminHeaders() });
       if (!res.ok) throw new Error("Error eliminando");
       if (draft.id === u.id) setDraft(EMPTY_DRAFT);
       await load();

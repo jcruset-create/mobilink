@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useState, useEffect, useCallback } from "react";
 import type {
   WhatsAppCaptureSessionWithMessages,
@@ -78,7 +79,7 @@ function MessageRow({
     setSaveError("");
     try {
       const token = localStorage.getItem("sea-admin-token") ?? "";
-      const res = await fetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {
+      const res = await apiFetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": token },
         body: JSON.stringify({
@@ -245,7 +246,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
 
   const fetchSession = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp-capture/by-job/${jobId}`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp-capture/by-job/${jobId}`, {
         headers: getAdminHeaders(),
       });
       if (!res.ok) throw new Error();
@@ -274,7 +275,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     setActionLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp-capture/sessions`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp-capture/sessions`, {
         method: "POST",
         headers: getAdminHeaders(),
         body: JSON.stringify({ job_id: jobId, created_by: "backoffice" }),
@@ -295,7 +296,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     setActionLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/reopen`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/reopen`, {
         method: "POST",
         headers: getAdminHeaders(),
       });
@@ -315,7 +316,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     setActionLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/close`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/close`, {
         method: "POST",
         headers: getAdminHeaders(),
       });
@@ -341,7 +342,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     if (!session) return;
     setApplyingField(field);
     try {
-      const res = await fetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/apply`, {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/apply`, {
         method: "POST",
         headers: getAdminHeaders(),
         body: JSON.stringify({ field, value }),
@@ -387,7 +388,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
       const mediaUrl = m.media_stored_url || m.media_url;
       if (!mediaUrl) continue;
       try {
-        const res = await fetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {
+        const res = await apiFetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-admin-token": token },
           body: JSON.stringify({ url: mediaUrl, kind: "whatsapp", filename: `whatsapp_${m.message_type}_${m.id}` }),

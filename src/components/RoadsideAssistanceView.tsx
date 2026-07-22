@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -445,7 +446,7 @@ export default function RoadsideAssistanceView({
   useEffect(() => {
     if (!photosAssistance) return;
     setPhotosLoading(true);
-    fetch(`${API_BASE}/api/roadside-assistances/${photosAssistance.id}/files`)
+    apiFetch(`${API_BASE}/api/roadside-assistances/${photosAssistance.id}/files`)
       .then((r) => r.json())
       .then((data) => setPhotos(Array.isArray(data) ? data : []))
       .catch(() => setPhotos([]))
@@ -458,7 +459,7 @@ export default function RoadsideAssistanceView({
     // Cargar coordenadas del taller si estamos en modo "vuelta al taller"
     if (mapAssistance.status === "en_camino_base" && !workshopCoords) {
       const token = localStorage.getItem("sea-admin-token") ?? "";
-      fetch(`${API_BASE}/api/workshop-config`, { headers: { "x-admin-token": token } })
+      apiFetch(`${API_BASE}/api/workshop-config`, { headers: { "x-admin-token": token } })
         .then((r) => r.json())
         .then((cfg) => {
           const lat = parseFloat(cfg.taller_lat);
@@ -471,7 +472,7 @@ export default function RoadsideAssistanceView({
     const token = localStorage.getItem("sea-admin-token") ?? "";
 
     const refresh = () => {
-      fetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}`)
+      apiFetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}`)
         .then((r) => r.json())
         .then((data) => {
           if (data?.assistance) setMapAssistance(data.assistance);
@@ -481,7 +482,7 @@ export default function RoadsideAssistanceView({
 
     // Posición en vivo (Webfleet) + velocidad + ETA
     const refreshLive = () => {
-      fetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}/live-position`, {
+      apiFetch(`${API_BASE}/api/roadside-assistances/${mapAssistance.id}/live-position`, {
         headers: { "x-admin-token": token },
       })
         .then((r) => r.json())
@@ -511,7 +512,7 @@ export default function RoadsideAssistanceView({
     if (historialTech) params.set("techName", historialTech);
     params.set("page", String(historialPage));
     const token = localStorage.getItem("sea-admin-token") ?? "";
-    fetch(`${API_BASE}/api/roadside-assistances/historial?${params}`, {
+    apiFetch(`${API_BASE}/api/roadside-assistances/historial?${params}`, {
       headers: { "x-admin-token": token },
     })
       .then((r) => r.json())

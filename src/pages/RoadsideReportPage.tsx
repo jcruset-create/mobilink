@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
@@ -74,7 +75,7 @@ export default function RoadsideReportPage() {
       return;
     }
 
-    fetch(`/api/roadside-report/${token}`)
+    apiFetch(`/api/roadside-report/${token}`)
       .then((r) => {
         if (!r.ok) throw new Error("Informe no encontrado.");
         return r.json();

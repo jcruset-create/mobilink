@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import WorkHistoryV2Line from "./WorkHistoryV2Line";
 
@@ -286,7 +287,7 @@ export default function FinishedAndCancelledJobsView({
       setMaintenanceLoading(true);
       setMaintenanceError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/assigned-maintenance-tasks`);
+        const res = await apiFetch(`${API_BASE}/api/assigned-maintenance-tasks`);
         if (!res.ok) {
           setMaintenanceError(`Error ${res.status}: ${res.statusText}`);
           return;

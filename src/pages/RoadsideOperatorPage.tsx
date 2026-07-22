@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
@@ -251,7 +252,7 @@ function FilesSection({
 
   async function loadFiles() {
     try {
-      const resp = await fetch(`${API_BASE}/api/roadside-assistances/${assistance.id}/files`);
+      const resp = await apiFetch(`${API_BASE}/api/roadside-assistances/${assistance.id}/files`);
       if (resp.ok) {
         const data = await resp.json();
         setFiles(Array.isArray(data) ? data : []);

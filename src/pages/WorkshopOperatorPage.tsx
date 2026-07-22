@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useRef, useState } from "react";
 import { Briefcase, Coffee, LogOut } from "lucide-react";
 import { API_BASE } from "../modules/workshopApi";
@@ -105,7 +106,7 @@ function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/workshop-operator/techs-list`)
+    apiFetch(`${API_BASE}/api/workshop-operator/techs-list`)
       .then((r) => r.json())
       .then((data: { name: string }[]) => {
         const names = data.map((d) => d.name);
@@ -120,7 +121,7 @@ function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
     setLoading(true);
     setError("");
     try {
-      const resp = await fetch(`${API_BASE}/api/workshop-operator/login`, {
+      const resp = await apiFetch(`${API_BASE}/api/workshop-operator/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: techName, pin: p }),
@@ -263,7 +264,7 @@ function TrabajoTab({ session }: { session: Session }) {
 
   async function loadStatus() {
     try {
-      const resp = await fetch(`${API_BASE}/api/workshop-operator/status`, {
+      const resp = await apiFetch(`${API_BASE}/api/workshop-operator/status`, {
         headers: workshopHeaders(session),
       });
       if (resp.ok) {
@@ -362,7 +363,7 @@ function PausaTab({ session }: { session: Session }) {
 
   async function loadBreaks() {
     try {
-      const resp = await fetch(`${API_BASE}/api/workshop-operator/breaks/today`, {
+      const resp = await apiFetch(`${API_BASE}/api/workshop-operator/breaks/today`, {
         headers: workshopHeaders(session),
       });
       if (resp.ok) {
@@ -379,7 +380,7 @@ function PausaTab({ session }: { session: Session }) {
   async function startBreak(breakType: string) {
     setActing(true);
     try {
-      await fetch(`${API_BASE}/api/workshop-operator/break/start`, {
+      await apiFetch(`${API_BASE}/api/workshop-operator/break/start`, {
         method: "POST",
         headers: workshopHeaders(session),
         body: JSON.stringify({ breakType }),
@@ -395,7 +396,7 @@ function PausaTab({ session }: { session: Session }) {
   async function endBreak() {
     setActing(true);
     try {
-      await fetch(`${API_BASE}/api/workshop-operator/break/end`, {
+      await apiFetch(`${API_BASE}/api/workshop-operator/break/end`, {
         method: "POST",
         headers: workshopHeaders(session),
       });
@@ -497,7 +498,7 @@ export default function WorkshopOperatorPage() {
       return;
     }
     // Validate session
-    fetch(`${API_BASE}/api/workshop-operator/status`, {
+    apiFetch(`${API_BASE}/api/workshop-operator/status`, {
       headers: workshopHeaders(stored),
     })
       .then((r) => {

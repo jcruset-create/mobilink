@@ -1,3 +1,4 @@
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
@@ -276,7 +277,7 @@ function getMaintenanceTaskTypeLabel(type: MaintenanceTaskType) {
 
 async function fetchMaintenanceJson<T>(url: string, fallback: T): Promise<T> {
   try {
-    const response = await fetch(`${API_BASE}${url}`);
+    const response = await apiFetch(`${API_BASE}${url}`);
 
     if (!response.ok) {
       return fallback;

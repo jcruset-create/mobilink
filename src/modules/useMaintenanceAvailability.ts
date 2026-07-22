@@ -1,3 +1,4 @@
+import { apiFetch } from "./apiFetch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE } from "./workshopApi";
 import type { Tech } from "./workshopTypes";
@@ -97,7 +98,7 @@ export function useMaintenanceAvailability({
 
   const reloadMaintenanceAvailabilityFromBackend = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/maintenance-availability`);
+      const response = await apiFetch(`${API_BASE}/api/maintenance-availability`);
 
       if (!response.ok) {
         setMaintenanceAvailabilitySyncError(true);
