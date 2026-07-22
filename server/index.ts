@@ -120,7 +120,7 @@ if (Number.isFinite(jobId)) {
 );
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.post("/api/payments/create-deposit", async (req, res) => {
+app.post("/api/payments/create-deposit", authenticate, requireModule("administracion"), async (req, res) => {
   try {
     const { jobId, customerName, customerPhone, amountEuros, description } = req.body;
 
@@ -215,7 +215,7 @@ app.post("/api/payments/create-deposit", async (req, res) => {
   }
 });
 
-app.get("/api/payments/deposit-status/:jobId", async (req, res) => {
+app.get("/api/payments/deposit-status/:jobId", authenticate, requireModule("administracion"), async (req, res) => {
   try {
     const jobId = Number(req.params.jobId);
 
@@ -262,7 +262,7 @@ app.get("/api/payments/deposit-status/:jobId", async (req, res) => {
   }
 });
 
-app.get("/api/payments/status/:reference", async (req, res) => {
+app.get("/api/payments/status/:reference", authenticate, requireModule("administracion"), async (req, res) => {
   try {
     const reference = String(req.params.reference || "").trim();
 
@@ -321,7 +321,7 @@ app.get("/api/payments/status/:reference", async (req, res) => {
   }
 });
 
-app.get("/api/payments/recent", async (_req, res) => {
+app.get("/api/payments/recent", authenticate, requireModule("administracion"), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -356,7 +356,7 @@ app.get("/api/payments/recent", async (_req, res) => {
   }
 });
 
-app.delete("/api/payments/:id", async (req, res) => {
+app.delete("/api/payments/:id", authenticate, requireModule("administracion"), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -411,7 +411,7 @@ app.delete("/api/payments/:id", async (req, res) => {
   }
 });
 
-app.post("/api/whatsapp/send-agenda-reminder", async (req, res) => {
+app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const {
       customerName,
@@ -1032,7 +1032,7 @@ function extractLatLngFromGoogleMapsUrl(url: string): { lat: number; lng: number
   return null;
 }
 
-app.post("/api/geocode", async (req, res) => {
+app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const address = String(req.body?.address || "").trim();
     if (!address) {
@@ -1501,6 +1501,9 @@ function requireRole(allowedRoles: UserRole[]) {
 const requireAdminRole = requireRole(["admin"]);
 const requireSupervisorRole = requireRole(["admin", "supervisor"]);
 const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
+// Cualquier rol del panel (incluye TVs). Usado como puerta de sesión al
+// pasar a AUTH_MODE=strict; el permiso fino llegará con el RBAC completo.
+const requirePanelRole = requireRole(["admin", "supervisor", "pantallas", "tv75"]);
 app.use((req, _res, next) => {
   console.log(`[REQ] ${req.method} ${req.url}`);
   next();
@@ -1654,7 +1657,7 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
   }
 });
 
-app.get("/api/ai-test", async (req, res) => {
+app.get("/api/ai-test", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -1719,7 +1722,7 @@ const techs = techsResult.rows;
     res.status(500).json({ error: "Error reiniciando el sistema" });
   }
 });
-app.post("/api/ai/taller", async (req, res) => {
+app.post("/api/ai/taller", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const { jobs, techs, operationReport, techOperationStats } = req.body;
     const safeJobs = Array.isArray(jobs) ? jobs : [];
@@ -1815,7 +1818,7 @@ Si no hay técnico válido, responsable debe ser null.
    TECHS
 ========================================================= */
 
-app.get("/api/techs", async (_req, res) => {
+app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
@@ -2070,7 +2073,7 @@ app.post(
    JOBS
 ========================================================= */
 
-app.get("/api/jobs", async (req, res) => {
+app.get("/api/jobs", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     // scope=live (por defecto para el operativo y su auto-sync): solo trabajos
     // no cerrados + cerrados de los últimos 3 días (cubre las estadísticas del
@@ -2379,7 +2382,7 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
   }
 });
 
-app.post("/api/jobs/:id/finish", async (req, res) => {
+app.post("/api/jobs/:id/finish", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -2450,7 +2453,7 @@ app.post("/api/jobs/:id/finish", async (req, res) => {
   }
 });
 
-app.delete("/api/jobs/:id", async (req, res) => {
+app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -2520,7 +2523,7 @@ app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
    ROADSIDE ASSISTANCES
 ========================================================= */
 
-app.get("/api/roadside-vehicles", async (req, res) => {
+app.get("/api/roadside-vehicles", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const includeInactive = String(req.query.includeInactive || "") === "true";
 
@@ -2684,7 +2687,7 @@ app.delete(
   }
 );
 
-app.get("/api/roadside-assistances", async (req, res) => {
+app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
 
@@ -3092,7 +3095,7 @@ app.delete(
 );
 
 /* ── ETA ─────────────────────────────────────────────────────────────── */
-app.post("/api/maps/eta", async (req, res) => {
+app.post("/api/maps/eta", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const { origen, destino } = req.body;
     const eta = await calcularETA(origen, destino);
@@ -3103,7 +3106,7 @@ app.post("/api/maps/eta", async (req, res) => {
   }
 });
 
-app.post("/api/roadside-eta", async (req, res) => {
+app.post("/api/roadside-eta", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const { origen, destino } = req.body as {
       origen?: { lat: number; lng: number };
@@ -3126,7 +3129,7 @@ app.post("/api/roadside-eta", async (req, res) => {
   }
 });
 
-app.get("/api/webfleet/debug", async (_req, res) => {
+app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
@@ -3141,7 +3144,7 @@ app.get("/api/webfleet/debug", async (_req, res) => {
   }
 });
 
-app.get("/api/webfleet/vehicles", async (_req, res) => {
+app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
@@ -3176,7 +3179,7 @@ app.get("/api/webfleet/vehicles", async (_req, res) => {
   }
 });
 
-app.get("/api/webfleet/vehicle/:vehicleId/position", async (req, res) => {
+app.get("/api/webfleet/vehicle/:vehicleId/position", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const { vehicleId } = req.params;
     const position = await getWebfleetVehiclePosition(vehicleId);
@@ -3268,7 +3271,7 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 
-app.post("/api/asistencias/:id/en-camino", async (req, res) => {
+app.post("/api/asistencias/:id/en-camino", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -4287,7 +4290,7 @@ app.post(
   }
 );
 
-app.get("/api/roadside-assistances/:id", async (req, res) => {
+app.get("/api/roadside-assistances/:id", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -4341,7 +4344,7 @@ app.get("/api/roadside-assistances/:id", async (req, res) => {
 
 // Posición en vivo (Webfleet) + velocidad + ETA al destino correcto.
 // Para en_camino → ETA al punto de avería; en_camino_base → ETA al taller.
-app.get("/api/roadside-assistances/:id/live-position", async (req, res) => {
+app.get("/api/roadside-assistances/:id/live-position", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
@@ -5232,7 +5235,7 @@ app.post(
   }
 );
 
-app.get("/api/roadside-assistances/:id/files", async (req, res) => {
+app.get("/api/roadside-assistances/:id/files", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await db.query(
@@ -6931,7 +6934,7 @@ async function seedDefaultMaintenanceTasksIfEmpty() {
   }
 }
 
-app.get("/api/maintenance-tasks", async (_req, res) => {
+app.get("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     await seedDefaultMaintenanceTasksIfEmpty();
 
@@ -6952,7 +6955,7 @@ app.get("/api/maintenance-tasks", async (_req, res) => {
   }
 });
 
-app.post("/api/maintenance-tasks", async (req, res) => {
+app.post("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -6989,7 +6992,7 @@ app.post("/api/maintenance-tasks", async (req, res) => {
   }
 });
 
-app.put("/api/maintenance-tasks/:id", async (req, res) => {
+app.put("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7047,7 +7050,7 @@ app.put("/api/maintenance-tasks/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/maintenance-tasks/:id", async (req, res) => {
+app.delete("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7066,7 +7069,7 @@ app.delete("/api/maintenance-tasks/:id", async (req, res) => {
   }
 });
 
-app.get("/api/assigned-maintenance-tasks", async (_req, res) => {
+app.get("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7089,7 +7092,7 @@ app.get("/api/assigned-maintenance-tasks", async (_req, res) => {
   }
 });
 
-app.get("/api/maintenance-availability", async (_req, res) => {
+app.get("/api/maintenance-availability", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7145,7 +7148,7 @@ const interruptedTasks = activeMaintenanceTasks.filter(
   }
 });
 
-app.post("/api/assigned-maintenance-tasks", async (req, res) => {
+app.post("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7257,7 +7260,7 @@ async function updateAssignedMaintenanceTaskStatus(
   return nextTask;
 }
 
-app.put("/api/assigned-maintenance-tasks/:id/finish", async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/finish", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -7274,7 +7277,7 @@ app.put("/api/assigned-maintenance-tasks/:id/finish", async (req, res) => {
   }
 });
 
-app.put("/api/assigned-maintenance-tasks/:id/interrupt", async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/interrupt", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -7294,7 +7297,7 @@ app.put("/api/assigned-maintenance-tasks/:id/interrupt", async (req, res) => {
   }
 });
 
-app.put("/api/assigned-maintenance-tasks/:id/resume", async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/resume", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -7313,7 +7316,7 @@ app.put("/api/assigned-maintenance-tasks/:id/resume", async (req, res) => {
   }
 });
 
-app.delete("/api/assigned-maintenance-tasks/history", async (_req, res) => {
+app.delete("/api/assigned-maintenance-tasks/history", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7397,7 +7400,7 @@ app.delete(
   }
 );
 
-app.delete("/api/assigned-maintenance-tasks/:id", async (req, res) => {
+app.delete("/api/assigned-maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -7421,7 +7424,7 @@ app.delete("/api/assigned-maintenance-tasks/:id", async (req, res) => {
    LOGS
 ========================================================= */
 
-app.get("/api/logs", async (_req, res) => {
+app.get("/api/logs", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`SELECT * FROM logs ORDER BY id DESC LIMIT 50`);
 
@@ -7432,7 +7435,7 @@ app.get("/api/logs", async (_req, res) => {
   }
 });
 
-app.post("/api/logs", async (req, res) => {
+app.post("/api/logs", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const log = req.body ?? {};
 
@@ -7458,7 +7461,7 @@ app.post("/api/logs", async (req, res) => {
    RULES
 ========================================================= */
 
-app.get("/api/rules", async (_req, res) => {
+app.get("/api/rules", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`SELECT * FROM rules ORDER BY id ASC`);
     res.json(result.rows);
@@ -7472,7 +7475,7 @@ app.get("/api/rules", async (_req, res) => {
    QUICK TEMPLATES
 ========================================================= */
 
-app.get("/api/quick-templates", async (_req, res) => {
+app.get("/api/quick-templates", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const defaults = [
       {
@@ -7710,7 +7713,7 @@ app.delete("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
   }
 });
 
-app.get("/api/scheduled-jobs", async (_req, res) => {
+app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT data
@@ -7728,7 +7731,7 @@ app.get("/api/scheduled-jobs", async (_req, res) => {
     res.status(500).json({ error: "Error obteniendo citas programadas" });
   }
 });
-app.get("/api/scheduled-tech-statuses", async (_req, res) => {
+app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -7756,7 +7759,7 @@ app.get("/api/scheduled-tech-statuses", async (_req, res) => {
   }
 });
 
-app.get("/api/agenda-date-reminders", async (_req, res) => {
+app.get("/api/agenda-date-reminders", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -7951,7 +7954,7 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
 });
 
 
-app.put("/api/scheduled-jobs", async (req, res) => {
+app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
     const now = Date.now();
@@ -12198,7 +12201,7 @@ app.post(
 // Escalada manual de cobro por WhatsApp (avisos 1 a 4, disparados a mano
 // desde el expediente): 1) recibo devuelto, 2) recordatorio, 3) aviso previo
 // de traslado a Crédito y Caución, 4) confirmación del traslado.
-app.post("/api/administracion/recobro-whatsapp", async (req, res) => {
+app.post("/api/administracion/recobro-whatsapp", authenticate, requireModule("administracion"), async (req, res) => {
   try {
     const recoveryCaseId = String(req.body?.recoveryCaseId || "").trim();
     const aviso = Number(req.body?.aviso);

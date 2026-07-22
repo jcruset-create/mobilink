@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil, CalendarClock, X } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
+import { sessionHeaders } from "../../sessionHeaders";
 import {
   listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
   addRecoveryAction, cambiarEstadoRecovery, cambiarPrioridadRecovery, updateRecovery,
@@ -526,7 +527,7 @@ function ModalDetalleRecobro({ caso: inicial, formas, puedeGestionar, userId, on
     try {
       const res = await fetch("/api/administracion/recobro-whatsapp", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await sessionHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ recoveryCaseId: c.id, aviso }),
       });
       const data = await res.json();

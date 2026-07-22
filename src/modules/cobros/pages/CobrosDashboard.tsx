@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { sessionHeaders } from "../../sessionHeaders";
 
 type Payment = {
   id: number;
@@ -49,7 +50,7 @@ export default function CobrosDashboard() {
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch("/api/payments/recent");
+      const res = await fetch("/api/payments/recent", { headers: await sessionHeaders() });
       const data = await res.json();
       if (data.success) setHistory(data.payments);
     } catch {}
@@ -65,7 +66,7 @@ export default function CobrosDashboard() {
     try {
       const response = await fetch("/api/payments/create-deposit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await sessionHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           jobId: Number(jobId),
           customerName,
@@ -90,7 +91,7 @@ export default function CobrosDashboard() {
     setStatusLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`/api/payments/status/${encodeURIComponent(jobId)}`);
+      const response = await fetch(`/api/payments/status/${encodeURIComponent(jobId)}`, { headers: await sessionHeaders() });
       const data = await response.json();
       if (!data.success) throw new Error(data.message || "No se pudo consultar el estado");
       setPaymentStatus({
@@ -114,7 +115,7 @@ export default function CobrosDashboard() {
     if (!confirm("¿Cancelar este cobro? Se eliminará y el enlace dejará de funcionar.")) return;
     setCancellingId(id);
     try {
-      const res = await fetch(`/api/payments/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/payments/${id}`, { method: "DELETE", headers: await sessionHeaders() });
       const data = await res.json();
       if (!data.success) throw new Error(data.message);
       setMessage("Cobro cancelado correctamente.");
