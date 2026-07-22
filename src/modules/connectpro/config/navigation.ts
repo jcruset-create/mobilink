@@ -22,11 +22,11 @@ export type ConnectNavItem = {
 
 export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "dashboard", path: "dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "analyst" },
-  { key: "centro", path: "centro", label: "Centro de control", icon: Radio, minRole: "operator", phase: "F2" },
+  { key: "centro", path: "centro", label: "Centro de control", icon: Radio, minRole: "operator" },
   { key: "nueva", path: "nueva", label: "Nueva asistencia", icon: PlusCircle, minRole: "operator" },
   { key: "asistencias", path: "asistencias", label: "Asistencias", icon: ClipboardList, minRole: "analyst" },
   { key: "ofertas", path: "ofertas", label: "Ofertas", icon: Handshake, minRole: "provider_user" },
-  { key: "mapa", path: "mapa", label: "Mapa operativo", icon: Map, minRole: "operator", phase: "F2" },
+  { key: "mapa", path: "mapa", label: "Mapa operativo", icon: Map, minRole: "operator" },
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
   { key: "talleres", path: "talleres", label: "Talleres", icon: Warehouse, minRole: "analyst" },
   { key: "unidades", path: "unidades", label: "Unidades móviles", icon: Truck, minRole: "operator", phase: "F3" },

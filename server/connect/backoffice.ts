@@ -74,6 +74,66 @@ export function createConnectBackofficeRouter(): Router {
     });
   });
 
+  // ── Centro de control operativo (Sprint 4) ────────────────
+
+  router.get("/control-center", ...requireConnectRole("operator"), async (_req, res) => {
+    const now = Date.now();
+    const r = await db.query(
+      `SELECT ca.id, ca.uuid, ca.status, ca.priority, ca."serviceType", ca.address,
+              ca."customerName", ca."customerPhone", ca."expedientNumber", ca."externalReference",
+              ca."clientName", ca.origin, ca."slaDeadlineAtMs", ca."createdAtMs", ca."updatedAtMs",
+              ca.latitude, ca.longitude,
+              p.name AS "partnerName", w.name AS "workshopName",
+              ra."assignedTechName", ra.status AS "coreStatus",
+              asg."acceptDeadlineMs"
+         FROM connect_assistances ca
+         LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+         LEFT JOIN LATERAL (
+           SELECT "acceptDeadlineMs" FROM connect_assignments
+            WHERE "assistanceId" = ca.id AND status = 'sent' ORDER BY id DESC LIMIT 1
+         ) asg ON true
+        WHERE ca.status NOT IN ('finished', 'cancelled')
+        ORDER BY ca.priority = 'urgente' DESC, ca."createdAtMs" ASC`,
+    );
+
+    const pending: any[] = [], assigning: any[] = [], active: any[] = [], attention: any[] = [];
+    for (const a of r.rows) {
+      const slaRisk = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) - now < 15 * 60_000;
+      const slaBreached = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) < now;
+      const row = { ...a, slaRisk, slaBreached };
+      if (["assignment_failed", "no_coverage"].includes(a.status) || slaBreached) attention.push(row);
+      else if (["draft", "pending"].includes(a.status)) pending.push(row);
+      else if (["searching", "awaiting_acceptance"].includes(a.status)) assigning.push(row);
+      else active.push(row);
+    }
+    res.json({ generated_at: now, pending, assigning, active, attention });
+  });
+
+  // Mapa operativo: asistencias activas + talleres + posición de técnicos
+  router.get("/map", ...requireConnectRole("operator"), async (_req, res) => {
+    const [assistances, workshops] = await Promise.all([
+      db.query(
+        `SELECT ca.id, ca.status, ca.priority, ca."serviceType", ca.address, ca."customerName",
+                ca.latitude, ca.longitude, w.name AS "workshopName", ra."assignedTechName",
+                ra."webfleetVehicleId"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+           LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+          WHERE ca.status NOT IN ('finished', 'cancelled', 'draft')
+            AND ca.latitude IS NOT NULL`,
+      ),
+      db.query(
+        `SELECT w.id, w.name, w.latitude, w.longitude, w."radiusKm", w."connectStatus",
+                w."currentScore", pc.name AS "providerName"
+           FROM connect_workshops w
+           LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"`,
+      ),
+    ]);
+    res.json({ assistances: assistances.rows, workshops: workshops.rows });
+  });
+
   // ── Empresas proveedoras ──────────────────────────────────
 
   router.get("/providers", ...requireConnectRole("analyst"), async (_req, res) => {
