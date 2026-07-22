@@ -8159,6 +8159,66 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// Login de la APK de Almacén: valida nombre + PIN contra perfiles_usuario
+// (con service role; la tabla deja de ser legible por anon) y garantiza un
+// usuario de Supabase Auth con email sintético y el PIN como contraseña.
+// La APK hace después signInWithPassword y opera con sesión real (RLS).
+app.post("/api/almacen/login-operario", async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre || "").trim();
+    const pin = String(req.body?.pin || "").trim();
+    if (!nombre || pin.length < 4) {
+      return res.status(400).json({ error: "Faltan nombre o PIN" });
+    }
+
+    const { data: perfil } = await supabase
+      .from("perfiles_usuario")
+      .select("id, nombre, rol, ubicacion, activo, codigo_operario")
+      .eq("codigo_operario", pin)
+      .eq("activo", true)
+      .maybeSingle();
+
+    const nombreDb = String(perfil?.nombre ?? "").toLowerCase().trim();
+    if (!perfil || nombreDb !== nombre.toLowerCase()) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+    }
+
+    const slug = nombre
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const email = `apk-${slug}@mobilink-almacen.app`;
+
+    // Supabase Auth: crear o sincronizar el usuario sintético de la APK.
+    const { data: lista } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    const existente = lista?.users?.find((u) => u.email === email);
+    if (existente) {
+      await supabase.auth.admin.updateUserById(existente.id, { password: pin });
+    } else {
+      const { error: createErr } = await supabase.auth.admin.createUser({
+        email,
+        password: pin,
+        email_confirm: true,
+      });
+      if (createErr) throw new Error(createErr.message);
+    }
+
+    void registrarAuditoria({
+      empresaId: process.env.DEFAULT_EMPRESA_ID || "00000000-0000-4000-a000-000000000001",
+      accion: "auth.login-almacen-apk",
+      detalle: { nombre, perfilId: perfil.id },
+      ip: req.ip,
+    });
+
+    res.json({ ok: true, email, perfil });
+  } catch (error) {
+    console.error("POST /api/almacen/login-operario error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
 // Puente SSO: entra al panel de taller con la sesión unificada (Supabase).
 // Empareja el usuario unificado con un usuario del panel por nombre
 // (username o nombre completo). Los superadmin entran como admin.

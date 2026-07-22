@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../main.dart' show kBackendUrl;
 import 'traspasos_screen.dart';
 
 final _db = Supabase.instance.client;
@@ -54,29 +57,39 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _loading = true; _error = null; });
 
     try {
-      final res = await _db
-          .from('perfiles_usuario')
-          .select('id, nombre, rol, ubicacion, activo, codigo_operario')
-          .eq('codigo_operario', pin)
-          .eq('activo', true)
-          .maybeSingle();
+      // 1) El backend valida nombre + PIN (con service role) y garantiza el
+      //    usuario de Supabase Auth. La tabla de perfiles ya no es legible
+      //    con la clave anónima.
+      final r = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/almacen/login-operario'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'nombre': nombre, 'pin': pin}),
+          )
+          .timeout(const Duration(seconds: 15));
 
-      if (res == null) {
-        setState(() => _error = 'Usuario o contraseña incorrectos.');
+      if (r.statusCode != 200) {
+        String msg = 'Usuario o contraseña incorrectos.';
+        try {
+          final body = jsonDecode(r.body) as Map<String, dynamic>;
+          if (r.statusCode >= 500) msg = body['error'] ?? msg;
+        } catch (_) {}
+        setState(() => _error = msg);
         _limpiarPin();
         return;
       }
 
-      final nombreDb = (res['nombre'] as String? ?? '').toLowerCase().trim();
-      if (nombreDb != nombre.toLowerCase().trim()) {
-        setState(() => _error = 'Usuario o contraseña incorrectos.');
-        _limpiarPin();
-        return;
-      }
+      final data = jsonDecode(r.body) as Map<String, dynamic>;
+      final email = data['email'] as String;
+      final perfil = (data['perfil'] as Map).cast<String, dynamic>();
+
+      // 2) Sesión real de Supabase: a partir de aquí todas las lecturas y
+      //    escrituras van autenticadas (requisito de las políticas RLS).
+      await _db.auth.signInWithPassword(email: email, password: pin);
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => TraspasoListScreen(operario: res)),
+        MaterialPageRoute(builder: (_) => TraspasoListScreen(operario: perfil)),
       );
     } catch (e) {
       setState(() => _error = 'Error de conexión: $e');
