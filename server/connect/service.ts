@@ -232,9 +232,11 @@ export interface WorkshopCandidate {
   requiresAcceptance?: boolean;
   acceptTimeoutMin?: number;
   distanceKm: number;
-  etaMinutes: number;
+  etaMinutes: number;      // ETA corregida con el histórico real del taller
   score: number;
   explanation: string;
+  acceptProbability?: number; // 0..1, histórico de aceptación de ofertas
+  activeLoad?: number;        // asistencias activas ahora mismo
 }
 
 /** ETA aproximada por carretera: haversine × 1,4 a 60 km/h medios + 5 min de salida. */
@@ -248,16 +250,40 @@ export async function findCandidates(
   serviceType: string,
   excludeWorkshopIds: number[] = [],
 ): Promise<WorkshopCandidate[]> {
+  const since90 = Date.now() - 90 * 24 * 3600_000;
   const r = await db.query(
     `SELECT w.*, pc.name AS "providerName",
             COALESCE(a."requiresAcceptance", false) AS "requiresAcceptance",
-            COALESCE(a."acceptTimeoutMin", 10) AS "acceptTimeoutMin"
+            COALESCE(a."acceptTimeoutMin", 10) AS "acceptTimeoutMin",
+            hist.accepted, hist.declined, hist."etaFactor",
+            COALESCE(load.n, 0)::int AS "activeLoad"
        FROM connect_workshops w
        LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
        LEFT JOIN connect_provider_authorizations a
          ON a."providerCompanyId" = w."providerCompanyId" AND a."branchId" IS NULL AND a.status = 'active'
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) FILTER (WHERE asg.status = 'accepted')::int AS accepted,
+                COUNT(*) FILTER (WHERE asg.status IN ('rejected','expired'))::int AS declined,
+                AVG(arrmin.actual / NULLIF((asg."scoreBreakdown"::json->>'etaMinutes')::float, 0)) AS "etaFactor"
+           FROM connect_assignments asg
+           LEFT JOIN LATERAL (
+             SELECT (arr."occurredAtMs" - asg2."occurredAtMs") / 60000.0 AS actual
+               FROM connect_status_history asg2
+               JOIN connect_status_history arr
+                 ON arr."assistanceId" = asg2."assistanceId" AND arr."toStatus" = 'arrived'
+              WHERE asg2."assistanceId" = asg."assistanceId" AND asg2."toStatus" = 'assigned'
+              LIMIT 1
+           ) arrmin ON asg.status = 'accepted'
+          WHERE asg."workshopId" = w.id AND asg."sentAtMs" >= $1
+       ) hist ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS n FROM connect_assistances ca
+          WHERE ca."workshopId" = w.id
+            AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')
+       ) load ON true
       WHERE w."connectStatus" = 'active'
         AND (a.id IS NULL OR a.excluded = false)`,
+    [since90],
   );
   const candidates: WorkshopCandidate[] = [];
   for (const w of r.rows) {
@@ -266,10 +292,36 @@ export async function findCandidates(
     if (serviceType !== "other" && services.length > 0 && !services.includes(serviceType)) continue;
     const distanceKm = haversineKm(latitude, longitude, w.latitude, w.longitude);
     if (distanceKm > Number(w.radiusKm || 60)) continue;
-    const etaMinutes = estimateEtaMinutes(distanceKm);
-    // Score = 70 % idoneidad (ETA normalizada a 90 min máx) + 30 % score histórico del taller
+
+    // Fase 4 — ETA aprendida: corrige la heurística con el ratio real/previsto
+    // del taller (acotado 0,6–2,5; sin historial → 1)
+    const rawFactor = Number(w.etaFactor);
+    const etaFactor = Number.isFinite(rawFactor) && rawFactor > 0 ? Math.min(2.5, Math.max(0.6, rawFactor)) : 1;
+    const etaMinutes = Math.round(estimateEtaMinutes(distanceKm) * etaFactor);
+
+    // Fase 4 — probabilidad de aceptación (suavizado con prior 0,7 y k=6)
+    const offered = (w.accepted ?? 0) + (w.declined ?? 0);
+    const acceptProbability = Math.round(((Number(w.accepted ?? 0) + 0.7 * 6) / (offered + 6)) * 100) / 100;
+
+    // Fase 4 — penalización por carga: cada asistencia activa resta capacidad
+    const activeLoad = Number(w.activeLoad ?? 0);
+    const loadFactor = Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
+
+    // Score = 45 % ETA + 25 % score de red + 15 % prob. aceptación + 15 % carga
     const fit = Math.max(0, 1 - etaMinutes / 90);
-    const score = Math.round((0.7 * fit + 0.3 * (Number(w.currentScore) / 100)) * 100);
+    const score = Math.round((
+      0.45 * fit +
+      0.25 * (Number(w.currentScore) / 100) +
+      0.15 * acceptProbability +
+      0.15 * loadFactor
+    ) * 100);
+
+    const parts = [
+      `${Math.round(distanceKm)} km (ETA ~${etaMinutes} min${etaFactor !== 1 ? `, corregida ×${etaFactor.toFixed(1)} por historial` : ""})`,
+      `score de red ${Math.round(w.currentScore)}/100`,
+      `acepta el ${Math.round(acceptProbability * 100)} %`,
+      activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
+    ];
     candidates.push({
       workshopId: w.id,
       name: w.name,
@@ -279,7 +331,9 @@ export async function findCandidates(
       distanceKm: Math.round(distanceKm * 10) / 10,
       etaMinutes,
       score,
-      explanation: `${w.name}: ${Math.round(distanceKm)} km (ETA ~${etaMinutes} min), score de red ${Math.round(w.currentScore)}/100`,
+      acceptProbability,
+      activeLoad,
+      explanation: `${w.name}: ${parts.join(" · ")}`,
     });
   }
   return candidates.sort((a, b) => b.score - a.score);
@@ -354,6 +408,22 @@ export async function offerToWorkshop(assistanceId: number, workshopId: number, 
   const useOffer = opts.mode === "offer" || (opts.mode !== "direct" && c.requiresAcceptance);
   const now = Date.now();
   const deadline = useOffer ? now + (c.acceptTimeoutMin ?? 10) * 60_000 : null;
+
+  // Fase 4 — predicción de SLA: ETA prevista (+ plazo de aceptación si es
+  // oferta) frente al margen restante; avisa ANTES de que ocurra
+  if (a.slaDeadlineAtMs) {
+    const etaMs = (c.etaMinutes + (useOffer ? (c.acceptTimeoutMin ?? 10) : 0)) * 60_000;
+    const marginMin = Math.round((Number(a.slaDeadlineAtMs) - now - etaMs) / 60_000);
+    if (marginMin < 0) {
+      c.explanation += ` · ⚠ SLA en riesgo: llegada prevista ${-marginMin} min tarde`;
+      await createAlert({
+        type: "sla_predicted_breach", severity: "warning",
+        title: `Predicción: la asistencia #${assistanceId} incumplirá el SLA (~${-marginMin} min tarde)`,
+        body: `ETA prevista de ${c.name}: ${c.etaMinutes} min${useOffer ? ` + ${c.acceptTimeoutMin} min de plazo de aceptación` : ""}`,
+        assistanceId, workshopId,
+      });
+    }
+  }
 
   const ins = await db.query(
     `INSERT INTO connect_assignments

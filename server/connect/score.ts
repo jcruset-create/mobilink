@@ -139,6 +139,83 @@ export async function computeWorkshopScores(): Promise<number> {
   return results.length;
 }
 
+/**
+ * Fase 4 — detección de anomalías por taller (reglas estadísticas):
+ *   - exceso de rechazos: >25 % en 14 días con muestra mínima
+ *   - caída brusca de score: −15 puntos frente a hace 14 días
+ *   - inactividad: ofertas recibidas sin ninguna aceptación en 21 días
+ * Cada alerta se deduplica: no se repite si ya hay una igual en 24 h.
+ */
+export async function detectAnomalies(): Promise<number> {
+  const now = Date.now();
+  const d14 = now - 14 * 24 * 3600_000;
+  const d21 = now - 21 * 24 * 3600_000;
+  const d1 = now - 24 * 3600_000;
+  let created = 0;
+
+  const ws = await db.query(`SELECT id, name, "currentScore" FROM connect_workshops WHERE "connectStatus" = 'active'`);
+  for (const w of ws.rows) {
+    const dup = async (type: string) => {
+      const r = await db.query(
+        `SELECT 1 FROM connect_alerts WHERE type = $1 AND "workshopId" = $2 AND "createdAtMs" > $3 LIMIT 1`,
+        [type, w.id, d1],
+      );
+      return r.rows.length > 0;
+    };
+
+    const offers = await db.query(
+      `SELECT COUNT(*) FILTER (WHERE status = 'accepted')::int AS accepted,
+              COUNT(*) FILTER (WHERE status IN ('rejected','expired'))::int AS declined,
+              MAX("sentAtMs") FILTER (WHERE status = 'accepted') AS last_accept,
+              COUNT(*) FILTER (WHERE "sentAtMs" >= $2)::int AS recent_offers
+         FROM connect_assignments WHERE "workshopId" = $1 AND "sentAtMs" >= $3`,
+      [w.id, d21, d14],
+    );
+    const o = offers.rows[0];
+    const total14 = o.accepted + o.declined;
+
+    if (total14 >= 4 && o.declined / total14 > 0.25 && !(await dup("provider_rejections"))) {
+      await createAlert({
+        type: "provider_rejections", severity: "warning",
+        title: `${w.name}: ${Math.round((o.declined / total14) * 100)} % de rechazos/expiraciones en 14 días`,
+        body: `${o.declined} de ${total14} ofertas no aceptadas`,
+        workshopId: w.id,
+      });
+      created++;
+    }
+
+    const prev = await db.query(
+      `SELECT score FROM connect_workshop_scores
+        WHERE "workshopId" = $1 AND "computedAtMs" <= $2 ORDER BY id DESC LIMIT 1`,
+      [w.id, d14],
+    );
+    if (prev.rows[0] && Number(prev.rows[0].score) - Number(w.currentScore) >= 15 && !(await dup("score_drop"))) {
+      await createAlert({
+        type: "score_drop", severity: "warning",
+        title: `${w.name}: caída de score de ${Math.round(prev.rows[0].score)} a ${Math.round(w.currentScore)} en 14 días`,
+        workshopId: w.id,
+      });
+      created++;
+    }
+
+    if (o.recent_offers > 0 && !o.last_accept && !(await dup("provider_inactive"))) {
+      const anyAccept21 = await db.query(
+        `SELECT 1 FROM connect_assignments WHERE "workshopId" = $1 AND status = 'accepted' AND "sentAtMs" >= $2 LIMIT 1`,
+        [w.id, d21],
+      );
+      if (anyAccept21.rows.length === 0) {
+        await createAlert({
+          type: "provider_inactive", severity: "warning",
+          title: `${w.name}: sin aceptaciones en 21 días pese a recibir ofertas`,
+          workshopId: w.id,
+        });
+        created++;
+      }
+    }
+  }
+  return created;
+}
+
 /** Avisos de SLA: emite webhooks sla_risk (<15 min) y sla_breached una sola vez. */
 export async function notifySlaEvents(
   enqueue: (partnerId: number, type: string, data: Record<string, unknown>) => Promise<void>,

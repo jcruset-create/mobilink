@@ -21,6 +21,10 @@ const TYPE_LABELS: Record<string, string> = {
   sla_breached: "SLA incumplido",
   incident_critical: "Incidencia crítica",
   webhook_dead: "Webhook caído",
+  sla_predicted_breach: "Predicción: SLA en riesgo",
+  provider_rejections: "Exceso de rechazos",
+  score_drop: "Caída de score",
+  provider_inactive: "Proveedor inactivo",
 };
 
 const SEV: Record<string, { label: string; cls: string }> = {

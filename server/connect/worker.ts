@@ -8,7 +8,7 @@
 
 import { syncFromCore, expireOfferedAssignments } from "./service.ts";
 import { deliverPendingWebhooks, enqueueWebhookEvent } from "./webhooks.ts";
-import { computeWorkshopScores, notifySlaEvents } from "./score.ts";
+import { computeWorkshopScores, notifySlaEvents, detectAnomalies } from "./score.ts";
 import { syncMobileUnits } from "./mobileunits.ts";
 
 const TICK_MS = 15_000;
@@ -30,6 +30,8 @@ export async function runConnectChecksOnce(): Promise<void> {
     if (tick++ % SCORE_EVERY_TICKS === 0) {
       const scored = await computeWorkshopScores();
       if (scored > 0) console.log(`[Connect] worker: score recalculado para ${scored} taller(es)`);
+      const anomalies = await detectAnomalies();
+      if (anomalies > 0) console.log(`[Connect] worker: ${anomalies} anomalía(s) de red detectadas`);
     }
     await deliverPendingWebhooks();
   } catch (err: any) {
