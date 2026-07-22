@@ -11,7 +11,7 @@ import sharp from "sharp";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
-import { supabase, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import OpenAI, { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
@@ -19,6 +19,7 @@ import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
+import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 
 const twilioClient = twilio(
@@ -3404,9 +3405,59 @@ app.post("/api/roadside-operator/login", async (req, res) => {
       });
     }
 
+    // Sesión unificada (fase 1 SaaS): garantizar usuario de Supabase Auth
+    // con email sintético y devolver la sesión para que la APK envíe
+    // Authorization Bearer (requerido al pasar a AUTH_MODE=strict).
+    let session: { access_token: string; refresh_token: string; expires_in: number } | null = null;
+    try {
+      const slug = techName
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const email = `apk-${slug}@mobilink-assist.app`;
+
+      const { data: lista } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      const existente = lista?.users?.find((u) => u.email === email);
+      if (existente) {
+        await supabase.auth.admin.updateUserById(existente.id, { password: code });
+      } else {
+        const { error: createErr } = await supabase.auth.admin.createUser({
+          email,
+          password: code,
+          email_confirm: true,
+        });
+        if (createErr) throw new Error(createErr.message);
+      }
+
+      const { data: signIn, error: signInErr } = await supabaseAnonAuth.auth.signInWithPassword({
+        email,
+        password: code,
+      });
+      if (signInErr || !signIn.session) throw new Error(signInErr?.message || "sin sesión");
+      session = {
+        access_token: signIn.session.access_token,
+        refresh_token: signIn.session.refresh_token,
+        expires_in: signIn.session.expires_in ?? 3600,
+      };
+
+      void registrarAuditoria({
+        empresaId: process.env.DEFAULT_EMPRESA_ID || "00000000-0000-4000-a000-000000000001",
+        accion: "auth.login-assist-apk",
+        detalle: { techName },
+        ip: req.ip,
+      });
+    } catch (e) {
+      // La sesión unificada es opcional en dual: si falla, la APK sigue
+      // funcionando con las cabeceras de operario.
+      console.error("roadside-operator/login sesión unificada:", e);
+    }
+
     res.json({
       ok: true,
       techName,
+      session,
     });
   } catch (error) {
     console.error("POST /api/roadside-operator/login error:", error);
@@ -12496,6 +12547,12 @@ const requireLicensesAdmin: express.RequestHandler = (req, res, next) => {
 mountLicenses(app, requireLicensesAdmin);
 
 /* =========================================================
+   MOBILINK CONNECT PRO (partners bajo /api/connect/v1)
+========================================================= */
+
+mountConnect(app, requireLicensesAdmin);
+
+/* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
@@ -12527,6 +12584,7 @@ app.use(
 initDb()
   .then(() => initIntegrationHub())
   .then(() => initLicenses())
+  .then(() => initConnect())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -12537,6 +12595,7 @@ initDb()
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
+      startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
     });
   })
   .catch((error) => {

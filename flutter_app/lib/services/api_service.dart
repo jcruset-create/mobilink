@@ -18,12 +18,47 @@ class ApiService {
 
   ApiService({required this.techName, required this.code});
 
+  // ── Sesión unificada (fase 1 SaaS) ─────────────────────────
+  // El login devuelve una sesión de Supabase; se envía como Bearer en todas
+  // las llamadas (requerido por el backend al pasar a AUTH_MODE=strict).
+  // Las cabeceras de operario se mantienen por compatibilidad.
+  static String? _accessToken;
+  static DateTime? _tokenExpiresAt;
+
+  static void _captureSession(Map<String, dynamic> data) {
+    final session = data['session'];
+    if (session is Map) {
+      _accessToken = session['access_token'] as String?;
+      final expiresIn = (session['expires_in'] as num?)?.toInt() ?? 3600;
+      // Margen de 5 minutos para renovar antes de que caduque.
+      _tokenExpiresAt =
+          DateTime.now().add(Duration(seconds: expiresIn - 300));
+    }
+  }
+
+  bool get _tokenCaducado =>
+      _accessToken == null ||
+      _tokenExpiresAt == null ||
+      DateTime.now().isAfter(_tokenExpiresAt!);
+
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         // Codificado: las cabeceras HTTP no admiten acentos/ñ (Iván, Jesús…)
         'x-roadside-operator-name': Uri.encodeComponent(techName),
         'x-roadside-operator-code': code,
+        if (_accessToken != null) 'Authorization': 'Bearer $_accessToken',
       };
+
+  /// Cabeceras con la sesión renovada si estaba caducada (re-login con las
+  /// credenciales del operario). Best-effort: sin red, siguen las legacy.
+  Future<Map<String, String>> _authHeaders() async {
+    if (_tokenCaducado) {
+      try {
+        await ApiService.login(techName, code);
+      } catch (_) {/* offline o backend antiguo: seguimos con legacy */}
+    }
+    return _headers;
+  }
 
   static Future<Map<String, dynamic>> login(
       String techName, String code) async {
@@ -36,6 +71,7 @@ class ApiService {
     if (res.statusCode != 200) {
       throw Exception(data['error'] ?? 'Error de login');
     }
+    _captureSession(data);
     return data;
   }
 
@@ -47,7 +83,7 @@ class ApiService {
       final res = await http
           .get(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances'),
-            headers: _headers,
+            headers: await _authHeaders(),
           )
           .timeout(const Duration(seconds: 12));
       if (res.statusCode != 200) {
@@ -95,7 +131,7 @@ class ApiService {
               ? '$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'
               : '$kBackendUrl/api/roadside-operator/assistances/$id/status';
           final res = await http
-              .post(Uri.parse(url), headers: _headers,
+              .post(Uri.parse(url), headers: await _authHeaders(),
                   body: jsonEncode(type == 'en_camino'
                       ? {'clientActionId': actionId}
                       : {'status': item['status'], 'clientActionId': actionId}))
@@ -108,10 +144,7 @@ class ApiService {
           else {
             final req = http.MultipartRequest(
               'POST', Uri.parse('$kBackendUrl/api/roadside-assistances/$id/files'));
-            req.headers.addAll({
-              'x-roadside-operator-name': Uri.encodeComponent(techName),
-              'x-roadside-operator-code': code,
-            });
+            req.headers.addAll((await _authHeaders())..remove('Content-Type'));
             req.fields['kind'] = item['kind'] as String;
             req.fields['clientActionId'] = actionId;
             req.files.add(await http.MultipartFile.fromPath('file', path));
@@ -123,7 +156,7 @@ class ApiService {
         } else if (type == 'save_conductor') {
           final res = await http
               .post(Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/conductor'),
-                  headers: _headers,
+                  headers: await _authHeaders(),
                   body: jsonEncode({
                     'conductorNombre': item['nombre'],
                     'conductorDni': item['dni'],
@@ -135,7 +168,7 @@ class ApiService {
         } else if (type == 'capture_destination') {
           final res = await http
               .post(Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/capture-destination'),
-                  headers: _headers,
+                  headers: await _authHeaders(),
                   body: jsonEncode({'lat': item['lat'], 'lng': item['lng'], 'clientActionId': actionId}))
               .timeout(const Duration(seconds: 12));
           ok = res.statusCode == 200;
@@ -163,7 +196,7 @@ class ApiService {
           final res = await http
               .post(
                 Uri.parse('$kBackendUrl/api/roadside-operator/assistances/${entry.key}/locations-batch'),
-                headers: _headers,
+                headers: await _authHeaders(),
                 body: jsonEncode({'points': entry.value}),
               )
               .timeout(const Duration(seconds: 20));
@@ -180,7 +213,7 @@ class ApiService {
   Future<List<Map<String, dynamic>>> getHistory() async {
     final res = await http.get(
       Uri.parse('$kBackendUrl/api/roadside-operator/history'),
-      headers: _headers,
+      headers: await _authHeaders(),
     );
     if (res.statusCode != 200) {
       throw Exception('Error cargando historial');
@@ -197,7 +230,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-eta'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({
         'origen': {'lat': originLat, 'lng': originLng},
         'destino': {'lat': destLat, 'lng': destLng},
@@ -211,7 +244,7 @@ class ApiService {
   Future<void> updatePlate(int id, String plate) async {
     final res = await http.patch(
       Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/plate'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({'plate': plate}),
     );
     if (res.statusCode != 200) throw Exception('Error actualizando matrícula');
@@ -220,7 +253,7 @@ class ApiService {
   Future<void> reportPlateMismatch(int id, {String? detected, String? current}) async {
     await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/report-plate-mismatch'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({'detected': detected, 'current': current}),
     );
   }
@@ -228,7 +261,7 @@ class ApiService {
   Future<void> sendEtaWhatsApp(int id, {int? etaMinutos, String? distanciaKm}) async {
     await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/send-eta'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({'etaMinutos': etaMinutos, 'distanciaKm': distanciaKm}),
     );
   }
@@ -239,7 +272,7 @@ class ApiService {
       final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/status'),
-            headers: _headers,
+            headers: await _authHeaders(),
             body: jsonEncode({'status': status, 'clientActionId': actionId}),
           )
           .timeout(const Duration(seconds: 12));
@@ -267,7 +300,7 @@ class ApiService {
       final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'),
-            headers: _headers,
+            headers: await _authHeaders(),
             body: jsonEncode({'clientActionId': actionId}),
           )
           .timeout(const Duration(seconds: 12));
@@ -302,7 +335,7 @@ class ApiService {
       await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/location'),
-            headers: _headers,
+            headers: await _authHeaders(),
             body: jsonEncode({'lat': lat, 'lng': lng}),
           )
           .timeout(const Duration(seconds: 10));
@@ -343,7 +376,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/trabajos'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({
         'plate': plate,
         'tipoVehiculo': tipoVehiculo,
@@ -361,7 +394,7 @@ class ApiService {
   Future<void> updateOtfTrabajoStatus(int trabajoId, String status) async {
     final res = await http.put(
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/status'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({'status': status}),
     );
     if (res.statusCode != 200) throw Exception('Error actualizando estado');
@@ -388,7 +421,7 @@ class ApiService {
   Future<Map<String, dynamic>> checkinOtf(int otfId) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/checkin'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({}),
     );
     if (res.statusCode != 200) throw Exception('Error en check-in');
@@ -442,7 +475,7 @@ class ApiService {
       final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/conductor'),
-            headers: _headers,
+            headers: await _authHeaders(),
             body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 12));
@@ -466,7 +499,7 @@ class ApiService {
   Future<Map<String, dynamic>?> getWhatsAppCapture(int id) async {
     final res = await http.get(
       Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/whatsapp-capture'),
-      headers: _headers,
+      headers: await _authHeaders(),
     );
     if (res.statusCode == 404 || res.body == 'null') return null;
     if (res.statusCode != 200) return null;
@@ -481,7 +514,7 @@ class ApiService {
       final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/capture-destination'),
-            headers: _headers,
+            headers: await _authHeaders(),
             body: jsonEncode({'lat': lat, 'lng': lng}),
           )
           .timeout(const Duration(seconds: 12));
@@ -509,7 +542,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/known-places'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({
         'assistanceId': assistanceId,
         'nombre': nombre,
@@ -526,7 +559,7 @@ class ApiService {
   Future<List<Map<String, dynamic>>> getCobros() async {
     final res = await http.get(
       Uri.parse('$kBackendUrl/api/roadside-operator/cobros'),
-      headers: _headers,
+      headers: await _authHeaders(),
     );
     if (res.statusCode != 200) throw Exception('Error cargando cobros');
     final list = jsonDecode(res.body) as List<dynamic>;
@@ -536,7 +569,7 @@ class ApiService {
   Future<Map<String, dynamic>?> getCobroForAssistance(int assistanceId) async {
     final res = await http.get(
       Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$assistanceId/cobro'),
-      headers: _headers,
+      headers: await _authHeaders(),
     );
     if (res.statusCode != 200 || res.body == 'null') return null;
     final data = jsonDecode(res.body);
@@ -552,7 +585,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/cobros/$id/marcar-cobrado'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({
         'metodoPago': metodoPago,
         'importeCobrado': importeCobrado,
@@ -573,7 +606,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/payments/create'),
-      headers: _headers,
+      headers: await _authHeaders(),
       body: jsonEncode({
         'jobId': jobId,
         'customerName': customerName,
@@ -592,7 +625,7 @@ class ApiService {
   Future<List<Map<String, dynamic>>> getPaymentHistory() async {
     final res = await http.get(
       Uri.parse('$kBackendUrl/api/roadside-operator/payments/history'),
-      headers: _headers,
+      headers: await _authHeaders(),
     );
     if (res.statusCode != 200) throw Exception('Error cargando historial de pagos');
     final list = jsonDecode(res.body) as List<dynamic>;
@@ -602,7 +635,7 @@ class ApiService {
   Future<void> cancelPayment(int id) async {
     final res = await http.delete(
       Uri.parse('$kBackendUrl/api/roadside-operator/payments/$id'),
-      headers: _headers,
+      headers: await _authHeaders(),
     );
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200) throw Exception(data['message'] ?? 'Error cancelando cobro');

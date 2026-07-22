@@ -16,6 +16,14 @@ if (!serviceRoleKey) {
 
 export const supabase = createClient(supabaseUrl, serviceRoleKey);
 
+// Cliente solo-auth para iniciar sesiones en nombre de las APKs (login de
+// operarios): usa la clave anónima y no persiste estado entre peticiones.
+export const supabaseAnonAuth = createClient(
+  supabaseUrl,
+  process.env.VITE_SUPABASE_ANON_KEY || serviceRoleKey,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+);
+
 export const SUPABASE_STORAGE_BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET || "avatars";
 
