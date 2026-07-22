@@ -511,7 +511,12 @@ class TyreControlApi {
     try {
       await http.post(
         Uri.parse('$kBackendUrl/api/tyrecontrol/intervencion/cerrar'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          // Sesión unificada: requerido por el backend en AUTH_MODE=strict.
+          if (currentSessionToken != null)
+            'Authorization': 'Bearer $currentSessionToken',
+        },
         body: jsonEncode({
           'vehiculoId': vehiculoId,
           'desde': desde.toUtc().toIso8601String(),

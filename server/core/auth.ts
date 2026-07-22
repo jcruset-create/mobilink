@@ -36,6 +36,10 @@ declare module "express-serve-static-core" {
   }
 }
 
+// Tenant por defecto para usuarios aún no unificados (SEA Tarragona).
+const DEFAULT_EMPRESA_ID =
+  process.env.DEFAULT_EMPRESA_ID || "00000000-0000-4000-a000-000000000001";
+
 export function getAuthMode(): "legacy" | "dual" | "strict" {
   const m = String(process.env.AUTH_MODE || "dual").toLowerCase();
   return m === "legacy" || m === "strict" ? m : "dual";
@@ -69,15 +73,37 @@ export async function resolveAuthContext(token: string): Promise<AuthContext | n
     [data.user.id]
   );
   const u = r.rows[0];
-  if (!u || !u.activo || !u.empresa_id) return null;
 
-  const ctx: AuthContext = {
-    userId: data.user.id,
-    username: u.username,
-    nombre: u.nombre,
-    empresaId: u.empresa_id,
-    esSuperadmin: Boolean(u.es_superadmin),
-  };
+  let ctx: AuthContext | null = null;
+  if (u && u.activo && u.empresa_id) {
+    ctx = {
+      userId: data.user.id,
+      username: u.username,
+      nombre: u.nombre,
+      empresaId: u.empresa_id,
+      esSuperadmin: Boolean(u.es_superadmin),
+    };
+  } else if (!u) {
+    // Puente fase 1: usuarios que solo existen en tc_usuarios (operarios
+    // creados por login-operario) aún no están en app_usuarios. Se les
+    // asigna la empresa por defecto hasta completar la unificación.
+    const tc = await db.query(
+      `SELECT nombre, activo, es_superadmin FROM tc_usuarios WHERE id = $1`,
+      [data.user.id]
+    );
+    const t = tc.rows[0];
+    if (t && t.activo) {
+      ctx = {
+        userId: data.user.id,
+        username: String(data.user.email || "").split("@")[0] || "operario",
+        nombre: t.nombre ?? "Operario",
+        empresaId: DEFAULT_EMPRESA_ID,
+        esSuperadmin: Boolean(t.es_superadmin),
+      };
+    }
+  }
+
+  if (!ctx) return null;
   ctxCache.set(token, { ctx, expiresAt: Date.now() + CACHE_TTL_MS });
   return ctx;
 }
@@ -129,6 +155,25 @@ export function requireModule(modulo: string): RequestHandler {
       console.error("requireModule error:", e);
       res.status(500).json({ error: "Error comprobando la licencia" });
     }
+  };
+}
+
+/**
+ * Aplica los middlewares solo en AUTH_MODE=strict. Para endpoints llamados
+ * por apps móviles ya desplegadas que aún no envían token: en dual siguen
+ * funcionando; al pasar a strict quedan protegidos.
+ */
+export function protectWhenStrict(...handlers: RequestHandler[]): RequestHandler {
+  return (req, res, next) => {
+    if (getAuthMode() !== "strict") return next();
+    let i = 0;
+    const run = (err?: unknown) => {
+      if (err) return next(err);
+      const h = handlers[i++];
+      if (!h) return next();
+      h(req, res, run);
+    };
+    run();
   };
 }
 

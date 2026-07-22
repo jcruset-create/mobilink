@@ -1168,6 +1168,14 @@ export async function guardarWebfleetConfig(empresaId: string, patch: Partial<Om
 // ── Webfleet: vehículos en base ─────────────────────────────────
 const WF_API_BASE = import.meta.env.PROD ? "" : "http://localhost:4000";
 
+// Cabecera de sesión para los endpoints del backend (protegidos con la
+// sesión unificada de Supabase desde la fase 1 SaaS).
+export async function authHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> {
   const { data, error } = await supabase
     .from("tc_vehiculo_webfleet_estado")
@@ -1178,7 +1186,10 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 
 // Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.
 export async function sincronizarWebfleet(): Promise<{ actualizados?: number; error?: string }> {
-  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, { method: "POST" });
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
   try { return await r.json(); } catch { return { error: `HTTP ${r.status}` }; }
 }
 

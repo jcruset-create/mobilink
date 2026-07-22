@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { actualizarVehiculo } from "../services/data";
+import { actualizarVehiculo, authHeaders } from "../services/data";
 import { inputCls } from "./ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import type { Vehiculo } from "../types";
@@ -46,7 +46,7 @@ export default function WebfleetVehiculo({ vehiculo, onUpdated }: { vehiculo: Ve
     setSincronizando(true); setMsg(""); setEstado(null);
     try {
       const url = `${API_BASE}/api/tyrecontrol/webfleet/odometer?empresa=${encodeURIComponent(vehiculo.empresa_id)}&objectno=${encodeURIComponent(objectno)}`;
-      const r = await fetch(url);
+      const r = await fetch(url, { headers: await authHeaders() });
       const data = await r.json();
       if (!r.ok) { setMsg(data?.error || `Error ${r.status}`); return; }
       setEstado(data);

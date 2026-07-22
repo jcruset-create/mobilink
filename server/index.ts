@@ -19,7 +19,7 @@ import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
-import { authenticate, buildMePayload, getAuthMode, registrarAuditoria } from "./core/auth.ts";
+import { authenticate, buildMePayload, getAuthMode, protectWhenStrict, registrarAuditoria, requireModule } from "./core/auth.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -1530,7 +1530,7 @@ app.get("/api/health", (_req, res) => {
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
-app.post("/api/tyrecontrol/intervencion/cerrar", async (req, res) => {
+app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
     const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
@@ -3208,14 +3208,14 @@ function webfleetOdometerKm(o: any): number | null {
 
 // Fuerza un ciclo de sincronización de "vehículos en base" y devuelve el nº
 // de vehículos actualizados. Para el botón "Sincronizar ahora" de la config.
-app.post("/api/tyrecontrol/webfleet/sync", async (_req, res) => {
+app.post("/api/tyrecontrol/webfleet/sync", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
   const r = await syncWebfleetOnce();
   if ("error" in r) return res.status(502).json(r);
   res.json(r);
 });
 
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
-app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
+app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
     const empresa = String(req.query.empresa || "");
     if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
@@ -3237,7 +3237,7 @@ app.get("/api/tyrecontrol/webfleet/objects", async (req, res) => {
 });
 
 // Estado de un objeto: km (odómetro) + posición. Para sincronizar un vehículo.
-app.get("/api/tyrecontrol/webfleet/odometer", async (req, res) => {
+app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
     const empresa = String(req.query.empresa || "");
     const objectno = String(req.query.objectno || "");
@@ -11552,7 +11552,7 @@ function requireTyreControlAdmin(
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
 // un 409 y se recomienda desactivarlo en su lugar: no se pierde histórico.
-app.delete("/api/tyrecontrol/usuarios/:id", requireTyreControlAdmin, async (req, res) => {
+app.delete("/api/tyrecontrol/usuarios/:id", authenticate, requireModule("tyrecontrol"), requireTyreControlAdmin, async (req, res) => {
   try {
     const id = String(req.params.id);
     const admin = (req as any).tcAdmin as { id: string };
