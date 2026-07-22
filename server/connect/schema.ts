@@ -293,6 +293,59 @@ export async function initConnect(): Promise<void> {
       "createdAtMs" BIGINT NOT NULL
     );
 
+    -- Sprint 5: incidencias y comunicaciones
+    CREATE TABLE IF NOT EXISTS connect_incidents (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER,
+      "assistanceId" INTEGER REFERENCES connect_assistances(id) ON DELETE SET NULL,
+      "providerCompanyId" INTEGER REFERENCES connect_provider_companies(id),
+      "workshopId" INTEGER,
+      type TEXT NOT NULL,
+      -- delay | no_response | rejection | wrong_data | customer_not_found | tech_not_found
+      -- | unit_breakdown | access_problem | not_feasible | incomplete_service | incomplete_docs
+      -- | insufficient_photos | complaint | damages | tariff_conflict | duplicate
+      -- | integration_error | other
+      severity TEXT NOT NULL DEFAULT 'medium', -- low | medium | high | critical
+      status TEXT NOT NULL DEFAULT 'open',
+      -- open | investigating | pending_provider | pending_client | escalated | resolved | closed
+      "ownerUserId" INTEGER,
+      description TEXT NOT NULL,
+      resolution TEXT,
+      "dueAtMs" BIGINT,
+      "slaImpact" BOOLEAN NOT NULL DEFAULT false,
+      "scoreImpact" BOOLEAN NOT NULL DEFAULT false,
+      "createdByUserId" INTEGER,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      "resolvedAtMs" BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_incidents_status
+      ON connect_incidents (status, severity, "dueAtMs");
+
+    CREATE TABLE IF NOT EXISTS connect_incident_events (
+      id SERIAL PRIMARY KEY,
+      "incidentId" INTEGER NOT NULL REFERENCES connect_incidents(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      note TEXT,
+      "byUserId" INTEGER,
+      "byName" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS connect_communications (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL DEFAULT 'note', -- note | call | whatsapp | email
+      direction TEXT NOT NULL DEFAULT 'internal', -- internal | outbound | inbound
+      "toRef" TEXT,                        -- teléfono/email/destinatario si aplica
+      body TEXT NOT NULL,
+      "byUserId" INTEGER,
+      "byName" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_communications_assistance
+      ON connect_communications ("assistanceId", id DESC);
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,

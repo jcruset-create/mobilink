@@ -9,6 +9,7 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { Card, Badge, Button, ErrorBanner } from "../components/ui";
 import AsignacionTab from "../components/AsignacionTab";
+import ComunicacionesTab from "../components/ComunicacionesTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 type Detail = {
@@ -37,7 +38,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Asignación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Asignación", "Comunicaciones", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -162,6 +163,9 @@ export default function FichaAsistencia() {
         )}
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
+        )}
+        {tab === "Comunicaciones" && (
+          <ComunicacionesTab assistanceId={a.id} canOperate={canOperate} />
         )}
         {tab === "Solicitante" && (
           <div>

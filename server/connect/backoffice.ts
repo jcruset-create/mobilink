@@ -669,6 +669,144 @@ export function createConnectBackofficeRouter(): Router {
     res.json(r.rows[0]);
   });
 
+  // ── Incidencias (Sprint 5) ────────────────────────────────
+
+  const INCIDENT_TYPES = [
+    "delay", "no_response", "rejection", "wrong_data", "customer_not_found", "tech_not_found",
+    "unit_breakdown", "access_problem", "not_feasible", "incomplete_service", "incomplete_docs",
+    "insufficient_photos", "complaint", "damages", "tariff_conflict", "duplicate",
+    "integration_error", "other",
+  ];
+  const INCIDENT_STATUSES = ["open", "investigating", "pending_provider", "pending_client", "escalated", "resolved", "closed"];
+
+  router.get("/incidents", ...requireConnectRole("operator"), async (req, res) => {
+    const status = req.query.status ? String(req.query.status) : null;
+    const severity = req.query.severity ? String(req.query.severity) : null;
+    const assistanceId = req.query.assistanceId ? Number(req.query.assistanceId) : null;
+    const r = await db.query(
+      `SELECT i.*, ca.uuid AS "assistanceUuid", ca."customerName", ca."expedientNumber",
+              pc.name AS "providerName", u.name AS "ownerName", cu.name AS "createdByName"
+         FROM connect_incidents i
+         LEFT JOIN connect_assistances ca ON ca.id = i."assistanceId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = i."providerCompanyId"
+         LEFT JOIN connect_users u ON u.id = i."ownerUserId"
+         LEFT JOIN connect_users cu ON cu.id = i."createdByUserId"
+        WHERE ($1::text IS NULL OR i.status = $1)
+          AND ($2::text IS NULL OR i.severity = $2)
+          AND ($3::int IS NULL OR i."assistanceId" = $3)
+        ORDER BY i.status IN ('resolved','closed'), i.severity = 'critical' DESC, i."dueAtMs" NULLS LAST, i.id DESC
+        LIMIT 300`,
+      [status, severity, assistanceId],
+    );
+    res.json({ data: r.rows, types: INCIDENT_TYPES, statuses: INCIDENT_STATUSES });
+  });
+
+  router.post("/incidents", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const b = req.body ?? {};
+    if (!INCIDENT_TYPES.includes(b.type)) return err(res, 422, "validation_failed", "Tipo de incidencia no válido");
+    if (!b.description?.trim()) return err(res, 422, "validation_failed", "La descripción es obligatoria");
+    const now = Date.now();
+    // Si va ligada a una asistencia, hereda proveedor/taller
+    let providerCompanyId = b.providerCompanyId ?? null;
+    let workshopId = null;
+    if (b.assistanceId) {
+      const a = await db.query(
+        `SELECT ca."workshopId", w."providerCompanyId" FROM connect_assistances ca
+          LEFT JOIN connect_workshops w ON w.id = ca."workshopId" WHERE ca.id = $1`,
+        [Number(b.assistanceId)],
+      );
+      if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+      workshopId = a.rows[0].workshopId;
+      providerCompanyId = providerCompanyId ?? a.rows[0].providerCompanyId;
+    }
+    const r = await db.query(
+      `INSERT INTO connect_incidents
+         ("controlCenterId", "assistanceId", "providerCompanyId", "workshopId", type, severity,
+          "ownerUserId", description, "dueAtMs", "slaImpact", "scoreImpact", "createdByUserId",
+          "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13) RETURNING *`,
+      [
+        u.controlCenterId, b.assistanceId ?? null, providerCompanyId, workshopId,
+        b.type, ["low","medium","high","critical"].includes(b.severity) ? b.severity : "medium",
+        b.ownerUserId ?? u.id, b.description.trim(), b.dueAtMs ?? null,
+        b.slaImpact === true, b.scoreImpact === true, u.id, now,
+      ],
+    );
+    await db.query(
+      `INSERT INTO connect_incident_events ("incidentId", action, "byUserId", "byName", "createdAtMs")
+       VALUES ($1, 'created', $2, $3, $4)`,
+      [r.rows[0].id, u.id, u.name, now],
+    );
+    await auditConnect({ req, action: "incident.created", resourceType: "incident", resourceId: r.rows[0].id, detail: { type: b.type } });
+    res.status(201).json(r.rows[0]);
+  });
+
+  router.patch("/incidents/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    const b = req.body ?? {};
+    if (b.status && !INCIDENT_STATUSES.includes(b.status)) return err(res, 422, "validation_failed", "Estado no válido");
+    if ((b.status === "resolved" || b.status === "closed") && !b.resolution && !(await db.query(`SELECT resolution FROM connect_incidents WHERE id=$1`, [id])).rows[0]?.resolution) {
+      return err(res, 422, "validation_failed", "Indica la resolución antes de resolver/cerrar");
+    }
+    const now = Date.now();
+    const r = await db.query(
+      `UPDATE connect_incidents SET
+         status = COALESCE($1, status), severity = COALESCE($2, severity),
+         "ownerUserId" = COALESCE($3, "ownerUserId"), resolution = COALESCE($4, resolution),
+         "dueAtMs" = COALESCE($5, "dueAtMs"),
+         "resolvedAtMs" = CASE WHEN $1 IN ('resolved','closed') THEN $6 ELSE "resolvedAtMs" END,
+         "updatedAtMs" = $6
+       WHERE id = $7 RETURNING *`,
+      [b.status ?? null, b.severity ?? null, b.ownerUserId ?? null, b.resolution ?? null,
+       b.dueAtMs ?? null, now, id],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Incidencia no encontrada");
+    await db.query(
+      `INSERT INTO connect_incident_events ("incidentId", action, note, "byUserId", "byName", "createdAtMs")
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, b.status ? `status:${b.status}` : "updated", b.note ?? b.resolution ?? null, u.id, u.name, now],
+    );
+    await auditConnect({ req, action: "incident.updated", resourceType: "incident", resourceId: id, detail: b });
+    res.json(r.rows[0]);
+  });
+
+  router.get("/incidents/:id/events", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT * FROM connect_incident_events WHERE "incidentId" = $1 ORDER BY id`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  // ── Comunicaciones / notas de la asistencia ───────────────
+
+  router.get("/assistances/:id/communications", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT * FROM connect_communications WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 200`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/assistances/:id/communications", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const { channel, direction, toRef, body } = req.body ?? {};
+    if (!body?.trim()) return err(res, 422, "validation_failed", "El texto es obligatorio");
+    const r = await db.query(
+      `INSERT INTO connect_communications ("assistanceId", channel, direction, "toRef", body, "byUserId", "byName", "createdAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [
+        Number(req.params.id),
+        ["note","call","whatsapp","email"].includes(channel) ? channel : "note",
+        ["internal","outbound","inbound"].includes(direction) ? direction : "internal",
+        toRef ?? null, body.trim(), u.id, u.name, Date.now(),
+      ],
+    );
+    res.status(201).json(r.rows[0]);
+  });
+
   // ── Catálogos ─────────────────────────────────────────────
 
   router.get("/catalogs", ...requireConnectUser(), async (_req, res) => {
@@ -677,6 +815,56 @@ export function createConnectBackofficeRouter(): Router {
       db.query(`SELECT * FROM connect_rejection_reasons ORDER BY "sortOrder"`),
     ]);
     res.json({ service_types: types.rows, rejection_reasons: reasons.rows });
+  });
+
+  // Edición de catálogos (cc_admin)
+  router.post("/catalogs/service-types", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { code, name } = req.body ?? {};
+    if (!code?.trim() || !name?.trim()) return err(res, 422, "validation_failed", "code y name son obligatorios");
+    const r = await db.query(
+      `INSERT INTO connect_service_types (code, name, "sortOrder")
+       VALUES ($1, $2, (SELECT COALESCE(MAX("sortOrder"),0)+1 FROM connect_service_types))
+       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, active = true RETURNING *`,
+      [code.trim().toLowerCase().replace(/\s+/g, "_"), name.trim()],
+    );
+    await auditConnect({ req, action: "catalog.service_type_upserted", detail: { code, name } });
+    res.status(201).json(r.rows[0]);
+  });
+
+  router.patch("/catalogs/service-types/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `UPDATE connect_service_types SET name = COALESCE($1, name), active = COALESCE($2, active) WHERE id = $3 RETURNING *`,
+      [req.body?.name ?? null, req.body?.active ?? null, Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Tipo no encontrado");
+    await auditConnect({ req, action: "catalog.service_type_updated", detail: req.body });
+    res.json(r.rows[0]);
+  });
+
+  router.post("/catalogs/rejection-reasons", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { code, label, affectsScoreDefault } = req.body ?? {};
+    if (!code?.trim() || !label?.trim()) return err(res, 422, "validation_failed", "code y label son obligatorios");
+    const r = await db.query(
+      `INSERT INTO connect_rejection_reasons (code, label, "affectsScoreDefault", "sortOrder")
+       VALUES ($1, $2, $3, (SELECT COALESCE(MAX("sortOrder"),0)+1 FROM connect_rejection_reasons))
+       ON CONFLICT (code) DO UPDATE SET label = EXCLUDED.label, active = true RETURNING *`,
+      [code.trim().toLowerCase().replace(/\s+/g, "_"), label.trim(), affectsScoreDefault !== false],
+    );
+    await auditConnect({ req, action: "catalog.rejection_reason_upserted", detail: { code, label } });
+    res.status(201).json(r.rows[0]);
+  });
+
+  router.patch("/catalogs/rejection-reasons/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `UPDATE connect_rejection_reasons
+          SET label = COALESCE($1, label), active = COALESCE($2, active),
+              "affectsScoreDefault" = COALESCE($3, "affectsScoreDefault")
+        WHERE id = $4 RETURNING *`,
+      [req.body?.label ?? null, req.body?.active ?? null, req.body?.affectsScoreDefault ?? null, Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Motivo no encontrado");
+    await auditConnect({ req, action: "catalog.rejection_reason_updated", detail: req.body });
+    res.json(r.rows[0]);
   });
 
   // ── Auditoría ─────────────────────────────────────────────

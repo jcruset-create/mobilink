@@ -30,7 +30,7 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
   { key: "talleres", path: "talleres", label: "Talleres", icon: Warehouse, minRole: "analyst" },
   { key: "unidades", path: "unidades", label: "Unidades móviles", icon: Truck, minRole: "operator", phase: "F3" },
-  { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator", phase: "F2" },
+  { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },
   { key: "sla", path: "sla", label: "SLA y alertas", icon: BellRing, minRole: "supervisor", phase: "F2" },
   { key: "clientes", path: "clientes", label: "Clientes", icon: Contact, minRole: "cc_admin", phase: "F2" },
   { key: "integraciones", path: "integraciones", label: "Partners e integraciones", icon: Plug, minRole: "cc_admin" },

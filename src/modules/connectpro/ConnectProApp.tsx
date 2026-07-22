@@ -19,6 +19,7 @@ import Configuracion from "./pages/Configuracion";
 import Ofertas from "./pages/Ofertas";
 import CentroControl from "./pages/CentroControl";
 import MapaOperativo from "./pages/MapaOperativo";
+import Incidencias from "./pages/Incidencias";
 
 /** Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el Dashboard. */
 function Home() {
@@ -40,6 +41,7 @@ export default function ConnectProApp() {
             <Route path="ofertas" element={<Ofertas />} />
             <Route path="centro" element={<CentroControl />} />
             <Route path="mapa" element={<MapaOperativo />} />
+            <Route path="incidencias" element={<Incidencias />} />
             <Route path="empresas" element={<Empresas />} />
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />
