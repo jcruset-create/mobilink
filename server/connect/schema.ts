@@ -9,6 +9,7 @@
  * INSERT en roadside_assistances y la sincronización un polling ligero.
  */
 
+import crypto from "node:crypto";
 import db from "../db.ts";
 
 export async function initConnect(): Promise<void> {
@@ -133,5 +134,255 @@ export async function initConnect(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_connect_webhook_deliveries_pending
       ON connect_webhook_deliveries (status, "nextRetryAtMs");
+
+    -- ============================================================
+    -- Fase 1 (Sprint 1): backoffice del centro de control
+    -- ============================================================
+
+    -- Centros de control (call centers que operan Connect Pro)
+    CREATE TABLE IF NOT EXISTS connect_control_centers (
+      id SERIAL PRIMARY KEY,
+      uuid TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active', -- active | suspended
+      settings TEXT NOT NULL DEFAULT '{}',
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      "deletedAtMs" BIGINT
+    );
+
+    -- Usuarios de Connect Pro (vinculados a la sesión unificada Supabase)
+    CREATE TABLE IF NOT EXISTS connect_users (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER REFERENCES connect_control_centers(id),
+      "supabaseUserId" TEXT,
+      email TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'operator',
+      -- superadmin | cc_admin | supervisor | operator | analyst | provider_user
+      "providerCompanyId" INTEGER, -- solo para provider_user
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      UNIQUE (email)
+    );
+
+    -- Empresas proveedoras de asistencia (clientes del ecosistema Mobilink Assist)
+    CREATE TABLE IF NOT EXISTS connect_provider_companies (
+      id SERIAL PRIMARY KEY,
+      uuid TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      "licenseUuid" TEXT,                 -- vínculo con el módulo de licencias
+      "coreInstance" TEXT NOT NULL DEFAULT 'local', -- local | external
+      "contactEmail" TEXT,
+      "contactPhone" TEXT,
+      status TEXT NOT NULL DEFAULT 'active', -- active | suspended
+      notes TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      "deletedAtMs" BIGINT
+    );
+
+    -- Delegaciones / bases operativas de una empresa proveedora
+    CREATE TABLE IF NOT EXISTS connect_branches (
+      id SERIAL PRIMARY KEY,
+      "providerCompanyId" INTEGER NOT NULL REFERENCES connect_provider_companies(id),
+      name TEXT NOT NULL,
+      address TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      phone TEXT,
+      schedule TEXT NOT NULL DEFAULT '{}',
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      "deletedAtMs" BIGINT
+    );
+
+    -- Autorización centro de control ↔ empresa proveedora (relación M:N con condiciones)
+    CREATE TABLE IF NOT EXISTS connect_provider_authorizations (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER NOT NULL REFERENCES connect_control_centers(id),
+      "providerCompanyId" INTEGER NOT NULL REFERENCES connect_provider_companies(id),
+      "branchId" INTEGER REFERENCES connect_branches(id),
+      status TEXT NOT NULL DEFAULT 'active', -- active | suspended
+      "serviceTypes" TEXT NOT NULL DEFAULT '[]', -- [] = todos
+      preferred BOOLEAN NOT NULL DEFAULT false,
+      excluded BOOLEAN NOT NULL DEFAULT false,
+      "slaAcceptMin" INTEGER,
+      "slaArrivalMin" INTEGER,
+      "maxConcurrent" INTEGER,
+      "validFromMs" BIGINT,
+      "validToMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      UNIQUE ("controlCenterId", "providerCompanyId", "branchId")
+    );
+
+    -- Catálogo configurable de tipos de asistencia
+    CREATE TABLE IF NOT EXISTS connect_service_types (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      "parentId" INTEGER REFERENCES connect_service_types(id),
+      active BOOLEAN NOT NULL DEFAULT true,
+      "sortOrder" INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Motivos de rechazo configurables
+    CREATE TABLE IF NOT EXISTS connect_rejection_reasons (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      "affectsScoreDefault" BOOLEAN NOT NULL DEFAULT true,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "sortOrder" INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Auditoría de Connect Pro (append-only)
+    CREATE TABLE IF NOT EXISTS connect_audit_logs (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER,
+      "actorType" TEXT NOT NULL, -- user | api | system
+      "actorId" TEXT,
+      "actorName" TEXT,
+      action TEXT NOT NULL,
+      "resourceType" TEXT,
+      "resourceId" TEXT,
+      detail TEXT,
+      ip TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_audit_center_time
+      ON connect_audit_logs ("controlCenterId", "createdAtMs" DESC);
+
+    -- Fase 3 (solo DDL, sin lógica): unidades móviles
+    CREATE TABLE IF NOT EXISTS connect_mobile_units (
+      id SERIAL PRIMARY KEY,
+      "providerCompanyId" INTEGER NOT NULL REFERENCES connect_provider_companies(id),
+      "branchId" INTEGER REFERENCES connect_branches(id),
+      name TEXT NOT NULL,
+      plate TEXT,
+      capabilities TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'unknown',
+      "statusReason" TEXT,
+      "technicianRef" TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      "batteryPct" INTEGER,
+      "connectionStatus" TEXT,
+      "activeAssistanceId" INTEGER,
+      "etaAvailableMin" INTEGER,
+      "lastReportAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS connect_mobile_unit_events (
+      id SERIAL PRIMARY KEY,
+      "unitId" INTEGER NOT NULL REFERENCES connect_mobile_units(id) ON DELETE CASCADE,
+      "fromStatus" TEXT,
+      "toStatus" TEXT NOT NULL,
+      reason TEXT,
+      payload TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
   `);
+
+  // Ampliaciones idempotentes de tablas v0
+  await db.query(`
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "providerCompanyId" INTEGER;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "branchId" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "controlCenterId" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'api';
+    -- manual | api | partner | import | reopen | derived | core
+  `);
+
+  await seedConnectDefaults();
+}
+
+/**
+ * Seed idempotente: centro de control por defecto, SEA como empresa proveedora
+ * (enlazando los talleres v0 existentes), autorización M:N y catálogos base.
+ */
+async function seedConnectDefaults(): Promise<void> {
+  const now = Date.now();
+
+  const cc = await db.query(`SELECT id FROM connect_control_centers LIMIT 1`);
+  let ccId: number;
+  if (cc.rows[0]) {
+    ccId = cc.rows[0].id;
+  } else {
+    const r = await db.query(
+      `INSERT INTO connect_control_centers (uuid, name, "createdAtMs", "updatedAtMs")
+       VALUES ($1, 'Centro de Control SEA', $2, $2) RETURNING id`,
+      [crypto.randomUUID(), now],
+    );
+    ccId = r.rows[0].id;
+  }
+
+  const pc = await db.query(`SELECT id FROM connect_provider_companies LIMIT 1`);
+  let pcId: number;
+  if (pc.rows[0]) {
+    pcId = pc.rows[0].id;
+  } else {
+    const r = await db.query(
+      `INSERT INTO connect_provider_companies (uuid, name, "coreInstance", "createdAtMs", "updatedAtMs")
+       VALUES ($1, 'SEA Tarragona', 'local', $2, $2) RETURNING id`,
+      [crypto.randomUUID(), now],
+    );
+    pcId = r.rows[0].id;
+  }
+
+  await db.query(
+    `UPDATE connect_workshops SET "providerCompanyId" = $1 WHERE "providerCompanyId" IS NULL`,
+    [pcId],
+  );
+
+  await db.query(
+    `INSERT INTO connect_provider_authorizations
+       ("controlCenterId", "providerCompanyId", "createdAtMs", "updatedAtMs")
+     SELECT $1, $2, $3, $3
+      WHERE NOT EXISTS (
+        SELECT 1 FROM connect_provider_authorizations
+         WHERE "controlCenterId" = $1 AND "providerCompanyId" = $2 AND "branchId" IS NULL)`,
+    [ccId, pcId, now],
+  );
+
+  const serviceTypes: Array<[string, string]> = [
+    ["tow_truck", "Grúa / remolque"], ["mechanical", "Mecánica en carretera"],
+    ["tyres", "Neumáticos"], ["battery", "Batería / arranque"],
+    ["fuel", "Combustible"], ["lockout", "Apertura de vehículo"],
+    ["electric_vehicle", "Vehículo eléctrico"], ["heavy_vehicle", "Vehículo industrial"],
+    ["machinery", "Maquinaria"], ["other", "Otros"],
+  ];
+  for (let i = 0; i < serviceTypes.length; i++) {
+    await db.query(
+      `INSERT INTO connect_service_types (code, name, "sortOrder")
+       VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
+      [serviceTypes[i][0], serviceTypes[i][1], i],
+    );
+  }
+
+  const reasons: Array<[string, string, boolean]> = [
+    ["no_capacity", "Sin disponibilidad", true],
+    ["out_of_zone", "Fuera de cobertura", false],
+    ["service_unsupported", "Tipo de asistencia no soportado", false],
+    ["unit_unsuitable", "Unidad no adecuada", false],
+    ["no_technician", "Sin técnico disponible", true],
+    ["eta_too_long", "Tiempo de llegada excesivo", false],
+    ["schedule", "Fuera de horario", false],
+    ["insufficient_data", "Datos insuficientes", false],
+    ["operational_risk", "Riesgo operativo", false],
+    ["price_rejected", "Precio no aceptado", false],
+    ["commercial_conflict", "Conflicto comercial", false],
+    ["breakdown", "Avería propia", true],
+    ["other", "Otro motivo", true],
+  ];
+  for (let i = 0; i < reasons.length; i++) {
+    await db.query(
+      `INSERT INTO connect_rejection_reasons (code, label, "affectsScoreDefault", "sortOrder")
+       VALUES ($1, $2, $3, $4) ON CONFLICT (code) DO NOTHING`,
+      [reasons[i][0], reasons[i][1], reasons[i][2], i],
+    );
+  }
 }

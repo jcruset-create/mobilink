@@ -16,6 +16,7 @@
 import type { Express, RequestHandler } from "express";
 import { initConnect } from "./schema.ts";
 import { createConnectRouter, createConnectAdminRouter } from "./router.ts";
+import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { startConnectWorker, stopConnectWorker, runConnectChecksOnce } from "./worker.ts";
 
 export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnce };
@@ -24,5 +25,6 @@ export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnc
 export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
   app.use("/api/connect/v1", createConnectRouter());
   app.use("/api/connect/admin", createConnectAdminRouter(requireAdmin));
-  console.log("Connect Pro: API montada en /api/connect/v1 (partners) y /api/connect/admin");
+  app.use("/api/connect/bo", createConnectBackofficeRouter());
+  console.log("Connect Pro: API montada en /api/connect/v1 (partners), /api/connect/admin y /api/connect/bo (backoffice)");
 }
