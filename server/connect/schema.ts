@@ -295,6 +295,17 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "controlCenterId" INTEGER;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'api';
     -- manual | api | partner | import | reopen | derived | core
+
+    -- Sprint 2: creación manual con borradores y ficha completa
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "expedientNumber" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "clientName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS requester TEXT NOT NULL DEFAULT '{}';
+    -- {name, phone, email, language, notes} — puede diferir del cliente final
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "locationDetails" TEXT NOT NULL DEFAULT '{}';
+    -- {road, km, direction, placeRef, serviceArea, confirmed}
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaMinutes" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaDeadlineAtMs" BIGINT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "createdByUserId" INTEGER;
   `);
 
   await seedConnectDefaults();

@@ -8,6 +8,8 @@ import { ConnectAuthProvider, ConnectAccessGate } from "./contexts/ConnectAuthCo
 import ConnectLayout from "./layouts/ConnectLayout";
 import Dashboard from "./pages/Dashboard";
 import Asistencias from "./pages/Asistencias";
+import NuevaAsistencia from "./pages/NuevaAsistencia";
+import FichaAsistencia from "./pages/FichaAsistencia";
 import Empresas from "./pages/Empresas";
 import Talleres from "./pages/Talleres";
 import Integraciones from "./pages/Integraciones";
@@ -24,6 +26,8 @@ export default function ConnectProApp() {
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="asistencias" element={<Asistencias />} />
+            <Route path="asistencias/:id" element={<FichaAsistencia />} />
+            <Route path="nueva" element={<NuevaAsistencia />} />
             <Route path="empresas" element={<Empresas />} />
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />

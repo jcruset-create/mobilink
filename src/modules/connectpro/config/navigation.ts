@@ -23,7 +23,7 @@ export type ConnectNavItem = {
 export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "dashboard", path: "dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "analyst" },
   { key: "centro", path: "centro", label: "Centro de control", icon: Radio, minRole: "operator", phase: "F2" },
-  { key: "nueva", path: "nueva", label: "Nueva asistencia", icon: PlusCircle, minRole: "operator", phase: "F2" },
+  { key: "nueva", path: "nueva", label: "Nueva asistencia", icon: PlusCircle, minRole: "operator" },
   { key: "asistencias", path: "asistencias", label: "Asistencias", icon: ClipboardList, minRole: "analyst" },
   { key: "mapa", path: "mapa", label: "Mapa operativo", icon: Map, minRole: "operator", phase: "F2" },
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },

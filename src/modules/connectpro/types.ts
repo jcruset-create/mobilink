@@ -64,6 +64,7 @@ export type ServiceType = { id: number; code: string; name: string; active: bool
 export type RejectionReason = { id: number; code: string; label: string; active: boolean; affectsScoreDefault: boolean };
 
 export const ASSISTANCE_STATUS_LABELS: Record<string, string> = {
+  draft: "Borrador",
   pending: "Pendiente",
   searching: "Buscando proveedor",
   assigned: "Enviada al proveedor",
@@ -78,6 +79,7 @@ export const ASSISTANCE_STATUS_LABELS: Record<string, string> = {
 };
 
 export const ASSISTANCE_STATUS_STYLES: Record<string, string> = {
+  draft: "border-slate-500/40 bg-slate-500/10 text-slate-300",
   pending: "border-amber-500/40 bg-amber-500/10 text-amber-300",
   searching: "border-sky-500/40 bg-sky-500/10 text-sky-300",
   assigned: "border-blue-500/40 bg-blue-500/10 text-blue-300",

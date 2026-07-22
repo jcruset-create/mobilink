@@ -1,6 +1,7 @@
 /** Connect Pro — Asistencias (listado + timeline; gestión completa en S2/S3). */
 
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Th, Td, Badge, Select, ErrorBanner, EmptyState } from "../components/ui";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
@@ -12,18 +13,15 @@ type Assistance = {
   origin: string; createdAtMs: number;
 };
 
-type TimelineEntry = { fromStatus: string | null; toStatus: string; actorType: string; reason: string | null; occurredAtMs: number };
-
 const ORIGIN_LABELS: Record<string, string> = {
   manual: "Manual", api: "API", partner: "Partner", import: "Importada", reopen: "Reapertura", derived: "Derivada", core: "Mobilink Assist",
 };
 
 export default function Asistencias() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState<Assistance[]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<number | null>(null);
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
 
   const load = useCallback(() => {
     boFetch<{ data: Assistance[] }>(`/assistances${status ? `?status=${status}` : ""}`)
@@ -35,15 +33,6 @@ export default function Asistencias() {
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
   }, [load]);
-
-  const verTimeline = async (id: number) => {
-    if (openId === id) { setOpenId(null); return; }
-    setOpenId(id);
-    try {
-      const r = await boFetch<{ data: TimelineEntry[] }>(`/assistances/${id}/timeline`);
-      setTimeline(r.data);
-    } catch { setTimeline([]); }
-  };
 
   return (
     <div>
@@ -69,10 +58,9 @@ export default function Asistencias() {
             </tr></thead>
             <tbody>
               {rows.map((a) => (
-                <>
                   <tr
                     key={a.id}
-                    onClick={() => verTimeline(a.id)}
+                    onClick={() => navigate(`/connect/asistencias/${a.id}`)}
                     className="cursor-pointer border-b border-slate-700/50 hover:bg-slate-700/30"
                     title={a.assignmentExplanation ?? undefined}
                   >
@@ -92,27 +80,6 @@ export default function Asistencias() {
                       </Badge>
                     </Td>
                   </tr>
-                  {openId === a.id && (
-                    <tr key={`${a.id}-tl`} className="border-b border-slate-700/50 bg-slate-900/50">
-                      <Td className="py-3" colSpan={8}>
-                        <div className="flex flex-col gap-1 pl-4">
-                          {timeline.length === 0 ? (
-                            <span className="text-slate-500">Sin historial.</span>
-                          ) : timeline.map((t, i) => (
-                            <div key={i} className="flex items-center gap-2 text-[12px]">
-                              <span className="text-slate-500">{fmtDateTime(t.occurredAtMs)}</span>
-                              <Badge className={ASSISTANCE_STATUS_STYLES[t.toStatus] ?? "border-slate-600 text-slate-400"}>
-                                {ASSISTANCE_STATUS_LABELS[t.toStatus] ?? t.toStatus}
-                              </Badge>
-                              <span className="text-slate-500">({t.actorType})</span>
-                              {t.reason && <span className="text-slate-400">— {t.reason}</span>}
-                            </div>
-                          ))}
-                        </div>
-                      </Td>
-                    </tr>
-                  )}
-                </>
               ))}
             </tbody>
           </table>

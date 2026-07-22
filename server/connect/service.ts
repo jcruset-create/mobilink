@@ -17,12 +17,13 @@ import { enqueueWebhookEvent } from "./webhooks.ts";
 // ---------------------------------------------------------------------------
 
 export const CONNECT_STATUSES = [
-  "pending", "searching", "assigned", "technician_assigned", "en_route",
+  "draft", "pending", "searching", "assigned", "technician_assigned", "en_route",
   "arrived", "in_progress", "finished", "cancelled", "no_coverage", "assignment_failed",
 ] as const;
 export type ConnectStatus = (typeof CONNECT_STATUSES)[number];
 
 const TRANSITIONS: Record<string, ConnectStatus[]> = {
+  draft: ["pending", "cancelled"],
   pending: ["searching", "cancelled"],
   searching: ["assigned", "no_coverage", "assignment_failed", "cancelled"],
   assigned: ["technician_assigned", "en_route", "cancelled"],
@@ -94,7 +95,7 @@ export async function transition(
 // ---------------------------------------------------------------------------
 
 export interface CreateAssistanceInput {
-  partnerId: number;
+  partnerId?: number | null;
   externalReference?: string;
   idempotencyKey?: string;
   priority?: string;
@@ -107,12 +108,22 @@ export interface CreateAssistanceInput {
   customerPhone?: string;
   vehicle?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  // Sprint 2 — creación manual desde el backoffice
+  origin?: "manual" | "api" | "partner" | "import" | "reopen" | "derived" | "core";
+  draft?: boolean;
+  controlCenterId?: number | null;
+  createdByUserId?: number | null;
+  expedientNumber?: string | null;
+  clientName?: string | null;
+  requester?: Record<string, unknown>;
+  locationDetails?: Record<string, unknown>;
+  slaMinutes?: number | null;
 }
 
 export async function createAssistance(input: CreateAssistanceInput): Promise<{ row: any; duplicated: boolean }> {
   const now = Date.now();
 
-  if (input.idempotencyKey) {
+  if (input.idempotencyKey && input.partnerId) {
     const dup = await db.query(
       `SELECT * FROM connect_assistances WHERE "partnerId" = $1 AND "idempotencyKey" = $2`,
       [input.partnerId, input.idempotencyKey],
@@ -120,18 +131,23 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
     if (dup.rows[0]) return { row: dup.rows[0], duplicated: true };
   }
 
+  const initialStatus = input.draft ? "draft" : "pending";
+  const origin = input.origin ?? "api";
   const r = await db.query(
     `INSERT INTO connect_assistances
        (uuid, "partnerId", "externalReference", "idempotencyKey", status, priority, "serviceType",
         description, latitude, longitude, address, "customerName", "customerPhone", vehicle,
-        "externalMetadata", "createdAtMs", "updatedAtMs")
-     VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
+        "externalMetadata", origin, "controlCenterId", "createdByUserId", "expedientNumber",
+        "clientName", requester, "locationDetails", "slaMinutes", "slaDeadlineAtMs",
+        "createdAtMs", "updatedAtMs")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$25)
      RETURNING *`,
     [
       crypto.randomUUID(),
-      input.partnerId,
+      input.partnerId ?? null,
       input.externalReference ?? null,
       input.idempotencyKey ?? null,
+      initialStatus,
       input.priority === "urgente" || input.priority === "high" || input.priority === "critical" ? "urgente" : "normal",
       String(input.serviceType || "other"),
       input.description ?? null,
@@ -142,16 +158,44 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
       String(input.customerPhone || "").trim(),
       JSON.stringify(input.vehicle ?? {}),
       JSON.stringify(input.metadata ?? {}),
+      origin,
+      input.controlCenterId ?? null,
+      input.createdByUserId ?? null,
+      input.expedientNumber ?? null,
+      input.clientName ?? null,
+      JSON.stringify(input.requester ?? {}),
+      JSON.stringify(input.locationDetails ?? {}),
+      input.slaMinutes ?? null,
+      !input.draft && input.slaMinutes ? now + input.slaMinutes * 60_000 : null,
       now,
     ],
   );
   const row = r.rows[0];
   await db.query(
     `INSERT INTO connect_status_history ("assistanceId", "fromStatus", "toStatus", "actorType", "occurredAtMs")
-     VALUES ($1, NULL, 'pending', 'api', $2)`,
-    [row.id, now],
+     VALUES ($1, NULL, $2, $3, $4)`,
+    [row.id, initialStatus, origin === "manual" ? "user" : "api", now],
   );
   return { row, duplicated: false };
+}
+
+/** Envía un borrador: valida mínimos, arranca el reloj SLA y pasa a pending. */
+export async function submitDraft(assistanceId: number): Promise<void> {
+  const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const a = r.rows[0];
+  if (!a) throw new Error("Asistencia no encontrada");
+  if (a.status !== "draft") throw new InvalidTransitionError(a.status, "pending");
+  if (!a.customerName && !a.customerPhone) throw new Error("Faltan datos del cliente (nombre o teléfono)");
+  if (!a.address && (a.latitude == null || a.longitude == null)) throw new Error("Falta la ubicación (dirección o coordenadas)");
+  const now = Date.now();
+  await db.query(
+    `UPDATE connect_assistances
+        SET "slaDeadlineAtMs" = CASE WHEN "slaMinutes" IS NOT NULL THEN $1 + "slaMinutes" * 60000 ELSE NULL END,
+            "updatedAtMs" = $1
+      WHERE id = $2`,
+    [now, assistanceId],
+  );
+  await transition(assistanceId, "pending", "user", "Borrador enviado");
 }
 
 // ---------------------------------------------------------------------------

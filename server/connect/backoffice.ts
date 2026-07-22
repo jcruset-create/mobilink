@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { Router, json, type Response } from "express";
 import db from "../db.ts";
 import { requireConnectRole, auditConnect } from "./rbac.ts";
+import { createAssistance, submitDraft, assignAssistance, transition, InvalidTransitionError } from "./service.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
@@ -189,12 +190,174 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  router.get("/assistances/:id", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName", w.phone AS "workshopPhone",
+              pc.name AS "providerName", u.name AS "createdByName",
+              ra."assignedTechName", ra.status AS "coreStatus"
+         FROM connect_assistances ca
+         LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN connect_users u ON u.id = ca."createdByUserId"
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+        WHERE ca.id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    res.json(r.rows[0]);
+  });
+
   router.get("/assistances/:id/timeline", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(
       `SELECT * FROM connect_status_history WHERE "assistanceId" = $1 ORDER BY id`,
       [Number(req.params.id)],
     );
     res.json({ data: r.rows });
+  });
+
+  // Crear asistencia manual (borrador o directa)
+  router.post("/assistances", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const b = req.body ?? {};
+    if (!b.draft) {
+      const missing: string[] = [];
+      if (!b.customer?.name && !b.customer?.phone) missing.push("cliente (nombre o teléfono)");
+      if (!b.address && (typeof b.location?.lat !== "number" || typeof b.location?.lng !== "number")) missing.push("ubicación");
+      if (missing.length) return err(res, 422, "validation_failed", `Faltan datos: ${missing.join(", ")}. Guarda como borrador si aún no los tienes.`);
+    }
+    try {
+      const { row } = await createAssistance({
+        origin: "manual",
+        draft: b.draft === true,
+        controlCenterId: u.controlCenterId,
+        createdByUserId: u.id,
+        expedientNumber: b.expedientNumber || null,
+        clientName: b.clientName || null,
+        externalReference: b.externalReference || null,
+        priority: b.priority,
+        serviceType: b.serviceType,
+        description: b.description,
+        latitude: typeof b.location?.lat === "number" ? b.location.lat : null,
+        longitude: typeof b.location?.lng === "number" ? b.location.lng : null,
+        address: b.address,
+        customerName: b.customer?.name,
+        customerPhone: b.customer?.phone,
+        requester: b.requester ?? {},
+        locationDetails: b.locationDetails ?? {},
+        vehicle: b.vehicle ?? {},
+        slaMinutes: b.slaMinutes ? Number(b.slaMinutes) : null,
+      });
+      await auditConnect({ req, action: b.draft ? "assistance.draft_created" : "assistance.created", resourceType: "assistance", resourceId: row.id });
+      res.status(201).json(row);
+    } catch (e: any) {
+      console.error("[Connect] bo crear asistencia:", e?.message);
+      err(res, 500, "internal_error", "Error creando la asistencia");
+    }
+  });
+
+  // Editar (solo en draft/pending: datos aún no enviados al proveedor)
+  router.patch("/assistances/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = await db.query(`SELECT status FROM connect_assistances WHERE id = $1`, [id]);
+    if (!cur.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (!["draft", "pending", "no_coverage", "assignment_failed"].includes(cur.rows[0].status)) {
+      return err(res, 409, "invalid_state", "Solo se pueden editar asistencias en borrador o pendientes de asignación");
+    }
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE connect_assistances SET
+         "expedientNumber" = COALESCE($1, "expedientNumber"),
+         "clientName" = COALESCE($2, "clientName"),
+         "externalReference" = COALESCE($3, "externalReference"),
+         priority = COALESCE($4, priority),
+         "serviceType" = COALESCE($5, "serviceType"),
+         description = COALESCE($6, description),
+         latitude = COALESCE($7, latitude),
+         longitude = COALESCE($8, longitude),
+         address = COALESCE($9, address),
+         "customerName" = COALESCE($10, "customerName"),
+         "customerPhone" = COALESCE($11, "customerPhone"),
+         requester = COALESCE($12, requester),
+         "locationDetails" = COALESCE($13, "locationDetails"),
+         vehicle = COALESCE($14, vehicle),
+         "slaMinutes" = COALESCE($15, "slaMinutes"),
+         "updatedAtMs" = $16
+       WHERE id = $17 RETURNING *`,
+      [
+        b.expedientNumber ?? null, b.clientName ?? null, b.externalReference ?? null,
+        b.priority ?? null, b.serviceType ?? null, b.description ?? null,
+        typeof b.location?.lat === "number" ? b.location.lat : null,
+        typeof b.location?.lng === "number" ? b.location.lng : null,
+        b.address ?? null,
+        b.customer?.name ?? null, b.customer?.phone ?? null,
+        b.requester ? JSON.stringify(b.requester) : null,
+        b.locationDetails ? JSON.stringify(b.locationDetails) : null,
+        b.vehicle ? JSON.stringify(b.vehicle) : null,
+        b.slaMinutes != null ? Number(b.slaMinutes) : null,
+        Date.now(), id,
+      ],
+    );
+    await auditConnect({ req, action: "assistance.updated", resourceType: "assistance", resourceId: id, detail: Object.keys(b) });
+    res.json(r.rows[0]);
+  });
+
+  // Enviar borrador
+  router.post("/assistances/:id/submit", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    try {
+      await submitDraft(id);
+      await auditConnect({ req, action: "assistance.submitted", resourceType: "assistance", resourceId: id });
+      const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      if (e instanceof InvalidTransitionError) return err(res, 409, "invalid_state_transition", e.message);
+      return err(res, 422, "validation_failed", e?.message || "No se pudo enviar el borrador");
+    }
+  });
+
+  // Buscar y asignar proveedor automáticamente (la selección manual llega en S3)
+  router.post("/assistances/:id/search-provider", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    try {
+      await assignAssistance(id);
+      await auditConnect({ req, action: "assistance.provider_search", resourceType: "assistance", resourceId: id });
+      const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      return err(res, 409, "assignment_error", e?.message || "No se pudo buscar proveedor");
+    }
+  });
+
+  // Cancelar
+  router.post("/assistances/:id/cancel", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const reason = String(req.body?.reason || "").trim();
+    if (!reason) return err(res, 422, "validation_failed", "El motivo de cancelación es obligatorio");
+    const cur = await db.query(`SELECT status, "coreAssistanceId" FROM connect_assistances WHERE id = $1`, [id]);
+    if (!cur.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    try {
+      await transition(id, "cancelled", "user", reason);
+      await db.query(`UPDATE connect_assistances SET "cancelReason" = $1 WHERE id = $2`, [reason, id]);
+      if (cur.rows[0].coreAssistanceId) {
+        const now = Date.now();
+        await db.query(
+          `UPDATE roadside_assistances SET status = 'cancelada', "cancelledAtMs" = $1, "updatedAtMs" = $1 WHERE id = $2 AND status <> 'finalizada'`,
+          [now, cur.rows[0].coreAssistanceId],
+        );
+        await db.query(
+          `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+           VALUES ($1, 'cancelada', $2, 'connect-pro', $3)`,
+          [cur.rows[0].coreAssistanceId, reason, now],
+        );
+      }
+      await auditConnect({ req, action: "assistance.cancelled", resourceType: "assistance", resourceId: id, detail: { reason } });
+      const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      if (e instanceof InvalidTransitionError) return err(res, 409, "invalid_state_transition", e.message);
+      throw e;
+    }
   });
 
   // ── Autorizaciones centro ↔ empresa ───────────────────────
