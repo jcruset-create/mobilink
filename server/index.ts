@@ -412,6 +412,40 @@ app.delete("/api/payments/:id", authenticate, requireModule("administracion"), a
   }
 });
 
+/* Middleware de roles del panel: definido aquí (antes del primer uso)
+   porque las const no se elevan y el servidor lo evalúa al arrancar. */
+function requireRole(allowedRoles: UserRole[]) {
+  return (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    void (async () => {
+      const role = await getRoleFromRequestAsync(req);
+
+      if (!role) {
+        return res.status(401).json({ error: "No autorizado" });
+      }
+
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ error: "Permisos insuficientes" });
+      }
+
+      next();
+    })().catch((error) => {
+      console.error("requireRole error:", error);
+      res.status(500).json({ error: "Error de autorización" });
+    });
+  };
+}
+
+const requireAdminRole = requireRole(["admin"]);
+const requireSupervisorRole = requireRole(["admin", "supervisor"]);
+const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
+// Cualquier rol del panel (incluye TVs). Usado como puerta de sesión al
+// pasar a AUTH_MODE=strict; el permiso fino llegará con el RBAC completo.
+const requirePanelRole = requireRole(["admin", "supervisor", "pantallas", "tv75"]);
+
 app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
     const {
@@ -1474,37 +1508,6 @@ function requireRoadsideOperator(
   });
 }
 
-function requireRole(allowedRoles: UserRole[]) {
-  return (
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction
-  ) => {
-    void (async () => {
-      const role = await getRoleFromRequestAsync(req);
-
-      if (!role) {
-        return res.status(401).json({ error: "No autorizado" });
-      }
-
-      if (!allowedRoles.includes(role)) {
-        return res.status(403).json({ error: "Permisos insuficientes" });
-      }
-
-      next();
-    })().catch((error) => {
-      console.error("requireRole error:", error);
-      res.status(500).json({ error: "Error de autorización" });
-    });
-  };
-}
-
-const requireAdminRole = requireRole(["admin"]);
-const requireSupervisorRole = requireRole(["admin", "supervisor"]);
-const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
-// Cualquier rol del panel (incluye TVs). Usado como puerta de sesión al
-// pasar a AUTH_MODE=strict; el permiso fino llegará con el RBAC completo.
-const requirePanelRole = requireRole(["admin", "supervisor", "pantallas", "tv75"]);
 app.use((req, _res, next) => {
   console.log(`[REQ] ${req.method} ${req.url}`);
   next();
