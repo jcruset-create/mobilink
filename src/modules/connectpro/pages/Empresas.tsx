@@ -6,6 +6,7 @@ import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Button, ErrorBanner, EmptyState } from "../components/ui";
 import type { ProviderCompany, Branch, Authorization } from "../types";
 import { fmtDateTime } from "../types";
+import TarifasEditor from "../components/TarifasEditor";
 
 export default function Empresas() {
   const { user } = useConnectAuth();
@@ -13,6 +14,7 @@ export default function Empresas() {
   const [rows, setRows] = useState<ProviderCompany[]>([]);
   const [auths, setAuths] = useState<Authorization[]>([]);
   const [selected, setSelected] = useState<ProviderCompany | null>(null);
+  const [tariffAuth, setTariffAuth] = useState<Authorization | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", contactEmail: "", contactPhone: "" });
@@ -112,7 +114,16 @@ export default function Empresas() {
                     )}
                   </Td>
                   <Td>{fmtDateTime(p.createdAtMs)}</Td>
-                  <Td><Button variant="ghost" onClick={() => setSelected(selected?.id === p.id ? null : p)}>{selected?.id === p.id ? "Cerrar" : "Delegaciones"}</Button></Td>
+                  <Td>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" onClick={() => setSelected(selected?.id === p.id ? null : p)}>{selected?.id === p.id ? "Cerrar" : "Delegaciones"}</Button>
+                      {a && (
+                        <Button variant="ghost" onClick={() => setTariffAuth(tariffAuth?.id === a.id ? null : a)}>
+                          {tariffAuth?.id === a.id ? "Cerrar tarifas" : "Tarifas"}
+                        </Button>
+                      )}
+                    </div>
+                  </Td>
                 </tr>
               );
             })}
@@ -122,6 +133,10 @@ export default function Empresas() {
           </tbody>
         </table>
       </Card>
+
+      {tariffAuth && (
+        <TarifasEditor authorizationId={tariffAuth.id} providerName={tariffAuth.providerName} canEdit={canEdit} />
+      )}
 
       {selected && (
         <Card className="mt-4 p-4">

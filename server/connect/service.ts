@@ -401,11 +401,39 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
     `UPDATE connect_assignments SET status = 'accepted', "respondedAtMs" = $1, "respondedBy" = $2 WHERE id = $3`,
     [now, actorName, assignmentId],
   );
+
+  // Coste estimado según el tarifario de la autorización (base + €/km × distancia)
+  let estimatedCost: number | null = null;
+  let costDetail: string | null = null;
+  try {
+    const breakdown = asg.scoreBreakdown ? JSON.parse(asg.scoreBreakdown) : {};
+    const distanceKm = Number(breakdown.distanceKm) || 0;
+    const t = await db.query(
+      `SELECT tl."baseAmount", tl."perKmAmount", tl.currency
+         FROM connect_tariff_lines tl
+         JOIN connect_provider_authorizations auth ON auth.id = tl."authorizationId"
+         JOIN connect_workshops w ON w."providerCompanyId" = auth."providerCompanyId"
+        WHERE w.id = $1 AND auth."branchId" IS NULL AND auth.status = 'active'
+          AND tl.active AND tl."serviceTypeCode" = $2
+        LIMIT 1`,
+      [asg.workshopId, a.serviceType],
+    );
+    if (t.rows[0]) {
+      const { baseAmount, perKmAmount } = t.rows[0];
+      estimatedCost = Math.round((Number(baseAmount) + Number(perKmAmount) * distanceKm) * 100) / 100;
+      costDetail = `Base ${baseAmount} € + ${perKmAmount} €/km × ${Math.round(distanceKm)} km`;
+    }
+  } catch (err: any) {
+    console.error("[Connect] cálculo de coste:", err?.message);
+  }
+
   await db.query(
     `UPDATE connect_assistances
-        SET "workshopId" = $1, "coreAssistanceId" = $2, "assignmentExplanation" = $3, "updatedAtMs" = $4
-      WHERE id = $5`,
-    [asg.workshopId, coreId, asg.explanation, now, asg.assistanceId],
+        SET "workshopId" = $1, "coreAssistanceId" = $2, "assignmentExplanation" = $3,
+            "estimatedCost" = COALESCE($4, "estimatedCost"), "costDetail" = COALESCE($5, "costDetail"),
+            "updatedAtMs" = $6
+      WHERE id = $7`,
+    [asg.workshopId, coreId, asg.explanation, estimatedCost, costDetail, now, asg.assistanceId],
   );
   await transition(asg.assistanceId, "assigned", "system", asg.mode === "offer" ? `Aceptada por ${actorName}` : asg.explanation);
 }

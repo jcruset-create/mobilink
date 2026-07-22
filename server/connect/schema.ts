@@ -380,6 +380,35 @@ export async function initConnect(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_connect_alerts_status
       ON connect_alerts (status, id DESC);
 
+    -- Fase 2 S2: clientes del centro de control y tarifas por autorización
+    CREATE TABLE IF NOT EXISTS connect_clients (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER REFERENCES connect_control_centers(id),
+      name TEXT NOT NULL,
+      "taxId" TEXT,
+      "contactEmail" TEXT,
+      "contactPhone" TEXT,
+      "defaultSlaMinutes" INTEGER,
+      "defaultPriority" TEXT NOT NULL DEFAULT 'normal',
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    -- Tarifario por relación comercial (autorización) y tipo de servicio
+    CREATE TABLE IF NOT EXISTS connect_tariff_lines (
+      id SERIAL PRIMARY KEY,
+      "authorizationId" INTEGER NOT NULL REFERENCES connect_provider_authorizations(id) ON DELETE CASCADE,
+      "serviceTypeCode" TEXT NOT NULL,
+      "baseAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
+      "perKmAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      active BOOLEAN NOT NULL DEFAULT true,
+      "updatedAtMs" BIGINT NOT NULL,
+      UNIQUE ("authorizationId", "serviceTypeCode")
+    );
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,
@@ -439,6 +468,13 @@ export async function initConnect(): Promise<void> {
     -- Sprint 6: avisos de SLA (webhooks sla_risk / sla_breached una sola vez)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaRiskNotifiedAtMs" BIGINT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaBreachNotifiedAtMs" BIGINT;
+
+    -- Fase 2 S2: cliente y costes de la asistencia
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "clientId" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "estimatedCost" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "finalCost" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "costCurrency" TEXT NOT NULL DEFAULT 'EUR';
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "costDetail" TEXT;
   `);
 
   await seedConnectDefaults();

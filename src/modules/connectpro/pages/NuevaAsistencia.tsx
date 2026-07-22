@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
 import type { ServiceType } from "../types";
+import type { Client } from "./Clientes";
 
 type Form = {
   expedientNumber: string; externalReference: string; clientName: string;
@@ -52,11 +53,14 @@ export default function NuevaAsistencia() {
   const navigate = useNavigate();
   const [f, setF] = useState<Form>(EMPTY);
   const [types, setTypes] = useState<ServiceType[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     boFetch<{ service_types: ServiceType[] }>("/catalogs").then((r) => setTypes(r.service_types.filter((t) => t.active))).catch(() => {});
+    boFetch<{ data: Client[] }>("/clients").then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
   }, []);
 
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
@@ -66,6 +70,7 @@ export default function NuevaAsistencia() {
     draft,
     expedientNumber: f.expedientNumber || null,
     externalReference: f.externalReference || null,
+    clientId: clientId ? Number(clientId) : null,
     clientName: f.clientName || null,
     priority: f.priority,
     slaMinutes: f.slaMinutes ? Number(f.slaMinutes) : null,
@@ -109,7 +114,15 @@ export default function NuevaAsistencia() {
         <Section title="Expediente">
           <Field label="Nº expediente"><Input value={f.expedientNumber} onChange={set("expedientNumber")} className="w-40" /></Field>
           <Field label="Referencia externa"><Input value={f.externalReference} onChange={set("externalReference")} className="w-40" /></Field>
-          <Field label="Cliente (empresa)"><Input value={f.clientName} onChange={set("clientName")} className="w-48" placeholder="Aseguradora / flota" /></Field>
+          <Field label="Cliente de cartera">
+            <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>
+              <option value="">— Sin cliente —</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.defaultSlaMinutes ? ` (SLA ${c.defaultSlaMinutes} min)` : ""}</option>)}
+            </Select>
+          </Field>
+          {!clientId && (
+            <Field label="Cliente (texto libre)"><Input value={f.clientName} onChange={set("clientName")} className="w-48" placeholder="Aseguradora / flota" /></Field>
+          )}
           <Field label="Tipo de asistencia">
             <Select value={f.serviceType} onChange={set("serviceType")}>
               {types.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}

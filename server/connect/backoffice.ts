@@ -412,6 +412,17 @@ export function createConnectBackofficeRouter(): Router {
       if (!b.address && (typeof b.location?.lat !== "number" || typeof b.location?.lng !== "number")) missing.push("ubicación");
       if (missing.length) return err(res, 422, "validation_failed", `Faltan datos: ${missing.join(", ")}. Guarda como borrador si aún no los tienes.`);
     }
+    // Cliente de cartera: hereda nombre, SLA y prioridad por defecto
+    let clientName = b.clientName || null;
+    let slaMinutes = b.slaMinutes ? Number(b.slaMinutes) : null;
+    let priority = b.priority;
+    if (b.clientId) {
+      const c = await db.query(`SELECT * FROM connect_clients WHERE id = $1 AND active`, [Number(b.clientId)]);
+      if (!c.rows[0]) return err(res, 404, "not_found", "Cliente no encontrado");
+      clientName = clientName ?? c.rows[0].name;
+      slaMinutes = slaMinutes ?? c.rows[0].defaultSlaMinutes;
+      priority = priority ?? c.rows[0].defaultPriority;
+    }
     try {
       const { row } = await createAssistance({
         origin: "manual",
@@ -419,9 +430,9 @@ export function createConnectBackofficeRouter(): Router {
         controlCenterId: u.controlCenterId,
         createdByUserId: u.id,
         expedientNumber: b.expedientNumber || null,
-        clientName: b.clientName || null,
+        clientName,
         externalReference: b.externalReference || null,
-        priority: b.priority,
+        priority,
         serviceType: b.serviceType,
         description: b.description,
         latitude: typeof b.location?.lat === "number" ? b.location.lat : null,
@@ -432,8 +443,11 @@ export function createConnectBackofficeRouter(): Router {
         requester: b.requester ?? {},
         locationDetails: b.locationDetails ?? {},
         vehicle: b.vehicle ?? {},
-        slaMinutes: b.slaMinutes ? Number(b.slaMinutes) : null,
+        slaMinutes,
       });
+      if (b.clientId) {
+        await db.query(`UPDATE connect_assistances SET "clientId" = $1 WHERE id = $2`, [Number(b.clientId), row.id]);
+      }
       await auditConnect({ req, action: b.draft ? "assistance.draft_created" : "assistance.created", resourceType: "assistance", resourceId: row.id });
       res.status(201).json(row);
     } catch (e: any) {
@@ -788,6 +802,94 @@ export function createConnectBackofficeRouter(): Router {
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Usuario no encontrado (o es superadmin)");
     await auditConnect({ req, action: "user.updated", resourceType: "user", resourceId: r.rows[0].id, detail: req.body });
+    res.json(r.rows[0]);
+  });
+
+  // ── Clientes y tarifas (Fase 2 S2) ────────────────────────
+
+  router.get("/clients", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const r = await db.query(
+      `SELECT * FROM connect_clients WHERE $1::int IS NULL OR "controlCenterId" = $1 ORDER BY name`,
+      [u.role === "superadmin" ? null : u.controlCenterId],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/clients", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const u = req.connectUser!;
+    const b = req.body ?? {};
+    if (!b.name?.trim()) return err(res, 422, "validation_failed", "El nombre es obligatorio");
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_clients ("controlCenterId", name, "taxId", "contactEmail", "contactPhone",
+         "defaultSlaMinutes", "defaultPriority", notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
+      [
+        u.controlCenterId, b.name.trim(), b.taxId ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+        b.defaultSlaMinutes != null ? Number(b.defaultSlaMinutes) : null,
+        b.defaultPriority === "urgente" ? "urgente" : "normal", b.notes ?? null, now,
+      ],
+    );
+    await auditConnect({ req, action: "client.created", resourceType: "client", resourceId: r.rows[0].id });
+    res.status(201).json(r.rows[0]);
+  });
+
+  router.patch("/clients/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE connect_clients SET
+         name = COALESCE($1, name), "contactEmail" = COALESCE($2, "contactEmail"),
+         "contactPhone" = COALESCE($3, "contactPhone"),
+         "defaultSlaMinutes" = COALESCE($4, "defaultSlaMinutes"),
+         "defaultPriority" = COALESCE($5, "defaultPriority"),
+         active = COALESCE($6, active), notes = COALESCE($7, notes), "updatedAtMs" = $8
+       WHERE id = $9 RETURNING *`,
+      [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       b.defaultSlaMinutes != null ? Number(b.defaultSlaMinutes) : null,
+       b.defaultPriority ?? null, b.active ?? null, b.notes ?? null, Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Cliente no encontrado");
+    await auditConnect({ req, action: "client.updated", resourceType: "client", resourceId: Number(req.params.id), detail: b });
+    res.json(r.rows[0]);
+  });
+
+  router.get("/authorizations/:id/tariffs", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT * FROM connect_tariff_lines WHERE "authorizationId" = $1 ORDER BY "serviceTypeCode"`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.put("/authorizations/:id/tariffs/:code", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { baseAmount, perKmAmount, active } = req.body ?? {};
+    const r = await db.query(
+      `INSERT INTO connect_tariff_lines ("authorizationId", "serviceTypeCode", "baseAmount", "perKmAmount", active, "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT ("authorizationId", "serviceTypeCode")
+       DO UPDATE SET "baseAmount" = EXCLUDED."baseAmount", "perKmAmount" = EXCLUDED."perKmAmount",
+                     active = EXCLUDED.active, "updatedAtMs" = EXCLUDED."updatedAtMs"
+       RETURNING *`,
+      [Number(req.params.id), String(req.params.code), Number(baseAmount) || 0, Number(perKmAmount) || 0,
+       active !== false, Date.now()],
+    );
+    await auditConnect({ req, action: "tariff.upserted", resourceType: "authorization", resourceId: Number(req.params.id), detail: req.body });
+    res.json(r.rows[0]);
+  });
+
+  // Coste final de la asistencia (cierre administrativo)
+  router.patch("/assistances/:id/costs", ...requireConnectRole("operator"), async (req, res) => {
+    const { finalCost } = req.body ?? {};
+    if (finalCost == null || Number.isNaN(Number(finalCost))) {
+      return err(res, 422, "validation_failed", "finalCost numérico es obligatorio");
+    }
+    const r = await db.query(
+      `UPDATE connect_assistances SET "finalCost" = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING *`,
+      [Number(finalCost), Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    await auditConnect({ req, action: "assistance.cost_set", resourceType: "assistance", resourceId: Number(req.params.id), detail: { finalCost } });
     res.json(r.rows[0]);
   });
 

@@ -22,6 +22,7 @@ type Detail = {
   vehicle: string; description: string | null; origin: string; createdByName: string | null;
   slaMinutes: number | null; slaDeadlineAtMs: number | null; cancelReason: string | null;
   assignmentExplanation: string | null; createdAtMs: number;
+  estimatedCost: number | null; finalCost: number | null; costCurrency: string; costDetail: string | null;
 };
 
 type TimelineEntry = { fromStatus: string | null; toStatus: string; actorType: string; reason: string | null; occurredAtMs: number };
@@ -38,7 +39,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Asignación", "Comunicaciones", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Asignación", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -166,6 +167,30 @@ export default function FichaAsistencia() {
         )}
         {tab === "Comunicaciones" && (
           <ComunicacionesTab assistanceId={a.id} canOperate={canOperate} />
+        )}
+        {tab === "Costes" && (
+          <div>
+            <Row label="Coste estimado" value={a.estimatedCost != null ? `${a.estimatedCost.toFixed(2)} ${a.costCurrency}` : "Sin tarifa aplicable"} />
+            <Row label="Detalle del cálculo" value={a.costDetail} />
+            <Row label="Coste final" value={a.finalCost != null ? `${a.finalCost.toFixed(2)} ${a.costCurrency}` : "Pendiente de cierre"} />
+            {canOperate && ["finished", "arrived", "in_progress"].includes(a.status) && (
+              <div className="mt-3">
+                <Button
+                  variant="ghost" disabled={busy}
+                  onClick={() => {
+                    const v = window.prompt("Coste final del servicio (€):", a.finalCost != null ? String(a.finalCost) : a.estimatedCost != null ? String(a.estimatedCost) : "");
+                    if (v != null && v.trim() !== "" && !Number.isNaN(Number(v))) {
+                      setBusy(true);
+                      boFetch(`/assistances/${a.id}/costs`, { method: "PATCH", body: { finalCost: Number(v) } })
+                        .then(load).catch((e: any) => setError(e.message)).finally(() => setBusy(false));
+                    }
+                  }}
+                >
+                  Registrar coste final
+                </Button>
+              </div>
+            )}
+          </div>
         )}
         {tab === "Solicitante" && (
           <div>
