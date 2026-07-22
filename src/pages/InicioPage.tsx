@@ -89,10 +89,20 @@ export default function InicioPage() {
 
       const accesos = new Map<string, { rol: string; pantallas: string[] | null }>();
       try {
-        const { data: rows } = await supabase.from("app_usuario_modulos")
-          .select("modulo, rol, pantallas").eq("user_id", user.id);
+        // app_mis_modulos cruza los accesos del usuario con las licencias
+        // vigentes de su empresa: un módulo no contratado (o caducado) no
+        // aparece. Si la migración SaaS fase 1 aún no está aplicada, cae
+        // al select directo de app_usuario_modulos.
+        const { data: rows, error } = await supabase.rpc("app_mis_modulos");
+        if (error) throw error;
         for (const r of rows ?? []) accesos.set(r.modulo, { rol: r.rol, pantallas: r.pantallas });
-      } catch { /* sin filas: fallbacks */ }
+      } catch {
+        try {
+          const { data: rows } = await supabase.from("app_usuario_modulos")
+            .select("modulo, rol, pantallas").eq("user_id", user.id);
+          for (const r of rows ?? []) accesos.set(r.modulo, { rol: r.rol, pantallas: r.pantallas });
+        } catch { /* sin filas: fallbacks */ }
+      }
 
       // Fallback para usuarios aún no unificados: perfiles propios de módulo
       if (accesos.size === 0 && !esSuperadmin) {
