@@ -9,6 +9,9 @@ on:
       - almacen_app/**
       - .github/workflows/build-almacen-apk.yml
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,3 +30,14 @@ jobs:
         with:
           name: mobilink-almacen-apk
           path: almacen_app/build/app/outputs/flutter-apk/app-release.apk
+      - name: Commit APK to branch
+        if: github.ref_name == 'claude/warehouse-project-status-81rr2p'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          mkdir -p releases
+          cp almacen_app/build/app/outputs/flutter-apk/app-release.apk releases/mobilink-almacen.apk
+          git add releases/mobilink-almacen.apk
+          git commit -m "build: APK Mobilink Almacén (artefacto de compilación)"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin HEAD:"$GITHUB_REF_NAME"
