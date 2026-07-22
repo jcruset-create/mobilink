@@ -5,13 +5,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { circle as turfCircle } from "@turf/circle";
-import { intersect as turfIntersect } from "@turf/intersect";
-import { featureCollection } from "@turf/helpers";
-import spainGeo from "../assets/spain.geo.json";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, ErrorBanner, Badge } from "../components/ui";
@@ -66,21 +62,6 @@ function workshopIcon(zoom: number) {
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
   const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) });
   return null;
-}
-
-/**
- * Cobertura recortada contra la línea de costa: círculo geodésico del taller
- * ∩ contorno de España — el mar queda fuera. Si la intersección falla,
- * se devuelve el círculo completo como respaldo.
- */
-const spainFeature = (spainGeo as any).features[0];
-function coveragePolygon(lat: number, lng: number, radiusKm: number) {
-  const circ = turfCircle([lng, lat], radiusKm, { steps: 96, units: "kilometers" });
-  try {
-    return turfIntersect(featureCollection([circ, spainFeature])) ?? circ;
-  } catch {
-    return circ;
-  }
 }
 
 export default function MapaOperativo() {
@@ -183,10 +164,9 @@ export default function MapaOperativo() {
                 </Popup>
               </Marker>
               {showCoverage && (
-                <GeoJSON
-                  key={`cov-${w.id}-${w.latitude}-${w.longitude}-${w.radiusKm}`}
-                  data={coveragePolygon(w.latitude, w.longitude, w.radiusKm) as any}
-                  style={{ color: "#0e7490", weight: 1, fillOpacity: 0.05 }}
+                <Circle
+                  center={[w.latitude, w.longitude]} radius={w.radiusKm * 1000}
+                  pathOptions={{ color: "#0e7490", weight: 1, fillOpacity: 0.05 }}
                 />
               )}
             </span>
