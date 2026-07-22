@@ -19,6 +19,7 @@ import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
+import { authenticate, buildMePayload, getAuthMode, registrarAuditoria } from "./core/auth.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -8077,6 +8078,13 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
 
 app.post("/api/login", async (req, res) => {
   try {
+    // AUTH_MODE=strict: solo se permite la sesión unificada (Supabase).
+    if (getAuthMode() === "strict") {
+      return res.status(410).json({
+        error: "El acceso por contraseña compartida está deshabilitado. Usa tu usuario personal.",
+      });
+    }
+
     const { password, name } = req.body ?? {};
 
     // 1) Usuarios creados en BD (con pantallas personalizadas)
@@ -8135,13 +8143,23 @@ app.post("/api/login-sso", async (req, res) => {
     if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
 
     const r = await db.query(
-      `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
+      `SELECT a.username, a.nombre, a.activo, a.es_superadmin, a.empresa_id,
               coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS adm_admin
        FROM app_usuarios a WHERE a.id = $1`,
       [data.user.id]
     );
     const u = r.rows[0];
     if (!u || !u.activo) return res.status(403).json({ error: "Usuario no activo en la aplicación" });
+
+    if (u.empresa_id) {
+      void registrarAuditoria({
+        empresaId: u.empresa_id,
+        userId: data.user.id,
+        accion: "auth.login-sso",
+        detalle: { username: u.username },
+        ip: req.ip,
+      });
+    }
 
     // 1) Usuario del panel con el mismo nombre (username o nombre completo)
     try {
@@ -8176,6 +8194,17 @@ app.post("/api/login-sso", async (req, res) => {
   } catch (error) {
     console.error("POST /api/login-sso error:", error);
     res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+// Perfil de sesión unificado: usuario + empresa + módulos con licencia
+// vigente. Es la fuente del menú del hub y de cualquier cliente (web/móvil).
+app.get("/api/me", authenticate, async (req, res) => {
+  try {
+    res.json(await buildMePayload(req.authCtx!));
+  } catch (error) {
+    console.error("GET /api/me error:", error);
+    res.status(500).json({ error: "Error cargando el perfil" });
   }
 });
 
