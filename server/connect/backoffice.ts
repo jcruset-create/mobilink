@@ -74,6 +74,67 @@ export function createConnectBackofficeRouter(): Router {
     });
   });
 
+  // ── Estadísticas (Sprint 6) ───────────────────────────────
+
+  router.get("/stats/providers", ...requireConnectRole("analyst"), async (req, res) => {
+    const days = Math.min(Number(req.query.days) || 90, 365);
+    const since = Date.now() - days * 24 * 3600_000;
+    const r = await db.query(
+      `SELECT w.id AS "workshopId", w.name AS "workshopName", w."currentScore",
+              pc.id AS "providerCompanyId", pc.name AS "providerName",
+              (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1) AS offered,
+              (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'accepted') AS accepted,
+              (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'rejected') AS rejected,
+              (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'expired') AS expired,
+              (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca."createdAtMs" >= $1 AND ca.status = 'finished') AS finished,
+              (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')) AS active,
+              (SELECT COUNT(*)::int FROM connect_incidents i WHERE i."workshopId" = w.id AND i."createdAtMs" >= $1) AS incidents,
+              (SELECT AVG((a."respondedAtMs" - a."sentAtMs") / 60000.0)
+                 FROM connect_assignments a
+                WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'accepted' AND a.mode = 'offer') AS "avgAcceptMin",
+              (SELECT AVG((arr."occurredAtMs" - asg."occurredAtMs") / 60000.0)
+                 FROM connect_assistances ca
+                 JOIN connect_status_history asg ON asg."assistanceId" = ca.id AND asg."toStatus" = 'assigned'
+                 JOIN connect_status_history arr ON arr."assistanceId" = ca.id AND arr."toStatus" = 'arrived'
+                WHERE ca."workshopId" = w.id AND ca."createdAtMs" >= $1) AS "avgArrivalMin",
+              sc.components AS "scoreComponents", sc.confidence, sc.tier, sc."sampleSize"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN LATERAL (
+           SELECT components, confidence, tier, "sampleSize"
+             FROM connect_workshop_scores WHERE "workshopId" = w.id ORDER BY id DESC LIMIT 1
+         ) sc ON true
+        ORDER BY w."currentScore" DESC`,
+      [since],
+    );
+    res.json({ data: r.rows, window_days: days });
+  });
+
+  router.get("/stats/evolution", ...requireConnectRole("analyst"), async (req, res) => {
+    const days = Math.min(Number(req.query.days) || 14, 90);
+    const since = Date.now() - days * 24 * 3600_000;
+    const [daily, byService] = await Promise.all([
+      db.query(
+        `SELECT to_char(to_timestamp("createdAtMs" / 1000), 'YYYY-MM-DD') AS day,
+                COUNT(*)::int AS created,
+                COUNT(*) FILTER (WHERE status = 'finished')::int AS finished,
+                COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled
+           FROM connect_assistances
+          WHERE "createdAtMs" >= $1 AND status <> 'draft'
+          GROUP BY day ORDER BY day`,
+        [since],
+      ),
+      db.query(
+        `SELECT "serviceType", COUNT(*)::int AS n
+           FROM connect_assistances
+          WHERE "createdAtMs" >= $1 AND status <> 'draft'
+          GROUP BY "serviceType" ORDER BY n DESC`,
+        [since],
+      ),
+    ]);
+    res.json({ daily: daily.rows, by_service: byService.rows, window_days: days });
+  });
+
   // ── Centro de control operativo (Sprint 4) ────────────────
 
   router.get("/control-center", ...requireConnectRole("operator"), async (_req, res) => {

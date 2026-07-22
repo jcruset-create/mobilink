@@ -433,6 +433,15 @@ export async function rejectAssignment(
     ],
   );
   await db.query(`UPDATE connect_assistances SET "workshopId" = NULL, "updatedAtMs" = $1 WHERE id = $2`, [now, asg.assistanceId]);
+  const aInfo = await db.query(`SELECT uuid, "partnerId", "externalReference" FROM connect_assistances WHERE id = $1`, [asg.assistanceId]);
+  if (aInfo.rows[0]?.partnerId) {
+    await enqueueWebhookEvent(aInfo.rows[0].partnerId, "assistance.rejected", {
+      assistance_id: aInfo.rows[0].uuid,
+      external_reference: aInfo.rows[0].externalReference,
+      reason_code: opts.reasonCode,
+      comment: opts.comment ?? null,
+    });
+  }
   await transition(asg.assistanceId, "searching", "user", `Rechazada por ${opts.actorName}: ${opts.reasonCode}${opts.comment ? ` — ${opts.comment}` : ""}`);
   await cascadeNext(asg.assistanceId);
 }
@@ -486,6 +495,13 @@ export async function withdrawAndReassign(assistanceId: number, reason: string, 
     `UPDATE connect_assistances SET "workshopId" = NULL, "coreAssistanceId" = NULL, "updatedAtMs" = $1 WHERE id = $2`,
     [now, assistanceId],
   );
+  if (a.partnerId) {
+    await enqueueWebhookEvent(a.partnerId, "assistance.reassigned", {
+      assistance_id: a.uuid,
+      external_reference: a.externalReference,
+      reason,
+    });
+  }
   await transition(assistanceId, "searching", "user", `Reasignación solicitada por ${actorName}: ${reason}`);
   await cascadeNext(assistanceId);
 }

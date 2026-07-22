@@ -34,7 +34,7 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "sla", path: "sla", label: "SLA y alertas", icon: BellRing, minRole: "supervisor", phase: "F2" },
   { key: "clientes", path: "clientes", label: "Clientes", icon: Contact, minRole: "cc_admin", phase: "F2" },
   { key: "integraciones", path: "integraciones", label: "Partners e integraciones", icon: Plug, minRole: "cc_admin" },
-  { key: "estadisticas", path: "estadisticas", label: "Estadísticas", icon: BarChart3, minRole: "analyst", phase: "F2" },
+  { key: "estadisticas", path: "estadisticas", label: "Estadísticas", icon: BarChart3, minRole: "analyst" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, minRole: "analyst", phase: "F2" },
   { key: "facturacion", path: "facturacion", label: "Facturación", icon: Receipt, minRole: "cc_admin", phase: "F2" },
   { key: "usuarios", path: "usuarios", label: "Usuarios", icon: UserCog, minRole: "cc_admin" },

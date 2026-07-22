@@ -346,6 +346,20 @@ export async function initConnect(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_connect_communications_assistance
       ON connect_communications ("assistanceId", id DESC);
 
+    -- Sprint 6: histórico del score del taller/proveedor
+    CREATE TABLE IF NOT EXISTS connect_workshop_scores (
+      id SERIAL PRIMARY KEY,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id) ON DELETE CASCADE,
+      "computedAtMs" BIGINT NOT NULL,
+      score DOUBLE PRECISION NOT NULL,
+      tier TEXT NOT NULL,
+      components TEXT NOT NULL,          -- desglose JSON de cada factor
+      confidence DOUBLE PRECISION NOT NULL, -- 0..1 según muestra
+      "sampleSize" INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_workshop_scores_ws
+      ON connect_workshop_scores ("workshopId", id DESC);
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,
@@ -401,6 +415,10 @@ export async function initConnect(): Promise<void> {
     -- Sprint 3: la autorización decide si las asistencias requieren aceptación explícita
     ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "requiresAcceptance" BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "acceptTimeoutMin" INTEGER NOT NULL DEFAULT 10;
+
+    -- Sprint 6: avisos de SLA (webhooks sla_risk / sla_breached una sola vez)
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaRiskNotifiedAtMs" BIGINT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaBreachNotifiedAtMs" BIGINT;
   `);
 
   await seedConnectDefaults();
