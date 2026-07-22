@@ -14,6 +14,7 @@
  */
 
 import db from "../db.ts";
+import { createAlert } from "./alerts.ts";
 
 const WINDOW_MS = 90 * 24 * 3600_000;
 const BAYES_K = 30;
@@ -163,9 +164,20 @@ export async function notifySlaEvents(
     };
     if (breached && !a.slaBreachNotifiedAtMs) {
       if (a.partnerId) await enqueue(a.partnerId, "assistance.sla_breached", data);
+      await createAlert({
+        type: "sla_breached", severity: "critical",
+        title: `SLA incumplido en la asistencia #${a.id}`,
+        body: a.externalReference ? `Ref. externa ${a.externalReference}` : undefined,
+        assistanceId: a.id,
+      });
       await db.query(`UPDATE connect_assistances SET "slaBreachNotifiedAtMs" = $1 WHERE id = $2`, [now, a.id]);
     } else if (!breached && !a.slaRiskNotifiedAtMs) {
       if (a.partnerId) await enqueue(a.partnerId, "assistance.sla_risk", data);
+      await createAlert({
+        type: "sla_risk", severity: "warning",
+        title: `SLA en riesgo (<15 min) en la asistencia #${a.id}`,
+        assistanceId: a.id,
+      });
       await db.query(`UPDATE connect_assistances SET "slaRiskNotifiedAtMs" = $1 WHERE id = $2`, [now, a.id]);
     }
   }

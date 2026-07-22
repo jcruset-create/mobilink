@@ -10,6 +10,7 @@ import { supabase } from "../../administracion/services/supabase";
 import { CONNECT_NAV } from "../config/navigation";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { ROLE_LABELS } from "../types";
+import AlertBell from "../components/AlertBell";
 import logoMobilink from "../../../assets/logo-mobilink.png";
 
 export default function ConnectLayout() {
@@ -45,6 +46,7 @@ export default function ConnectLayout() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {user && user.role !== "provider_user" && <AlertBell />}
           <button onClick={() => navigate("/inicio")} className="rounded-lg p-1.5 text-slate-300 hover:bg-slate-800" title="Volver al hub">
             <Home className="h-4 w-4" />
           </button>

@@ -15,6 +15,8 @@ import {
   findCandidates, offerToWorkshop, acceptAssignment, rejectAssignment, withdrawAndReassign,
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
+import { connectBus } from "./bus.ts";
+import { createAlert } from "./alerts.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
@@ -72,6 +74,65 @@ export function createConnectBackofficeRouter(): Router {
       },
       by_status: statusMap,
     });
+  });
+
+  // ── Tiempo real y alertas (Fase 2) ────────────────────────
+
+  // SSE: EventSource no admite cabeceras → el token viaja en ?access_token
+  router.get(
+    "/events",
+    (req, _res, next) => {
+      if (req.query.access_token && !req.headers.authorization) {
+        req.headers.authorization = `Bearer ${String(req.query.access_token)}`;
+      }
+      next();
+    },
+    ...requireConnectRole("analyst"),
+    (req, res) => {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.write(`event: hello\ndata: {}\n\n`);
+      const onPush = (push: unknown) => res.write(`event: push\ndata: ${JSON.stringify(push)}\n\n`);
+      connectBus.on("push", onPush);
+      const heartbeat = setInterval(() => res.write(`: ping\n\n`), 25_000);
+      req.on("close", () => {
+        clearInterval(heartbeat);
+        connectBus.off("push", onPush);
+      });
+    },
+  );
+
+  router.get("/alerts", ...requireConnectRole("analyst"), async (req, res) => {
+    const onlyUnread = req.query.unread === "true";
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const [rows, unread] = await Promise.all([
+      db.query(
+        `SELECT * FROM connect_alerts WHERE $1::bool = false OR status = 'unread' ORDER BY id DESC LIMIT $2`,
+        [onlyUnread, limit],
+      ),
+      db.query(`SELECT COUNT(*)::int AS n FROM connect_alerts WHERE status = 'unread'`),
+    ]);
+    res.json({ data: rows.rows, unread: unread.rows[0].n });
+  });
+
+  router.post("/alerts/:id/read", ...requireConnectRole("operator"), async (req, res) => {
+    await db.query(
+      `UPDATE connect_alerts SET status = 'read', "readAtMs" = $1, "readByUserId" = $2 WHERE id = $3 AND status = 'unread'`,
+      [Date.now(), req.connectUser!.id, Number(req.params.id)],
+    );
+    res.json({ ok: true });
+  });
+
+  router.post("/alerts/read-all", ...requireConnectRole("operator"), async (req, res) => {
+    await db.query(
+      `UPDATE connect_alerts SET status = 'read', "readAtMs" = $1, "readByUserId" = $2 WHERE status = 'unread'`,
+      [Date.now(), req.connectUser!.id],
+    );
+    res.json({ ok: true });
   });
 
   // ── Estadísticas (Sprint 6) ───────────────────────────────
@@ -800,6 +861,14 @@ export function createConnectBackofficeRouter(): Router {
       [r.rows[0].id, u.id, u.name, now],
     );
     await auditConnect({ req, action: "incident.created", resourceType: "incident", resourceId: r.rows[0].id, detail: { type: b.type } });
+    if (r.rows[0].severity === "critical") {
+      await createAlert({
+        type: "incident_critical", severity: "critical",
+        title: `Incidencia crítica #${r.rows[0].id}: ${b.type}`,
+        body: b.description?.slice(0, 200),
+        assistanceId: b.assistanceId ?? null, workshopId, incidentId: r.rows[0].id,
+      });
+    }
     res.status(201).json(r.rows[0]);
   });
 

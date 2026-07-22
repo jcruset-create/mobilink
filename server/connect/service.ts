@@ -11,6 +11,8 @@
 import crypto from "node:crypto";
 import db from "../db.ts";
 import { enqueueWebhookEvent } from "./webhooks.ts";
+import { publish } from "./bus.ts";
+import { createAlert } from "./alerts.ts";
 
 // ---------------------------------------------------------------------------
 // Máquina de estados
@@ -82,13 +84,25 @@ export async function transition(
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [assistanceId, from, toStatus, actorType, reason ?? null, now],
   );
-  await enqueueWebhookEvent(row.partnerId, `assistance.${toStatus}`, {
-    assistance_id: row.uuid,
-    from_status: from,
-    to_status: toStatus,
-    reason: reason ?? null,
-    occurred_at: new Date(now).toISOString(),
-  });
+  if (row.partnerId) {
+    await enqueueWebhookEvent(row.partnerId, `assistance.${toStatus}`, {
+      assistance_id: row.uuid,
+      from_status: from,
+      to_status: toStatus,
+      reason: reason ?? null,
+      occurred_at: new Date(now).toISOString(),
+    });
+  }
+  publish({ kind: "status", assistanceId, status: toStatus });
+  if (toStatus === "assignment_failed" || toStatus === "no_coverage") {
+    await createAlert({
+      type: toStatus,
+      severity: "critical",
+      title: toStatus === "no_coverage" ? `Asistencia #${assistanceId} sin cobertura` : `Asistencia #${assistanceId} sin proveedor`,
+      body: reason ?? undefined,
+      assistanceId,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +532,11 @@ export async function expireOfferedAssignments(): Promise<number> {
     try {
       await db.query(`UPDATE connect_assignments SET status = 'expired', "respondedAtMs" = $1 WHERE id = $2`, [now, asg.id]);
       await db.query(`UPDATE connect_assistances SET "workshopId" = NULL, "updatedAtMs" = $1 WHERE id = $2`, [now, asg.assistanceId]);
+      await createAlert({
+        type: "offer_expired", severity: "warning",
+        title: `Oferta expirada sin respuesta (asistencia #${asg.assistanceId})`,
+        assistanceId: asg.assistanceId, workshopId: asg.workshopId,
+      });
       await transition(asg.assistanceId, "searching", "system", "Oferta expirada sin respuesta del proveedor");
       await cascadeNext(asg.assistanceId);
     } catch (err: any) {

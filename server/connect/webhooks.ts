@@ -7,6 +7,7 @@
 
 import crypto from "node:crypto";
 import db from "../db.ts";
+import { createAlert } from "./alerts.ts";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000, 21_600_000, 86_400_000];
 
@@ -92,6 +93,11 @@ async function scheduleRetry(id: number, attempt: number, error: string, code: n
       `UPDATE connect_webhook_deliveries SET status = 'dead', attempt = $1, "lastError" = $2, "responseCode" = $3 WHERE id = $4`,
       [attempt, error, code, id],
     );
+    await createAlert({
+      type: "webhook_dead", severity: "warning",
+      title: `Webhook agotó los reintentos (entrega #${id})`,
+      body: error,
+    });
   } else {
     await db.query(
       `UPDATE connect_webhook_deliveries

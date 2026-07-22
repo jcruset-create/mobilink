@@ -360,6 +360,26 @@ export async function initConnect(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_connect_workshop_scores_ws
       ON connect_workshop_scores ("workshopId", id DESC);
 
+    -- Fase 2: alertas internas del centro de control
+    CREATE TABLE IF NOT EXISTS connect_alerts (
+      id SERIAL PRIMARY KEY,
+      type TEXT NOT NULL,
+      -- assignment_failed | no_coverage | offer_expired | sla_risk | sla_breached
+      -- | incident_critical | webhook_dead | provider_rejections | other
+      severity TEXT NOT NULL DEFAULT 'warning', -- info | warning | critical
+      title TEXT NOT NULL,
+      body TEXT,
+      "assistanceId" INTEGER,
+      "workshopId" INTEGER,
+      "incidentId" INTEGER,
+      status TEXT NOT NULL DEFAULT 'unread', -- unread | read
+      "createdAtMs" BIGINT NOT NULL,
+      "readAtMs" BIGINT,
+      "readByUserId" INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_alerts_status
+      ON connect_alerts (status, id DESC);
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,

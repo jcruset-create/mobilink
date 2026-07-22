@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { boFetch } from "../services/api";
+import { useConnectEvents } from "../services/events";
 import { PageTitle, Badge, Button, ErrorBanner } from "../components/ui";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
@@ -95,9 +96,12 @@ export default function CentroControl() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 10000);
+    const t = setInterval(load, 30000); // respaldo; el SSE refresca al instante
     return () => clearInterval(t);
   }, [load]);
+
+  // Tiempo real: cualquier cambio de estado o alerta refresca el tablero
+  useConnectEvents(() => load());
 
   const act = async (path: string, body?: unknown) => {
     if (!selected) return;
