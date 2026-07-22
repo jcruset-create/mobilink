@@ -28,6 +28,8 @@
     "@capacitor/core": "^8.4.0",
     "@capacitor/ios": "^8.4.0",
     "@supabase/supabase-js": "^2.105.1",
+    "@turf/circle": "^7.3.5",
+    "@turf/intersect": "^7.3.5",
     "@types/leaflet": "^1.9.21",
     "@types/pdfkit": "^0.17.6",
     "better-sqlite3": "^12.8.0",
