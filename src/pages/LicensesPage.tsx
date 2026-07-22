@@ -163,7 +163,7 @@ export default function LicensesPage() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="flex items-center justify-between bg-[#101a33] px-6 py-4">
-        <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
+        <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-16" />
         <div className="text-right">
           <div className="text-xs text-slate-300">Administración</div>
           <div className="text-lg font-black text-white">Licencias</div>

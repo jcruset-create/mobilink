@@ -958,8 +958,8 @@ export default function RoadsideAssistanceView({
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 backdrop-blur">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
-              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+            <div className="flex items-center justify-center px-1">
+              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
             </div>
             <div>
               <h1 className="text-base font-bold">{tabTitle}</h1>
@@ -1924,8 +1924,8 @@ export default function RoadsideAssistanceView({
           <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-slate-700 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
-                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                <div className="flex items-center justify-center px-1">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
                 </div>
                 <div>
                   <h2 className="text-lg font-bold">
@@ -2393,8 +2393,8 @@ export default function RoadsideAssistanceView({
           <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
-                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                <div className="flex items-center justify-center px-1">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
                 </div>
                 <div>
                   <div className="text-sm font-bold uppercase text-slate-500">
@@ -2487,8 +2487,8 @@ export default function RoadsideAssistanceView({
           <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
-                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                <div className="flex items-center justify-center px-1">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
                 </div>
                 <div>
                   <div className="text-sm font-bold uppercase text-slate-500">
@@ -2571,8 +2571,8 @@ export default function RoadsideAssistanceView({
           <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
-                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                <div className="flex items-center justify-center px-1">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
                 </div>
                 <div>
                   <div className="text-sm font-bold uppercase text-slate-500">
@@ -2671,8 +2671,8 @@ export default function RoadsideAssistanceView({
           <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 items-center justify-center rounded-lg bg-[#101a33] px-2">
-                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-7" />
+                <div className="flex items-center justify-center px-1">
+                  <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
                 </div>
                 <h2 className="text-lg font-bold text-slate-100">📍 Lugares conocidos</h2>
               </div>
