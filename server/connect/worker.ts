@@ -9,6 +9,7 @@
 import { syncFromCore, expireOfferedAssignments } from "./service.ts";
 import { deliverPendingWebhooks, enqueueWebhookEvent } from "./webhooks.ts";
 import { computeWorkshopScores, notifySlaEvents } from "./score.ts";
+import { syncMobileUnits } from "./mobileunits.ts";
 
 const TICK_MS = 15_000;
 const SCORE_EVERY_TICKS = 20; // recalcular el score cada ~5 min
@@ -25,6 +26,7 @@ export async function runConnectChecksOnce(): Promise<void> {
     const expired = await expireOfferedAssignments();
     if (expired > 0) console.log(`[Connect] worker: ${expired} oferta(s) expiradas → cascada`);
     await notifySlaEvents(enqueueWebhookEvent);
+    if (tick % 2 === 0) await syncMobileUnits(); // cada ~30 s
     if (tick++ % SCORE_EVERY_TICKS === 0) {
       const scored = await computeWorkshopScores();
       if (scored > 0) console.log(`[Connect] worker: score recalculado para ${scored} taller(es)`);

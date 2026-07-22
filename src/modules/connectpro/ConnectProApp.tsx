@@ -24,6 +24,7 @@ import Estadisticas from "./pages/Estadisticas";
 import Alertas from "./pages/Alertas";
 import Clientes from "./pages/Clientes";
 import Facturacion from "./pages/Facturacion";
+import UnidadesMoviles from "./pages/UnidadesMoviles";
 
 /**
  * Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el
@@ -54,6 +55,7 @@ export default function ConnectProApp() {
             <Route path="sla" element={<Alertas />} />
             <Route path="clientes" element={<Clientes />} />
             <Route path="facturacion" element={<Facturacion />} />
+            <Route path="unidades" element={<UnidadesMoviles />} />
             <Route path="empresas" element={<Empresas />} />
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />

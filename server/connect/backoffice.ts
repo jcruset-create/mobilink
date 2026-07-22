@@ -16,6 +16,7 @@ import {
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 import { connectBus } from "./bus.ts";
+import { setManualStatus } from "./mobileunits.ts";
 import { createAlert } from "./alerts.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
@@ -891,6 +892,43 @@ export function createConnectBackofficeRouter(): Router {
     if (!r.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
     await auditConnect({ req, action: "assistance.cost_set", resourceType: "assistance", resourceId: Number(req.params.id), detail: { finalCost } });
     res.json(r.rows[0]);
+  });
+
+  // ── Unidades móviles (Fase 3) ─────────────────────────────
+
+  router.get("/mobile-units", ...requireConnectRole("operator"), async (_req, res) => {
+    const r = await db.query(
+      `SELECT mu.*, pc.name AS "providerName", ca."expedientNumber"
+         FROM connect_mobile_units mu
+         LEFT JOIN connect_provider_companies pc ON pc.id = mu."providerCompanyId"
+         LEFT JOIN connect_assistances ca ON ca.id = mu."activeAssistanceId"
+        ORDER BY mu.name`,
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.get("/mobile-units/:id/events", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT * FROM connect_mobile_unit_events WHERE "unitId" = $1 ORDER BY id DESC LIMIT 100`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.patch("/mobile-units/:id/status", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const { status, reason } = req.body ?? {};
+    if (status && !reason?.trim()) {
+      return err(res, 422, "validation_failed", "El motivo es obligatorio al fijar un estado manual");
+    }
+    try {
+      await setManualStatus(Number(req.params.id), status ?? null, reason ?? null, u.name);
+      await auditConnect({ req, action: "mobile_unit.status_set", resourceType: "mobile_unit", resourceId: Number(req.params.id), detail: { status, reason } });
+      const r = await db.query(`SELECT * FROM connect_mobile_units WHERE id = $1`, [Number(req.params.id)]);
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      return err(res, 422, "validation_failed", e?.message);
+    }
   });
 
   // ── Facturación (Fase 2 S3) ───────────────────────────────

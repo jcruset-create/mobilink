@@ -478,6 +478,17 @@ export async function initConnect(): Promise<void> {
 
     -- Fase 2 S3: marca de facturación (cierre contable de la línea)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "invoicedAtMs" BIGINT;
+
+    -- Fase 3: unidades móviles — vínculo con el core y estado manual del operador
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "coreVehicleId" INTEGER;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "webfleetVehicleId" TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "manualStatus" TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "manualReason" TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "manualByName" TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "speedKmh" DOUBLE PRECISION;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "positionText" TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_mobile_units_core
+      ON connect_mobile_units ("coreVehicleId") WHERE "coreVehicleId" IS NOT NULL;
   `);
 
   await seedConnectDefaults();
