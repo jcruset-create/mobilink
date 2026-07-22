@@ -25,10 +25,14 @@ import Alertas from "./pages/Alertas";
 import Clientes from "./pages/Clientes";
 import Facturacion from "./pages/Facturacion";
 
-/** Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el Dashboard. */
+/**
+ * Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el
+ * Dashboard. Rutas SIEMPRE absolutas: una redirección relativa desde una URL
+ * no reconocida encadenaría /dashboard/dashboard/... en bucle infinito.
+ */
 function Home() {
   const { user } = useConnectAuth();
-  return <Navigate to={user?.role === "provider_user" ? "ofertas" : "dashboard"} replace />;
+  return <Navigate to={user?.role === "provider_user" ? "/connect/ofertas" : "/connect/dashboard"} replace />;
 }
 
 export default function ConnectProApp() {
