@@ -19,7 +19,7 @@ import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
-import { authenticate, buildMePayload, getAuthMode, protectWhenStrict, registrarAuditoria, requireModule } from "./core/auth.ts";
+import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -6705,6 +6705,32 @@ async function findDbUserByPassword(password: string | undefined): Promise<DbApp
 }
 
 async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole | null> {
+  // 1) Sesión unificada (Supabase) con licencia vigente del módulo taller.
+  //    Es la vía preferente; las vías legacy quedan bloqueadas en strict.
+  const auth = String(req.headers.authorization || "");
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (bearer) {
+    try {
+      const ctx = await resolveAuthContext(bearer);
+      if (ctx) {
+        if (!ctx.esSuperadmin && !(await licenciaActiva(ctx.empresaId, "taller"))) {
+          return null; // empresa sin licencia del panel de taller
+        }
+        if (ctx.esSuperadmin) return "admin";
+        // Usuario del panel con el mismo nombre (mismo criterio que login-sso)
+        const users = await listDbAppUsers();
+        const objetivo = [ctx.username.toLowerCase(), ctx.nombre.toLowerCase()];
+        const panelUser = users.find((p) => objetivo.includes(p.name.toLowerCase()));
+        if (panelUser) return panelUser.role;
+      }
+    } catch (e) {
+      console.error("getRoleFromRequestAsync (bearer) error:", e);
+    }
+  }
+
+  // 2) Vías legacy (rol por cabecera / x-admin-token): solo fuera de strict.
+  if (getAuthMode() === "strict") return null;
+
   const sync = getRoleFromRequest(req);
   if (sync) return sync;
   const rawToken = String(req.headers["x-admin-token"] ?? req.query?.token ?? "");
