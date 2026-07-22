@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
-import type { ServiceType } from "../types";
+import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 
 type Form = {
@@ -53,13 +53,19 @@ export default function NuevaAsistencia() {
   const navigate = useNavigate();
   const [f, setF] = useState<Form>(EMPTY);
   const [types, setTypes] = useState<ServiceType[]>([]);
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    boFetch<{ service_types: ServiceType[] }>("/catalogs").then((r) => setTypes(r.service_types.filter((t) => t.active))).catch(() => {});
+    boFetch<{ service_types: ServiceType[]; vehicle_types?: VehicleType[] }>("/catalogs")
+      .then((r) => {
+        setTypes(r.service_types.filter((t) => t.active));
+        setVehicleTypes((r.vehicle_types ?? []).filter((t) => t.active));
+      })
+      .catch(() => {});
     boFetch<{ data: Client[] }>("/clients").then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
   }, []);
 
@@ -174,9 +180,8 @@ export default function NuevaAsistencia() {
         <Section title="Vehículo o activo">
           <Field label="Tipo">
             <Select value={f.vehicleType} onChange={set("vehicleType")}>
-              <option value="car">Turismo</option><option value="van">Furgoneta</option><option value="truck">Camión</option>
-              <option value="bus">Autobús</option><option value="motorcycle">Motocicleta</option><option value="agricultural">Agrícola</option>
-              <option value="machinery">Maquinaria</option><option value="other">Otro</option>
+              {vehicleTypes.length === 0 && <option value="car">Turismo</option>}
+              {vehicleTypes.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
             </Select>
           </Field>
           <Field label="Marca"><Input value={f.make} onChange={set("make")} className="w-32" /></Field>

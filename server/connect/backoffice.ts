@@ -1156,11 +1156,53 @@ export function createConnectBackofficeRouter(): Router {
   // ── Catálogos ─────────────────────────────────────────────
 
   router.get("/catalogs", ...requireConnectUser(), async (_req, res) => {
-    const [types, reasons] = await Promise.all([
+    const [types, reasons, vehicles] = await Promise.all([
       db.query(`SELECT * FROM connect_service_types ORDER BY "sortOrder"`),
       db.query(`SELECT * FROM connect_rejection_reasons ORDER BY "sortOrder"`),
+      db.query(`SELECT * FROM connect_vehicle_types ORDER BY "sortOrder"`),
     ]);
-    res.json({ service_types: types.rows, rejection_reasons: reasons.rows });
+    res.json({ service_types: types.rows, rejection_reasons: reasons.rows, vehicle_types: vehicles.rows });
+  });
+
+  // Tipos de vehículo (crear / renombrar / activar / eliminar)
+  router.post("/catalogs/vehicle-types", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { code, name } = req.body ?? {};
+    if (!code?.trim() || !name?.trim()) return err(res, 422, "validation_failed", "code y name son obligatorios");
+    const r = await db.query(
+      `INSERT INTO connect_vehicle_types (code, name, "sortOrder")
+       VALUES ($1, $2, (SELECT COALESCE(MAX("sortOrder"),0)+1 FROM connect_vehicle_types))
+       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, active = true RETURNING *`,
+      [code.trim().toLowerCase().replace(/\s+/g, "_"), name.trim()],
+    );
+    await auditConnect({ req, action: "catalog.vehicle_type_upserted", detail: { code, name } });
+    res.status(201).json(r.rows[0]);
+  });
+
+  router.patch("/catalogs/vehicle-types/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `UPDATE connect_vehicle_types SET name = COALESCE($1, name), active = COALESCE($2, active) WHERE id = $3 RETURNING *`,
+      [req.body?.name ?? null, req.body?.active ?? null, Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Tipo no encontrado");
+    await auditConnect({ req, action: "catalog.vehicle_type_updated", detail: req.body });
+    res.json(r.rows[0]);
+  });
+
+  router.delete("/catalogs/vehicle-types/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const t = await db.query(`SELECT code FROM connect_vehicle_types WHERE id = $1`, [id]);
+    if (!t.rows[0]) return err(res, 404, "not_found", "Tipo no encontrado");
+    const used = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_assistances WHERE vehicle::json->>'type' = $1`,
+      [t.rows[0].code],
+    );
+    if (used.rows[0].n > 0) {
+      return err(res, 409, "in_use",
+        `No se puede eliminar: usado en ${used.rows[0].n} asistencia(s). Desactívalo para que no se ofrezca más.`);
+    }
+    await db.query(`DELETE FROM connect_vehicle_types WHERE id = $1`, [id]);
+    await auditConnect({ req, action: "catalog.vehicle_type_deleted", detail: { id, code: t.rows[0].code } });
+    res.status(204).end();
   });
 
   // Edición de catálogos (cc_admin)
@@ -1187,6 +1229,25 @@ export function createConnectBackofficeRouter(): Router {
     res.json(r.rows[0]);
   });
 
+  router.delete("/catalogs/service-types/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const t = await db.query(`SELECT code FROM connect_service_types WHERE id = $1`, [id]);
+    if (!t.rows[0]) return err(res, 404, "not_found", "Tipo no encontrado");
+    const used = await db.query(
+      `SELECT (SELECT COUNT(*)::int FROM connect_assistances WHERE "serviceType" = $1) AS assistances,
+              (SELECT COUNT(*)::int FROM connect_tariff_lines WHERE "serviceTypeCode" = $1) AS tariffs`,
+      [t.rows[0].code],
+    );
+    const u = used.rows[0];
+    if (u.assistances > 0 || u.tariffs > 0) {
+      return err(res, 409, "in_use",
+        `No se puede eliminar: usado en ${u.assistances} asistencia(s) y ${u.tariffs} tarifa(s). Desactívalo para que no se ofrezca más.`);
+    }
+    await db.query(`DELETE FROM connect_service_types WHERE id = $1`, [id]);
+    await auditConnect({ req, action: "catalog.service_type_deleted", detail: { id, code: t.rows[0].code } });
+    res.status(204).end();
+  });
+
   router.post("/catalogs/rejection-reasons", ...requireConnectRole("cc_admin"), async (req, res) => {
     const { code, label, affectsScoreDefault } = req.body ?? {};
     if (!code?.trim() || !label?.trim()) return err(res, 422, "validation_failed", "code y label son obligatorios");
@@ -1211,6 +1272,23 @@ export function createConnectBackofficeRouter(): Router {
     if (!r.rows[0]) return err(res, 404, "not_found", "Motivo no encontrado");
     await auditConnect({ req, action: "catalog.rejection_reason_updated", detail: req.body });
     res.json(r.rows[0]);
+  });
+
+  router.delete("/catalogs/rejection-reasons/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const t = await db.query(`SELECT code FROM connect_rejection_reasons WHERE id = $1`, [id]);
+    if (!t.rows[0]) return err(res, 404, "not_found", "Motivo no encontrado");
+    const used = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_rejections WHERE "reasonCode" = $1`,
+      [t.rows[0].code],
+    );
+    if (used.rows[0].n > 0) {
+      return err(res, 409, "in_use",
+        `No se puede eliminar: usado en ${used.rows[0].n} rechazo(s) históricos. Desactívalo para que no se ofrezca más.`);
+    }
+    await db.query(`DELETE FROM connect_rejection_reasons WHERE id = $1`, [id]);
+    await auditConnect({ req, action: "catalog.rejection_reason_deleted", detail: { id, code: t.rows[0].code } });
+    res.status(204).end();
   });
 
   // ── Auditoría ─────────────────────────────────────────────

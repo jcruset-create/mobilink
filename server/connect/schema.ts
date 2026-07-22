@@ -228,6 +228,15 @@ export async function initConnect(): Promise<void> {
       "sortOrder" INTEGER NOT NULL DEFAULT 0
     );
 
+    -- Catálogo configurable de tipos de vehículo/activo
+    CREATE TABLE IF NOT EXISTS connect_vehicle_types (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "sortOrder" INTEGER NOT NULL DEFAULT 0
+    );
+
     -- Motivos de rechazo configurables
     CREATE TABLE IF NOT EXISTS connect_rejection_reasons (
       id SERIAL PRIMARY KEY,
@@ -554,6 +563,19 @@ async function seedConnectDefaults(): Promise<void> {
       `INSERT INTO connect_service_types (code, name, "sortOrder")
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
       [serviceTypes[i][0], serviceTypes[i][1], i],
+    );
+  }
+
+  const vehicleTypes: Array<[string, string]> = [
+    ["car", "Turismo"], ["van", "Furgoneta"], ["truck", "Camión"], ["bus", "Autobús"],
+    ["motorcycle", "Motocicleta"], ["agricultural", "Agrícola"], ["machinery", "Maquinaria"],
+    ["trailer", "Remolque"], ["other", "Otro"],
+  ];
+  for (let i = 0; i < vehicleTypes.length; i++) {
+    await db.query(
+      `INSERT INTO connect_vehicle_types (code, name, "sortOrder")
+       VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
+      [vehicleTypes[i][0], vehicleTypes[i][1], i],
     );
   }
 

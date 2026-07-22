@@ -61,6 +61,7 @@ export type Authorization = {
 };
 
 export type ServiceType = { id: number; code: string; name: string; active: boolean };
+export type VehicleType = { id: number; code: string; name: string; active: boolean };
 export type RejectionReason = { id: number; code: string; label: string; active: boolean; affectsScoreDefault: boolean };
 
 export const ASSISTANCE_STATUS_LABELS: Record<string, string> = {
