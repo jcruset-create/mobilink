@@ -65,18 +65,15 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
   }
 
   Future<void> _pickPhoto(String label, void Function(File) onPicked, {bool plate = false}) async {
-    final source = await _showSourceDialog(label);
-    if (source == null) return;
-    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
+    // Abre directamente la cámara (sin preguntar cámara/galería)
+    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile, plate: plate);
     setState(() => onPicked(file));
   }
 
   Future<void> _pickExtraPhoto() async {
-    final source = await _showSourceDialog('Foto adicional');
-    if (source == null) return;
-    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
+    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile);
     setState(() => _extraPhotos.add(file));

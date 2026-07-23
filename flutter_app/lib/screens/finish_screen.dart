@@ -69,18 +69,15 @@ class _FinishScreenState extends State<FinishScreen> {
   }
 
   Future<void> _pickPhoto() async {
-    final source = await _showSourceDialog('Foto de la reparación');
-    if (source == null) return;
-    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
+    // Abre directamente la cámara (sin preguntar cámara/galería)
+    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile);
     setState(() => _photoReparacion = file);
   }
 
   Future<void> _pickPhotoOr() async {
-    final source = await _showSourceDialog('Foto de la OR manual');
-    if (source == null) return;
-    final xfile = await _picker.pickImage(source: source, maxWidth: 1920);
+    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile, document: true);
     setState(() => _photoOr = file);
