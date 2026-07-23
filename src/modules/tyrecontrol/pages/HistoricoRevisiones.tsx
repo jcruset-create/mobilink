@@ -29,18 +29,19 @@ const RESUELTA = new Set(["solucionada", "cancelada", "no_procede"]);
 
 // Orden de las posiciones en la ficha: por eje y, dentro del eje, derecha
 // antes que izquierda (E1_DER, E1_IZQ, E2_DER, E2_IZQ, …).
-function ejeDe(d: RevisionDetalle): number {
-  if (d.posicion?.eje != null) return d.posicion.eje;
-  const m = /E(\d+)/i.exec(d.posicion?.codigo_posicion ?? "");
+type PosLike = { eje?: number | null; codigo_posicion?: string | null; lado?: string | null } | null | undefined;
+function ejeDe(p: PosLike): number {
+  if (p?.eje != null) return p.eje;
+  const m = /E(\d+)/i.exec(p?.codigo_posicion ?? "");
   return m ? Number(m[1]) : 99;
 }
-function ladoRank(d: RevisionDetalle): number {
-  const s = `${d.posicion?.lado ?? ""} ${d.posicion?.codigo_posicion ?? ""}`.toUpperCase();
+function ladoRank(p: PosLike): number {
+  const s = `${p?.lado ?? ""} ${p?.codigo_posicion ?? ""}`.toUpperCase();
   return /DER/.test(s) ? 0 : /IZQ/.test(s) ? 1 : 2; // derecha primero
 }
-function ordenFicha(a: RevisionDetalle, b: RevisionDetalle): number {
+function ordenPos(a: PosLike, b: PosLike): number {
   return ejeDe(a) - ejeDe(b) || ladoRank(a) - ladoRank(b)
-    || (a.posicion?.codigo_posicion ?? "").localeCompare(b.posicion?.codigo_posicion ?? "");
+    || (a?.codigo_posicion ?? "").localeCompare(b?.codigo_posicion ?? "");
 }
 
 type Fila = {
@@ -91,7 +92,8 @@ export default function HistoricoRevisiones() {
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [fichaIncidencias, setFichaIncidencias] = useState<any[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
-  const fichaDetalleOrden = useMemo(() => [...fichaDetalle].sort(ordenFicha), [fichaDetalle]);
+  const fichaDetalleOrden = useMemo(() => [...fichaDetalle].sort((a, b) => ordenPos(a.posicion, b.posicion)), [fichaDetalle]);
+  const fichaIncidenciasOrden = useMemo(() => [...fichaIncidencias].sort((a, b) => ordenPos(a.posicion, b.posicion)), [fichaIncidencias]);
   // Etiquetas configurables (tipos de problema y motivos pendientes)
   const [tipoLabels, setTipoLabels] = useState<Record<string, string>>({});
   const [motivoLabels, setMotivoLabels] = useState<Record<string, string>>({});
@@ -290,7 +292,7 @@ export default function HistoricoRevisiones() {
             <div className="mb-4">
               <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Incidencias ({fichaIncidencias.length})</div>
               <div className="space-y-1.5">
-                {fichaIncidencias.map((inc) => {
+                {fichaIncidenciasOrden.map((inc) => {
                   const grav = GRAV_INC[inc.gravedad] ?? { label: inc.gravedad, cls: "bg-slate-500/15 text-slate-300" };
                   const pos = inc.posicion?.nombre ?? inc.posicion?.codigo_posicion ?? "General del vehículo";
                   const problemas = (inc.problemas ?? []).map((p: any) => tipoLabels[p.tipo] ?? p.tipo).join(" · ");

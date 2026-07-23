@@ -238,7 +238,7 @@ export async function listarRevisionesHistorico(filtros: {
 // Incidencias de una revisión concreta (para la ficha del histórico).
 export async function listarIncidenciasDeRevision(revisionId: string): Promise<any[]> {
   const { data, error } = await supabase.from("tc_incidencias")
-    .select("id, gravedad, estado, foto_url, motivo_pendiente, posicion:tc_posiciones_vehiculo(nombre, codigo_posicion), problemas:tc_incidencia_problemas(tipo, estado)")
+    .select("id, gravedad, estado, foto_url, motivo_pendiente, posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje, lado), problemas:tc_incidencia_problemas(tipo, estado)")
     .eq("revision_id", revisionId)
     .order("detectada_at", { ascending: true });
   if (error) throw new Error(error.message);
