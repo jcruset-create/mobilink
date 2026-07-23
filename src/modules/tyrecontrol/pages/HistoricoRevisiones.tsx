@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarRevisionesHistorico, listarEmpresas, listarUsuarios } from "../services/data";
-import type { Empresa, Perfil } from "../types";
-import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
+import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision } from "../services/data";
+import type { Empresa, Perfil, RevisionDetalle } from "../types";
+import { presionTxt } from "../types";
+import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
 
 // ── Estado de la revisión → etiqueta y color ─────────────────
 const ESTADO_META: Record<string, { label: string; cls: string }> = {
@@ -52,6 +53,18 @@ export default function HistoricoRevisiones() {
   const [filas, setFilas] = useState<Fila[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Ficha de revisión completa (modal)
+  const [ficha, setFicha] = useState<Fila | null>(null);
+  const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
+  const [cargandoFicha, setCargandoFicha] = useState(false);
+
+  async function verFicha(f: Fila) {
+    setFicha(f); setCargandoFicha(true); setFichaDetalle([]);
+    try { setFichaDetalle(await listarDetalleRevision(f.id)); }
+    catch { setFichaDetalle([]); }
+    finally { setCargandoFicha(false); }
+  }
 
   // Filtros (por defecto: últimos 7 días)
   const [desde, setDesde] = useState(haceDiasISO(7));
@@ -152,12 +165,13 @@ export default function HistoricoRevisiones() {
           <th className={thCls}>Fecha</th><th className={thCls}>Hora</th><th className={thCls}>Matrícula</th>
           <th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Operario</th>
           <th className={thCls}>Km</th><th className={thCls}>Incidencias</th><th className={thCls}>Estado</th>
+          <th className={thCls}></th>
         </tr></thead>
         <tbody>
           {loading ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={9}>Cargando…</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Cargando…</td></tr>
           ) : filas.length === 0 ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={9}>Sin revisiones en este periodo.</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Sin revisiones en este periodo.</td></tr>
           ) : filas.map((f) => {
             const meta = ESTADO_META[f.estado] ?? { label: f.estado, cls: "bg-slate-500/15 text-slate-300" };
             return (
@@ -181,11 +195,47 @@ export default function HistoricoRevisiones() {
                 <td className={tdCls}>
                   <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${meta.cls}`}>{meta.label}</span>
                 </td>
+                <td className={tdCls}>
+                  <button onClick={() => verFicha(f)}
+                    className="rounded-lg border border-slate-600 px-3 py-1 text-[12px] font-bold text-slate-200 hover:bg-slate-700">
+                    Ver revisión
+                  </button>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </TableWrap>
+
+      {ficha && (
+        <Modal title={`Revisión ${ficha.matricula} · ${fechaCorta(ficha.fecha)}${ficha.hora ? ` · ${ficha.hora}` : ""}`} onClose={() => setFicha(null)} size="xl">
+          <div className="mb-2 text-[12px] text-slate-400">
+            {ficha.cliente} · Base {ficha.base} · Operario: {ficha.tecnico}
+            {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
+            {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
+          </div>
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th><th className={thCls}>Profundidad</th>
+              <th className={thCls}>Presión</th><th className={thCls}>Estado visual</th><th className={thCls}>Observaciones</th>
+            </tr></thead>
+            <tbody>
+              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Cargando…</td></tr>
+              : fichaDetalle.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos de posiciones para esta revisión.</td></tr>
+              : fichaDetalle.map((d) => (
+                <tr key={d.id} className="border-t border-slate-700/60">
+                  <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Modal>
+      )}
     </div>
   );
 }
