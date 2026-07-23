@@ -109,17 +109,8 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.warehouse, size: 72, color: Colors.white54),
-                const SizedBox(height: 16),
-                const Text(
-                  'Mobilink Almacén',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
+                Image.asset('assets/logo_horizontal.png', width: 300),
+                const SizedBox(height: 12),
                 const Text(
                   'Gestión de traspasos',
                   style: TextStyle(color: Colors.white54, fontSize: 14),

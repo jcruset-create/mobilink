@@ -1,7 +1,7 @@
 name: almacen_app
 description: "Mobilink Almacén - Gestión de traspasos de neumáticos"
 publish_to: 'none'
-version: 1.2.0+3
+version: 1.2.1+4
 
 environment:
   sdk: ^3.8.1
@@ -20,3 +20,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/logo_horizontal.png

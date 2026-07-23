@@ -88,9 +88,9 @@ class _TraspasoListScreenState extends State<TraspasoListScreen> {
         foregroundColor: Colors.white,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Mobilink Almacén',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+            Image.asset('assets/logo_horizontal.png', height: 30),
             Text(
               widget.operario['nombre'] as String? ?? '',
               style: const TextStyle(fontSize: 11, color: Colors.white54),
