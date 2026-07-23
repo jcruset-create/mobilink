@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente } from "../services/data";
 import type { Empresa, Perfil, RevisionDetalle } from "../types";
+import type { MontajeSnapshot } from "../services/data";
 import { presionTxt } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
+import PlanoSnapshot from "../components/PlanoSnapshot";
 
 // ── Estado de la revisión → etiqueta y color ─────────────────
 const ESTADO_META: Record<string, { label: string; cls: string }> = {
@@ -39,6 +41,7 @@ type Fila = {
   incidencias: number;
   incidenciasAbiertas: number;
   vehiculoId?: string;
+  chasisImg: string | null;
 };
 
 function hoyISO(): string {
@@ -129,6 +132,8 @@ export default function HistoricoRevisiones() {
           estado: r.estado_revision ?? "completada",
           incidencias: incs.length,
           incidenciasAbiertas: incs.filter((i) => !["solucionada", "cancelada", "no_procede"].includes(i.estado)).length,
+          vehiculoId: r.vehiculo?.id ?? undefined,
+          chasisImg: r.vehiculo?.config_ejes?.imagen_chasis_url ?? null,
         };
       }));
     } catch (e: any) { setError(e?.message || "Error"); }
@@ -240,6 +245,28 @@ export default function HistoricoRevisiones() {
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
           </div>
+
+          {/* Plano visual del vehículo con las mediciones de esta revisión */}
+          {!cargandoFicha && fichaDetalle.length > 0 && (
+            <div className="mb-4 rounded-lg bg-slate-950/40 p-3">
+              <PlanoSnapshot
+                imagen={ficha.chasisImg}
+                snap={fichaDetalle.map((d): MontajeSnapshot => ({
+                  posicion_id: d.posicion_id ?? null,
+                  codigo: d.posicion?.codigo_posicion ?? null,
+                  eje: d.posicion?.eje ?? null,
+                  x: d.posicion?.pos_x ?? null, y: d.posicion?.pos_y ?? null,
+                  w: d.posicion?.pos_w ?? null, h: d.posicion?.pos_h ?? null,
+                  marca: d.neumatico?.marca ?? (d.neumatico_ausente ? "Ausente" : null),
+                  modelo: d.neumatico?.modelo ?? null,
+                  medida: d.neumatico?.medida ?? null,
+                  mm: d.no_accesible ? null : d.profundidad_mm ?? null,
+                  presion: d.no_accesible ? null : d.presion_bar ?? null,
+                  averias: null,
+                }))}
+              />
+            </div>
+          )}
 
           {/* Incidencias detectadas en esta revisión */}
           {fichaIncidencias.length > 0 && (
