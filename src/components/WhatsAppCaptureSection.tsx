@@ -1,5 +1,5 @@
 import { apiFetch } from "../modules/apiFetch";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   WhatsAppCaptureSessionWithMessages,
   WhatsAppAiSuggestions,
@@ -243,6 +243,10 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const [savedMsgIds, setSavedMsgIds] = useState<Set<number>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
   const [saveAllMsg, setSaveAllMsg] = useState("");
+  // Modal de resultados de la IA (se abre solo al terminar el análisis)
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [applyingAll, setApplyingAll] = useState(false);
+  const autoOpenedSessionRef = useRef<number | null>(null);
 
   const fetchSession = useCallback(async () => {
     try {
@@ -359,6 +363,68 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     }
   }
 
+  const suggestions: WhatsAppAiSuggestions | null = session?.ai_suggestions ?? null;
+  const messages = session?.messages ?? [];
+  const locationMessages = messages.filter(
+    (m) => m.message_type === "location" && m.latitude != null && m.longitude != null
+  );
+
+  // Campos detectados aún sin aplicar (para el botón "Aplicar todos" y el contador)
+  const detectedFields = AI_FIELD_LABELS.filter((f) => {
+    if (f.applyKey === "location") {
+      return (suggestions?.address != null && suggestions.address !== "") || suggestions?.latitude != null;
+    }
+    return suggestions?.[f.key] != null && suggestions?.[f.key] !== "";
+  });
+  const pendingFields = detectedFields.filter(
+    (f) => f.applyKey && !appliedFields.has(f.applyKey)
+  );
+
+  // Abrir el modal automáticamente la primera vez que llegan sugerencias por sesión
+  useEffect(() => {
+    if (suggestions && session && autoOpenedSessionRef.current !== session.id) {
+      autoOpenedSessionRef.current = session.id;
+      setShowAiModal(true);
+    }
+  }, [suggestions, session]);
+
+  // Cerrar el modal con Escape
+  useEffect(() => {
+    if (!showAiModal) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setShowAiModal(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showAiModal]);
+
+  // Aplica de una vez todos los campos pendientes. Si hay varias ubicaciones,
+  // NO auto-aplica la ubicación (el usuario debe elegir cuál).
+  async function applyAll() {
+    if (!suggestions) return;
+    setApplyingAll(true);
+    try {
+      for (const f of pendingFields) {
+        if (!f.applyKey) continue;
+        if (f.applyKey === "location") {
+          if (locationMessages.length > 1) continue; // ambigua: la elige el usuario
+          await applyField("location", {
+            address: suggestions.address,
+            latitude: suggestions.latitude,
+            longitude: suggestions.longitude,
+          });
+        } else {
+          await applyField(f.applyKey, suggestions[f.key]);
+        }
+      }
+      // Si no queda nada pendiente (salvo ubicación ambigua), cerrar el modal
+      const quedaUbicacionAmbigua = pendingFields.some(
+        (f) => f.applyKey === "location" && locationMessages.length > 1
+      );
+      if (!quedaUbicacionAmbigua) setShowAiModal(false);
+    } finally {
+      setApplyingAll(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -369,13 +435,6 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
 
   const isActive = session?.status === "ACTIVE";
   const isClosed = session?.status === "CLOSED";
-  const suggestions: WhatsAppAiSuggestions | null = session?.ai_suggestions ?? null;
-  const messages = session?.messages ?? [];
-
-  const locationMessages = messages.filter(
-    (m) => m.message_type === "location" && m.latitude != null && m.longitude != null
-  );
-
   const mediaMessages = messages.filter(
     (m) => MEDIA_TYPES.has(m.message_type) && (m.media_stored_url || m.media_url)
   );
@@ -532,28 +591,58 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
           </div>
         )}
 
-        {/* AI Suggestions */}
+        {/* Botón para (re)abrir el modal de resultados de la IA */}
         {suggestions && (
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-xs font-black uppercase tracking-wide text-slate-400">
-                Información detectada por IA
-              </span>
-              {suggestions.confidence && (
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-bold ${
-                    suggestions.confidence === "high"
-                      ? "bg-emerald-100 text-emerald-700"
-                      : suggestions.confidence === "medium"
-                      ? "bg-amber-100 text-amber-700"
-                      : "bg-red-100 text-red-700"
-                  }`}
-                >
-                  Confianza: {suggestions.confidence}
-                </span>
-              )}
-            </div>
+          <button
+            type="button"
+            onClick={() => setShowAiModal(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white hover:bg-blue-700"
+          >
+            Ver datos detectados por IA{pendingFields.length > 0 ? ` (${pendingFields.length})` : ""}
+          </button>
+        )}
 
+        {/* Modal de resultados de la IA (se abre solo al terminar el análisis) */}
+        {suggestions && showAiModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-10"
+            onClick={() => setShowAiModal(false)}
+          >
+            <div
+              className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black uppercase tracking-wide text-slate-400">
+                    Información detectada por IA
+                  </span>
+                  {suggestions.confidence && (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                        suggestions.confidence === "high"
+                          ? "bg-emerald-100 text-emerald-700"
+                          : suggestions.confidence === "medium"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      Confianza: {suggestions.confidence}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAiModal(false)}
+                  className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                >
+                  <span className="block h-5 w-5 text-center leading-5">✕</span>
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto px-5 py-4">
             {suggestions.resumen && (
               <div className="mb-3 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-sm text-blue-800">
                 {suggestions.resumen}
@@ -683,6 +772,34 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
                   </div>
                 );
               })}
+            </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex shrink-0 items-center justify-between gap-2 border-t border-slate-200 px-5 py-3">
+                <span className="text-xs text-slate-500">
+                  {pendingFields.length > 0
+                    ? `${pendingFields.length} sin aplicar`
+                    : "Todo aplicado ✓"}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAiModal(false)}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100"
+                  >
+                    Cerrar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyAll}
+                    disabled={applyingAll || pendingFields.length === 0}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {applyingAll ? "Aplicando…" : "Aplicar todos"}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
