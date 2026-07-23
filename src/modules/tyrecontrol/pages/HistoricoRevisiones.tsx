@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision } from "../services/data";
+import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente } from "../services/data";
 import type { Empresa, Perfil, RevisionDetalle } from "../types";
 import { presionTxt } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
@@ -11,6 +11,19 @@ const ESTADO_META: Record<string, { label: string; cls: string }> = {
   completada_con_incidencias: { label: "Con incidencias solucionadas", cls: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30" },
   completada_incidencia_pendiente: { label: "Con incidencia pendiente", cls: "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40" },
 };
+
+// ── Incidencias dentro de la ficha ───────────────────────────
+const GRAV_INC: Record<string, { label: string; cls: string }> = {
+  critica: { label: "Crítica", cls: "bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40" },
+  importante: { label: "Importante", cls: "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40" },
+  leve: { label: "Leve", cls: "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40" },
+};
+const ESTADO_INC: Record<string, string> = {
+  detectada: "Detectada", pendiente_autorizacion: "Pendiente de autorización", autorizada: "Autorizada",
+  planificada: "Planificada", pendiente_material: "Pendiente de material", pendiente_vehiculo: "Pendiente de vehículo",
+  en_curso: "En curso", solucionada: "Solucionada", cancelada: "Cancelada", no_procede: "No procede",
+};
+const RESUELTA = new Set(["solucionada", "cancelada", "no_procede"]);
 
 type Fila = {
   id: string;
@@ -57,12 +70,18 @@ export default function HistoricoRevisiones() {
   // Ficha de revisión completa (modal)
   const [ficha, setFicha] = useState<Fila | null>(null);
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
+  const [fichaIncidencias, setFichaIncidencias] = useState<any[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
+  // Etiquetas configurables (tipos de problema y motivos pendientes)
+  const [tipoLabels, setTipoLabels] = useState<Record<string, string>>({});
+  const [motivoLabels, setMotivoLabels] = useState<Record<string, string>>({});
 
   async function verFicha(f: Fila) {
-    setFicha(f); setCargandoFicha(true); setFichaDetalle([]);
-    try { setFichaDetalle(await listarDetalleRevision(f.id)); }
-    catch { setFichaDetalle([]); }
+    setFicha(f); setCargandoFicha(true); setFichaDetalle([]); setFichaIncidencias([]);
+    try {
+      const [det, incs] = await Promise.all([listarDetalleRevision(f.id), listarIncidenciasDeRevision(f.id)]);
+      setFichaDetalle(det); setFichaIncidencias(incs);
+    } catch { setFichaDetalle([]); setFichaIncidencias([]); }
     finally { setCargandoFicha(false); }
   }
 
@@ -76,6 +95,13 @@ export default function HistoricoRevisiones() {
     Promise.all([listarEmpresas(), listarUsuarios()])
       .then(([e, u]) => { setEmpresas(e); setUsuarios(u); })
       .catch(() => {/* los filtros quedan vacíos, la tabla sigue */});
+    // Etiquetas de tipos de problema y motivos (para la ficha); si falla, se usan las claves.
+    Promise.all([listarTiposIncidencia(false), listarMotivosPendiente(false)])
+      .then(([tipos, motivos]) => {
+        setTipoLabels(Object.fromEntries(tipos.map((t) => [t.clave, t.etiqueta])));
+        setMotivoLabels(Object.fromEntries(motivos.map((m) => [m.clave, m.etiqueta])));
+      })
+      .catch(() => {/* sin catálogo: se muestran las claves crudas */});
   }, []);
 
   async function cargar() {
@@ -214,6 +240,37 @@ export default function HistoricoRevisiones() {
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
           </div>
+
+          {/* Incidencias detectadas en esta revisión */}
+          {fichaIncidencias.length > 0 && (
+            <div className="mb-4">
+              <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Incidencias ({fichaIncidencias.length})</div>
+              <div className="space-y-1.5">
+                {fichaIncidencias.map((inc) => {
+                  const grav = GRAV_INC[inc.gravedad] ?? { label: inc.gravedad, cls: "bg-slate-500/15 text-slate-300" };
+                  const pos = inc.posicion?.nombre ?? inc.posicion?.codigo_posicion ?? "General del vehículo";
+                  const problemas = (inc.problemas ?? []).map((p: any) => tipoLabels[p.tipo] ?? p.tipo).join(" · ");
+                  const resuelta = RESUELTA.has(inc.estado);
+                  return (
+                    <div key={inc.id} className="flex items-start gap-2 rounded-lg border border-slate-700/60 bg-slate-800/40 p-2">
+                      <span className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-black ${grav.cls}`}>{grav.label}</span>
+                      <div className="flex-1">
+                        <div className="text-sm font-bold text-slate-200">{pos}</div>
+                        {problemas && <div className="text-[12px] text-slate-300">{problemas}</div>}
+                        <div className="text-[11px] text-slate-500">
+                          {ESTADO_INC[inc.estado] ?? inc.estado}
+                          {inc.motivo_pendiente && !resuelta ? ` · ${motivoLabels[inc.motivo_pendiente] ?? inc.motivo_pendiente}` : ""}
+                          {inc.foto_url ? " · 📷" : ""}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Mediciones por posición</div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
               <th className={thCls}>Posición</th><th className={thCls}>Neumático</th><th className={thCls}>Profundidad</th>
