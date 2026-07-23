@@ -27,6 +27,22 @@ const ESTADO_INC: Record<string, string> = {
 };
 const RESUELTA = new Set(["solucionada", "cancelada", "no_procede"]);
 
+// Orden de las posiciones en la ficha: por eje y, dentro del eje, derecha
+// antes que izquierda (E1_DER, E1_IZQ, E2_DER, E2_IZQ, …).
+function ejeDe(d: RevisionDetalle): number {
+  if (d.posicion?.eje != null) return d.posicion.eje;
+  const m = /E(\d+)/i.exec(d.posicion?.codigo_posicion ?? "");
+  return m ? Number(m[1]) : 99;
+}
+function ladoRank(d: RevisionDetalle): number {
+  const s = `${d.posicion?.lado ?? ""} ${d.posicion?.codigo_posicion ?? ""}`.toUpperCase();
+  return /DER/.test(s) ? 0 : /IZQ/.test(s) ? 1 : 2; // derecha primero
+}
+function ordenFicha(a: RevisionDetalle, b: RevisionDetalle): number {
+  return ejeDe(a) - ejeDe(b) || ladoRank(a) - ladoRank(b)
+    || (a.posicion?.codigo_posicion ?? "").localeCompare(b.posicion?.codigo_posicion ?? "");
+}
+
 type Fila = {
   id: string;
   fecha: string;
@@ -75,6 +91,7 @@ export default function HistoricoRevisiones() {
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [fichaIncidencias, setFichaIncidencias] = useState<any[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
+  const fichaDetalleOrden = useMemo(() => [...fichaDetalle].sort(ordenFicha), [fichaDetalle]);
   // Etiquetas configurables (tipos de problema y motivos pendientes)
   const [tipoLabels, setTipoLabels] = useState<Record<string, string>>({});
   const [motivoLabels, setMotivoLabels] = useState<Record<string, string>>({});
@@ -305,8 +322,8 @@ export default function HistoricoRevisiones() {
             </tr></thead>
             <tbody>
               {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Cargando…</td></tr>
-              : fichaDetalle.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos de posiciones para esta revisión.</td></tr>
-              : fichaDetalle.map((d) => (
+              : fichaDetalleOrden.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos de posiciones para esta revisión.</td></tr>
+              : fichaDetalleOrden.map((d) => (
                 <tr key={d.id} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
