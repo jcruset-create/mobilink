@@ -2471,6 +2471,239 @@ app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res
 });
 
 /* =========================================================
+   TALLER OPERATOR (APK "Mobilink Taller")
+   Endpoints propios autenticados por nombre+PIN (reusa
+   requireRoadsideOperator). El rol lo decide techs.es_supervisor.
+   NO tocan los /api/jobs del panel web.
+========================================================= */
+
+async function getTallerOperator(techName: string) {
+  const r = await db.query(
+    `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
+    [techName]
+  );
+  if (r.rows.length === 0) return null;
+  return {
+    name: String(r.rows[0].name),
+    esSupervisor: r.rows[0].es_supervisor === true,
+  };
+}
+
+// Ficha del operario logueado (para pintar el rol en la APK)
+app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json({ name: op.name, esSupervisor: op.esSupervisor });
+  } catch (error) {
+    console.error("GET /api/taller-operator/me error:", error);
+    res.status(500).json({ error: "Error obteniendo operario" });
+  }
+});
+
+// Trabajos visibles (scope=live). Operario: solo los suyos. Supervisor: todos.
+app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const result = await db.query(
+      `SELECT * FROM jobs
+       WHERE status <> 'cerrado'
+          OR COALESCE("closedAtMs", "createdAtMs", 0) > $1
+       ORDER BY id DESC`,
+      [cutoff]
+    );
+    let jobs = result.rows.map(normalizeJobRow);
+    if (!op.esSupervisor) {
+      jobs = jobs.filter(
+        (j: any) => Array.isArray(j.assignedNames) && j.assignedNames.includes(op.name)
+      );
+    }
+    res.json(jobs);
+  } catch (error) {
+    console.error("GET /api/taller-operator/jobs error:", error);
+    res.status(500).json({ error: "Error obteniendo trabajos" });
+  }
+});
+
+// Lista de técnicos para asignar (solo supervisor)
+app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+    if (!op.esSupervisor) return res.status(403).json({ error: "Solo supervisores" });
+
+    const result = await db.query(
+      `SELECT name, status, blocked FROM techs ORDER BY name ASC`
+    );
+    res.json(
+      result.rows.map((r: any) => ({
+        name: String(r.name),
+        status: r.status ?? "",
+        blocked: r.blocked === true,
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/taller-operator/techs error:", error);
+    res.status(500).json({ error: "Error obteniendo técnicos" });
+  }
+});
+
+// Crear/asignar trabajo (solo supervisor)
+app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+    if (!op.esSupervisor) return res.status(403).json({ error: "Solo supervisores" });
+
+    const body = req.body ?? {};
+    const plate = String(body.plate ?? "").trim().toUpperCase();
+    if (!plate) return res.status(400).json({ error: "La matrícula es obligatoria" });
+
+    const assignedNames = Array.isArray(body.assignedNames)
+      ? body.assignedNames.map((n: unknown) => String(n || "").trim()).filter(Boolean)
+      : [];
+
+    const id = Date.now();
+    const result = await db.query(
+      `INSERT INTO jobs (
+         id, area, plate, urgent, status, "assignedNames", reason,
+         "customerName", "customerPhone", "createdAtMs",
+         "workedAccumulatedMinutes", "pausedAccumulatedMinutes"
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0)
+       RETURNING *`,
+      [
+        id,
+        String(body.area ?? "mecanica"),
+        plate,
+        !!body.urgent,
+        "espera",
+        JSON.stringify(assignedNames),
+        String(body.reason ?? "").trim(),
+        String(body.customerName ?? "").trim(),
+        String(body.customerPhone ?? "").trim(),
+        id,
+      ]
+    );
+    res.json(normalizeJobRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/taller-operator/jobs error:", error);
+    res.status(500).json({ error: "Error creando trabajo" });
+  }
+});
+
+// Reasignar trabajo (solo supervisor)
+app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+    if (!op.esSupervisor) return res.status(403).json({ error: "Solo supervisores" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const assignedNames = Array.isArray(req.body?.assignedNames)
+      ? req.body.assignedNames.map((n: unknown) => String(n || "").trim()).filter(Boolean)
+      : [];
+
+    const result = await db.query(
+      `UPDATE jobs SET "assignedNames" = $1 WHERE id = $2 RETURNING *`,
+      [JSON.stringify(assignedNames), id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Trabajo no encontrado" });
+    res.json(normalizeJobRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/taller-operator/jobs/:id/assign error:", error);
+    res.status(500).json({ error: "Error reasignando trabajo" });
+  }
+});
+
+// Cambiar estado del trabajo (operario: solo los suyos; supervisor: cualquiera)
+// status admitido: activo (empezar/reanudar) | parado (pausar) | cerrado (finalizar) | espera
+app.put("/api/taller-operator/jobs/:id/status", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const status = String(req.body?.status ?? "").trim();
+    const ALLOWED = new Set(["activo", "parado", "cerrado", "espera"]);
+    if (!ALLOWED.has(status)) return res.status(400).json({ error: "Estado no válido" });
+
+    const jr = await db.query(`SELECT * FROM jobs WHERE id = $1 LIMIT 1`, [id]);
+    if (jr.rows.length === 0) return res.status(404).json({ error: "Trabajo no encontrado" });
+    const job = normalizeJobRow(jr.rows[0]);
+
+    // Autorización: el operario solo puede tocar trabajos donde esté asignado
+    if (!op.esSupervisor && !(job.assignedNames || []).includes(op.name)) {
+      return res.status(403).json({ error: "No estás asignado a este trabajo" });
+    }
+
+    const now = Date.now();
+    let startedAtMs: number | null = job.startedAtMs ?? null;
+    let pausedAtMs: number | null = job.pausedAtMs ?? null;
+    let pausedAcc: number = Number(job.pausedAccumulatedMinutes ?? 0);
+    let workedAcc: number = Number(job.workedAccumulatedMinutes ?? 0);
+    let actualMinutes: number | null = job.actualMinutes ?? null;
+    let closedAtMs: number | null = job.closedAtMs ?? null;
+
+    if (status === "activo") {
+      if (pausedAtMs != null) {
+        // reanudar: acumula el tramo de pausa
+        pausedAcc += Math.max(0, Math.round((now - pausedAtMs) / 60000));
+        pausedAtMs = null;
+      } else if (startedAtMs == null) {
+        // empezar por primera vez
+        startedAtMs = now;
+      }
+      closedAtMs = null;
+    } else if (status === "parado") {
+      if (startedAtMs != null && pausedAtMs == null) pausedAtMs = now;
+    } else if (status === "cerrado") {
+      if (pausedAtMs != null) {
+        pausedAcc += Math.max(0, Math.round((now - pausedAtMs) / 60000));
+        pausedAtMs = null;
+      }
+      closedAtMs = now;
+      const started = startedAtMs ?? now;
+      actualMinutes = Math.max(0, Math.round((closedAtMs - started) / 60000) - pausedAcc);
+      workedAcc = actualMinutes;
+    } else if (status === "espera") {
+      // volver a la cola (sin cambios de tiempo)
+      pausedAtMs = null;
+    }
+
+    const result = await db.query(
+      `UPDATE jobs SET
+         status = $1,
+         "startedAtMs" = $2,
+         "pausedAtMs" = $3,
+         "pausedAccumulatedMinutes" = $4,
+         "workedAccumulatedMinutes" = $5,
+         "actualMinutes" = $6,
+         "closedAtMs" = $7
+       WHERE id = $8
+       RETURNING *`,
+      [status, startedAtMs, pausedAtMs, pausedAcc, workedAcc, actualMinutes, closedAtMs, id]
+    );
+    res.json(normalizeJobRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/taller-operator/jobs/:id/status error:", error);
+    res.status(500).json({ error: "Error cambiando estado" });
+  }
+});
+
+/* =========================================================
    WORKSHOP CONFIG
 ========================================================= */
 

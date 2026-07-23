@@ -200,6 +200,12 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "currentRoadsideAssistanceId" INTEGER;
   `);
 
+  // APK Mobilink Taller: marca qué técnicos pueden crear/asignar trabajos
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "es_supervisor" BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id BIGINT PRIMARY KEY,
