@@ -4506,7 +4506,6 @@ if (view === "asistencias" && canView("asistencias")) {
         roadside.roadsideAssistanceError ||
         roadside.roadsideVehicleError
       }
-      onBack={() => setView("operativo")}
       onRefresh={() => {
         void roadside.reloadRoadsideAssistancesFromBackend();
         void roadside.reloadRoadsideVehiclesFromBackend();

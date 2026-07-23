@@ -1,5 +1,6 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   CheckCircle2,
   Clock3,
@@ -280,7 +281,6 @@ type Props = {
   currentBase?: string;
   loading: boolean;
   error: string;
-  onBack: () => void;
   onRefresh: () => void;
   onOpenSettings?: () => void;
   onCreate: (draft: RoadsideAssistanceDraft) => Promise<void>;
@@ -352,7 +352,6 @@ export default function RoadsideAssistanceView({
   currentBase,
   loading,
   error,
-  onBack,
   onRefresh,
   onOpenSettings,
   onCreate,
@@ -361,6 +360,7 @@ export default function RoadsideAssistanceView({
   onEnCamino,
   onStatusChange,
 }: Props) {
+  const navigate = useNavigate();
   const [draft, setDraft] = useState<RoadsideAssistanceDraft>(INITIAL_DRAFT);
   const [editingAssistance, setEditingAssistance] =
     useState<RoadsideAssistance | null>(null);
@@ -976,7 +976,7 @@ export default function RoadsideAssistanceView({
             </button>
             <button
               type="button"
-              onClick={onBack}
+              onClick={() => navigate("/inicio")}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
             >
               <Home className="h-4 w-4" /> Inicio
