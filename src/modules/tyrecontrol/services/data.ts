@@ -220,7 +220,7 @@ export async function listarRevisionesHistorico(filtros: {
     .from("revisiones_vehiculo")
     .select(
       "id, fecha_revision, created_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
-      "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), config_ejes:tc_config_ejes(imagen_chasis_url)), " +
+      "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
       "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado)"
     )
     .in("estado_revision", ["completada", "completada_con_incidencias", "completada_incidencia_pendiente"]);

@@ -133,7 +133,7 @@ export default function HistoricoRevisiones() {
           incidencias: incs.length,
           incidenciasAbiertas: incs.filter((i) => !["solucionada", "cancelada", "no_procede"].includes(i.estado)).length,
           vehiculoId: r.vehiculo?.id ?? undefined,
-          chasisImg: r.vehiculo?.config_ejes?.imagen_chasis_url ?? null,
+          chasisImg: r.vehiculo?.tipo?.imagen_chasis_url ?? null,
         };
       }));
     } catch (e: any) { setError(e?.message || "Error"); }
