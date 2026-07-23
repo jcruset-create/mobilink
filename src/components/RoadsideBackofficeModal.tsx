@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Save, Loader2 } from "lucide-react";
+import { X, Save, Loader2, Sparkles, ImagePlus, Trash2 } from "lucide-react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 import type { RoadsideAssistance } from "../modules/roadsideAssistanceTypes";
 
@@ -138,6 +138,82 @@ export default function RoadsideBackofficeModal({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // ── Extracción por IA ──
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiText, setAiText] = useState("");
+  const [aiImages, setAiImages] = useState<string[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiMsg, setAiMsg] = useState<string | null>(null);
+
+  // Claves que pertenecen al back office (el resto se ignora en el volcado)
+  const BACKOFFICE_KEYS: (keyof BackofficeData)[] = [
+    "solicitanteNombre", "solicitanteTelefono", "solicitanteWhatsapp", "solicitanteEmail",
+    "conductorTelefono", "responsableNombre", "responsableTelefono", "responsableCargo",
+    "autorizadorNombre", "autorizadorTelefono", "autorizadorCargo",
+    "empresaSolicitanteNombre", "empresaSolicitanteTelefono", "empresaSolicitanteEmail",
+    "empresaServicioNombre", "empresaServicioCif", "empresaServicioTelefono",
+    "empresaFacturacionNombre", "empresaFacturacionCif", "empresaFacturacionEmail",
+    "expedienteExterno", "referenciaCliente", "referenciaAutorizacion",
+    "tiposAsistencia", "tipoVehiculo", "estadoVehiculo", "ubicacionIncidencia",
+    "marca", "modelo", "color", "vin", "kilometraje", "medidaNeumatico",
+    "ejeAfectado", "posicionRueda", "vehiculoCargado", "mercancia", "adr",
+    "importeAcordado", "observacionesFacturacion",
+  ];
+
+  async function onPickAiImages(files: FileList | null) {
+    if (!files) return;
+    const urls: string[] = [];
+    for (const f of Array.from(files).slice(0, 6)) {
+      const url = await new Promise<string>((resolve) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.readAsDataURL(f);
+      });
+      urls.push(url);
+    }
+    setAiImages((prev) => [...prev, ...urls].slice(0, 6));
+  }
+
+  async function analyzeWithAI() {
+    if (!aiText.trim() && aiImages.length === 0) {
+      setAiMsg("Pega texto o añade una captura.");
+      return;
+    }
+    setAiLoading(true);
+    setAiMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/roadside-backoffice/ai-extract`, {
+        method: "POST",
+        headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
+        body: JSON.stringify({ text: aiText.trim(), images: aiImages }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Error analizando");
+      const extracted = (json.data ?? {}) as Record<string, unknown>;
+      let applied = 0;
+      setData((prev) => {
+        const next = { ...prev };
+        for (const key of BACKOFFICE_KEYS) {
+          const val = extracted[key];
+          if (val == null || val === "") continue;
+          if (key === "tiposAsistencia") {
+            if (Array.isArray(val) && val.length) { (next as any)[key] = val; applied++; }
+          } else {
+            (next as any)[key] = val;
+            applied++;
+          }
+        }
+        return next;
+      });
+      setSaved(false);
+      setAiMsg(applied > 0 ? `IA rellenó ${applied} campo${applied !== 1 ? "s" : ""}. Revísalos antes de guardar.` : "La IA no encontró datos aprovechables.");
+    } catch (e) {
+      setAiMsg(e instanceof Error ? e.message : "Error analizando con IA");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (draftMode || !assistance) { setLoading(false); return; }
     async function load() {
@@ -272,6 +348,69 @@ export default function RoadsideBackofficeModal({
               {t.label}
             </button>
           ))}
+        </div>
+
+        {/* Panel de extracción por IA */}
+        <div className="shrink-0 border-b border-slate-200 bg-indigo-50/60 px-4 py-2">
+          {!aiOpen ? (
+            <button
+              type="button"
+              onClick={() => setAiOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-500"
+            >
+              <Sparkles className="h-4 w-4" /> Rellenar con IA (pegar WhatsApp o subir captura)
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="inline-flex items-center gap-2 text-xs font-bold text-indigo-700">
+                  <Sparkles className="h-4 w-4" /> Extracción por IA
+                </div>
+                <button type="button" onClick={() => setAiOpen(false)} className="text-slate-400 hover:text-slate-700">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <textarea
+                value={aiText}
+                onChange={(e) => setAiText(e.target.value)}
+                rows={3}
+                placeholder="Pega aquí la conversación de WhatsApp, un email o los datos del cliente…"
+                className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+              />
+              {aiImages.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {aiImages.map((url, i) => (
+                    <div key={i} className="relative">
+                      <img src={url} alt="captura" className="h-14 w-14 rounded-lg border border-indigo-200 object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setAiImages((prev) => prev.filter((_, j) => j !== i))}
+                        className="absolute -right-1 -top-1 rounded-full bg-white p-0.5 shadow"
+                      >
+                        <Trash2 className="h-3 w-3 text-red-500" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50">
+                  <ImagePlus className="h-4 w-4" /> Añadir captura
+                  <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => onPickAiImages(e.target.files)} />
+                </label>
+                <button
+                  type="button"
+                  onClick={analyzeWithAI}
+                  disabled={aiLoading}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {aiLoading ? "Analizando…" : "Analizar y rellenar"}
+                </button>
+                {aiMsg && <span className="text-xs font-medium text-slate-600">{aiMsg}</span>}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Body */}

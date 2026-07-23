@@ -6589,6 +6589,68 @@ app.put(
   }
 );
 
+// ── Extracción por IA para el back office ──
+// Recibe texto pegado (conversación WhatsApp, email…) y/o imágenes (capturas,
+// data URLs base64) y devuelve un BackofficeData parcial con los campos que la
+// IA logre deducir. No inventa: deja fuera lo que no aparezca.
+app.post(
+  "/api/roadside-backoffice/ai-extract",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const text = String(req.body?.text ?? "").trim();
+      const images: string[] = Array.isArray(req.body?.images)
+        ? req.body.images.filter((u: any) => typeof u === "string" && u.startsWith("data:image"))
+        : [];
+      if (!text && images.length === 0) {
+        return res.status(400).json({ error: "Aporta texto o al menos una imagen" });
+      }
+      if (!process.env.OPENAI_API_KEY) {
+        return res.status(503).json({ error: "OPENAI_API_KEY no configurada" });
+      }
+
+      const systemPrompt = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios. Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
+- Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
+- Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
+- Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
+- Vehículo: plate (matrícula del vehículo/camión), plateRemolque (matrícula roja del remolque: R+4 dígitos+3 letras), marca, modelo, color, vin, kilometraje (número), medidaNeumatico, ejeAfectado (Dirección, Tracción, Remolque), posicionRueda (Interior, Exterior), vehiculoCargado (true/false), mercancia, adr (true/false)
+- Averia: descripcionAveria (texto libre de la avería o trabajos)
+- Facturación: importeAcordado (número), observacionesFacturacion
+Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera del JSON.`;
+
+      type ContentPart =
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string; detail: "auto" } };
+      const userContent: ContentPart[] = [
+        { type: "text", text: text || "(sin texto, analiza las imágenes)" },
+        ...images.map((url) => ({
+          type: "image_url" as const,
+          image_url: { url, detail: "auto" as const },
+        })),
+      ];
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.1,
+        max_tokens: 800,
+      });
+      const rawOut = response.choices[0]?.message?.content ?? "{}";
+      const cleaned = rawOut.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      let parsed: Record<string, any> = {};
+      try { parsed = JSON.parse(cleaned); } catch { parsed = {}; }
+
+      return res.json({ data: parsed });
+    } catch (error) {
+      console.error("POST /api/roadside-backoffice/ai-extract error:", error);
+      return res.status(500).json({ error: "Error analizando con IA" });
+    }
+  }
+);
+
 /* ── Companies ── */
 
 app.get("/api/companies", requireSupervisorRole, async (req, res) => {
