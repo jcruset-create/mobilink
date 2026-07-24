@@ -2803,6 +2803,363 @@ app.post(
 );
 
 /* =========================================================
+   PRESENCIA OPERATOR (APK Mobilink Presencia — fichaje)
+   Auth por empleado (sea_employees) + PIN verificado con el
+   RPC pres_login (pgcrypto). Cabeceras en cada petición:
+   x-presencia-employee (uuid) + x-presencia-pin.
+========================================================= */
+
+async function verificarPinPresencia(employeeId: string, pin: string): Promise<boolean> {
+  if (!employeeId || !pin) return false;
+  const { data, error } = await supabase.rpc("pres_login", {
+    p_employee_id: employeeId,
+    p_pin: pin,
+  });
+  if (error) {
+    console.error("pres_login RPC error:", error);
+    return false;
+  }
+  return data === true;
+}
+
+function requirePresenciaEmployee(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const employeeId = String(req.headers["x-presencia-employee"] || "").trim();
+    const pin = String(req.headers["x-presencia-pin"] || "").trim();
+    if (!(await verificarPinPresencia(employeeId, pin))) {
+      return res.status(401).json({ error: "Empleado o PIN incorrecto" });
+    }
+    (req as any).presenciaEmployeeId = employeeId;
+    next();
+  })().catch((error) => {
+    console.error("requirePresenciaEmployee error:", error);
+    res.status(500).json({ error: "Error validando empleado" });
+  });
+}
+
+// Lista de empleados activos (para el selector del login; sin datos sensibles)
+app.get("/api/presencia-operator/employees", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("sea_employees")
+      .select("id, nombre, apellidos, cargo")
+      .eq("activo", true)
+      .order("nombre");
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/presencia-operator/employees error:", error);
+    res.status(500).json({ error: "Error obteniendo empleados" });
+  }
+});
+
+// Login: valida PIN (el primer PIN del empleado queda registrado)
+app.post("/api/presencia-operator/login", async (req, res) => {
+  try {
+    const employeeId = String(req.body?.employeeId || "").trim();
+    const pin = String(req.body?.pin || "").trim();
+    if (!(await verificarPinPresencia(employeeId, pin))) {
+      return res.status(401).json({ error: "Empleado o PIN incorrecto" });
+    }
+    const { data } = await supabase
+      .from("sea_employees")
+      .select("id, nombre, apellidos, cargo")
+      .eq("id", employeeId)
+      .single();
+    res.json({ ok: true, employee: data });
+  } catch (error) {
+    console.error("POST /api/presencia-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+// Estado de hoy del empleado (registro de pres_records de la fecha actual)
+app.get("/api/presencia-operator/hoy", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const hoy = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from("pres_records")
+      .select("*")
+      .eq("employee_id", employeeId)
+      .eq("fecha", hoy)
+      .maybeSingle();
+    if (error) throw error;
+    res.json(data ?? null);
+  } catch (error) {
+    console.error("GET /api/presencia-operator/hoy error:", error);
+    res.status(500).json({ error: "Error consultando fichaje de hoy" });
+  }
+});
+
+// Fichar entrada o salida
+app.post("/api/presencia-operator/fichar", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const accion = String(req.body?.accion || "").trim(); // 'entrada' | 'salida'
+    if (!["entrada", "salida"].includes(accion)) {
+      return res.status(400).json({ error: "Acción no válida" });
+    }
+    const hoy = new Date().toISOString().slice(0, 10);
+    const ahora = new Date().toISOString();
+
+    const { data: existente, error: selErr } = await supabase
+      .from("pres_records")
+      .select("*")
+      .eq("employee_id", employeeId)
+      .eq("fecha", hoy)
+      .maybeSingle();
+    if (selErr) throw selErr;
+
+    if (accion === "entrada") {
+      if (existente?.hora_entrada) {
+        return res.status(409).json({ error: "Ya has fichado la entrada hoy" });
+      }
+      const { data, error } = existente
+        ? await supabase
+            .from("pres_records")
+            .update({ hora_entrada: ahora })
+            .eq("id", existente.id)
+            .select()
+            .single()
+        : await supabase
+            .from("pres_records")
+            .insert({ employee_id: employeeId, fecha: hoy, hora_entrada: ahora })
+            .select()
+            .single();
+      if (error) throw error;
+      return res.json(data);
+    }
+
+    // salida
+    if (!existente?.hora_entrada) {
+      return res.status(409).json({ error: "No has fichado la entrada todavía" });
+    }
+    if (existente.hora_salida) {
+      return res.status(409).json({ error: "Ya has fichado la salida hoy" });
+    }
+    const { data, error } = await supabase
+      .from("pres_records")
+      .update({ hora_salida: ahora })
+      .eq("id", existente.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("POST /api/presencia-operator/fichar error:", error);
+    res.status(500).json({ error: "Error registrando fichaje" });
+  }
+});
+
+// Historial de los últimos 14 días
+app.get("/api/presencia-operator/historial", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const desde = new Date(Date.now() - 13 * 86400000).toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from("pres_records")
+      .select("fecha, hora_entrada, hora_salida, tipo, validado")
+      .eq("employee_id", employeeId)
+      .gte("fecha", desde)
+      .order("fecha", { ascending: false });
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/presencia-operator/historial error:", error);
+    res.status(500).json({ error: "Error consultando historial" });
+  }
+});
+
+/* =========================================================
+   SAFETY OPERATOR (APK Mobilink Safety — técnicos)
+   Reutiliza la auth de presencia (sea_employees + PIN, cabeceras
+   x-presencia-employee + x-presencia-pin). Solo lectura de sus
+   propios datos + solicitar EPIs + firmar lecturas obligatorias.
+========================================================= */
+
+// Mis EPIs entregados
+app.get("/api/safety-operator/epis", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const { data, error } = await supabase
+      .from("sm_epi_assignments")
+      .select("id, cantidad, talla, estado, fecha_entrega, fecha_caducidad, observaciones, sm_epis(nombre, codigo)")
+      .eq("employee_id", employeeId)
+      .order("fecha_entrega", { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/safety-operator/epis error:", error);
+    res.status(500).json({ error: "Error obteniendo EPIs" });
+  }
+});
+
+// Catálogo de EPIs activos (para solicitar)
+app.get("/api/safety-operator/epi-catalog", requirePresenciaEmployee, async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("sm_epis")
+      .select("id, nombre, codigo, talla, stock_actual")
+      .eq("activo", true)
+      .order("nombre");
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/safety-operator/epi-catalog error:", error);
+    res.status(500).json({ error: "Error obteniendo catálogo" });
+  }
+});
+
+// Mis solicitudes de EPI
+app.get("/api/safety-operator/epi-requests", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const { data, error } = await supabase
+      .from("sm_epi_requests")
+      .select("id, cantidad, talla, motivo, estado, created_at, sm_epis(nombre, codigo)")
+      .eq("employee_id", employeeId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/safety-operator/epi-requests error:", error);
+    res.status(500).json({ error: "Error obteniendo solicitudes" });
+  }
+});
+
+// Solicitar un EPI
+app.post("/api/safety-operator/epi-requests", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const epiId = String(req.body?.epiId || "").trim();
+    if (!epiId) return res.status(400).json({ error: "EPI obligatorio" });
+    const cantidad = Math.max(1, Number(req.body?.cantidad) || 1);
+    const { data, error } = await supabase
+      .from("sm_epi_requests")
+      .insert({
+        epi_id: epiId,
+        employee_id: employeeId,
+        cantidad,
+        talla: String(req.body?.talla || "").trim() || null,
+        motivo: String(req.body?.motivo || "").trim() || null,
+        estado: "pendiente",
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    res.json({ ok: true, id: data?.id });
+  } catch (error) {
+    console.error("POST /api/safety-operator/epi-requests error:", error);
+    res.status(500).json({ error: "Error creando solicitud" });
+  }
+});
+
+// Documentos publicados + estado de firma del empleado
+app.get("/api/safety-operator/documents", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const [{ data: docs, error: e1 }, { data: acks, error: e2 }] = await Promise.all([
+      supabase
+        .from("sm_safety_documents")
+        .select("id, titulo, tipo, descripcion, version, lectura_obligatoria, fecha_publicacion, archivo_url")
+        .eq("activo", true)
+        .eq("publicado", true)
+        .order("fecha_publicacion", { ascending: false }),
+      supabase
+        .from("sm_document_acknowledgements")
+        .select("document_id, firmado, fecha_firma")
+        .eq("employee_id", employeeId),
+    ]);
+    if (e1) throw e1;
+    if (e2) throw e2;
+    const ackMap = new Map((acks ?? []).map((a: any) => [a.document_id, a]));
+    res.json(
+      (docs ?? []).map((d: any) => ({
+        ...d,
+        firmado: ackMap.get(d.id)?.firmado === true,
+        fecha_firma: ackMap.get(d.id)?.fecha_firma ?? null,
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/safety-operator/documents error:", error);
+    res.status(500).json({ error: "Error obteniendo documentos" });
+  }
+});
+
+// Firmar la lectura de un documento (el PIN ya viaja validado en la auth)
+app.post("/api/safety-operator/documents/:id/ack", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const documentId = String(req.params.id || "").trim();
+    const ahora = new Date().toISOString();
+    const dispositivo = String(req.body?.dispositivo || "").trim() || null;
+    const { error } = await supabase
+      .from("sm_document_acknowledgements")
+      .upsert(
+        {
+          document_id: documentId,
+          employee_id: employeeId,
+          leido: true,
+          firmado: true,
+          fecha_lectura: ahora,
+          fecha_firma: ahora,
+          dispositivo,
+          ip: req.ip ?? null,
+        },
+        { onConflict: "document_id,employee_id" }
+      );
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/safety-operator/documents/:id/ack error:", error);
+    res.status(500).json({ error: "Error firmando documento" });
+  }
+});
+
+// Mis formaciones (registros con caducidad)
+app.get("/api/safety-operator/trainings", requirePresenciaEmployee, async (req, res) => {
+  try {
+    const employeeId = (req as any).presenciaEmployeeId as string;
+    const { data, error } = await supabase
+      .from("sm_training_records")
+      .select("id, fecha_fin, fecha_caducidad, estado, aprobado, sm_trainings(titulo, tipo)")
+      .eq("employee_id", employeeId)
+      .order("fecha_fin", { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/safety-operator/trainings error:", error);
+    res.status(500).json({ error: "Error obteniendo formaciones" });
+  }
+});
+
+// Próximas reuniones de seguridad
+app.get("/api/safety-operator/meetings", requirePresenciaEmployee, async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("sm_safety_meetings")
+      .select("id, titulo, descripcion, fecha, duracion_minutos, lugar, estado")
+      .eq("estado", "programada")
+      .gte("fecha", new Date().toISOString())
+      .order("fecha")
+      .limit(20);
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error) {
+    console.error("GET /api/safety-operator/meetings error:", error);
+    res.status(500).json({ error: "Error obteniendo reuniones" });
+  }
+});
+
+/* =========================================================
    WORKSHOP CONFIG
 ========================================================= */
 
