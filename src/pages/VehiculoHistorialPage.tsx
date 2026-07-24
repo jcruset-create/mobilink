@@ -47,7 +47,7 @@ export default function VehiculoHistorialPage() {
       <div className="mx-auto max-w-3xl">
         <header className="mb-4 flex items-center justify-between">
           <h1 className="text-xl font-black">🔎 Historial del vehículo</h1>
-          <a href="/" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
+          <a href="/asistencias" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
         </header>
 
         <div className="mb-4 flex gap-2">

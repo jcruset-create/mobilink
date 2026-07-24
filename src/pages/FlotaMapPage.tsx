@@ -133,7 +133,7 @@ export default function FlotaMapPage() {
           >
             ↺ Actualizar
           </button>
-          <a href="/" className="rounded-lg bg-[#1e3a5f] px-3 py-1.5 text-xs font-bold text-[#8bafd4] hover:bg-[#2d4a6a]">
+          <a href="/asistencias" className="rounded-lg bg-[#1e3a5f] px-3 py-1.5 text-xs font-bold text-[#8bafd4] hover:bg-[#2d4a6a]">
             ← Volver
           </a>
         </div>

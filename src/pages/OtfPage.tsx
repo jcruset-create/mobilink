@@ -72,7 +72,7 @@ export default function OtfPage() {
             <button onClick={() => setShowNew(true)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800">+ Nueva OTF</button>
             <a href="/otf-tv" target="_blank" rel="noopener noreferrer" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">📺 Panel TV</a>
             <button onClick={loadList} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">↻ Actualizar</button>
-            <a href="/" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
+            <a href="/asistencias" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
           </div>
         </header>
 

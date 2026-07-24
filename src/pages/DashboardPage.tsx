@@ -47,7 +47,7 @@ export default function DashboardPage() {
               <option value={30}>Últimos 30 días</option>
               <option value={90}>Últimos 90 días</option>
             </select>
-            <a href="/" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
+            <a href="/asistencias" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
           </div>
         </header>
 
