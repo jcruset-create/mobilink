@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import SafetyMenu from "../components/SafetyMenu";
+import { Plus } from "lucide-react";
+import SafetyLayout from "../components/SafetyLayout";
 import { supabase } from "../services/supabase";
 
 type Epi = {
@@ -27,6 +28,10 @@ const EMPTY = {
   stock_actual: 0, stock_minimo: 0, coste_unitario: "", ubicacion: "", norma_ce: "",
   category_id: "", activo: true,
 };
+
+const FIELD = "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/40";
+const INPUT = `w-full ${FIELD}`;
+const LABEL = "text-xs font-medium text-slate-400";
 
 export default function Epis() {
   const [items, setItems] = useState<Epi[]>([]);
@@ -139,44 +144,42 @@ export default function Epis() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <SafetyMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">EPIs</h1>
-          <p className="text-sm text-gray-500">{filtrados.length} equipos de protección individual</p>
-        </div>
+    <SafetyLayout
+      title="EPIs"
+      subtitle={`${filtrados.length} equipos de protección individual`}
+      actions={
         <button onClick={abrirNuevo}
-          className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-600">
-          + Nuevo EPI
+          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400">
+          <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Nuevo EPI</span>
         </button>
-      </div>
-
-      {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+      }
+    >
+      {mensaje && (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/15 p-3 text-sm text-emerald-300">{mensaje}</p>
+      )}
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-2 items-center">
+      <div className="flex flex-wrap items-center gap-2">
         <input value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)}
-          placeholder="Buscar por nombre, código, fabricante..." className="rounded-lg border px-3 py-2 text-sm w-64" />
-        <select value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
+          placeholder="Buscar por nombre, código, fabricante..." className={`w-64 ${FIELD}`} />
+        <select value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)} className={FIELD}>
           <option value="">Todas las categorías</option>
           {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
-        <label className="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" checked={filtroStockBajo} onChange={(e) => setFiltroStockBajo(e.target.checked)} />
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+          <input type="checkbox" checked={filtroStockBajo} onChange={(e) => setFiltroStockBajo(e.target.checked)} className="accent-amber-500" />
           Solo stock bajo
         </label>
         {(filtroTexto || filtroCat || filtroStockBajo) && (
           <button onClick={() => { setFiltroTexto(""); setFiltroCat(""); setFiltroStockBajo(false); }}
-            className="rounded-lg border px-3 py-2 text-sm text-gray-500 hover:bg-gray-50">Limpiar</button>
+            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700">Limpiar</button>
         )}
       </div>
 
-      {cargando ? <div className="py-10 text-center text-gray-400">Cargando...</div> : (
-        <div className="overflow-auto rounded-xl border bg-white">
+      {cargando ? <div className="py-10 text-center text-slate-500">Cargando...</div> : (
+        <div className="overflow-auto rounded-xl border border-slate-700 bg-slate-800 shadow-sm">
           <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
               <tr>
                 <th className="p-3">Código</th>
                 <th className="p-3">Nombre</th>
@@ -193,32 +196,32 @@ export default function Epis() {
               {filtrados.map((e) => {
                 const stockBajo = e.stock_actual <= e.stock_minimo;
                 return (
-                  <tr key={e.id} className="border-t hover:bg-gray-50">
-                    <td className="p-3 font-mono font-semibold">{e.codigo}</td>
-                    <td className="p-3 font-medium">{e.nombre}</td>
-                    <td className="p-3 text-gray-500">{(e.sm_epi_categories as any)?.nombre ?? "—"}</td>
-                    <td className="p-3 text-gray-500">{[e.fabricante, e.modelo].filter(Boolean).join(" · ") || "—"}</td>
-                    <td className="p-3 text-gray-500">{e.talla ?? "—"}</td>
+                  <tr key={e.id} className="border-t border-slate-700/70 hover:bg-slate-700/40">
+                    <td className="p-3 font-mono font-semibold text-slate-200">{e.codigo}</td>
+                    <td className="p-3 font-medium text-slate-100">{e.nombre}</td>
+                    <td className="p-3 text-slate-400">{(e.sm_epi_categories as any)?.nombre ?? "—"}</td>
+                    <td className="p-3 text-slate-400">{[e.fabricante, e.modelo].filter(Boolean).join(" · ") || "—"}</td>
+                    <td className="p-3 text-slate-400">{e.talla ?? "—"}</td>
                     <td className="p-3">
-                      <div className={`font-bold ${stockBajo ? "text-red-600" : "text-green-700"}`}>{e.stock_actual}</div>
-                      <div className="text-xs text-gray-400">mín. {e.stock_minimo}</div>
-                      {stockBajo && <span className="rounded-full bg-red-100 text-red-700 px-1.5 py-0.5 text-xs">Stock bajo</span>}
+                      <div className={`font-bold ${stockBajo ? "text-red-400" : "text-emerald-400"}`}>{e.stock_actual}</div>
+                      <div className="text-xs text-slate-500">mín. {e.stock_minimo}</div>
+                      {stockBajo && <span className="rounded-full border border-red-500/30 bg-red-500/15 px-1.5 py-0.5 text-xs text-red-300">Stock bajo</span>}
                     </td>
-                    <td className="p-3 text-gray-500">{e.coste_unitario != null ? `${e.coste_unitario.toFixed(2)} €` : "—"}</td>
-                    <td className="p-3 text-gray-500">{e.ubicacion ?? "—"}</td>
+                    <td className="p-3 text-slate-400">{e.coste_unitario != null ? `${e.coste_unitario.toFixed(2)} €` : "—"}</td>
+                    <td className="p-3 text-slate-400">{e.ubicacion ?? "—"}</td>
                     <td className="p-3">
                       <div className="flex gap-1">
                         <button onClick={() => { setFormStock({ tipo: "compra", cantidad: "", observaciones: "" }); setError(""); setModalStock(e); }}
-                          className="rounded-lg bg-green-50 px-2 py-1 text-xs text-green-700 hover:bg-green-100">Stock</button>
+                          className="rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/25">Stock</button>
                         <button onClick={() => abrirEditar(e)}
-                          className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">Editar</button>
+                          className="rounded-lg border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-600">Editar</button>
                       </div>
                     </td>
                   </tr>
                 );
               })}
               {filtrados.length === 0 && (
-                <tr><td colSpan={9} className="p-8 text-center text-gray-400">Sin EPIs registrados.</td></tr>
+                <tr><td colSpan={9} className="p-8 text-center text-slate-500">Sin EPIs registrados.</td></tr>
               )}
             </tbody>
           </table>
@@ -227,63 +230,64 @@ export default function Epis() {
 
       {/* Modal EPI */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-bold mb-4">{editId ? "Editar EPI" : "Nuevo EPI"}</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-bold text-slate-100">{editId ? "Editar EPI" : "Nuevo EPI"}</h2>
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Código *</label>
+                <div><label className={LABEL}>Código *</label>
                   <input value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="EPI-001" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Categoría</label>
+                    className={`mt-1 ${INPUT}`} placeholder="EPI-001" /></div>
+                <div><label className={LABEL}>Categoría</label>
                   <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                    className={`mt-1 ${INPUT}`}>
                     <option value="">Sin categoría</option>
                     {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select></div>
               </div>
-              <div><label className="text-xs font-medium text-gray-600">Nombre *</label>
+              <div><label className={LABEL}>Nombre *</label>
                 <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="Casco de seguridad clase 1" /></div>
+                  className={`mt-1 ${INPUT}`} placeholder="Casco de seguridad clase 1" /></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Fabricante</label>
+                <div><label className={LABEL}>Fabricante</label>
                   <input value={form.fabricante} onChange={(e) => setForm({ ...form, fabricante: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Modelo</label>
+                    className={`mt-1 ${INPUT}`} /></div>
+                <div><label className={LABEL}>Modelo</label>
                   <input value={form.modelo} onChange={(e) => setForm({ ...form, modelo: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                    className={`mt-1 ${INPUT}`} /></div>
               </div>
               <div className="grid grid-cols-3 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Talla</label>
+                <div><label className={LABEL}>Talla</label>
                   <input value={form.talla} onChange={(e) => setForm({ ...form, talla: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="M / 42 / Única" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Stock actual</label>
+                    className={`mt-1 ${INPUT}`} placeholder="M / 42 / Única" /></div>
+                <div><label className={LABEL}>Stock actual</label>
                   <input type="number" value={form.stock_actual} onChange={(e) => setForm({ ...form, stock_actual: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Stock mínimo</label>
+                    className={`mt-1 ${INPUT}`} /></div>
+                <div><label className={LABEL}>Stock mínimo</label>
                   <input type="number" value={form.stock_minimo} onChange={(e) => setForm({ ...form, stock_minimo: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                    className={`mt-1 ${INPUT}`} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Coste unitario (€)</label>
+                <div><label className={LABEL}>Coste unitario (€)</label>
                   <input type="number" step="0.01" value={form.coste_unitario} onChange={(e) => setForm({ ...form, coste_unitario: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Ubicación</label>
+                    className={`mt-1 ${INPUT}`} /></div>
+                <div><label className={LABEL}>Ubicación</label>
                   <input value={form.ubicacion} onChange={(e) => setForm({ ...form, ubicacion: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="Armario PRL — Estante A" /></div>
+                    className={`mt-1 ${INPUT}`} placeholder="Armario PRL — Estante A" /></div>
               </div>
-              <div><label className="text-xs font-medium text-gray-600">Norma CE</label>
+              <div><label className={LABEL}>Norma CE</label>
                 <input value={form.norma_ce} onChange={(e) => setForm({ ...form, norma_ce: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="EN 397:2012" /></div>
-              <div><label className="text-xs font-medium text-gray-600">Descripción</label>
+                  className={`mt-1 ${INPUT}`} placeholder="EN 397:2012" /></div>
+              <div><label className={LABEL}>Descripción</label>
                 <textarea value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" rows={2} /></div>
+                  className={`mt-1 resize-none ${INPUT}`} rows={2} /></div>
             </div>
-            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-            <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setModal(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+            {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setModal(false)}
+                className="rounded-lg border border-slate-600 bg-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-600">Cancelar</button>
               <button onClick={guardar} disabled={guardando}
-                className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-600 disabled:opacity-50">
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50">
                 {guardando ? "Guardando..." : editId ? "Guardar cambios" : "Crear EPI"}
               </button>
             </div>
@@ -293,14 +297,14 @@ export default function Epis() {
 
       {/* Modal ajuste stock */}
       {modalStock && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-bold mb-1">Ajustar stock</h2>
-            <p className="text-sm text-gray-500 mb-4">{modalStock.nombre} — actual: <strong>{modalStock.stock_actual}</strong></p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-xl">
+            <h2 className="mb-1 text-lg font-bold text-slate-100">Ajustar stock</h2>
+            <p className="mb-4 text-sm text-slate-400">{modalStock.nombre} — actual: <strong className="text-slate-200">{modalStock.stock_actual}</strong></p>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium text-gray-600">Tipo de movimiento</label>
+              <div><label className={LABEL}>Tipo de movimiento</label>
                 <select value={formStock.tipo} onChange={(e) => setFormStock({ ...formStock, tipo: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className={`mt-1 ${INPUT}`}>
                   <option value="compra">Compra (entrada)</option>
                   <option value="reposicion">Reposición (entrada)</option>
                   <option value="devolucion">Devolución (entrada)</option>
@@ -309,24 +313,25 @@ export default function Epis() {
                   <option value="baja">Baja (salida)</option>
                   <option value="ajuste">Ajuste manual</option>
                 </select></div>
-              <div><label className="text-xs font-medium text-gray-600">Cantidad</label>
+              <div><label className={LABEL}>Cantidad</label>
                 <input type="number" min="1" value={formStock.cantidad} onChange={(e) => setFormStock({ ...formStock, cantidad: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-              <div><label className="text-xs font-medium text-gray-600">Observaciones</label>
+                  className={`mt-1 ${INPUT}`} /></div>
+              <div><label className={LABEL}>Observaciones</label>
                 <input value={formStock.observaciones} onChange={(e) => setFormStock({ ...formStock, observaciones: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
+                  className={`mt-1 ${INPUT}`} /></div>
             </div>
-            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-            <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setModalStock(null)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+            {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setModalStock(null)}
+                className="rounded-lg border border-slate-600 bg-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-600">Cancelar</button>
               <button onClick={ajustarStock} disabled={guardando}
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50">
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Confirmar"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </SafetyLayout>
   );
 }

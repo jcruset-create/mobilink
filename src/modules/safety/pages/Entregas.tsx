@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import SafetyMenu from "../components/SafetyMenu";
+import { Plus } from "lucide-react";
+import SafetyLayout from "../components/SafetyLayout";
 import { supabase } from "../services/supabase";
 
 type Entrega = {
@@ -17,12 +18,16 @@ type Entrega = {
 };
 
 const ESTADO_BADGE: Record<string, string> = {
-  entregado:    "bg-blue-100 text-blue-800",
-  devuelto:     "bg-green-100 text-green-800",
-  perdido:      "bg-red-100 text-red-800",
-  dado_de_baja: "bg-gray-200 text-gray-600",
-  pendiente:    "bg-yellow-100 text-yellow-800",
+  entregado:    "border-sky-500/30 bg-sky-500/15 text-sky-300",
+  devuelto:     "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
+  perdido:      "border-red-500/30 bg-red-500/15 text-red-300",
+  dado_de_baja: "border-slate-500/30 bg-slate-500/20 text-slate-300",
+  pendiente:    "border-amber-500/30 bg-amber-500/15 text-amber-300",
 };
+
+const FIELD = "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/40";
+const INPUT = `w-full ${FIELD}`;
+const LABEL = "text-xs font-medium text-slate-400";
 
 export default function Entregas() {
   const [items, setItems] = useState<Entrega[]>([]);
@@ -114,27 +119,25 @@ export default function Entregas() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <SafetyMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Entregas de EPIs</h1>
-          <p className="text-sm text-gray-500">{filtrados.length} registros</p>
-        </div>
+    <SafetyLayout
+      title="Entregas de EPIs"
+      subtitle={`${filtrados.length} registros`}
+      actions={
         <button onClick={() => { setForm({ epi_id: "", employee_id: "", cantidad: "1", talla: "", fecha_caducidad: "", observaciones: "" }); setError(""); setModal(true); }}
-          className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-600">
-          + Nueva entrega
+          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400">
+          <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Nueva entrega</span>
         </button>
-      </div>
-
-      {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+      }
+    >
+      {mensaje && (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/15 p-3 text-sm text-emerald-300">{mensaje}</p>
+      )}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-2">
         <input value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)}
-          placeholder="Buscar EPI o empleado..." className="rounded-lg border px-3 py-2 text-sm w-56" />
-        <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className="rounded-lg border px-3 py-2 text-sm">
+          placeholder="Buscar EPI o empleado..." className={`w-56 ${FIELD}`} />
+        <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className={FIELD}>
           <option value="">Todos los estados</option>
           <option value="entregado">Entregado</option>
           <option value="devuelto">Devuelto</option>
@@ -143,14 +146,14 @@ export default function Entregas() {
         </select>
         {(filtroEstado || filtroTexto) && (
           <button onClick={() => { setFiltroEstado(""); setFiltroTexto(""); }}
-            className="rounded-lg border px-3 py-2 text-sm text-gray-500 hover:bg-gray-50">Limpiar</button>
+            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700">Limpiar</button>
         )}
       </div>
 
-      {cargando ? <div className="py-10 text-center text-gray-400">Cargando...</div> : (
-        <div className="overflow-auto rounded-xl border bg-white">
+      {cargando ? <div className="py-10 text-center text-slate-500">Cargando...</div> : (
+        <div className="overflow-auto rounded-xl border border-slate-700 bg-slate-800 shadow-sm">
           <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
               <tr>
                 <th className="p-3">Fecha</th>
                 <th className="p-3">EPI</th>
@@ -168,33 +171,33 @@ export default function Entregas() {
                   ? Math.ceil((new Date(e.fecha_caducidad).getTime() - Date.now()) / 86400000)
                   : null;
                 return (
-                  <tr key={e.id} className="border-t hover:bg-gray-50">
-                    <td className="p-3 text-xs text-gray-500 whitespace-nowrap">
+                  <tr key={e.id} className="border-t border-slate-700/70 hover:bg-slate-700/40">
+                    <td className="whitespace-nowrap p-3 text-xs text-slate-400">
                       {new Date(e.fecha_entrega).toLocaleDateString("es-ES")}
                     </td>
                     <td className="p-3">
-                      <div className="font-medium">{(e.sm_epis as any)?.nombre ?? "—"}</div>
-                      <div className="text-xs text-gray-400">{(e.sm_epis as any)?.codigo ?? ""}</div>
+                      <div className="font-medium text-slate-100">{(e.sm_epis as any)?.nombre ?? "—"}</div>
+                      <div className="text-xs text-slate-500">{(e.sm_epis as any)?.codigo ?? ""}</div>
                     </td>
-                    <td className="p-3">{(e.sea_employees as any)?.nombre ?? "—"}</td>
-                    <td className="p-3 text-center">{e.cantidad}</td>
-                    <td className="p-3 text-gray-500">{e.talla ?? "—"}</td>
+                    <td className="p-3 text-slate-200">{(e.sea_employees as any)?.nombre ?? "—"}</td>
+                    <td className="p-3 text-center text-slate-200">{e.cantidad}</td>
+                    <td className="p-3 text-slate-400">{e.talla ?? "—"}</td>
                     <td className="p-3">
-                      {caduca === null ? <span className="text-gray-400">—</span> : (
-                        <span className={`text-xs font-semibold ${caduca < 0 ? "text-red-600" : caduca < 30 ? "text-orange-600" : "text-gray-500"}`}>
+                      {caduca === null ? <span className="text-slate-500">—</span> : (
+                        <span className={`text-xs font-semibold ${caduca < 0 ? "text-red-400" : caduca < 30 ? "text-orange-400" : "text-slate-400"}`}>
                           {caduca < 0 ? `Caducado (${Math.abs(caduca)}d)` : caduca === 0 ? "Hoy" : `${caduca}d`}
                         </span>
                       )}
                     </td>
                     <td className="p-3">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[e.estado] ?? "bg-gray-100"}`}>
+                      <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[e.estado] ?? "border-slate-500/30 bg-slate-500/15 text-slate-300"}`}>
                         {e.estado}
                       </span>
                     </td>
                     <td className="p-3">
                       {e.estado === "entregado" && (
                         <button onClick={() => cambiarEstado(e.id, "devuelto")}
-                          className="rounded-lg bg-green-50 px-2 py-1 text-xs text-green-700 hover:bg-green-100">
+                          className="rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/25">
                           Devolver
                         </button>
                       )}
@@ -203,7 +206,7 @@ export default function Entregas() {
                 );
               })}
               {filtrados.length === 0 && (
-                <tr><td colSpan={8} className="p-8 text-center text-gray-400">Sin entregas registradas.</td></tr>
+                <tr><td colSpan={8} className="p-8 text-center text-slate-500">Sin entregas registradas.</td></tr>
               )}
             </tbody>
           </table>
@@ -212,50 +215,51 @@ export default function Entregas() {
 
       {/* Modal nueva entrega */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-bold mb-4">Nueva entrega de EPI</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-bold text-slate-100">Nueva entrega de EPI</h2>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium text-gray-600">EPI *</label>
+              <div><label className={LABEL}>EPI *</label>
                 <select value={form.epi_id} onChange={(e) => setForm({ ...form, epi_id: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className={`mt-1 ${INPUT}`}>
                   <option value="">Seleccionar EPI...</option>
                   {epis.map((e) => (
                     <option key={e.id} value={e.id}>{e.nombre} ({e.codigo}) — stock: {e.stock_actual}</option>
                   ))}
                 </select></div>
-              <div><label className="text-xs font-medium text-gray-600">Empleado *</label>
+              <div><label className={LABEL}>Empleado *</label>
                 <select value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className={`mt-1 ${INPUT}`}>
                   <option value="">Seleccionar empleado...</option>
                   {empleados.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
                 </select></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-medium text-gray-600">Cantidad</label>
+                <div><label className={LABEL}>Cantidad</label>
                   <input type="number" min="1" value={form.cantidad} onChange={(e) => setForm({ ...form, cantidad: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-                <div><label className="text-xs font-medium text-gray-600">Talla</label>
+                    className={`mt-1 ${INPUT}`} /></div>
+                <div><label className={LABEL}>Talla</label>
                   <input value={form.talla} onChange={(e) => setForm({ ...form, talla: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="M / 42 / Única" /></div>
+                    className={`mt-1 ${INPUT}`} placeholder="M / 42 / Única" /></div>
               </div>
-              <div><label className="text-xs font-medium text-gray-600">Fecha caducidad EPI</label>
+              <div><label className={LABEL}>Fecha caducidad EPI</label>
                 <input type="date" value={form.fecha_caducidad} onChange={(e) => setForm({ ...form, fecha_caducidad: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" /></div>
-              <div><label className="text-xs font-medium text-gray-600">Observaciones</label>
+                  className={`mt-1 ${INPUT}`} /></div>
+              <div><label className={LABEL}>Observaciones</label>
                 <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" rows={2} /></div>
+                  className={`mt-1 resize-none ${INPUT}`} rows={2} /></div>
             </div>
-            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-            <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setModal(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+            {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setModal(false)}
+                className="rounded-lg border border-slate-600 bg-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-600">Cancelar</button>
               <button onClick={crear} disabled={guardando}
-                className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-600 disabled:opacity-50">
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Registrar entrega"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </SafetyLayout>
   );
 }
