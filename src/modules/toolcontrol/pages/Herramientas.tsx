@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
-import ToolControlMenu from "../components/ToolControlMenu";
+import { Plus } from "lucide-react";
+import ToolControlLayout from "../components/ToolControlLayout";
 import { supabase } from "../services/supabase";
 
 type Herramienta = {
@@ -35,17 +36,21 @@ const ESTADOS = [
 ];
 
 const ESTADO_BADGE: Record<string, string> = {
-  disponible:           "bg-green-100 text-green-800",
-  en_uso:               "bg-blue-100 text-blue-800",
-  compartida:           "bg-cyan-100 text-cyan-800",
-  pendiente_devolucion: "bg-yellow-100 text-yellow-800",
-  danada:               "bg-red-100 text-red-800",
-  mantenimiento:        "bg-orange-100 text-orange-800",
-  perdida:              "bg-gray-200 text-gray-600",
-  fuera_servicio:       "bg-gray-200 text-gray-600",
-  pendiente_revision:   "bg-purple-100 text-purple-800",
-  desactualizada:       "bg-pink-100 text-pink-800",
+  disponible:           "bg-emerald-500/15 text-emerald-300",
+  en_uso:               "bg-blue-500/15 text-blue-300",
+  compartida:           "bg-cyan-500/15 text-cyan-300",
+  pendiente_devolucion: "bg-yellow-500/15 text-yellow-300",
+  danada:               "bg-red-500/15 text-red-300",
+  mantenimiento:        "bg-orange-500/15 text-orange-300",
+  perdida:              "bg-slate-500/15 text-slate-300",
+  fuera_servicio:       "bg-slate-500/15 text-slate-300",
+  pendiente_revision:   "bg-purple-500/15 text-purple-300",
+  desactualizada:       "bg-pink-500/15 text-pink-300",
 };
+
+const FIELD = "rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/40";
+const INPUT = `mt-1 w-full ${FIELD}`;
+const LABEL = "text-xs font-medium text-slate-400";
 
 const EMPTY: Partial<Herramienta> = {
   codigo: "", nombre: "", descripcion: "", marca: "", modelo: "",
@@ -176,23 +181,19 @@ export default function Herramientas() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <ToolControlMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Herramientas</h1>
-          <p className="text-sm text-gray-500">{filtradas.length} herramientas</p>
-        </div>
+    <ToolControlLayout
+      title="Herramientas"
+      subtitle={`${filtradas.length} herramientas`}
+      actions={
         <button
           onClick={abrirNueva}
-          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400"
         >
-          + Nueva herramienta
+          <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Nueva herramienta</span>
         </button>
-      </div>
-
-      {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+      }
+    >
+      {mensaje && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">{mensaje}</p>}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-2">
@@ -200,12 +201,12 @@ export default function Herramientas() {
           value={filtroTexto}
           onChange={(e) => setFiltroTexto(e.target.value)}
           placeholder="Buscar por nombre, código, marca..."
-          className="rounded-lg border px-3 py-2 text-sm w-64"
+          className={`w-64 ${FIELD}`}
         />
         <select
           value={filtroEstado}
           onChange={(e) => setFiltroEstado(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm"
+          className={FIELD}
         >
           <option value="">Todos los estados</option>
           {ESTADOS.map((e) => (
@@ -215,7 +216,7 @@ export default function Herramientas() {
         <select
           value={filtroCat}
           onChange={(e) => setFiltroCat(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm"
+          className={FIELD}
         >
           <option value="">Todas las categorías</option>
           {categorias.map((c) => (
@@ -225,7 +226,7 @@ export default function Herramientas() {
         {(filtroEstado || filtroTexto || filtroCat) && (
           <button
             onClick={() => { setFiltroEstado(""); setFiltroTexto(""); setFiltroCat(""); }}
-            className="rounded-lg border px-3 py-2 text-sm text-gray-500 hover:bg-gray-50"
+            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700"
           >
             Limpiar
           </button>
@@ -234,11 +235,11 @@ export default function Herramientas() {
 
       {/* Tabla */}
       {cargando ? (
-        <div className="text-center py-10 text-gray-400">Cargando...</div>
+        <div className="text-center py-10 text-slate-500">Cargando...</div>
       ) : (
-        <div className="overflow-auto rounded-xl border bg-white">
+        <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-800/60">
           <table className="w-full min-w-[800px] text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-slate-800 text-left text-xs uppercase tracking-wide text-slate-400">
               <tr>
                 <th className="p-3">Código</th>
                 <th className="p-3">Nombre</th>
@@ -256,33 +257,33 @@ export default function Herramientas() {
                   ? Math.ceil((new Date(h.proxima_revision).getTime() - Date.now()) / 86400000)
                   : null;
                 return (
-                  <tr key={h.id} className="border-t align-middle hover:bg-gray-50">
-                    <td className="p-3 font-mono font-semibold">{h.codigo}</td>
+                  <tr key={h.id} className="border-t border-slate-800 align-middle hover:bg-slate-800/50">
+                    <td className="p-3 font-mono font-semibold text-slate-200">{h.codigo}</td>
                     <td className="p-3">
-                      <div className="font-medium">{h.nombre}</div>
+                      <div className="font-medium text-slate-100">{h.nombre}</div>
                       {h.es_compartida && (
-                        <span className="text-xs text-cyan-600">Compartida</span>
+                        <span className="text-xs text-cyan-300">Compartida</span>
                       )}
                     </td>
-                    <td className="p-3 text-gray-600">
+                    <td className="p-3 text-slate-400">
                       {[h.marca, h.modelo].filter(Boolean).join(" · ") || "—"}
                     </td>
-                    <td className="p-3 text-gray-600">
+                    <td className="p-3 text-slate-400">
                       {(h.tc_categories as any)?.nombre ?? "—"}
                     </td>
-                    <td className="p-3 text-gray-600">
+                    <td className="p-3 text-slate-400">
                       {(h.ubicacion_actual as any)?.nombre ?? "—"}
                     </td>
                     <td className="p-3">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[h.estado] ?? "bg-gray-100 text-gray-600"}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[h.estado] ?? "bg-slate-500/15 text-slate-300"}`}>
                         {h.estado.replace(/_/g, " ")}
                       </span>
                     </td>
                     <td className="p-3">
                       {diasRevision === null ? (
-                        <span className="text-gray-400">—</span>
+                        <span className="text-slate-500">—</span>
                       ) : (
-                        <span className={`text-xs font-semibold ${diasRevision < 0 ? "text-red-600" : diasRevision < 7 ? "text-orange-600" : "text-gray-500"}`}>
+                        <span className={`text-xs font-semibold ${diasRevision < 0 ? "text-red-400" : diasRevision < 7 ? "text-orange-400" : "text-slate-400"}`}>
                           {diasRevision < 0
                             ? `Vencida (${Math.abs(diasRevision)}d)`
                             : diasRevision === 0
@@ -295,19 +296,19 @@ export default function Herramientas() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => setQrItem({ id: h.id, codigo: h.codigo, nombre: h.nombre })}
-                          className="rounded-lg bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100"
+                          className="rounded-lg border border-blue-500/30 bg-blue-500/15 px-2 py-1 text-xs text-blue-300 hover:bg-blue-500/25"
                         >
                           QR
                         </button>
                         <button
                           onClick={() => abrirEditar(h)}
-                          className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200"
+                          className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700"
                         >
                           Editar
                         </button>
                         <button
                           onClick={() => eliminar(h.id)}
-                          className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600 hover:bg-red-100"
+                          className="rounded-lg border border-red-500/30 bg-red-500/15 px-2 py-1 text-xs text-red-300 hover:bg-red-500/25"
                         >
                           Desactivar
                         </button>
@@ -318,7 +319,7 @@ export default function Herramientas() {
               })}
               {filtradas.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-gray-400">
+                  <td colSpan={8} className="p-8 text-center text-slate-500">
                     No hay herramientas con los filtros actuales.
                   </td>
                 </tr>
@@ -330,29 +331,29 @@ export default function Herramientas() {
 
       {/* Modal */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-bold mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
+            <h2 className="text-lg font-bold mb-4 text-slate-100">
               {editId ? "Editar herramienta" : "Nueva herramienta"}
             </h2>
 
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Código *</label>
+                  <label className={LABEL}>Código *</label>
                   <input
                     value={form.codigo}
                     onChange={(e) => setForm({ ...form, codigo: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    className={INPUT}
                     placeholder="HRR-001"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Estado</label>
+                  <label className={LABEL}>Estado</label>
                   <select
                     value={form.estado}
                     onChange={(e) => setForm({ ...form, estado: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    className={INPUT}
                   >
                     {ESTADOS.map((e) => (
                       <option key={e} value={e}>{e.replace(/_/g, " ")}</option>
@@ -362,50 +363,50 @@ export default function Herramientas() {
               </div>
 
               <div>
-                <label className="text-xs font-medium text-gray-600">Nombre *</label>
+                <label className={LABEL}>Nombre *</label>
                 <input
                   value={form.nombre}
                   onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                  className={INPUT}
                   placeholder="Llave de impacto 1/2"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Marca</label>
+                  <label className={LABEL}>Marca</label>
                   <input
                     value={form.marca}
                     onChange={(e) => setForm({ ...form, marca: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    className={INPUT}
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Modelo</label>
+                  <label className={LABEL}>Modelo</label>
                   <input
                     value={form.modelo}
                     onChange={(e) => setForm({ ...form, modelo: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    className={INPUT}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs font-medium text-gray-600">Número de serie</label>
+                <label className={LABEL}>Número de serie</label>
                 <input
                   value={form.numero_serie}
                   onChange={(e) => setForm({ ...form, numero_serie: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                  className={INPUT}
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Categoría</label>
+                  <label className={LABEL}>Categoría</label>
                   <select
                     value={form.category_id ?? ""}
                     onChange={(e) => setForm({ ...form, category_id: e.target.value || null })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    className={INPUT}
                   >
                     <option value="">Sin categoría</option>
                     {categorias.map((c) => (
@@ -414,11 +415,11 @@ export default function Herramientas() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Ubicación habitual</label>
+                  <label className={LABEL}>Ubicación habitual</label>
                   <select
                     value={form.ubicacion_habitual_id ?? ""}
                     onChange={(e) => setForm({ ...form, ubicacion_habitual_id: e.target.value || null })}
-                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    className={INPUT}
                   >
                     <option value="">Sin ubicación</option>
                     {ubicaciones.map((u) => (
@@ -429,11 +430,11 @@ export default function Herramientas() {
               </div>
 
               <div>
-                <label className="text-xs font-medium text-gray-600">Ubicación actual</label>
+                <label className={LABEL}>Ubicación actual</label>
                 <select
                   value={form.ubicacion_actual_id ?? ""}
                   onChange={(e) => setForm({ ...form, ubicacion_actual_id: e.target.value || null })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                  className={INPUT}
                 >
                   <option value="">Misma que habitual</option>
                   {ubicaciones.map((u) => (
@@ -443,48 +444,49 @@ export default function Herramientas() {
               </div>
 
               <div>
-                <label className="text-xs font-medium text-gray-600">Descripción</label>
+                <label className={LABEL}>Descripción</label>
                 <textarea
                   value={form.descripcion}
                   onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                  className={INPUT}
                   rows={2}
                 />
               </div>
 
               <div>
-                <label className="text-xs font-medium text-gray-600">Observaciones</label>
+                <label className={LABEL}>Observaciones</label>
                 <textarea
                   value={form.observaciones}
                   onChange={(e) => setForm({ ...form, observaciones: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                  className={INPUT}
                   rows={2}
                 />
               </div>
 
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-slate-300">
                 <input
                   type="checkbox"
                   checked={form.es_compartida}
                   onChange={(e) => setForm({ ...form, es_compartida: e.target.checked })}
+                  className="accent-amber-500"
                 />
                 Herramienta compartida (varios usuarios simultáneos)
               </label>
             </div>
 
-            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+            {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
 
             <div className="mt-5 flex gap-2 justify-end">
               <button
                 onClick={() => setModal(false)}
-                className="rounded-xl border px-4 py-2 text-sm font-semibold"
+                className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700"
               >
                 Cancelar
               </button>
               <button
                 onClick={guardar}
                 disabled={guardando}
-                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50"
               >
                 {guardando ? "Guardando..." : editId ? "Guardar cambios" : "Crear herramienta"}
               </button>
@@ -495,14 +497,14 @@ export default function Herramientas() {
 
       {/* Modal QR */}
       {qrItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-xs rounded-2xl bg-white p-6 shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-xs rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl space-y-4">
             <div className="text-center">
-              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Herramienta · {qrItem.codigo}</div>
-              <div className="font-bold text-gray-800">{qrItem.nombre}</div>
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Herramienta · {qrItem.codigo}</div>
+              <div className="font-bold text-slate-100">{qrItem.nombre}</div>
             </div>
 
-            <div ref={qrRef} className="flex justify-center p-4 bg-white border rounded-xl">
+            <div ref={qrRef} className="flex justify-center p-4 bg-white rounded-xl">
               <QRCode
                 value={`${window.location.origin}/qr/herramienta/${qrItem.id}`}
                 size={180}
@@ -510,14 +512,14 @@ export default function Herramientas() {
               />
             </div>
 
-            <p className="text-xs text-center text-gray-400 break-all">
+            <p className="text-xs text-center text-slate-500 break-all">
               {window.location.origin}/qr/herramienta/{qrItem.id}
             </p>
 
             <div className="flex gap-2">
               <button
                 onClick={() => setQrItem(null)}
-                className="flex-1 rounded-xl border px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700"
               >
                 Cerrar
               </button>
@@ -537,7 +539,7 @@ export default function Herramientas() {
                     </body></html>`);
                   w.document.close();
                 }}
-                className="flex-1 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                className="flex-1 rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400"
               >
                 Imprimir etiqueta
               </button>
@@ -545,6 +547,6 @@ export default function Herramientas() {
           </div>
         </div>
       )}
-    </div>
+    </ToolControlLayout>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ToolControlMenu from "../components/ToolControlMenu";
+import ToolControlLayout from "../components/ToolControlLayout";
 import { supabase } from "../services/supabase";
 
 type Inventario = {
@@ -12,11 +12,11 @@ type Inventario = {
 };
 
 const RESULTADO_BADGE: Record<string, string> = {
-  localizada:    "bg-green-100 text-green-800",
-  no_localizada: "bg-red-100 text-red-800",
-  danada:        "bg-orange-100 text-orange-800",
-  en_uso:        "bg-blue-100 text-blue-800",
-  en_reparacion: "bg-purple-100 text-purple-800",
+  localizada:    "bg-emerald-500/15 text-emerald-300",
+  no_localizada: "bg-red-500/15 text-red-300",
+  danada:        "bg-orange-500/15 text-orange-300",
+  en_uso:        "bg-sky-500/15 text-sky-300",
+  en_reparacion: "bg-purple-500/15 text-purple-300",
 };
 
 export default function Inventario() {
@@ -89,42 +89,41 @@ export default function Inventario() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <ToolControlMenu />
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Inventario</h1>
-          <p className="text-sm text-gray-500">Verificación periódica de herramientas</p>
-        </div>
-        {!inventarioActivo && (
-          <button onClick={iniciarInventario} disabled={creando}
-            className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50">
-            {creando ? "Creando..." : "Iniciar inventario"}
-          </button>
-        )}
-        {inventarioActivo && (
-          <button onClick={cerrarInventario}
-            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-            ✓ Cerrar inventario
-          </button>
-        )}
-      </div>
-
-      {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+    <ToolControlLayout
+      title="Inventario"
+      subtitle="Verificación periódica de herramientas"
+      actions={
+        <>
+          {!inventarioActivo && (
+            <button onClick={iniciarInventario} disabled={creando}
+              className="rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50">
+              {creando ? "Creando..." : "Iniciar inventario"}
+            </button>
+          )}
+          {inventarioActivo && (
+            <button onClick={cerrarInventario}
+              className="rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400">
+              ✓ Cerrar inventario
+            </button>
+          )}
+        </>
+      }
+    >
+      {mensaje && <p className="rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{mensaje}</p>}
 
       {/* Inventario activo */}
       {inventarioActivo && (
-        <div className="rounded-xl border border-green-300 bg-green-50 p-4 space-y-3">
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 space-y-3">
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-            <h2 className="font-semibold text-green-800">Inventario en curso</h2>
-            <span className="text-xs text-green-600">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <h2 className="font-semibold text-emerald-300">Inventario en curso</h2>
+            <span className="text-xs text-emerald-400/80">
               {itemsActual.length} / {herramientas.length} verificadas
             </span>
           </div>
-          <div className="overflow-auto max-h-96">
-            <table className="w-full text-sm bg-white rounded-lg overflow-hidden">
-              <thead className="bg-gray-50 text-left">
+          <div className="overflow-auto max-h-96 rounded-lg border border-slate-800">
+            <table className="w-full text-sm bg-slate-900">
+              <thead className="bg-slate-800 text-left text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="p-2">Código</th>
                   <th className="p-2">Herramienta</th>
@@ -136,20 +135,20 @@ export default function Inventario() {
                 {herramientas.map((h) => {
                   const item = itemsActual.find((i) => i.tool_id === h.id);
                   return (
-                    <tr key={h.id} className="border-t">
-                      <td className="p-2 font-mono text-xs">{h.codigo}</td>
-                      <td className="p-2 font-medium">{h.nombre}</td>
-                      <td className="p-2 text-xs text-gray-500">{h.estado}</td>
+                    <tr key={h.id} className="border-t border-slate-800">
+                      <td className="p-2 font-mono text-xs text-slate-400">{h.codigo}</td>
+                      <td className="p-2 font-medium text-slate-100">{h.nombre}</td>
+                      <td className="p-2 text-xs text-slate-400">{h.estado}</td>
                       <td className="p-2">
                         {item ? (
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${RESULTADO_BADGE[item.estado_verificado] ?? "bg-gray-100"}`}>
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${RESULTADO_BADGE[item.estado_verificado] ?? "bg-slate-500/15 text-slate-300"}`}>
                             {item.estado_verificado}
                           </span>
                         ) : (
                           <div className="flex flex-wrap gap-1">
                             {["localizada","no_localizada","danada","en_uso","en_reparacion"].map((r) => (
                               <button key={r} onClick={() => verificar(h.id, r)}
-                                className="rounded-full border px-2 py-0.5 text-xs hover:bg-gray-100">
+                                className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-xs text-slate-300 hover:bg-slate-700">
                                 {r}
                               </button>
                             ))}
@@ -167,13 +166,13 @@ export default function Inventario() {
 
       {/* Historial */}
       <div>
-        <h2 className="font-semibold mb-3">Histórico de inventarios</h2>
+        <h2 className="font-semibold mb-3 text-slate-100">Histórico de inventarios</h2>
         {cargando ? (
-          <div className="py-8 text-center text-gray-400">Cargando...</div>
+          <div className="py-8 text-center text-slate-500">Cargando...</div>
         ) : (
-          <div className="overflow-auto rounded-xl border bg-white">
+          <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-800/60">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left">
+              <thead className="bg-slate-800 text-left text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="p-3">Fecha inicio</th>
                   <th className="p-3">Tipo</th>
@@ -183,29 +182,29 @@ export default function Inventario() {
               </thead>
               <tbody>
                 {inventarios.map((inv) => (
-                  <tr key={inv.id} className="border-t hover:bg-gray-50">
-                    <td className="p-3 text-xs">{new Date(inv.fecha_inicio).toLocaleString("es-ES")}</td>
-                    <td className="p-3">{inv.tipo}</td>
+                  <tr key={inv.id} className="border-t border-slate-800 hover:bg-slate-800/50">
+                    <td className="p-3 text-xs text-slate-300">{new Date(inv.fecha_inicio).toLocaleString("es-ES")}</td>
+                    <td className="p-3 text-slate-200">{inv.tipo}</td>
                     <td className="p-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                        inv.estado === "completado" ? "bg-green-100 text-green-800" :
-                        inv.estado === "en_curso" ? "bg-blue-100 text-blue-800" :
-                        "bg-gray-100 text-gray-600"
+                        inv.estado === "completado" ? "bg-emerald-500/15 text-emerald-300" :
+                        inv.estado === "en_curso" ? "bg-sky-500/15 text-sky-300" :
+                        "bg-slate-500/15 text-slate-300"
                       }`}>{inv.estado}</span>
                     </td>
-                    <td className="p-3 text-xs text-gray-500">
+                    <td className="p-3 text-xs text-slate-400">
                       {inv.fecha_fin ? new Date(inv.fecha_fin).toLocaleString("es-ES") : "—"}
                     </td>
                   </tr>
                 ))}
                 {inventarios.length === 0 && (
-                  <tr><td colSpan={4} className="p-8 text-center text-gray-400">Sin inventarios realizados.</td></tr>
+                  <tr><td colSpan={4} className="p-8 text-center text-slate-500">Sin inventarios realizados.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         )}
       </div>
-    </div>
+    </ToolControlLayout>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ToolControlMenu from "../components/ToolControlMenu";
+import ToolControlLayout from "../components/ToolControlLayout";
 import { supabase } from "../services/supabase";
 
 type Ubicacion = { id: string; nombre: string; descripcion: string | null; codigo: string | null; activa: boolean };
@@ -57,22 +57,25 @@ export default function Ubicaciones() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <ToolControlMenu />
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Ubicaciones</h1>
-        <button onClick={() => abrir()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+    <ToolControlLayout
+      title="Ubicaciones"
+      actions={
+        <button
+          onClick={() => abrir()}
+          className="rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400"
+        >
           + Nueva ubicación
         </button>
-      </div>
-      {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+      }
+    >
+      {mensaje && <p className="rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{mensaje}</p>}
 
       {cargando ? (
-        <div className="py-10 text-center text-gray-400">Cargando...</div>
+        <div className="py-10 text-center text-slate-500">Cargando...</div>
       ) : (
-        <div className="overflow-auto rounded-xl border bg-white">
+        <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-800/60">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-slate-800 text-left text-slate-400">
               <tr>
                 <th className="p-3">Nombre</th>
                 <th className="p-3">Código</th>
@@ -82,20 +85,20 @@ export default function Ubicaciones() {
             </thead>
             <tbody>
               {items.map((u) => (
-                <tr key={u.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3 font-medium">{u.nombre}</td>
-                  <td className="p-3 font-mono text-gray-500">{u.codigo ?? "—"}</td>
-                  <td className="p-3 text-gray-500">{u.descripcion ?? "—"}</td>
+                <tr key={u.id} className="border-t border-slate-800 hover:bg-slate-800/50">
+                  <td className="p-3 font-medium text-slate-100">{u.nombre}</td>
+                  <td className="p-3 font-mono text-slate-400">{u.codigo ?? "—"}</td>
+                  <td className="p-3 text-slate-400">{u.descripcion ?? "—"}</td>
                   <td className="p-3">
                     <div className="flex gap-2">
-                      <button onClick={() => abrir(u)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">Editar</button>
-                      <button onClick={() => desactivar(u.id)} className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600 hover:bg-red-100">Eliminar</button>
+                      <button onClick={() => abrir(u)} className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700">Editar</button>
+                      <button onClick={() => desactivar(u.id)} className="rounded-lg bg-red-500/15 px-2 py-1 text-xs text-red-300 hover:bg-red-500/25">Eliminar</button>
                     </div>
                   </td>
                 </tr>
               ))}
               {items.length === 0 && (
-                <tr><td colSpan={4} className="p-8 text-center text-gray-400">Sin ubicaciones creadas.</td></tr>
+                <tr><td colSpan={4} className="p-8 text-center text-slate-500">Sin ubicaciones creadas.</td></tr>
               )}
             </tbody>
           </table>
@@ -103,36 +106,36 @@ export default function Ubicaciones() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-bold mb-4">{editId ? "Editar ubicación" : "Nueva ubicación"}</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-bold text-slate-100">{editId ? "Editar ubicación" : "Nueva ubicación"}</h2>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-gray-600">Nombre *</label>
+                <label className="text-xs font-medium text-slate-400">Nombre *</label>
                 <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="Taller 1 — Banco herramientas" />
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" placeholder="Taller 1 — Banco herramientas" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600">Código</label>
+                <label className="text-xs font-medium text-slate-400">Código</label>
                 <input value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" placeholder="T1-BH" />
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" placeholder="T1-BH" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600">Descripción</label>
+                <label className="text-xs font-medium text-slate-400">Descripción</label>
                 <textarea value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" rows={2} />
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100" rows={2} />
               </div>
             </div>
-            {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-            <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setModal(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
-              <button onClick={guardar} disabled={guardando} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+            {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setModal(false)} className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700">Cancelar</button>
+              <button onClick={guardar} disabled={guardando} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-400 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Guardar"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </ToolControlLayout>
   );
 }

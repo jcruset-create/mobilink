@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import ToolControlMenu from "../components/ToolControlMenu";
+import ToolControlLayout from "../components/ToolControlLayout";
 import { supabase } from "../services/supabase";
 
 type Stats = {
@@ -13,16 +13,16 @@ type Stats = {
 };
 
 const ESTADO_BADGE: Record<string, string> = {
-  disponible:          "bg-green-100 text-green-800",
-  en_uso:              "bg-blue-100 text-blue-800",
-  compartida:          "bg-cyan-100 text-cyan-800",
-  pendiente_devolucion:"bg-yellow-100 text-yellow-800",
-  danada:              "bg-red-100 text-red-800",
-  mantenimiento:       "bg-orange-100 text-orange-800",
-  perdida:             "bg-gray-200 text-gray-600",
-  fuera_servicio:      "bg-gray-200 text-gray-600",
-  pendiente_revision:  "bg-purple-100 text-purple-800",
-  desactualizada:      "bg-pink-100 text-pink-800",
+  disponible:          "bg-emerald-500/15 text-emerald-300",
+  en_uso:              "bg-sky-500/15 text-sky-300",
+  compartida:          "bg-cyan-500/15 text-cyan-300",
+  pendiente_devolucion:"bg-yellow-500/15 text-yellow-300",
+  danada:              "bg-red-500/15 text-red-300",
+  mantenimiento:       "bg-orange-500/15 text-orange-300",
+  perdida:             "bg-slate-500/15 text-slate-400",
+  fuera_servicio:      "bg-slate-500/15 text-slate-400",
+  pendiente_revision:  "bg-violet-500/15 text-violet-300",
+  desactualizada:      "bg-pink-500/15 text-pink-300",
 };
 
 export default function ToolControlDashboard() {
@@ -88,163 +88,156 @@ export default function ToolControlDashboard() {
     setCargando(false);
   }
 
-  if (cargando) {
-    return (
-      <div className="p-6">
-        <ToolControlMenu />
-        <div className="flex items-center justify-center h-40 text-gray-400">Cargando...</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6 space-y-6">
-      <ToolControlMenu />
-
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Mobilink ToolControl</h1>
-          <p className="text-sm text-gray-500">Gestión de herramientas y maquinaria</p>
-        </div>
+    <ToolControlLayout
+      title="Mobilink ToolControl"
+      subtitle="Gestión de herramientas y maquinaria"
+      actions={
         <Link
           to="/toolcontrol/herramientas"
-          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          className="rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400"
         >
           + Nueva herramienta
         </Link>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-        {[
-          { label: "Total",         value: stats?.total,               color: "bg-gray-50  border-gray-200",  text: "text-gray-800" },
-          { label: "Disponibles",   value: stats?.disponibles,         color: "bg-green-50 border-green-200", text: "text-green-800" },
-          { label: "En uso",        value: stats?.en_uso,              color: "bg-blue-50  border-blue-200",  text: "text-blue-800" },
-          { label: "Mantenimiento", value: stats?.mantenimiento,       color: "bg-orange-50 border-orange-200", text: "text-orange-800" },
-          { label: "Dañadas",       value: stats?.danadas,             color: "bg-red-50   border-red-200",   text: "text-red-800" },
-          { label: "Incidencias",   value: stats?.incidencias_abiertas,color: "bg-yellow-50 border-yellow-200", text: "text-yellow-800" },
-        ].map((s) => (
-          <div key={s.label} className={`rounded-xl border p-4 ${s.color}`}>
-            <div className={`text-3xl font-black ${s.text}`}>{s.value ?? 0}</div>
-            <div className="text-xs text-gray-500 mt-1">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Herramientas recientes */}
-        <div className="lg:col-span-2 rounded-xl border bg-white">
-          <div className="flex items-center justify-between border-b p-4">
-            <h2 className="font-semibold">Herramientas</h2>
-            <Link to="/toolcontrol/herramientas" className="text-sm text-blue-600 hover:underline">
-              Ver todas →
-            </Link>
-          </div>
-          <div className="divide-y">
-            {herramientasRecientes.length === 0 ? (
-              <p className="p-4 text-sm text-gray-400">Sin herramientas registradas</p>
-            ) : (
-              herramientasRecientes.map((h) => (
-                <div key={h.id} className="flex items-center gap-3 p-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm truncate">{h.nombre}</div>
-                    <div className="text-xs text-gray-400">
-                      {h.codigo} {h.marca ? `· ${h.marca}` : ""} {h.modelo ? h.modelo : ""}
-                    </div>
-                    {h.tc_locations?.nombre && (
-                      <div className="text-xs text-gray-400">📍 {h.tc_locations.nombre}</div>
-                    )}
-                  </div>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[h.estado] ?? "bg-gray-100 text-gray-600"}`}>
-                    {h.estado.replace(/_/g, " ")}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Panel lateral */}
-        <div className="space-y-4">
-          {/* Incidencias abiertas */}
-          <div className="rounded-xl border bg-white">
-            <div className="flex items-center justify-between border-b p-4">
-              <h2 className="font-semibold text-red-700">⚠ Incidencias abiertas</h2>
-              <Link to="/toolcontrol/incidencias" className="text-xs text-blue-600 hover:underline">
-                Ver todas →
-              </Link>
-            </div>
-            <div className="divide-y">
-              {incidencias.length === 0 ? (
-                <p className="p-4 text-sm text-gray-400">Sin incidencias</p>
-              ) : (
-                incidencias.map((i) => (
-                  <div key={i.id} className="p-3">
-                    <div className="text-sm font-medium">{i.titulo}</div>
-                    <div className="text-xs text-gray-400">
-                      {(i.tc_tools as any)?.nombre ?? "—"} · {i.estado}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+      }
+    >
+      {cargando ? (
+        <div className="flex h-40 items-center justify-center text-slate-500">Cargando...</div>
+      ) : (
+        <>
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
+            {[
+              { label: "Total",         value: stats?.total,               badge: "border-slate-500/30 bg-slate-500/15 text-slate-300" },
+              { label: "Disponibles",   value: stats?.disponibles,         badge: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300" },
+              { label: "En uso",        value: stats?.en_uso,              badge: "border-sky-500/30 bg-sky-500/15 text-sky-300" },
+              { label: "Mantenimiento", value: stats?.mantenimiento,       badge: "border-orange-500/30 bg-orange-500/15 text-orange-300" },
+              { label: "Dañadas",       value: stats?.danadas,             badge: "border-red-500/30 bg-red-500/15 text-red-300" },
+              { label: "Incidencias",   value: stats?.incidencias_abiertas,badge: "border-yellow-500/30 bg-yellow-500/15 text-yellow-300" },
+            ].map((s) => (
+              <div key={s.label} className={`rounded-lg border px-2 py-1.5 ${s.badge}`}>
+                <div className="text-[9px] font-bold uppercase leading-tight">{s.label}</div>
+                <div className="text-lg font-black leading-none">{s.value ?? 0}</div>
+              </div>
+            ))}
           </div>
 
-          {/* Próximas revisiones */}
-          <div className="rounded-xl border bg-white">
-            <div className="flex items-center justify-between border-b p-4">
-              <h2 className="font-semibold text-orange-700">🔔 Próximas revisiones</h2>
-              <Link to="/toolcontrol/mantenimiento" className="text-xs text-blue-600 hover:underline">
-                Ver todas →
-              </Link>
-            </div>
-            <div className="divide-y">
-              {proximoMantenimiento.length === 0 ? (
-                <p className="p-4 text-sm text-gray-400">Sin revisiones próximas</p>
-              ) : (
-                proximoMantenimiento.map((h) => {
-                  const dias = h.proxima_revision
-                    ? Math.ceil((new Date(h.proxima_revision).getTime() - Date.now()) / 86400000)
-                    : null;
-                  return (
-                    <div key={h.id} className="p-3">
-                      <div className="text-sm font-medium">{h.nombre}</div>
-                      <div className={`text-xs font-semibold ${dias !== null && dias < 0 ? "text-red-600" : dias !== null && dias < 7 ? "text-orange-600" : "text-gray-400"}`}>
-                        {dias === null
-                          ? "—"
-                          : dias < 0
-                          ? `Vencida hace ${Math.abs(dias)} días`
-                          : dias === 0
-                          ? "Hoy"
-                          : `En ${dias} días`}
+          <div className="grid gap-4 lg:grid-cols-3">
+            {/* Herramientas recientes */}
+            <div className="rounded-xl border border-slate-700 bg-slate-800 shadow-sm lg:col-span-2">
+              <div className="flex items-center justify-between border-b border-slate-700 p-4">
+                <h2 className="text-sm font-bold uppercase tracking-wide text-slate-300">Herramientas</h2>
+                <Link to="/toolcontrol/herramientas" className="text-sm text-amber-400 hover:underline">
+                  Ver todas →
+                </Link>
+              </div>
+              <div className="divide-y divide-slate-700/70">
+                {herramientasRecientes.length === 0 ? (
+                  <p className="p-4 text-sm text-slate-500">Sin herramientas registradas</p>
+                ) : (
+                  herramientasRecientes.map((h) => (
+                    <div key={h.id} className="flex items-center gap-3 p-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-slate-100">{h.nombre}</div>
+                        <div className="text-xs text-slate-500">
+                          {h.codigo} {h.marca ? `· ${h.marca}` : ""} {h.modelo ? h.modelo : ""}
+                        </div>
+                        {h.tc_locations?.nombre && (
+                          <div className="text-xs text-slate-500">📍 {h.tc_locations.nombre}</div>
+                        )}
                       </div>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ESTADO_BADGE[h.estado] ?? "bg-slate-500/15 text-slate-400"}`}>
+                        {h.estado.replace(/_/g, " ")}
+                      </span>
                     </div>
-                  );
-                })
-              )}
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Panel lateral */}
+            <div className="space-y-4">
+              {/* Incidencias abiertas */}
+              <div className="rounded-xl border border-slate-700 bg-slate-800 shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-700 p-4">
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-red-300">⚠ Incidencias abiertas</h2>
+                  <Link to="/toolcontrol/incidencias" className="text-xs text-amber-400 hover:underline">
+                    Ver todas →
+                  </Link>
+                </div>
+                <div className="divide-y divide-slate-700/70">
+                  {incidencias.length === 0 ? (
+                    <p className="p-4 text-sm text-slate-500">Sin incidencias</p>
+                  ) : (
+                    incidencias.map((i) => (
+                      <div key={i.id} className="p-3">
+                        <div className="text-sm font-medium text-slate-100">{i.titulo}</div>
+                        <div className="text-xs text-slate-500">
+                          {(i.tc_tools as any)?.nombre ?? "—"} · {i.estado}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Próximas revisiones */}
+              <div className="rounded-xl border border-slate-700 bg-slate-800 shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-700 p-4">
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-orange-300">🔔 Próximas revisiones</h2>
+                  <Link to="/toolcontrol/mantenimiento" className="text-xs text-amber-400 hover:underline">
+                    Ver todas →
+                  </Link>
+                </div>
+                <div className="divide-y divide-slate-700/70">
+                  {proximoMantenimiento.length === 0 ? (
+                    <p className="p-4 text-sm text-slate-500">Sin revisiones próximas</p>
+                  ) : (
+                    proximoMantenimiento.map((h) => {
+                      const dias = h.proxima_revision
+                        ? Math.ceil((new Date(h.proxima_revision).getTime() - Date.now()) / 86400000)
+                        : null;
+                      return (
+                        <div key={h.id} className="p-3">
+                          <div className="text-sm font-medium text-slate-100">{h.nombre}</div>
+                          <div className={`text-xs font-semibold ${dias !== null && dias < 0 ? "text-red-400" : dias !== null && dias < 7 ? "text-orange-400" : "text-slate-500"}`}>
+                            {dias === null
+                              ? "—"
+                              : dias < 0
+                              ? `Vencida hace ${Math.abs(dias)} días`
+                              : dias === 0
+                              ? "Hoy"
+                              : `En ${dias} días`}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Accesos rápidos */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {[
-          { to: "/toolcontrol/herramientas", label: "Herramientas", icon: "🔧", color: "bg-blue-50 hover:bg-blue-100 border-blue-200" },
-          { to: "/toolcontrol/maquinas",     label: "Máquinas",     icon: "⚙️", color: "bg-indigo-50 hover:bg-indigo-100 border-indigo-200" },
-          { to: "/toolcontrol/inventario",   label: "Inventario",   icon: "📋", color: "bg-green-50 hover:bg-green-100 border-green-200" },
-          { to: "/toolcontrol/incidencias",  label: "Incidencias",  icon: "⚠️", color: "bg-red-50 hover:bg-red-100 border-red-200" },
-        ].map((a) => (
-          <Link
-            key={a.to}
-            to={a.to}
-            className={`flex flex-col items-center gap-2 rounded-xl border p-4 text-center transition-colors ${a.color}`}
-          >
-            <span className="text-2xl">{a.icon}</span>
-            <span className="text-sm font-semibold">{a.label}</span>
-          </Link>
-        ))}
-      </div>
-    </div>
+          {/* Accesos rápidos */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {[
+              { to: "/toolcontrol/herramientas", label: "Herramientas", icon: "🔧", badge: "border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" },
+              { to: "/toolcontrol/maquinas",     label: "Máquinas",     icon: "⚙️", badge: "border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20" },
+              { to: "/toolcontrol/inventario",   label: "Inventario",   icon: "📋", badge: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" },
+              { to: "/toolcontrol/incidencias",  label: "Incidencias",  icon: "⚠️", badge: "border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20" },
+            ].map((a) => (
+              <Link
+                key={a.to}
+                to={a.to}
+                className={`flex flex-col items-center gap-2 rounded-xl border p-4 text-center transition-colors ${a.badge}`}
+              >
+                <span className="text-2xl">{a.icon}</span>
+                <span className="text-sm font-semibold">{a.label}</span>
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
+    </ToolControlLayout>
   );
 }
