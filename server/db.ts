@@ -206,6 +206,12 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "es_supervisor" BOOLEAN NOT NULL DEFAULT false;
   `);
 
+  // APK Mobilink Taller: taller (workshop) al que pertenece el trabajo
+  await pool.query(`
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
+  `);
+
   // APK Mobilink Taller: fotos adjuntas a un trabajo
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_files (

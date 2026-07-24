@@ -2571,12 +2571,13 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
       : [];
 
     const id = Date.now();
+    const workshopId = String(body.workshopId ?? "").trim() || null;
     const result = await db.query(
       `INSERT INTO jobs (
          id, area, plate, urgent, status, "assignedNames", reason,
          "customerName", "customerPhone", "createdAtMs",
-         "workedAccumulatedMinutes", "pausedAccumulatedMinutes"
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0)
+         "workedAccumulatedMinutes", "pausedAccumulatedMinutes", "workshopId"
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11)
        RETURNING *`,
       [
         id,
@@ -2589,6 +2590,7 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
         String(body.customerName ?? "").trim(),
         String(body.customerPhone ?? "").trim(),
         id,
+        workshopId,
       ]
     );
     res.json(normalizeJobRow(result.rows[0]));
