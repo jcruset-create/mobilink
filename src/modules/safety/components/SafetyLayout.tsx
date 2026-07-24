@@ -102,8 +102,13 @@ export default function SafetyLayout({ title, subtitle, actions, children }: Pro
             >
               <Menu className="h-5 w-5" />
             </button>
-            <div className="flex items-center justify-center px-1">
-              <img src="/logo_horizontal.png" alt="Mobilink Safety Manager" className="h-9 md:h-12" />
+            <div className="flex items-center gap-2 px-1">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500 text-amber-950 md:h-9 md:w-9">
+                <HardHat className="h-5 w-5" />
+              </div>
+              <span className="hidden text-sm font-black tracking-tight text-slate-100 lg:block">
+                Safety Manager
+              </span>
             </div>
             <div className="min-w-0">
               <h1 className="truncate text-sm font-bold md:text-base">{title}</h1>
