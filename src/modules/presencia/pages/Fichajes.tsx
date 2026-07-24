@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import PresenciaMenu from "../components/PresenciaMenu";
+import PresenciaLayout from "../components/PresenciaLayout";
 import { supabase } from "../services/supabase";
 
 type Record_ = {
@@ -15,6 +15,8 @@ type Record_ = {
 };
 
 const TIPOS = ["normal", "turno", "guardia", "extra"];
+
+const INPUT_CLS = "rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500";
 
 function fmt(ts: string | null) {
   if (!ts) return "—";
@@ -130,57 +132,55 @@ export default function Fichajes() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <PresenciaMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Fichajes</h1>
-          <p className="text-sm text-gray-500">{filtrados.length} registros</p>
-        </div>
+    <PresenciaLayout
+      title="Fichajes"
+      subtitle={`${filtrados.length} registros`}
+      actions={
         <button onClick={abrirNuevo}
-          className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-900">
+          className="rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400">
           + Añadir registro
         </button>
-      </div>
-
-      {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+      }
+    >
+      {mensaje && (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/15 p-3 text-sm text-emerald-300">{mensaje}</p>
+      )}
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-2 items-center">
+      <div className="flex flex-wrap items-center gap-2">
         <select value={filtroEmp} onChange={(e) => setFiltroEmp(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm w-52">
+          className={`${INPUT_CLS} w-52`}>
           <option value="">Todos los empleados</option>
           {empleados.map((e) => (
             <option key={e.id} value={e.id}>{e.nombre} {e.apellidos}</option>
           ))}
         </select>
         <input type="date" value={filtroDesde} onChange={(e) => setFiltroDesde(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm" />
-        <span className="text-gray-400 text-sm">—</span>
+          className={INPUT_CLS} />
+        <span className="text-sm text-slate-500">—</span>
         <input type="date" value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm" />
+          className={INPUT_CLS} />
         <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm">
+          className={INPUT_CLS}>
           <option value="">Todos los tipos</option>
           {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
-        <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
           <input type="checkbox" checked={soloNoValidados} onChange={(e) => setSoloNoValidados(e.target.checked)} />
           Sin validar
         </label>
         <button onClick={() => { setFiltroDesde(hace7); setFiltroHasta(hoy); setFiltroEmp(""); setFiltroTipo(""); setSoloNoValidados(false); }}
-          className="rounded-lg border px-3 py-2 text-sm text-gray-500 hover:bg-gray-50">
+          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700">
           Limpiar
         </button>
       </div>
 
       {cargando ? (
-        <div className="py-10 text-center text-gray-400">Cargando...</div>
+        <div className="flex h-40 items-center justify-center text-slate-500">Cargando...</div>
       ) : (
-        <div className="overflow-auto rounded-xl border bg-white">
+        <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/60">
           <table className="w-full min-w-[750px] text-sm">
-            <thead className="bg-gray-50 text-left">
+            <thead className="bg-slate-900 text-left text-slate-400">
               <tr>
                 <th className="p-3">Empleado</th>
                 <th className="p-3">Fecha</th>
@@ -197,54 +197,54 @@ export default function Fichajes() {
                 const emp = r.sea_employees;
                 const dur = duracion(r.hora_entrada, r.hora_salida);
                 return (
-                  <tr key={r.id} className="border-t hover:bg-gray-50">
+                  <tr key={r.id} className="border-t border-slate-800 hover:bg-slate-800/50">
                     <td className="p-3">
                       <div className="font-medium">{emp?.nombre} {emp?.apellidos}</div>
-                      {emp?.departamento && <div className="text-xs text-gray-400">{emp.departamento}</div>}
+                      {emp?.departamento && <div className="text-xs text-slate-500">{emp.departamento}</div>}
                     </td>
-                    <td className="p-3 text-gray-600">
+                    <td className="p-3 text-slate-400">
                       {new Date(r.fecha + "T12:00:00").toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}
                     </td>
                     <td className="p-3 font-mono text-sm">{fmt(r.hora_entrada)}</td>
                     <td className="p-3 font-mono text-sm">{fmt(r.hora_salida)}</td>
-                    <td className="p-3 text-gray-500 text-xs">{dur || "—"}</td>
+                    <td className="p-3 text-xs text-slate-500">{dur || "—"}</td>
                     <td className="p-3">
-                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs capitalize">{r.tipo}</span>
+                      <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-xs capitalize text-slate-300">{r.tipo}</span>
                     </td>
                     <td className="p-3">
                       {r.hora_entrada && !r.hora_salida ? (
-                        <span className="rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-xs font-medium flex items-center gap-1 w-fit">
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />Presente
+                        <span className="flex w-fit items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />Presente
                         </span>
                       ) : r.hora_entrada && r.hora_salida ? (
                         r.validado
-                          ? <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-xs font-medium">✓ Validado</span>
-                          : <span className="rounded-full bg-gray-100 text-gray-600 px-2 py-0.5 text-xs">Completado</span>
+                          ? <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-xs font-medium text-sky-300">✓ Validado</span>
+                          : <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-xs text-slate-400">Completado</span>
                       ) : (
-                        <span className="rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs">Sin entrada</span>
+                        <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs text-orange-300">Sin entrada</span>
                       )}
                     </td>
                     <td className="p-3">
                       <div className="flex gap-1">
                         {!r.validado && r.hora_salida && (
                           <button onClick={() => validar(r.id, true)}
-                            className="rounded-lg bg-blue-50 text-blue-700 px-2 py-1 text-xs hover:bg-blue-100">✓</button>
+                            className="rounded-lg bg-sky-500/15 px-2 py-1 text-xs text-sky-300 hover:bg-sky-500/25">✓</button>
                         )}
                         {r.validado && (
                           <button onClick={() => validar(r.id, false)}
-                            className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">↩</button>
+                            className="rounded-lg bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">↩</button>
                         )}
                         <button onClick={() => abrirEditar(r)}
-                          className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">Editar</button>
+                          className="rounded-lg bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">Editar</button>
                         <button onClick={() => eliminar(r.id)}
-                          className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-600 hover:bg-red-100">✕</button>
+                          className="rounded-lg bg-red-500/15 px-2 py-1 text-xs text-red-300 hover:bg-red-500/25">✕</button>
                       </div>
                     </td>
                   </tr>
                 );
               })}
               {filtrados.length === 0 && (
-                <tr><td colSpan={8} className="p-8 text-center text-gray-400">Sin fichajes para estos filtros.</td></tr>
+                <tr><td colSpan={8} className="p-8 text-center text-slate-500">Sin fichajes para estos filtros.</td></tr>
               )}
             </tbody>
           </table>
@@ -253,15 +253,15 @@ export default function Fichajes() {
 
       {/* Modal editar / crear */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-xl">
             <h2 className="text-lg font-bold">{editRec ? "Editar fichaje" : "Nuevo fichaje"}</h2>
 
             {!editRec && (
               <div>
-                <label className="text-xs font-medium text-gray-600">Empleado *</label>
+                <label className="text-xs font-medium text-slate-400">Empleado *</label>
                 <select value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                  className={`mt-1 w-full ${INPUT_CLS}`}>
                   <option value="">Selecciona...</option>
                   {empleados.map((e) => (
                     <option key={e.id} value={e.id}>{e.nombre} {e.apellidos}</option>
@@ -271,53 +271,56 @@ export default function Fichajes() {
             )}
 
             <div>
-              <label className="text-xs font-medium text-gray-600">Fecha</label>
+              <label className="text-xs font-medium text-slate-400">Fecha</label>
               <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" />
+                className={`mt-1 w-full ${INPUT_CLS}`} />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-medium text-gray-600">Hora entrada</label>
+                <label className="text-xs font-medium text-slate-400">Hora entrada</label>
                 <input type="time" value={form.hora_entrada} onChange={(e) => setForm({ ...form, hora_entrada: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" />
+                  className={`mt-1 w-full ${INPUT_CLS}`} />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600">Hora salida</label>
+                <label className="text-xs font-medium text-slate-400">Hora salida</label>
                 <input type="time" value={form.hora_salida} onChange={(e) => setForm({ ...form, hora_salida: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" />
+                  className={`mt-1 w-full ${INPUT_CLS}`} />
               </div>
             </div>
 
             <div>
-              <label className="text-xs font-medium text-gray-600">Tipo</label>
+              <label className="text-xs font-medium text-slate-400">Tipo</label>
               <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}
-                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm">
+                className={`mt-1 w-full ${INPUT_CLS}`}>
                 {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
 
             <div>
-              <label className="text-xs font-medium text-gray-600">Observaciones</label>
+              <label className="text-xs font-medium text-slate-400">Observaciones</label>
               <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })}
-                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" rows={2} />
+                className={`mt-1 w-full ${INPUT_CLS}`} rows={2} />
             </div>
 
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
               <input type="checkbox" checked={form.validado} onChange={(e) => setForm({ ...form, validado: e.target.checked })} />
               Marcar como validado
             </label>
 
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setModal(false)} className="rounded-xl border px-4 py-2 text-sm font-semibold">Cancelar</button>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setModal(false)}
+                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700">
+                Cancelar
+              </button>
               <button onClick={guardar} disabled={guardando}
-                className="rounded-xl bg-gray-800 px-4 py-2 text-sm font-bold text-white hover:bg-gray-900 disabled:opacity-50">
+                className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50">
                 {guardando ? "Guardando..." : "Guardar"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </PresenciaLayout>
   );
 }

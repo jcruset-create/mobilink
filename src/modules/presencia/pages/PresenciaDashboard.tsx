@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import PresenciaMenu from "../components/PresenciaMenu";
+import PresenciaLayout from "../components/PresenciaLayout";
 import { supabase } from "../services/supabase";
 
 function fmt(ts: string | null) {
@@ -45,63 +45,58 @@ export default function PresenciaDashboard() {
   const ausentes   = totalEmpleados - registros.length;
 
   const stats = [
-    { label: "Presentes ahora",  valor: presentes.length,   color: "text-green-600",  bg: "bg-green-50",  border: "border-green-200", icon: "🟢" },
-    { label: "Han salido",       valor: completados.length,  color: "text-gray-600",   bg: "bg-gray-50",   border: "border-gray-200",  icon: "✅" },
-    { label: "Sin fichar hoy",   valor: ausentes,            color: "text-orange-600", bg: "bg-orange-50", border: "border-orange-200", icon: "⏳" },
-    { label: "Total plantilla",  valor: totalEmpleados,      color: "text-blue-600",   bg: "bg-blue-50",   border: "border-blue-200",  icon: "👷" },
+    { label: "Presentes ahora", valor: presentes.length,   badge: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300" },
+    { label: "Han salido",      valor: completados.length, badge: "border-slate-500/30 bg-slate-500/15 text-slate-300" },
+    { label: "Sin fichar hoy",  valor: ausentes,           badge: "border-orange-500/30 bg-orange-500/15 text-orange-300" },
+    { label: "Total plantilla", valor: totalEmpleados,     badge: "border-sky-500/30 bg-sky-500/15 text-sky-300" },
   ];
 
   return (
-    <div className="p-6 space-y-6">
-      <PresenciaMenu />
-
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Presencia</h1>
-          <p className="text-sm text-gray-500">
-            {new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
-          </p>
-        </div>
-        <Link to="/presencia/fichajes"
-          className="rounded-xl border px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">
-          Ver todos los fichajes →
+    <PresenciaLayout
+      title="Mobilink Presencia"
+      subtitle={new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
+      actions={
+        <Link
+          to="/presencia/fichajes"
+          className="rounded-lg bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-amber-950 hover:bg-amber-400"
+        >
+          Ver fichajes →
         </Link>
-      </div>
-
+      }
+    >
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {stats.map((s) => (
-          <div key={s.label} className={`rounded-2xl border ${s.border} ${s.bg} p-5`}>
-            <div className="text-2xl mb-1">{s.icon}</div>
-            <div className={`text-3xl font-black ${s.color}`}>{s.valor}</div>
-            <div className="text-xs text-gray-500 mt-1">{s.label}</div>
+          <div key={s.label} className={`rounded-lg border px-3 py-2 ${s.badge}`}>
+            <div className="text-[9px] font-bold uppercase leading-tight">{s.label}</div>
+            <div className="text-2xl font-black leading-tight">{s.valor}</div>
           </div>
         ))}
       </div>
 
       {cargando ? (
-        <div className="py-10 text-center text-gray-400">Cargando...</div>
+        <div className="flex h-40 items-center justify-center text-slate-500">Cargando...</div>
       ) : (
         <>
           {/* Presentes ahora */}
           {presentes.length > 0 && (
-            <div className="rounded-2xl border bg-white overflow-hidden">
-              <div className="px-5 py-3 border-b bg-green-50 flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                <h2 className="font-semibold text-green-800">En planta ahora · {presentes.length}</h2>
+            <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
+              <div className="flex items-center gap-2 border-b border-slate-800 bg-emerald-500/10 px-4 py-2.5">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                <h2 className="text-sm font-semibold text-emerald-300">En planta ahora · {presentes.length}</h2>
               </div>
-              <div className="divide-y">
+              <div className="divide-y divide-slate-800">
                 {presentes.map((r) => {
                   const emp = r.sea_employees;
                   return (
-                    <div key={r.id} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
+                    <div key={r.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/50">
                       <div>
-                        <div className="font-medium text-sm">{emp?.nombre} {emp?.apellidos}</div>
-                        {emp?.cargo && <div className="text-xs text-gray-400">{emp.cargo}</div>}
+                        <div className="text-sm font-medium">{emp?.nombre} {emp?.apellidos}</div>
+                        {emp?.cargo && <div className="text-xs text-slate-500">{emp.cargo}</div>}
                       </div>
                       <div className="text-right">
-                        <div className="text-sm font-semibold text-green-700">Entrada {fmt(r.hora_entrada)}</div>
-                        <div className="text-xs text-gray-400 capitalize">{r.tipo}</div>
+                        <div className="text-sm font-semibold text-emerald-300">Entrada {fmt(r.hora_entrada)}</div>
+                        <div className="text-xs capitalize text-slate-500">{r.tipo}</div>
                       </div>
                     </div>
                   );
@@ -112,22 +107,22 @@ export default function PresenciaDashboard() {
 
           {/* Completados */}
           {completados.length > 0 && (
-            <div className="rounded-2xl border bg-white overflow-hidden">
-              <div className="px-5 py-3 border-b bg-gray-50">
-                <h2 className="font-semibold text-gray-700">Jornada completada · {completados.length}</h2>
+            <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
+              <div className="border-b border-slate-800 px-4 py-2.5">
+                <h2 className="text-sm font-semibold text-slate-300">Jornada completada · {completados.length}</h2>
               </div>
-              <div className="divide-y">
+              <div className="divide-y divide-slate-800">
                 {completados.map((r) => {
                   const emp = r.sea_employees;
                   return (
-                    <div key={r.id} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
+                    <div key={r.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/50">
                       <div>
-                        <div className="font-medium text-sm">{emp?.nombre} {emp?.apellidos}</div>
-                        {emp?.cargo && <div className="text-xs text-gray-400">{emp.cargo}</div>}
+                        <div className="text-sm font-medium">{emp?.nombre} {emp?.apellidos}</div>
+                        {emp?.cargo && <div className="text-xs text-slate-500">{emp.cargo}</div>}
                       </div>
                       <div className="text-right text-sm">
-                        <span className="text-gray-600">{fmt(r.hora_entrada)} → {fmt(r.hora_salida)}</span>
-                        <div className="text-xs text-gray-400">{duracion(r.hora_entrada, r.hora_salida)}</div>
+                        <span className="text-slate-300">{fmt(r.hora_entrada)} → {fmt(r.hora_salida)}</span>
+                        <div className="text-xs text-slate-500">{duracion(r.hora_entrada, r.hora_salida)}</div>
                       </div>
                     </div>
                   );
@@ -137,13 +132,13 @@ export default function PresenciaDashboard() {
           )}
 
           {registros.length === 0 && (
-            <div className="rounded-2xl border bg-white p-10 text-center text-gray-400">
-              <div className="text-4xl mb-3">🏁</div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-10 text-center text-slate-500">
+              <div className="mb-3 text-4xl">🏁</div>
               <div className="text-sm">Nadie ha fichado todavía hoy.</div>
             </div>
           )}
         </>
       )}
-    </div>
+    </PresenciaLayout>
   );
 }
