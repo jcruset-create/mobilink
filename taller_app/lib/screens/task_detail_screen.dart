@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../models/job.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
@@ -22,11 +23,43 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   late Job _job;
   bool _busy = false;
   bool _changed = false;
+  List<Map<String, dynamic>> _files = [];
+  bool _uploadingPhoto = false;
 
   @override
   void initState() {
     super.initState();
     _job = widget.job;
+    _loadFiles();
+  }
+
+  Future<void> _loadFiles() async {
+    final files = await widget.api.getFiles(_job.id);
+    if (!mounted) return;
+    setState(() => _files = files);
+  }
+
+  Future<void> _addPhoto() async {
+    final picker = ImagePicker();
+    final shot = await picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 85,
+      maxWidth: 1600,
+    );
+    if (shot == null) return;
+    setState(() => _uploadingPhoto = true);
+    try {
+      await widget.api.uploadPhoto(_job.id, shot.path);
+      await _loadFiles();
+      if (!mounted) return;
+      setState(() => _uploadingPhoto = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _uploadingPhoto = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+      ));
+    }
   }
 
   Future<void> _setStatus(String status) async {
@@ -100,6 +133,53 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               const Center(child: CircularProgressIndicator(color: AppColors.primary))
             else
               ..._actions(),
+            const SizedBox(height: 24),
+            const Divider(color: AppColors.border),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('FOTOS',
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.textMuted, letterSpacing: 0.4)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _uploadingPhoto ? null : _addPhoto,
+                  icon: _uploadingPhoto
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.add_a_photo, size: 18),
+                  label: const Text('Añadir'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_files.isEmpty)
+              const Text('Sin fotos.', style: TextStyle(color: AppColors.textMuted))
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _files
+                    .map((f) => ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            (f['url'] ?? '').toString(),
+                            width: 100,
+                            height: 100,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              width: 100,
+                              height: 100,
+                              color: AppColors.surfaceDeep,
+                              child: const Icon(Icons.broken_image,
+                                  color: AppColors.textMuted),
+                            ),
+                          ),
+                        ))
+                    .toList(),
+              ),
           ],
         ),
       ),

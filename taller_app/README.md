@@ -17,6 +17,13 @@ flutter pub get
 `flutter create .` NO sobrescribe `lib/` ni `pubspec.yaml` existentes; solo añade las
 carpetas de plataforma que falten.
 
+Tras generar `android/`, añade el permiso de cámara en
+`android/app/src/main/AndroidManifest.xml` (dentro de `<manifest>`, fuera de `<application>`):
+
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+```
+
 ## Compilar el APK
 
 ```bash
@@ -34,7 +41,12 @@ El APK queda en `build/app/outputs/flutter-apk/app-release.apk`. Renómbralo a
 - Antes de usarla: marcar `es_supervisor = true` a los supervisores y asegurar que todos
   los técnicos que la usen tengan un `roadsideOperatorCode` asignado.
 
-## Estado actual (MVP)
+## Estado actual
 - Login, lista de tareas, detalle con acciones (empezar/pausar/reanudar/finalizar),
   y creación/asignación (supervisor).
-- Pendiente (fase 2): cola offline (Hive), adjuntar fotos, selector de taller.
+- **Offline (Hive)**: la lista se cachea; los cambios de estado hechos sin cobertura se
+  encolan y se reenvían solos al recuperar la conexión (aviso en la cabecera).
+- **Fotos**: adjuntar foto por trabajo (cámara + compresión); las fotos hechas offline
+  también se encolan.
+- Pendiente: selector de taller Tarragona/Reus (requiere añadir `workshopId` al modelo
+  de trabajos en el backend).

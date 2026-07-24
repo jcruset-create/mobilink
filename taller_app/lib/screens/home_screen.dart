@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/job.dart';
 import '../services/api_service.dart';
+import '../services/offline_store.dart';
 import '../theme.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
@@ -100,11 +101,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               )
             : null,
-        body: TabBarView(
+        body: Column(
           children: [
-            _buildList(_misTareas, 'No tienes tareas asignadas.'),
-            if (widget.esSupervisor)
-              _buildList(_jobs, 'No hay trabajos activos.'),
+            _OfflineBanner(),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildList(_misTareas, 'No tienes tareas asignadas.'),
+                  if (widget.esSupervisor)
+                    _buildList(_jobs, 'No hay trabajos activos.'),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -216,6 +224,42 @@ class _JobCard extends StatelessWidget {
             style: TextStyle(
                 fontSize: 11, fontWeight: FontWeight.bold, color: color)),
       );
+}
+
+class _OfflineBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: OfflineStore.offline,
+      builder: (_, offline, __) {
+        return ValueListenableBuilder<int>(
+          valueListenable: OfflineStore.pendingCount,
+          builder: (_, pending, __) {
+            if (!offline && pending == 0) return const SizedBox.shrink();
+            final msg = offline
+                ? 'Sin conexión${pending > 0 ? ' · $pending cambio(s) pendiente(s)' : ''}'
+                : '$pending cambio(s) pendiente(s) de enviar';
+            return Container(
+              width: double.infinity,
+              color: const Color(0xFFF59E0B),
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.cloud_off, size: 16, color: Colors.black87),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(msg,
+                        style: const TextStyle(
+                            color: Colors.black87, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }
 
 class _CenteredMessage extends StatelessWidget {
