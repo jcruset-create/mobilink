@@ -206,6 +206,19 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "es_supervisor" BOOLEAN NOT NULL DEFAULT false;
   `);
 
+  // APK Mobilink Taller: fotos adjuntas a un trabajo
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_files (
+      id SERIAL PRIMARY KEY,
+      "jobId" INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      "fileName" TEXT,
+      "techName" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS job_files_job_idx ON job_files("jobId");
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id BIGINT PRIMARY KEY,

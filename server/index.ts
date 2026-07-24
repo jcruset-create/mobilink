@@ -2703,6 +2703,103 @@ app.put("/api/taller-operator/jobs/:id/status", requireRoadsideOperator, async (
   }
 });
 
+// ¿Puede este operario tocar este trabajo? (asignado o supervisor)
+async function tallerCanAccessJob(op: { name: string; esSupervisor: boolean }, jobId: number) {
+  if (op.esSupervisor) return true;
+  const jr = await db.query(`SELECT "assignedNames" FROM jobs WHERE id = $1 LIMIT 1`, [jobId]);
+  if (jr.rows.length === 0) return false;
+  const names = safeJsonParse(jr.rows[0].assignedNames, [] as string[]);
+  return Array.isArray(names) && names.includes(op.name);
+}
+
+// Listar fotos de un trabajo
+app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+    const result = await db.query(
+      `SELECT id, url, "fileName", "techName", "createdAtMs"
+       FROM job_files WHERE "jobId" = $1 ORDER BY "createdAtMs" ASC`,
+      [id]
+    );
+    res.json(
+      result.rows.map((r: any) => ({
+        id: Number(r.id),
+        url: r.url,
+        fileName: r.fileName ?? null,
+        techName: r.techName ?? null,
+        createdAtMs: Number(r.createdAtMs),
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/taller-operator/jobs/:id/files error:", error);
+    res.status(500).json({ error: "Error obteniendo fotos" });
+  }
+});
+
+// Subir foto a un trabajo
+app.post(
+  "/api/taller-operator/jobs/:id/files",
+  requireRoadsideOperator,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const { techName } = (req as any).roadsideOperator as { techName: string };
+      const op = await getTallerOperator(techName);
+      if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+      if (!req.file) return res.status(400).json({ error: "No se recibió archivo" });
+      if (!(await tallerCanAccessJob(op, id))) {
+        return res.status(403).json({ error: "Sin acceso a este trabajo" });
+      }
+
+      const mimeToExt: Record<string, string> = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+      };
+      const ext = mimeToExt[req.file.mimetype] ?? "jpg";
+      const storagePath = `taller/${id}/foto_${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(storagePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false,
+        });
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: publicData } = supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .getPublicUrl(storagePath);
+
+      const result = await db.query(
+        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs")
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now()]
+      );
+      const row = result.rows[0];
+      res.json({
+        id: Number(row.id),
+        url: row.url,
+        fileName: row.fileName ?? null,
+        techName: row.techName ?? null,
+        createdAtMs: Number(row.createdAtMs),
+      });
+    } catch (error) {
+      console.error("POST /api/taller-operator/jobs/:id/files error:", error);
+      res.status(500).json({ error: "Error subiendo foto" });
+    }
+  }
+);
+
 /* =========================================================
    WORKSHOP CONFIG
 ========================================================= */
