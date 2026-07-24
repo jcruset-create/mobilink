@@ -4,6 +4,7 @@ import '../models/job.dart';
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../theme.dart';
+import '../workshops.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
 import 'create_task_screen.dart';
@@ -21,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Job> _jobs = [];
   bool _loading = true;
   String? _error;
+  String _tallerFilter = 'all'; // 'all' | id de taller
 
   @override
   void initState() {
@@ -62,6 +64,10 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Job> get _misTareas => _jobs
       .where((j) => j.assignedNames.contains(widget.api.techName) && !j.isClosed)
       .toList();
+
+  List<Job> get _gestionJobs => _tallerFilter == 'all'
+      ? _jobs
+      : _jobs.where((j) => j.workshopId == _tallerFilter).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -108,14 +114,43 @@ class _HomeScreenState extends State<HomeScreen> {
               child: TabBarView(
                 children: [
                   _buildList(_misTareas, 'No tienes tareas asignadas.'),
-                  if (widget.esSupervisor)
-                    _buildList(_jobs, 'No hay trabajos activos.'),
+                  if (widget.esSupervisor) _buildGestion(),
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildGestion() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Row(
+            children: [
+              const Text('Taller:', style: TextStyle(color: AppColors.textMuted)),
+              const SizedBox(width: 10),
+              DropdownButton<String>(
+                value: _tallerFilter,
+                dropdownColor: AppColors.surface,
+                underline: const SizedBox.shrink(),
+                items: [
+                  const DropdownMenuItem(value: 'all', child: Text('Todos')),
+                  ...kWorkshops.map((w) => DropdownMenuItem(
+                      value: w['id'], child: Text(w['label']!))),
+                ],
+                onChanged: (v) => setState(() => _tallerFilter = v ?? 'all'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _buildList(_gestionJobs, 'No hay trabajos en este taller.'),
+        ),
+      ],
     );
   }
 

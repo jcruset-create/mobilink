@@ -163,6 +163,7 @@ class ApiService {
     required List<String> assignedNames,
     String customerName = '',
     String customerPhone = '',
+    String? workshopId,
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/taller-operator/jobs'),
@@ -175,6 +176,7 @@ class ApiService {
         'assignedNames': assignedNames,
         'customerName': customerName,
         'customerPhone': customerPhone,
+        'workshopId': workshopId,
       }),
     );
     final data = jsonDecode(res.body) as Map<String, dynamic>;

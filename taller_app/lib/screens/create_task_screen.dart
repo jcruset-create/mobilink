@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
+import '../workshops.dart';
 
 const _areas = ['camion', 'movil', 'tacografo', 'turismo', 'mecanica'];
 
@@ -14,6 +15,7 @@ class CreateTaskScreen extends StatefulWidget {
 
 class _CreateTaskScreenState extends State<CreateTaskScreen> {
   String _area = 'mecanica';
+  String _workshopId = kWorkshops.first['id']!;
   final _plateCtrl = TextEditingController();
   final _reasonCtrl = TextEditingController();
   final _customerCtrl = TextEditingController();
@@ -58,6 +60,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
         urgent: _urgent,
         assignedNames: _assigned.toList(),
         customerName: _customerCtrl.text.trim(),
+        workshopId: _workshopId,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -77,6 +80,18 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          DropdownButtonFormField<String>(
+            value: _workshopId,
+            decoration: const InputDecoration(labelText: 'Taller'),
+            dropdownColor: AppColors.surface,
+            items: kWorkshops
+                .map((w) => DropdownMenuItem(
+                    value: w['id'], child: Text(w['label']!)))
+                .toList(),
+            onChanged: (v) =>
+                setState(() => _workshopId = v ?? kWorkshops.first['id']!),
+          ),
+          const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             value: _area,
             decoration: const InputDecoration(labelText: 'Área'),

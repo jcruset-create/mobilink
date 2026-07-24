@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/job.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
+import '../workshops.dart';
 
 class TaskDetailScreen extends StatefulWidget {
   final ApiService api;
@@ -121,6 +122,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
             ]),
             const SizedBox(height: 16),
             _info('Matrícula', _job.plate.isEmpty ? '—' : _job.plate),
+            if (_job.workshopId != null && _job.workshopId!.isNotEmpty)
+              _info('Taller', workshopLabel(_job.workshopId)),
             _info('Área', _job.area),
             _info('Motivo', _job.reason.isEmpty ? '—' : _job.reason),
             _info('Asignado a',

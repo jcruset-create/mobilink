@@ -14,6 +14,7 @@ class Job {
   final int? closedAtMs;
   final int? pausedAtMs;
   final int? actualMinutes;
+  final String? workshopId;
 
   Job({
     required this.id,
@@ -30,6 +31,7 @@ class Job {
     this.closedAtMs,
     this.pausedAtMs,
     this.actualMinutes,
+    this.workshopId,
   });
 
   factory Job.fromJson(Map<String, dynamic> j) {
@@ -51,6 +53,7 @@ class Job {
       closedAtMs: (j['closedAtMs'] as num?)?.toInt(),
       pausedAtMs: (j['pausedAtMs'] as num?)?.toInt(),
       actualMinutes: (j['actualMinutes'] as num?)?.toInt(),
+      workshopId: (j['workshopId'])?.toString(),
     );
   }
 
