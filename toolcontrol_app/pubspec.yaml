@@ -1,0 +1,23 @@
+name: toolcontrol_app
+description: "Mobilink ToolControl — App de técnicos"
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  supabase_flutter: ^2.8.0
+  mobile_scanner: ^5.2.3
+  shared_preferences: ^2.2.3
+
+dev_dependencies:
+  flutter_lints: ^3.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
