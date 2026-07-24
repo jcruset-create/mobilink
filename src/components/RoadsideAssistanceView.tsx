@@ -25,6 +25,7 @@ import {
   Settings,
   Map,
   List,
+  Menu,
   Truck,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
@@ -403,6 +404,7 @@ export default function RoadsideAssistanceView({
   const [showNewBackoffice, setShowNewBackoffice] = useState(false);
   const [knownPlaces, setKnownPlaces] = useState<KnownPlace[]>([]);
   const [showPlacesManager, setShowPlacesManager] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false); // cajón lateral en móvil
 
   useEffect(() => {
     fetchKnownPlaces().then(setKnownPlaces).catch(() => {});
@@ -863,9 +865,32 @@ export default function RoadsideAssistanceView({
 
   return (
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
-      {/* ── Barra lateral ── */}
-      <aside className="flex w-52 flex-shrink-0 flex-col border-r border-slate-800 bg-slate-950">
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 pt-3 text-sm">
+      {/* Backdrop del cajón en móvil */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      {/* ── Barra lateral ── (cajón deslizante en móvil, fija en escritorio) */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 transform flex-col border-r border-slate-800 bg-slate-950 transition-transform duration-200 md:static md:z-auto md:w-52 md:flex-shrink-0 md:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-end p-2 md:hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <nav
+          onClick={() => setSidebarOpen(false)}
+          className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 pt-1 text-sm md:pt-3"
+        >
           {([
             ["nueva", "Nueva asistencia", Plus, null],
             ["activas", "Activas", Clock3, activeAssistances.length],
@@ -957,29 +982,37 @@ export default function RoadsideAssistanceView({
       {/* ── Columna principal ── */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 backdrop-blur">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-200 hover:bg-slate-700 md:hidden"
+              aria-label="Abrir menú"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
             <div className="flex items-center justify-center px-1">
-              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-12" />
+              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-9 md:h-12" />
             </div>
-            <div>
-              <h1 className="text-base font-bold">{tabTitle}</h1>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-bold md:text-base">{tabTitle}</h1>
               <div className="text-xs text-slate-400">{activeAssistances.length} activas</div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={onRefresh}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
             >
-              <RefreshCw className="h-4 w-4" /> Actualizar
+              <RefreshCw className="h-4 w-4" /> <span className="hidden sm:inline">Actualizar</span>
             </button>
             <button
               type="button"
               onClick={() => navigate("/inicio")}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
             >
-              <Home className="h-4 w-4" /> Inicio
+              <Home className="h-4 w-4" /> <span className="hidden sm:inline">Inicio</span>
             </button>
           </div>
         </header>
