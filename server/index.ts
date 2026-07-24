@@ -786,23 +786,29 @@ function getWhatsAppFromNumber() {
   );
 }
 
+// Dominio público de cara al cliente (enlaces de seguimiento/informe por WhatsApp).
+// Debe estar configurado como dominio personalizado en Render + DNS apuntando al servicio.
+const CANONICAL_PUBLIC_URL = "https://mobilink-solutions.com";
+
+function isInternalHost(url: string): boolean {
+  return /onrender\.com|localhost|127\.0\.0\.1|tu-app/i.test(url);
+}
+
 function getPublicAppBaseUrl(req: express.Request, preferredUrl?: unknown) {
-  const preferred = String(preferredUrl || "").trim();
-
-  if (/^https?:\/\//i.test(preferred)) {
-    return preferred.replace(/\/+$/, "");
-  }
-
+  // 1) PUBLIC_APP_URL si es un dominio real (no interno)
   const configured = String(process.env.PUBLIC_APP_URL || "").trim();
-
-  if (
-    /^https?:\/\//i.test(configured) &&
-    !configured.includes("tu-app.onrender.com")
-  ) {
+  if (/^https?:\/\//i.test(configured) && !isInternalHost(configured)) {
     return configured.replace(/\/+$/, "");
   }
 
-  return `${req.protocol}://${req.get("host")}`.replace(/\/+$/, "");
+  // 2) URL preferida del cliente, solo si NO es un host interno (onrender/localhost)
+  const preferred = String(preferredUrl || "").trim();
+  if (/^https?:\/\//i.test(preferred) && !isInternalHost(preferred)) {
+    return preferred.replace(/\/+$/, "");
+  }
+
+  // 3) Dominio canónico de Mobilink (evita mostrar sea-tarragona.onrender.com al cliente)
+  return CANONICAL_PUBLIC_URL;
 }
 
 function buildRoadsideTrackingUrl(
