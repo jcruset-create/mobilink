@@ -45,6 +45,7 @@ import {
   getDayEnd as cfgGetDayEnd,
   getDayStart as cfgGetDayStart,
   getGridSlots,
+  getHolidayForDate,
   isClosedDate as cfgIsClosedDate,
   isLunchTime as cfgIsLunchTime,
   isWorkingTime as cfgIsWorkingTime,
@@ -357,6 +358,17 @@ function isPastDateTime(date: string, time: string) {
 /** Festivo, día cerrado en el horario o sábado de agosto. */
 function isClosedDate(date: string) {
   return cfgIsClosedDate(activeAgendaConfig, date);
+}
+
+/** Texto explicativo del cierre, para el tooltip de las casillas bloqueadas. */
+function getClosedReason(date: string) {
+  const holiday = getHolidayForDate(activeAgendaConfig, date);
+  if (holiday) return `Festivo${holiday.label ? `: ${holiday.label}` : ""}`;
+
+  const index = weekdayIndexMonFirst(date);
+  if (index != null && activeAgendaConfig.days[index]?.closed) return "Día cerrado";
+
+  return "Cerrado: sábados de agosto";
 }
 
 function getValidSlotsForDate(date: string, dayIndex: number) {
@@ -1279,7 +1291,7 @@ function getEstimatedMinutesWithIncludedTasks(
     }
 
     if (isClosedDate(date)) {
-      alert("El taller cierra los sábados de agosto.");
+      alert(`El taller está cerrado ese día. ${getClosedReason(date)}.`);
       return;
     }
 
@@ -1408,7 +1420,7 @@ function getEstimatedMinutesWithIncludedTasks(
     }
 
     if (isClosedDate(selectedSlot.date)) {
-      alert("El taller cierra los sábados de agosto.");
+      alert(`El taller está cerrado ese día. ${getClosedReason(selectedSlot.date)}.`);
       return;
     }
 
@@ -2140,7 +2152,7 @@ appendLog(
                           if (disabled) return;
                           openNewAppointment(day.date, slot);
                         }}
-                        title={closed ? "Cerrado: sábados de agosto" : undefined}
+                        title={closed ? getClosedReason(day.date) : undefined}
                         className={`relative border-b ${th.gridBorderSoft} ${
                           !working
                             ? lunch

@@ -3260,15 +3260,24 @@ app.put("/api/agenda-config", requireSupervisorRole, async (req, res) => {
       afternoonEnd: String(day?.afternoonEnd ?? ""),
     }));
 
-    const holidays = Array.isArray(body.holidays)
-      ? Array.from(
-          new Set(
-            body.holidays
-              .map((d: any) => String(d || "").trim())
-              .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-          )
-        ).sort()
-      : [];
+    // Festivos: {date, label, yearly}. Se acepta el formato antiguo (fecha suelta).
+    const seenHolidays = new Set<string>();
+    const holidays = (Array.isArray(body.holidays) ? body.holidays : [])
+      .map((item: any) => {
+        const date = String(typeof item === "string" ? item : item?.date ?? "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+        return {
+          date,
+          label: String(typeof item === "string" ? "" : item?.label ?? "").trim(),
+          yearly: typeof item === "string" ? false : item?.yearly === true,
+        };
+      })
+      .filter((item: any) => {
+        if (!item || seenHolidays.has(item.date)) return false;
+        seenHolidays.add(item.date);
+        return true;
+      })
+      .sort((a: any, b: any) => a.date.localeCompare(b.date));
 
     const value = JSON.stringify({
       days,

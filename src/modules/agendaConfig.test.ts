@@ -4,6 +4,7 @@ import {
   getDayRanges,
   getGridBounds,
   getGridSlots,
+  getHolidayForDate,
   isClosedDate,
   isLunchTime,
   isWorkingTime,
@@ -67,10 +68,37 @@ describe("isClosedDate", () => {
     expect(isClosedDate(abierto, "2026-08-01")).toBe(false);
   });
 
-  it("festivos concretos bloquean el día", () => {
-    const conFestivo: AgendaConfig = { ...cfg, holidays: ["2026-12-25"] };
+  it("festivos concretos bloquean solo ese día", () => {
+    const conFestivo: AgendaConfig = {
+      ...cfg,
+      holidays: [{ date: "2026-12-25", label: "Navidad", yearly: false }],
+    };
     expect(isClosedDate(conFestivo, "2026-12-25")).toBe(true);
     expect(isClosedDate(conFestivo, "2026-12-24")).toBe(false);
+    // Sin repetición anual, el año siguiente no queda bloqueado
+    expect(isClosedDate(conFestivo, "2027-12-25")).toBe(false);
+  });
+
+  it("festivos anuales se repiten cada año (Diada de Catalunya)", () => {
+    const conDiada: AgendaConfig = {
+      ...cfg,
+      holidays: [{ date: "2026-09-11", label: "Diada de Catalunya", yearly: true }],
+    };
+    expect(isClosedDate(conDiada, "2026-09-11")).toBe(true);
+    expect(isClosedDate(conDiada, "2027-09-11")).toBe(true);
+    expect(isClosedDate(conDiada, "2030-09-11")).toBe(true);
+    expect(isClosedDate(conDiada, "2027-09-10")).toBe(false);
+    // No se aplica a años anteriores al de alta
+    expect(isClosedDate(conDiada, "2025-09-11")).toBe(false);
+  });
+
+  it("getHolidayForDate devuelve el motivo del festivo", () => {
+    const conDiada: AgendaConfig = {
+      ...cfg,
+      holidays: [{ date: "2026-09-11", label: "Diada de Catalunya", yearly: true }],
+    };
+    expect(getHolidayForDate(conDiada, "2028-09-11")?.label).toBe("Diada de Catalunya");
+    expect(getHolidayForDate(conDiada, "2028-09-12")).toBeNull();
   });
 
   it("un día marcado como cerrado bloquea toda la semana", () => {
@@ -100,11 +128,22 @@ describe("normalizeAgendaConfig", () => {
     expect(normalizeAgendaConfig({ days: [] }).days).toHaveLength(6);
   });
 
-  it("descarta festivos con formato inválido y ordena el resto", () => {
+  it("descarta festivos con formato inválido, quita duplicados y ordena", () => {
     const result = normalizeAgendaConfig({
-      holidays: ["2026-12-25", "mañana", "2026-01-01", "2026-12-25"],
+      holidays: [
+        { date: "2026-12-25", label: "Navidad", yearly: true },
+        "mañana",
+        { date: "2026-01-01", label: "Año nuevo", yearly: true },
+        { date: "2026-12-25", label: "duplicado", yearly: false },
+      ],
     });
-    expect(result.holidays).toEqual(["2026-01-01", "2026-12-25"]);
+    expect(result.holidays.map((h) => h.date)).toEqual(["2026-01-01", "2026-12-25"]);
+    expect(result.holidays[1].label).toBe("Navidad");
+  });
+
+  it("acepta el formato antiguo (lista de fechas) sin motivo ni repetición", () => {
+    const result = normalizeAgendaConfig({ holidays: ["2026-12-25"] });
+    expect(result.holidays).toEqual([{ date: "2026-12-25", label: "", yearly: false }]);
   });
 });
 

@@ -11,11 +11,20 @@ export type AgendaDaySchedule = {
   afternoonEnd: string;
 };
 
+export type AgendaHoliday = {
+  /** Fecha en formato 'YYYY-MM-DD'. */
+  date: string;
+  /** Motivo del festivo (p. ej. "Diada de Catalunya"). */
+  label: string;
+  /** Se repite cada año en el mismo día y mes. */
+  yearly: boolean;
+};
+
 export type AgendaConfig = {
   /** Índice 0 = lunes … 5 = sábado (la agenda no muestra domingos). */
   days: AgendaDaySchedule[];
-  /** Festivos concretos en formato 'YYYY-MM-DD'. */
-  holidays: string[];
+  /** Días festivos en los que el taller cierra. */
+  holidays: AgendaHoliday[];
   /** Cierre recurrente de los sábados de agosto. */
   closedSaturdaysInAugust: boolean;
 };
@@ -90,15 +99,26 @@ export function normalizeAgendaConfig(raw: any): AgendaConfig {
     };
   });
 
-  const holidays: string[] = Array.isArray(raw?.holidays)
-    ? Array.from(
-        new Set<string>(
-          raw.holidays
-            .map((d: unknown) => String(d ?? "").trim())
-            .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-        )
-      ).sort()
-    : [];
+  // Acepta el formato antiguo (array de fechas) y el actual (objetos con
+  // motivo y repetición anual).
+  const seen = new Set<string>();
+  const holidays: AgendaHoliday[] = (Array.isArray(raw?.holidays) ? raw.holidays : [])
+    .map((item: any): AgendaHoliday | null => {
+      const date = String(typeof item === "string" ? item : item?.date ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+      return {
+        date,
+        label: String(typeof item === "string" ? "" : item?.label ?? "").trim(),
+        yearly: typeof item === "string" ? false : item?.yearly === true,
+      };
+    })
+    .filter((item: AgendaHoliday | null): item is AgendaHoliday => {
+      if (!item) return false;
+      if (seen.has(item.date)) return false;
+      seen.add(item.date);
+      return true;
+    })
+    .sort((a: AgendaHoliday, b: AgendaHoliday) => a.date.localeCompare(b.date));
 
   return {
     days,
@@ -107,9 +127,30 @@ export function normalizeAgendaConfig(raw: any): AgendaConfig {
   };
 }
 
+/**
+ * Festivo que aplica a esa fecha: coincidencia exacta, o mismo día y mes si
+ * está marcado como repetición anual. Devuelve null si no hay ninguno.
+ */
+export function getHolidayForDate(
+  config: AgendaConfig,
+  date: string
+): AgendaHoliday | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return null;
+
+  const monthDay = date.slice(5);
+
+  return (
+    config.holidays.find(
+      (holiday) =>
+        holiday.date === date ||
+        (holiday.yearly && holiday.date.slice(5) === monthDay && holiday.date <= date)
+    ) ?? null
+  );
+}
+
 /** El taller está cerrado ese día concreto (festivo, día cerrado o sábado de agosto). */
 export function isClosedDate(config: AgendaConfig, date: string): boolean {
-  if (config.holidays.includes(date)) return true;
+  if (getHolidayForDate(config, date)) return true;
 
   const index = weekdayIndexMonFirst(date);
   if (index == null) return false;

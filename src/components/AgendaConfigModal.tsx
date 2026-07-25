@@ -24,6 +24,8 @@ function formatSpanishDateKey(dateKey: string) {
 export default function AgendaConfigModal({ open, config, onClose, onSaved }: Props) {
   const [draft, setDraft] = useState<AgendaConfig>(config);
   const [newHoliday, setNewHoliday] = useState("");
+  const [newHolidayLabel, setNewHolidayLabel] = useState("");
+  const [newHolidayYearly, setNewHolidayYearly] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -31,6 +33,8 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
     if (!open) return;
     setDraft(config);
     setNewHoliday("");
+    setNewHolidayLabel("");
+    setNewHolidayYearly(true);
     setError("");
   }, [open, config]);
 
@@ -45,19 +49,42 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
 
   function addHoliday() {
     const date = newHoliday.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError("Selecciona la fecha del festivo.");
+      return;
+    }
 
+    if (draft.holidays.some((h) => h.date === date)) {
+      setError("Ese día ya está en la lista de festivos.");
+      return;
+    }
+
+    setError("");
     setDraft((prev) => ({
       ...prev,
-      holidays: Array.from(new Set([...prev.holidays, date])).sort(),
+      holidays: [
+        ...prev.holidays,
+        { date, label: newHolidayLabel.trim(), yearly: newHolidayYearly },
+      ].sort((a, b) => a.date.localeCompare(b.date)),
     }));
     setNewHoliday("");
+    setNewHolidayLabel("");
+    setNewHolidayYearly(true);
   }
 
   function removeHoliday(date: string) {
     setDraft((prev) => ({
       ...prev,
-      holidays: prev.holidays.filter((d) => d !== date),
+      holidays: prev.holidays.filter((h) => h.date !== date),
+    }));
+  }
+
+  function toggleHolidayYearly(date: string) {
+    setDraft((prev) => ({
+      ...prev,
+      holidays: prev.holidays.map((h) =>
+        h.date === date ? { ...h, yearly: !h.yearly } : h
+      ),
     }));
   }
 
@@ -187,12 +214,21 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               Días festivos
             </h4>
 
-            <div className="flex gap-2">
+            <div className="grid gap-2 md:grid-cols-[180px_1fr_auto]">
               <input
                 type="date"
                 value={newHoliday}
                 onChange={(e) => setNewHoliday(e.target.value)}
-                className="flex-1 rounded-2xl border border-slate-200 px-3 py-3"
+                className="rounded-2xl border border-slate-200 px-3 py-3"
+              />
+              <input
+                value={newHolidayLabel}
+                onChange={(e) => setNewHolidayLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addHoliday();
+                }}
+                placeholder="Motivo (p. ej. Diada de Catalunya)"
+                className="rounded-2xl border border-slate-200 px-3 py-3"
               />
               <button
                 type="button"
@@ -203,28 +239,57 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               </button>
             </div>
 
+            <label className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={newHolidayYearly}
+                onChange={(e) => setNewHolidayYearly(e.target.checked)}
+              />
+              Se repite cada año en la misma fecha
+            </label>
+
             {draft.holidays.length === 0 ? (
               <p className="mt-3 text-sm text-slate-400">Todavía no hay festivos configurados.</p>
             ) : (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {draft.holidays.map((date) => (
-                  <span
-                    key={date}
-                    className="flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-sm text-red-700"
+              <div className="mt-3 space-y-2">
+                {draft.holidays.map((holiday) => (
+                  <div
+                    key={holiday.date}
+                    className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
                   >
-                    {formatSpanishDateKey(date)}
+                    <span className="font-semibold">
+                      {formatSpanishDateKey(holiday.date)}
+                    </span>
+                    <span className="flex-1 truncate">
+                      {holiday.label || <span className="text-red-400">Sin motivo</span>}
+                    </span>
+
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={holiday.yearly}
+                        onChange={() => toggleHolidayYearly(holiday.date)}
+                      />
+                      Cada año
+                    </label>
+
                     <button
                       type="button"
-                      onClick={() => removeHoliday(date)}
+                      onClick={() => removeHoliday(holiday.date)}
                       className="font-black"
                       title="Quitar festivo"
                     >
                       ×
                     </button>
-                  </span>
+                  </div>
                 ))}
               </div>
             )}
+
+            <p className="mt-2 text-xs text-slate-500">
+              Los festivos marcados como "cada año" bloquean esa misma fecha en los
+              años siguientes; el resto solo bloquean el día concreto.
+            </p>
           </section>
 
           {error && (
