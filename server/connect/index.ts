@@ -18,13 +18,23 @@ import { initConnect } from "./schema.ts";
 import { createConnectRouter, createConnectAdminRouter } from "./router.ts";
 import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { startConnectWorker, stopConnectWorker, runConnectChecksOnce } from "./worker.ts";
+import { initOperationalIntelligence, createOperationalIntelligenceRouter } from "./oi/index.ts";
 
-export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnce };
+export { startConnectWorker, stopConnectWorker, runConnectChecksOnce };
+
+/** Esquema de Connect + el del Centro de Inteligencia Operacional. */
+export async function initConnectAll(): Promise<void> {
+  await initConnect();
+  await initOperationalIntelligence();
+}
+
+export { initConnectAll as initConnect };
 
 /** Monta la API de partners bajo /api/connect/v1 y la de administración bajo /api/connect/admin. */
 export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
   app.use("/api/connect/v1", createConnectRouter());
   app.use("/api/connect/admin", createConnectAdminRouter(requireAdmin));
   app.use("/api/connect/bo", createConnectBackofficeRouter());
-  console.log("Connect Pro: API montada en /api/connect/v1 (partners), /api/connect/admin y /api/connect/bo (backoffice)");
+  app.use("/api/operational-intelligence", createOperationalIntelligenceRouter());
+  console.log("Connect Pro: API montada en /api/connect/v1 (partners), /api/connect/admin, /api/connect/bo (backoffice) y /api/operational-intelligence (Centro de Inteligencia Operacional)");
 }

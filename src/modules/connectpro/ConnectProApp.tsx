@@ -26,6 +26,18 @@ import Clientes from "./pages/Clientes";
 import Facturacion from "./pages/Facturacion";
 import UnidadesMoviles from "./pages/UnidadesMoviles";
 import Informes from "./pages/Informes";
+import IntelligenceLayout from "./pages/inteligencia/IntelligenceLayout";
+import OiResumen from "./pages/inteligencia/Resumen";
+import OiTiempoReal from "./pages/inteligencia/TiempoReal";
+import OiDemanda from "./pages/inteligencia/Demanda";
+import OiProveedores from "./pages/inteligencia/Proveedores";
+import OiFlota from "./pages/inteligencia/Flota";
+import OiCalidad from "./pages/inteligencia/Calidad";
+import OiEconomico from "./pages/inteligencia/Economico";
+import OiRecomendaciones from "./pages/inteligencia/Recomendaciones";
+import OiAlertas from "./pages/inteligencia/AlertasInteligentes";
+import OiInformes from "./pages/inteligencia/InformesIA";
+import OiConfiguracion from "./pages/inteligencia/ConfiguracionIA";
 
 /**
  * Los usuarios de empresa proveedora aterrizan en Ofertas; el resto, en el
@@ -58,6 +70,20 @@ export default function ConnectProApp() {
             <Route path="facturacion" element={<Facturacion />} />
             <Route path="unidades" element={<UnidadesMoviles />} />
             <Route path="informes" element={<Informes />} />
+            {/* Centro de Inteligencia Operacional: subsección con navegación propia */}
+            <Route path="inteligencia" element={<IntelligenceLayout />}>
+              <Route index element={<OiResumen />} />
+              <Route path="tiempo-real" element={<OiTiempoReal />} />
+              <Route path="demanda" element={<OiDemanda />} />
+              <Route path="proveedores" element={<OiProveedores />} />
+              <Route path="flota" element={<OiFlota />} />
+              <Route path="calidad" element={<OiCalidad />} />
+              <Route path="economico" element={<OiEconomico />} />
+              <Route path="recomendaciones" element={<OiRecomendaciones />} />
+              <Route path="alertas" element={<OiAlertas />} />
+              <Route path="informes" element={<OiInformes />} />
+              <Route path="configuracion" element={<OiConfiguracion />} />
+            </Route>
             <Route path="empresas" element={<Empresas />} />
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />
