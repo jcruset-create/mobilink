@@ -365,6 +365,35 @@ export function useScheduledJobs({
   }
 
   /**
+   * "Realizada" desde las tarjetas de citas pendientes de llegada (Operativo y
+   * Operativo 2).
+   *
+   * No crea trabajo ni pasa por el flujo de taller: solo deja constancia de que
+   * la cita se atendió. La cita desaparece de "Citas pendientes de llegada"
+   * (ese listado solo mira las `programado`) y se queda guardada en la agenda
+   * pintada como "Realizada".
+   */
+  function markScheduledJobDone(id: number) {
+    const scheduled = scheduledJobs.find((item) => item.id === id);
+
+    if (!scheduled) return;
+
+    setScheduledJobsAndSave((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: "realizado",
+              realizadoAtMs: nowMs(),
+            }
+          : item
+      )
+    );
+
+    appendLog(`Cita realizada: ${scheduled.plate}.`);
+  }
+
+  /**
    * "Cancelar" desde las tarjetas de citas pendientes de llegada (Operativo y
    * Operativo 2): borra la cita de verdad.
    *
@@ -714,6 +743,7 @@ export function useScheduledJobs({
     updateScheduledJobField,
     updateScheduledJobTemplate,
     cancelScheduledJob,
+    markScheduledJobDone,
     deleteScheduledJobById,
     deleteArrivedScheduledJob,
     confirmScheduledArrival,

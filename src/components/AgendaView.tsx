@@ -77,7 +77,8 @@ type ScheduledJobStatus =
   | "cerrado"
   | "cancelado"
   | "eliminado"
-  | "llego";
+  | "llego"
+  | "realizado";
 
 type QuickTemplate = {
   key: string;
@@ -123,6 +124,9 @@ export type ScheduledJob = {
   assignedTech?: string | null;
   status: ScheduledJobStatus;
   arrivedAtMs?: number | null;
+  cancelledAtMs?: number | null;
+  /** Cuándo se marcó la cita como realizada desde Operativo / Operativo 2. */
+  realizadoAtMs?: number | null;
   jobId?: number | null;
   secondJobId?: number | null;
   googleEventId?: string | null;
@@ -463,6 +467,12 @@ function getScheduledJobCardClass(job: ScheduledJob) {
     return "bg-slate-500 text-white border-slate-600 opacity-80";
   }
 
+  // Cita marcada como realizada a mano desde Operativo: se queda en la agenda
+  // como histórico, con un verde más oscuro que el de "activo".
+  if (job.status === "realizado") {
+    return "bg-green-800 text-white border-green-900";
+  }
+
   if (job.status === "cancelado") {
     return "bg-red-900 text-white border-red-950 opacity-70";
   }
@@ -477,6 +487,7 @@ function getScheduledJobStatusLabel(status: ScheduledJobStatus) {
   if (status === "cerrado") return "Cerrado";
   if (status === "cancelado") return "Cancelado";
   if (status === "llego") return "Llegó";
+  if (status === "realizado") return "Realizada";
 
   return status;
 }
