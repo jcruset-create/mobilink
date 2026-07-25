@@ -2050,17 +2050,19 @@ appendLog(
                       lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) - SLOT_MINUTES));
                     const lunchLast =
                       lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) + SLOT_MINUTES));
-                    const lunchClass = `cursor-not-allowed ${th.gridHead}${
+                    const lunchClass = `cursor-not-allowed ${
+                      dark ? "bg-slate-900" : "bg-slate-50"
+                    }${
                       lunchFirst ? " border-t-2 border-t-red-500" : ""
                     }${lunchLast ? " border-b-2 border-b-red-500" : ""}`;
 
                     let cellClass = dark ? "bg-slate-800/50" : "bg-slate-200/70";
 
-                    // Editable (futuro y en horario): verde muy suave
+                    // Editable (futuro y en horario): blanco con líneas grises
                     if (working && !past) {
                       cellClass = dark
-                        ? "cursor-pointer bg-emerald-900/25 hover:bg-emerald-800/40"
-                        : "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
+                        ? "cursor-pointer bg-white !border-slate-300 hover:bg-slate-100"
+                        : "cursor-pointer bg-white !border-slate-300 hover:bg-slate-100";
                     }
 
                     // Ya pasado: gris
