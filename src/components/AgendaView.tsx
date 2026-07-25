@@ -39,6 +39,19 @@ import {
   type AgendaDateReminderPayload,
 } from "../modules/agendaDateReminderApi";
 
+import AgendaConfigModal from "./AgendaConfigModal";
+import {
+  DEFAULT_AGENDA_CONFIG,
+  getDayEnd as cfgGetDayEnd,
+  getDayStart as cfgGetDayStart,
+  getGridSlots,
+  isClosedDate as cfgIsClosedDate,
+  isLunchTime as cfgIsLunchTime,
+  isWorkingTime as cfgIsWorkingTime,
+  type AgendaConfig,
+} from "../modules/agendaConfig";
+import { loadAgendaConfig } from "../modules/agendaConfigApi";
+
 import CaducidadTacografoModal from "./CaducidadTacografoModal";
 import {
   getEstadoVisual,
@@ -268,34 +281,30 @@ function getWeekDays(weekOffset = 0) {
   });
 }
 
+// Horario vigente del taller. Lo alimenta AgendaView con lo guardado en
+// "Configuración de agenda"; hasta entonces se usa el horario estándar.
+let activeAgendaConfig: AgendaConfig = DEFAULT_AGENDA_CONFIG;
+
 function getDayStart(dayIndex: number) {
-  if (dayIndex === 5) return 9 * 60;
-  return 8 * 60 + 30;
+  return cfgGetDayStart(activeAgendaConfig, dayIndex);
 }
 
 function getDayEnd(dayIndex: number) {
-  if (dayIndex === 5) return 13 * 60 + 15;
-  return 18 * 60 + 45;
+  return cfgGetDayEnd(activeAgendaConfig, dayIndex);
 }
 
-// Franja de descanso del mediodía (13:30–15:00, lunes a viernes).
+/** Descanso entre el turno de mañana y el de tarde. */
 function isLunchTime(dayIndex: number, time: string) {
-  if (dayIndex === 5) return false;
-  const minutes = timeToMinutes(time);
-  return minutes > 13 * 60 + 30 && minutes < 15 * 60;
+  return cfgIsLunchTime(activeAgendaConfig, dayIndex, time);
 }
 
 function isWorkingTime(dayIndex: number, time: string) {
-  const minutes = timeToMinutes(time);
+  return cfgIsWorkingTime(activeAgendaConfig, dayIndex, time);
+}
 
-  if (dayIndex === 5) {
-    return minutes >= 9 * 60 && minutes <= 13 * 60;
-  }
-
-  const morning = minutes >= 8 * 60 + 30 && minutes <= 13 * 60 + 30;
-  const afternoon = minutes >= 15 * 60 && minutes <= 18 * 60 + 30;
-
-  return morning || afternoon;
+/** Rejilla común a todas las columnas, para que queden alineadas con las horas. */
+function getGridTimeSlots() {
+  return getGridSlots(activeAgendaConfig, SLOT_MINUTES);
 }
 
 function getTimeSlotsForDay(dayIndex: number) {
@@ -345,10 +354,9 @@ function isPastDateTime(date: string, time: string) {
   return timeToMinutes(time) <= nowMinutes;
 }
 
-// En agosto el taller cierra los sábados.
+/** Festivo, día cerrado en el horario o sábado de agosto. */
 function isClosedDate(date: string) {
-  const [, month] = String(date || "").split("-");
-  return month === "08" && weekdayIndexMonFirst(date) === 5;
+  return cfgIsClosedDate(activeAgendaConfig, date);
 }
 
 function getValidSlotsForDate(date: string, dayIndex: number) {
@@ -713,6 +721,28 @@ useEffect(() => {
 }, []);
 
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
+
+  // ---- Configuración de agenda (horario y festivos) ----
+  const [agendaConfig, setAgendaConfig] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+
+  // Las funciones de rejilla (horario, mediodía, días cerrados) leen el horario
+  // vigente; se sincroniza en cada render para que el cambio se aplique al vuelo.
+  activeAgendaConfig = agendaConfig;
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAgendaConfig()
+      .then((config) => {
+        if (cancelled) return;
+        activeAgendaConfig = config;
+        setAgendaConfig(config);
+      })
+      .catch((error) => console.error("Error cargando configuración de agenda:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ---- Recordatorios de caducidad de tacógrafo ----
   const [caducidadReminders, setCaducidadReminders] = useState<CaducidadReminder[]>([]);
@@ -1733,6 +1763,15 @@ appendLog(
 
             <button
               type="button"
+              onClick={() => setConfigModalOpen(true)}
+              className={th.neutralBtn}
+              title="Horario del taller y días festivos"
+            >
+              ⚙ Configuración
+            </button>
+
+            <button
+              type="button"
               onClick={() => setWeekOffset((v) => v - 1)}
               className={th.neutralBtn}
             >
@@ -1995,7 +2034,7 @@ appendLog(
             }`}
           >
             <div>
-              {getTimeSlotsForDay(0).map((slot) => (
+              {getGridTimeSlots().map((slot) => (
                 <div
                   key={slot}
                   style={{ height: SLOT_HEIGHT }}
@@ -2011,8 +2050,8 @@ appendLog(
               // para quedar alineadas con la columna de horas; las franjas fuera
               // del horario del día (p. ej. sábado antes de las 9:00) se pintan
               // como no laborables.
-              const slots = getTimeSlotsForDay(0);
-              const dayStart = 8 * 60 + 30;
+              const slots = getGridTimeSlots();
+              const dayStart = timeToMinutes(slots[0] ?? "08:30");
               const closed = isClosedDate(day.date);
               const dayHeight = slots.length * SLOT_HEIGHT;
 
@@ -2373,6 +2412,17 @@ appendLog(
             })}
           </div>
         </div>
+
+<AgendaConfigModal
+  open={configModalOpen}
+  config={agendaConfig}
+  onClose={() => setConfigModalOpen(false)}
+  onSaved={(config) => {
+    activeAgendaConfig = config;
+    setAgendaConfig(config);
+    appendLog("Configuración de agenda actualizada (horario y festivos).");
+  }}
+/>
 
 <CaducidadTacografoModal
   open={caducidadModalOpen}

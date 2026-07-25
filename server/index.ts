@@ -3219,6 +3219,77 @@ app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
 });
 
 /* =========================================================
+   CONFIGURACIÓN DE AGENDA (horario semanal y festivos)
+   Se guarda como JSON en workshop_config con la clave agenda_config.
+   La lectura la necesita cualquier rol del panel para pintar la agenda;
+   escribir requiere supervisor.
+========================================================= */
+
+const AGENDA_CONFIG_KEY = "agenda_config";
+
+app.get("/api/agenda-config", protectWhenStrict(requirePanelRole), async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT value FROM workshop_config WHERE key = $1 LIMIT 1`,
+      [AGENDA_CONFIG_KEY]
+    );
+
+    if (!result.rows.length) return res.json(null);
+
+    res.json(safeJsonParse(result.rows[0].value, null));
+  } catch (error) {
+    console.error("GET /api/agenda-config error:", error);
+    res.status(500).json({ error: "Error cargando la configuración de agenda" });
+  }
+});
+
+app.put("/api/agenda-config", requireSupervisorRole, async (req, res) => {
+  try {
+    const body = req.body ?? {};
+
+    if (!Array.isArray(body.days) || body.days.length === 0) {
+      return res.status(400).json({ error: "Falta el horario semanal" });
+    }
+
+    // Normalización mínima en servidor; el detalle se valida en el cliente.
+    const days = body.days.slice(0, 6).map((day: any) => ({
+      closed: day?.closed === true,
+      morningStart: String(day?.morningStart ?? ""),
+      morningEnd: String(day?.morningEnd ?? ""),
+      afternoonStart: String(day?.afternoonStart ?? ""),
+      afternoonEnd: String(day?.afternoonEnd ?? ""),
+    }));
+
+    const holidays = Array.isArray(body.holidays)
+      ? Array.from(
+          new Set(
+            body.holidays
+              .map((d: any) => String(d || "").trim())
+              .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+          )
+        ).sort()
+      : [];
+
+    const value = JSON.stringify({
+      days,
+      holidays,
+      closedSaturdaysInAugust: body.closedSaturdaysInAugust !== false,
+    });
+
+    await db.query(
+      `INSERT INTO workshop_config(key, value) VALUES($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [AGENDA_CONFIG_KEY, value]
+    );
+
+    res.json(JSON.parse(value));
+  } catch (error) {
+    console.error("PUT /api/agenda-config error:", error);
+    res.status(500).json({ error: "Error guardando la configuración de agenda" });
+  }
+});
+
+/* =========================================================
    ROADSIDE ASSISTANCES
 ========================================================= */
 
