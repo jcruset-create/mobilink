@@ -1035,7 +1035,10 @@ function getVisibleCaducidadReminders() {
     .filter((rec) => rec.estado !== "CANCELADO")
     .filter((rec) =>
       finalVisibleDays.some(
-        (day) => day.date === rec.fecha_caducidad || day.date === rec.fecha_aviso
+        (day) =>
+          day.date === rec.fecha_caducidad ||
+          day.date === rec.fecha_aviso ||
+          day.date === rec.fecha_aviso2
       )
     )
     .slice()
@@ -1046,15 +1049,15 @@ function getVisibleCaducidadReminders() {
     );
 }
 
-// Columna donde pintar la tarjeta: día de caducidad si es visible; si no, día de aviso.
+// Columna donde pintar la tarjeta: día de caducidad si es visible;
+// si no, día del 1er aviso; si no, día del 2º aviso.
 function getCaducidadGridColumn(rec: CaducidadReminder) {
-  const byCaducidad = finalVisibleDays.findIndex((day) => day.date === rec.fecha_caducidad);
-  const index =
-    byCaducidad >= 0
-      ? byCaducidad
-      : finalVisibleDays.findIndex((day) => day.date === rec.fecha_aviso);
-  if (index < 0) return null;
-  return `${index + 2} / ${index + 3}`;
+  const candidates = [rec.fecha_caducidad, rec.fecha_aviso, rec.fecha_aviso2];
+  for (const date of candidates) {
+    const index = finalVisibleDays.findIndex((day) => day.date === date);
+    if (index >= 0) return `${index + 2} / ${index + 3}`;
+  }
+  return null;
 }
 
 async function sendCaducidadNow(rec: CaducidadReminder, canal?: "whatsapp" | "sms") {
@@ -1866,10 +1869,15 @@ appendLog(
                 <div
                   key={`caducidad-${rec.id}`}
                   title={
-                    `${rec.cliente_nombre} · ${rec.vehiculo || rec.matricula}\n` +
-                    `Caduca: ${formatSpanishDateKey(rec.fecha_caducidad)} · ` +
-                    `Aviso: ${formatSpanishDateKey(rec.fecha_aviso)}\n` +
-                    `WhatsApp: ${rec.whatsapp_estado} · SMS: ${rec.sms_estado}` +
+                    `${rec.cliente_nombre} · ${rec.vehiculo || rec.matricula}` +
+                    (rec.unidad ? ` · Unidad ${rec.unidad}` : "") +
+                    `\nCaduca: ${formatSpanishDateKey(rec.fecha_caducidad)} · ` +
+                    `1er aviso: ${formatSpanishDateKey(rec.fecha_aviso)}` +
+                    (rec.fecha_aviso2
+                      ? ` · 2º aviso: ${formatSpanishDateKey(rec.fecha_aviso2)}`
+                      : "") +
+                    `\nWhatsApp: ${rec.whatsapp_estado}/${rec.whatsapp2_estado} · ` +
+                    `SMS: ${rec.sms_estado}/${rec.sms2_estado}` +
                     (rec.ultimo_error ? `\nÚltimo error: ${rec.ultimo_error}` : "")
                   }
                   className={`z-20 mx-1 my-1 flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase shadow-sm ${getEstadoColorClass(
@@ -1882,6 +1890,7 @@ appendLog(
                 >
                   <span className="truncate">
                     Caducidad tacógrafo · {rec.matricula}
+                    {rec.unidad ? ` · U${rec.unidad}` : ""}
                     <span className="ml-2 font-medium opacity-90">
                       {rec.cliente_nombre} · Caduca {formatSpanishDateKey(rec.fecha_caducidad)} ·
                       Aviso {formatSpanishDateKey(rec.fecha_aviso)} · {getEstadoLabel(estadoVisual)}

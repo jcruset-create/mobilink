@@ -8949,8 +8949,22 @@ function addDaysToDateKey(dateKey: string, days: number): string | null {
   return `${y}-${m}-${d}`;
 }
 
+// Si el aviso cae en sábado/domingo se retrocede al viernes: la antelación
+// nunca baja del mínimo (15 → 16 o 17 días si hace falta).
+function ajustarADiaLaborable(dateKey: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+  if (!match) return null;
+  const dow = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  ).getUTCDay();
+  if (dow === 6) return addDaysToDateKey(dateKey, -1);
+  if (dow === 0) return addDaysToDateKey(dateKey, -2);
+  return dateKey;
+}
+
 function calcularFechaAvisoCaducidad(fechaCaducidad: string, diasAntelacion: number) {
-  return addDaysToDateKey(fechaCaducidad, -Math.max(0, Math.trunc(diasAntelacion)));
+  const base = addDaysToDateKey(fechaCaducidad, -Math.max(0, Math.trunc(diasAntelacion)));
+  return base ? ajustarADiaLaborable(base) : null;
 }
 
 function normalizeCaducidadInput(body: any) {
@@ -8961,8 +8975,15 @@ function normalizeCaducidadInput(body: any) {
       ? Math.trunc(diasAntelacionRaw)
       : 15;
 
+  const diasAntelacion2Raw = Number(body?.dias_antelacion2);
+  const diasAntelacion2 =
+    Number.isFinite(diasAntelacion2Raw) && diasAntelacion2Raw >= 0
+      ? Math.trunc(diasAntelacion2Raw)
+      : 7;
+
   const telefono = String(body?.telefono || "").trim();
   const fechaAviso = calcularFechaAvisoCaducidad(fechaCaducidad, diasAntelacion);
+  const fechaAviso2 = calcularFechaAvisoCaducidad(fechaCaducidad, diasAntelacion2);
 
   const errors: string[] = [];
   if (!telefono || !normalizeSpanishPhone(telefono)) errors.push("Teléfono obligatorio");
@@ -8976,11 +8997,14 @@ function normalizeCaducidadInput(body: any) {
       cliente_nombre: String(body?.cliente_nombre || "").trim(),
       vehiculo: String(body?.vehiculo || "").trim(),
       matricula: String(body?.matricula || "").trim().toUpperCase(),
+      unidad: String(body?.unidad || "").trim(),
       telefono,
       tipo_caducidad: String(body?.tipo_caducidad || "tacografo").trim() || "tacografo",
       fecha_caducidad: fechaCaducidad,
       dias_antelacion: diasAntelacion,
       fecha_aviso: fechaAviso || "",
+      dias_antelacion2: diasAntelacion2,
+      fecha_aviso2: fechaAviso2 || "",
       enviar_whatsapp: body?.enviar_whatsapp !== false,
       enviar_sms: body?.enviar_sms !== false,
       observaciones: String(body?.observaciones || "").trim(),
@@ -9066,8 +9090,9 @@ async function getCaducidadById(id: number) {
  * Envía los avisos de un recordatorio por los canales activos que sigan en
  * 'pendiente'. Idempotente: cada canal se marca 'enviado' (con sid y timestamp)
  * en cuanto Twilio acepta el mensaje, así una segunda ejecución no reenvía.
+ * ronda 1 = primer aviso (dias_antelacion); ronda 2 = segundo aviso (dias_antelacion2).
  */
-async function enviarAvisosCaducidad(recId: number) {
+async function enviarAvisosCaducidad(recId: number, ronda: 1 | 2 = 1) {
   const rec = await getCaducidadById(recId);
   if (!rec) return { ok: false, error: "Recordatorio no encontrado" };
 
@@ -9075,31 +9100,38 @@ async function enviarAvisosCaducidad(recId: number) {
     return { ok: false, error: `El recordatorio está en estado ${rec.estado}` };
   }
 
+  const cols =
+    ronda === 2
+      ? { wa: "whatsapp2_estado", waSid: "whatsapp2_sid", waAt: "whatsapp2_enviado_en_ms",
+          sms: "sms2_estado", smsSid: "sms2_sid", smsAt: "sms2_enviado_en_ms" }
+      : { wa: "whatsapp_estado", waSid: "whatsapp_sid", waAt: "whatsapp_enviado_en_ms",
+          sms: "sms_estado", smsSid: "sms_sid", smsAt: "sms_enviado_en_ms" };
+
   const nowMs = Date.now();
   const errores: string[] = [];
 
-  if (rec.enviar_whatsapp && rec.whatsapp_estado === "pendiente") {
+  if (rec.enviar_whatsapp && rec[cols.wa] === "pendiente") {
     try {
       const message = await sendCaducidadWhatsApp(rec);
       if (message) {
         await db.query(
           `UPDATE recordatorios_caducidad
-           SET whatsapp_estado = 'enviado', whatsapp_sid = $2,
-               whatsapp_enviado_en_ms = $3, actualizado_en_ms = $3
-           WHERE id = $1 AND whatsapp_estado = 'pendiente'`,
+           SET ${cols.wa} = 'enviado', ${cols.waSid} = $2,
+               ${cols.waAt} = $3, actualizado_en_ms = $3
+           WHERE id = $1 AND ${cols.wa} = 'pendiente'`,
           [rec.id, message.sid, nowMs]
         );
-        console.log(`Caducidad ${rec.id}: WhatsApp enviado sid=${message.sid}`);
+        console.log(`Caducidad ${rec.id} (ronda ${ronda}): WhatsApp enviado sid=${message.sid}`);
       }
     } catch (error: any) {
       errores.push(`WhatsApp: ${error?.message || "error"}`);
       await db.query(
         `UPDATE recordatorios_caducidad
-         SET whatsapp_estado = 'error', ultimo_error = $2, actualizado_en_ms = $3
+         SET ${cols.wa} = 'error', ultimo_error = $2, actualizado_en_ms = $3
          WHERE id = $1`,
         [rec.id, String(error?.message || "Error WhatsApp"), nowMs]
       );
-      console.error(`Caducidad ${rec.id}: error WhatsApp`, {
+      console.error(`Caducidad ${rec.id} (ronda ${ronda}): error WhatsApp`, {
         message: error?.message,
         code: error?.code,
         moreInfo: error?.moreInfo,
@@ -9107,39 +9139,39 @@ async function enviarAvisosCaducidad(recId: number) {
     }
   }
 
-  if (rec.enviar_sms && rec.sms_estado === "pendiente") {
+  if (rec.enviar_sms && rec[cols.sms] === "pendiente") {
     try {
       const message = await sendCaducidadSms(rec);
       if (message) {
         await db.query(
           `UPDATE recordatorios_caducidad
-           SET sms_estado = 'enviado', sms_sid = $2,
-               sms_enviado_en_ms = $3, actualizado_en_ms = $3
-           WHERE id = $1 AND sms_estado = 'pendiente'`,
+           SET ${cols.sms} = 'enviado', ${cols.smsSid} = $2,
+               ${cols.smsAt} = $3, actualizado_en_ms = $3
+           WHERE id = $1 AND ${cols.sms} = 'pendiente'`,
           [rec.id, message.sid, nowMs]
         );
-        console.log(`Caducidad ${rec.id}: SMS enviado sid=${message.sid}`);
+        console.log(`Caducidad ${rec.id} (ronda ${ronda}): SMS enviado sid=${message.sid}`);
       }
     } catch (error: any) {
       errores.push(`SMS: ${error?.message || "error"}`);
       await db.query(
         `UPDATE recordatorios_caducidad
-         SET sms_estado = 'error', ultimo_error = $2, actualizado_en_ms = $3
+         SET ${cols.sms} = 'error', ultimo_error = $2, actualizado_en_ms = $3
          WHERE id = $1`,
         [rec.id, String(error?.message || "Error SMS"), nowMs]
       );
-      console.error(`Caducidad ${rec.id}: error SMS`, error?.message);
+      console.error(`Caducidad ${rec.id} (ronda ${ronda}): error SMS`, error?.message);
     }
   }
 
-  // Estado general según el resultado de los canales
+  // Estado general según el resultado de los canales de esta ronda
   const after = await getCaducidadById(rec.id);
   const canalOk =
-    (after.enviar_whatsapp && after.whatsapp_estado === "enviado") ||
-    (after.enviar_sms && after.sms_estado === "enviado");
+    (after.enviar_whatsapp && after[cols.wa] === "enviado") ||
+    (after.enviar_sms && after[cols.sms] === "enviado");
   const canalPendiente =
-    (after.enviar_whatsapp && after.whatsapp_estado === "pendiente") ||
-    (after.enviar_sms && after.sms_estado === "pendiente");
+    (after.enviar_whatsapp && after[cols.wa] === "pendiente") ||
+    (after.enviar_sms && after[cols.sms] === "pendiente");
 
   if (["PENDIENTE", "ERROR_ENVIO", "AVISADO"].includes(after.estado)) {
     const nextEstado = canalOk ? "AVISADO" : canalPendiente ? after.estado : "ERROR_ENVIO";
@@ -9174,7 +9206,8 @@ async function checkCaducidadRecordatorios() {
       [todayKey, Date.now()]
     );
 
-    const result = await db.query(
+    // Ronda 1 (dias_antelacion, por defecto 15 días)
+    const ronda1 = await db.query(
       `SELECT id FROM recordatorios_caducidad
        WHERE fecha_aviso <= $1
          AND estado = 'PENDIENTE'
@@ -9182,8 +9215,27 @@ async function checkCaducidadRecordatorios() {
       [todayKey]
     );
 
-    for (const row of result.rows) {
-      await enviarAvisosCaducidad(Number(row.id));
+    for (const row of ronda1.rows) {
+      await enviarAvisosCaducidad(Number(row.id), 1);
+    }
+
+    // Ronda 2 (dias_antelacion2, por defecto 7 días): solo si ya se avisó antes
+    // y algún canal activo sigue pendiente de la segunda tanda.
+    const ronda2 = await db.query(
+      `SELECT id FROM recordatorios_caducidad
+       WHERE fecha_aviso2 <> ''
+         AND fecha_aviso2 <= $1
+         AND estado IN ('AVISADO', 'RESPONDIDO')
+         AND (
+           (enviar_whatsapp AND whatsapp2_estado = 'pendiente')
+           OR (enviar_sms AND sms2_estado = 'pendiente')
+         )
+       ORDER BY fecha_aviso2 ASC, id ASC`,
+      [todayKey]
+    );
+
+    for (const row of ronda2.rows) {
+      await enviarAvisosCaducidad(Number(row.id), 2);
     }
   } catch (error) {
     console.error("checkCaducidadRecordatorios error:", error);
@@ -9248,16 +9300,18 @@ app.post("/api/recordatorios-caducidad", requireSupervisorRole, async (req, res)
     const nowMs = Date.now();
     const result = await db.query(
       `INSERT INTO recordatorios_caducidad (
-        "workshopId", cliente_nombre, vehiculo, matricula, telefono,
+        "workshopId", cliente_nombre, vehiculo, matricula, unidad, telefono,
         tipo_caducidad, fecha_caducidad, dias_antelacion, fecha_aviso,
+        dias_antelacion2, fecha_aviso2,
         enviar_whatsapp, enviar_sms, observaciones,
         creado_en_ms, actualizado_en_ms
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
       RETURNING *`,
       [
         values.workshopId, values.cliente_nombre, values.vehiculo, values.matricula,
-        values.telefono, values.tipo_caducidad, values.fecha_caducidad,
+        values.unidad, values.telefono, values.tipo_caducidad, values.fecha_caducidad,
         values.dias_antelacion, values.fecha_aviso,
+        values.dias_antelacion2, values.fecha_aviso2,
         values.enviar_whatsapp, values.enviar_sms, values.observaciones, nowMs,
       ]
     );
@@ -9295,21 +9349,26 @@ app.put("/api/recordatorios-caducidad/:id", requireSupervisorRole, async (req, r
     const result = await db.query(
       `UPDATE recordatorios_caducidad SET
         "workshopId" = $2, cliente_nombre = $3, vehiculo = $4, matricula = $5,
-        telefono = $6, tipo_caducidad = $7, fecha_caducidad = $8,
-        dias_antelacion = $9, fecha_aviso = $10,
-        enviar_whatsapp = $11, enviar_sms = $12, observaciones = $13,
-        estado = $14, whatsapp_estado = $15, sms_estado = $16,
-        actualizado_en_ms = $17
+        unidad = $6, telefono = $7, tipo_caducidad = $8, fecha_caducidad = $9,
+        dias_antelacion = $10, fecha_aviso = $11,
+        dias_antelacion2 = $12, fecha_aviso2 = $13,
+        enviar_whatsapp = $14, enviar_sms = $15, observaciones = $16,
+        estado = $17, whatsapp_estado = $18, sms_estado = $19,
+        whatsapp2_estado = $20, sms2_estado = $21,
+        actualizado_en_ms = $22
       WHERE id = $1
       RETURNING *`,
       [
         rec.id, values.workshopId ?? rec.workshopId, values.cliente_nombre, values.vehiculo,
-        values.matricula, values.telefono, values.tipo_caducidad, values.fecha_caducidad,
-        values.dias_antelacion, values.fecha_aviso,
+        values.matricula, values.unidad, values.telefono, values.tipo_caducidad,
+        values.fecha_caducidad, values.dias_antelacion, values.fecha_aviso,
+        values.dias_antelacion2, values.fecha_aviso2,
         values.enviar_whatsapp, values.enviar_sms, values.observaciones,
         rearmar ? "PENDIENTE" : rec.estado,
         rearmar ? "pendiente" : rec.whatsapp_estado,
         rearmar ? "pendiente" : rec.sms_estado,
+        rearmar ? "pendiente" : rec.whatsapp2_estado,
+        rearmar ? "pendiente" : rec.sms2_estado,
         nowMs,
       ]
     );

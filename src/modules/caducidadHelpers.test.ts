@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   addDaysToDateKey,
   addYearsToDateKey,
+  ajustarADiaLaborable,
   getFechaCaducidadPorDefecto,
   calcularFechaAviso,
   getEstadoVisual,
@@ -9,13 +10,38 @@ import {
   formatSpanishDateKey,
 } from "./caducidadHelpers";
 
-describe("calcularFechaAviso", () => {
-  it("resta los días de antelación (caso del enunciado: 30/08 - 15 = 15/08)", () => {
-    expect(calcularFechaAviso("2026-08-30", 15)).toBe("2026-08-15");
+describe("ajustarADiaLaborable", () => {
+  it("sábado retrocede al viernes", () => {
+    // 2026-08-15 es sábado
+    expect(ajustarADiaLaborable("2026-08-15")).toBe("2026-08-14");
   });
 
-  it("cruza meses y años correctamente", () => {
-    expect(calcularFechaAviso("2026-01-05", 15)).toBe("2025-12-21");
+  it("domingo retrocede al viernes", () => {
+    // 2026-08-16 es domingo
+    expect(ajustarADiaLaborable("2026-08-16")).toBe("2026-08-14");
+  });
+
+  it("día laborable no cambia", () => {
+    // 2026-08-17 es lunes
+    expect(ajustarADiaLaborable("2026-08-17")).toBe("2026-08-17");
+  });
+});
+
+describe("calcularFechaAviso", () => {
+  it("resta los días y ajusta a laborable: 30/08/2026 - 15 = sábado 15/08 → viernes 14/08 (16 días)", () => {
+    expect(calcularFechaAviso("2026-08-30", 15)).toBe("2026-08-14");
+  });
+
+  it("si el aviso cae en laborable no se toca: 28/08/2026 - 15 = jueves 13/08", () => {
+    expect(calcularFechaAviso("2026-08-28", 15)).toBe("2026-08-13");
+  });
+
+  it("segundo aviso de 7 días también se ajusta: 30/08/2026 - 7 = domingo 23/08 → viernes 21/08", () => {
+    expect(calcularFechaAviso("2026-08-30", 7)).toBe("2026-08-21");
+  });
+
+  it("cruza meses y años correctamente (21/12/2025 es domingo → viernes 19/12)", () => {
+    expect(calcularFechaAviso("2026-01-05", 15)).toBe("2025-12-19");
     expect(calcularFechaAviso("2026-03-10", 15)).toBe("2026-02-23");
   });
 
@@ -24,7 +50,8 @@ describe("calcularFechaAviso", () => {
   });
 
   it("no le afecta el cambio horario de marzo/octubre (aritmética UTC)", () => {
-    expect(calcularFechaAviso("2026-04-05", 15)).toBe("2026-03-21");
+    // 21/03/2026 es sábado → viernes 20/03
+    expect(calcularFechaAviso("2026-04-05", 15)).toBe("2026-03-20");
     expect(calcularFechaAviso("2026-11-05", 15)).toBe("2026-10-21");
   });
 
@@ -33,9 +60,9 @@ describe("calcularFechaAviso", () => {
     expect(calcularFechaAviso("30/08/2026", 15)).toBeNull();
   });
 
-  it("antelación negativa o no numérica se normaliza", () => {
-    expect(calcularFechaAviso("2026-08-30", -5)).toBe("2026-08-30");
-    expect(calcularFechaAviso("2026-08-30", NaN)).toBe("2026-08-15");
+  it("antelación negativa o no numérica se normaliza (30/08/2026 es domingo → viernes)", () => {
+    expect(calcularFechaAviso("2026-08-30", -5)).toBe("2026-08-28");
+    expect(calcularFechaAviso("2026-08-30", NaN)).toBe("2026-08-14");
   });
 });
 

@@ -688,10 +688,19 @@ export async function initDb() {
       matricula TEXT NOT NULL DEFAULT '',
       telefono TEXT NOT NULL DEFAULT '',
 
+      unidad TEXT NOT NULL DEFAULT '',
       tipo_caducidad TEXT NOT NULL DEFAULT 'tacografo',
       fecha_caducidad TEXT NOT NULL,
       dias_antelacion INTEGER NOT NULL DEFAULT 15,
       fecha_aviso TEXT NOT NULL,
+      dias_antelacion2 INTEGER NOT NULL DEFAULT 7,
+      fecha_aviso2 TEXT NOT NULL DEFAULT '',
+      whatsapp2_estado TEXT NOT NULL DEFAULT 'pendiente',
+      sms2_estado TEXT NOT NULL DEFAULT 'pendiente',
+      whatsapp2_sid TEXT,
+      sms2_sid TEXT,
+      whatsapp2_enviado_en_ms BIGINT,
+      sms2_enviado_en_ms BIGINT,
 
       enviar_whatsapp BOOLEAN NOT NULL DEFAULT true,
       enviar_sms BOOLEAN NOT NULL DEFAULT true,
@@ -722,6 +731,20 @@ export async function initDb() {
       ON recordatorios_caducidad(matricula, tipo_caducidad, fecha_caducidad)
       WHERE estado NOT IN ('CANCELADO', 'CADUCADO');
   `);
+
+  // Fase 2: nº de unidad + segundo aviso (7 días) — para tablas ya creadas
+  await pool.query(`
+    ALTER TABLE recordatorios_caducidad
+      ADD COLUMN IF NOT EXISTS unidad TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS dias_antelacion2 INTEGER NOT NULL DEFAULT 7,
+      ADD COLUMN IF NOT EXISTS fecha_aviso2 TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS whatsapp2_estado TEXT NOT NULL DEFAULT 'pendiente',
+      ADD COLUMN IF NOT EXISTS sms2_estado TEXT NOT NULL DEFAULT 'pendiente',
+      ADD COLUMN IF NOT EXISTS whatsapp2_sid TEXT,
+      ADD COLUMN IF NOT EXISTS sms2_sid TEXT,
+      ADD COLUMN IF NOT EXISTS whatsapp2_enviado_en_ms BIGINT,
+      ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
+  `).catch(() => {});
 
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }

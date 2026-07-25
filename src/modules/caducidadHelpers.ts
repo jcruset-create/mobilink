@@ -24,20 +24,29 @@ export type CaducidadReminder = {
   cliente_nombre: string;
   vehiculo: string;
   matricula: string;
+  unidad: string;
   telefono: string;
   tipo_caducidad: string;
   fecha_caducidad: string;
   dias_antelacion: number;
   fecha_aviso: string;
+  dias_antelacion2: number;
+  fecha_aviso2: string;
   enviar_whatsapp: boolean;
   enviar_sms: boolean;
   estado: CaducidadEstado;
   whatsapp_estado: CaducidadCanalEstado;
   sms_estado: CaducidadCanalEstado;
+  whatsapp2_estado: CaducidadCanalEstado;
+  sms2_estado: CaducidadCanalEstado;
   whatsapp_sid?: string | null;
   sms_sid?: string | null;
   whatsapp_enviado_en_ms?: number | null;
   sms_enviado_en_ms?: number | null;
+  whatsapp2_sid?: string | null;
+  sms2_sid?: string | null;
+  whatsapp2_enviado_en_ms?: number | null;
+  sms2_enviado_en_ms?: number | null;
   ultimo_error?: string | null;
   cita_id?: number | null;
   observaciones: string;
@@ -74,6 +83,25 @@ export function getFechaCaducidadPorDefecto(todayKey: string): string {
   return addYearsToDateKey(todayKey, 2) ?? todayKey;
 }
 
+// Día de la semana de una fecha 'YYYY-MM-DD' (0 = domingo ... 6 = sábado).
+export function getDayOfWeek(dateKey: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+  if (!match) return null;
+  return new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  ).getUTCDay();
+}
+
+// Si la fecha cae en sábado o domingo, se retrocede al viernes anterior.
+// Así la antelación nunca baja del mínimo (15 → 16 o 17 días si hace falta).
+export function ajustarADiaLaborable(dateKey: string): string | null {
+  const dow = getDayOfWeek(dateKey);
+  if (dow == null) return null;
+  if (dow === 6) return addDaysToDateKey(dateKey, -1);
+  if (dow === 0) return addDaysToDateKey(dateKey, -2);
+  return dateKey;
+}
+
 export function calcularFechaAviso(
   fechaCaducidad: string,
   diasAntelacion: number
@@ -81,7 +109,8 @@ export function calcularFechaAviso(
   const dias = Number.isFinite(diasAntelacion)
     ? Math.max(0, Math.trunc(diasAntelacion))
     : 15;
-  return addDaysToDateKey(fechaCaducidad, -dias);
+  const base = addDaysToDateKey(fechaCaducidad, -dias);
+  return base ? ajustarADiaLaborable(base) : null;
 }
 
 /**

@@ -6,10 +6,12 @@ export type CaducidadDraft = {
   cliente_nombre: string;
   vehiculo: string;
   matricula: string;
+  unidad: string;
   telefono: string;
   tipo_caducidad: string;
   fecha_caducidad: string;
   dias_antelacion: number;
+  dias_antelacion2: number;
   enviar_whatsapp: boolean;
   enviar_sms: boolean;
   observaciones: string;

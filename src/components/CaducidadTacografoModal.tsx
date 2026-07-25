@@ -43,10 +43,12 @@ function emptyDraft(workshopId: string): CaducidadDraft {
     vehiculo: "",
     matricula: "",
     telefono: "",
+    unidad: "",
     tipo_caducidad: TIPOS_CADUCIDAD[0].value,
     // La revisión de tacógrafo caduca a los 2 años → se propone hoy + 2 años (editable).
     fecha_caducidad: getFechaCaducidadPorDefecto(todayKey()),
     dias_antelacion: 15,
+    dias_antelacion2: 7,
     enviar_whatsapp: true,
     enviar_sms: true,
     observaciones: "",
@@ -73,10 +75,12 @@ export default function CaducidadTacografoModal({
         cliente_nombre: editing.cliente_nombre,
         vehiculo: editing.vehiculo,
         matricula: editing.matricula,
+        unidad: editing.unidad ?? "",
         telefono: editing.telefono,
         tipo_caducidad: editing.tipo_caducidad,
         fecha_caducidad: editing.fecha_caducidad,
         dias_antelacion: editing.dias_antelacion,
+        dias_antelacion2: editing.dias_antelacion2 ?? 7,
         enviar_whatsapp: editing.enviar_whatsapp,
         enviar_sms: editing.enviar_sms,
         observaciones: editing.observaciones,
@@ -89,6 +93,7 @@ export default function CaducidadTacografoModal({
   if (!open) return null;
 
   const fechaAviso = calcularFechaAviso(draft.fecha_caducidad, draft.dias_antelacion);
+  const fechaAviso2 = calcularFechaAviso(draft.fecha_caducidad, draft.dias_antelacion2);
 
   async function save() {
     if (!draft.cliente_nombre.trim()) return setError("Escribe el nombre del cliente.");
@@ -175,6 +180,16 @@ export default function CaducidadTacografoModal({
           </div>
 
           <div>
+            <label className={labelClass}>Nº unidad</label>
+            <input
+              value={draft.unidad}
+              onChange={(e) => setDraft((p) => ({ ...p, unidad: e.target.value }))}
+              placeholder="Nº de unidad / flota"
+              className={inputClass}
+            />
+          </div>
+
+          <div>
             <label className={labelClass}>Tipo de revisión</label>
             <select
               value={draft.tipo_caducidad}
@@ -202,26 +217,49 @@ export default function CaducidadTacografoModal({
                 className={inputClass}
               />
             </div>
-            <div>
-              <label className={labelClass}>Días de antelación</label>
-              <input
-                type="number"
-                min={0}
-                value={draft.dias_antelacion}
-                onChange={(e) =>
-                  setDraft((p) => ({
-                    ...p,
-                    dias_antelacion: Math.max(0, Math.trunc(Number(e.target.value) || 0)),
-                  }))
-                }
-                className={inputClass}
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>1er aviso (días)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={draft.dias_antelacion}
+                  onChange={(e) =>
+                    setDraft((p) => ({
+                      ...p,
+                      dias_antelacion: Math.max(0, Math.trunc(Number(e.target.value) || 0)),
+                    }))
+                  }
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>2º aviso (días)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={draft.dias_antelacion2}
+                  onChange={(e) =>
+                    setDraft((p) => ({
+                      ...p,
+                      dias_antelacion2: Math.max(0, Math.trunc(Number(e.target.value) || 0)),
+                    }))
+                  }
+                  className={inputClass}
+                />
+              </div>
             </div>
           </div>
 
           {fechaAviso && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              El aviso se enviará el <strong>{formatSpanishDateKey(fechaAviso)}</strong>.
+              1er aviso el <strong>{formatSpanishDateKey(fechaAviso)}</strong>
+              {fechaAviso2 && (
+                <>
+                  {" "}· 2º aviso el <strong>{formatSpanishDateKey(fechaAviso2)}</strong>
+                </>
+              )}
+              . Si cae en fin de semana se adelanta al viernes.
             </div>
           )}
 
