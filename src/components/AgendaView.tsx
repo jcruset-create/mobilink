@@ -2038,14 +2038,16 @@ appendLog(
 
                     let cellClass = dark ? "bg-slate-800/50" : "bg-slate-200/70";
 
+                    // Editable (futuro y en horario): verde muy suave
                     if (working && !past) {
                       cellClass = dark
-                        ? "cursor-pointer bg-slate-800 hover:bg-slate-700"
+                        ? "cursor-pointer bg-emerald-900/25 hover:bg-emerald-800/40"
                         : "cursor-pointer bg-emerald-50 hover:bg-emerald-100";
                     }
 
+                    // Ya pasado: gris
                     if (working && past) {
-                      cellClass = dark ? "bg-rose-950/30" : "bg-red-50";
+                      cellClass = dark ? "bg-slate-700/40" : "bg-slate-300/60";
                     }
 
                     return (
@@ -2057,8 +2059,9 @@ appendLog(
                           openNewAppointment(day.date, slot);
                         }}
                         className={`relative border-b ${th.gridBorderSoft} ${
+                          // Descansos / fuera de horario (mediodía): azul marino
                           !isWorkingTime(day.index, slot)
-                            ? (dark ? "cursor-not-allowed bg-slate-950" : "cursor-not-allowed bg-slate-200")
+                            ? (dark ? "cursor-not-allowed bg-blue-950" : "cursor-not-allowed bg-blue-950/80")
                             : cellClass
                         }`}
                       />
