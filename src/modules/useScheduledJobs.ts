@@ -364,6 +364,53 @@ export function useScheduledJobs({
     appendLog(`Cita cancelada: ${scheduled.plate}.`);
   }
 
+  /**
+   * "Cancelar" desde las tarjetas de citas pendientes de llegada (Operativo y
+   * Operativo 2): borra la cita de verdad.
+   *
+   * Antes se llamaba a `cancelScheduledJob`, que solo marcaba la cita como
+   * `cancelado` dentro del listado y lo guardaba con un PUT del array completo.
+   * La cita seguía existiendo en el estado local y en la fila de la BD, así que
+   * se quedaba pintada en la agenda. Aquí se quita del estado y se llama al
+   * DELETE del backend, que marca `deletedAtMs` (el GET ya no la devuelve) y
+   * devuelve el recordatorio de caducidad a PENDIENTE/AVISADO si la cita venía
+   * de uno.
+   */
+  async function deleteScheduledJobById(scheduledId: number) {
+    const scheduled = scheduledJobs.find((item) => item.id === scheduledId);
+
+    if (!scheduled) return;
+
+    const ok = window.confirm(
+      `¿Cancelar la cita y borrarla de la agenda?\n\nMatrícula: ${
+        scheduled.plate || "sin matrícula"
+      }\nFecha: ${scheduled.date} · ${scheduled.startTime}`
+    );
+
+    if (!ok) return;
+
+    setScheduledJobs((prev) => prev.filter((item) => item.id !== scheduledId));
+
+    try {
+      await deleteScheduledJobFromBackend(scheduledId);
+
+      appendLog(`Cita cancelada y borrada de la agenda: ${scheduled.plate}.`);
+    } catch (error) {
+      console.error("Error cancelando cita:", error);
+
+      setScheduledJobs((prev) => {
+        const exists = prev.some((item) => item.id === scheduled.id);
+        return exists ? prev : [...prev, scheduled];
+      });
+
+      appendLog(`Error cancelando la cita ${scheduled.plate}.`);
+
+      alert(
+        "No se pudo borrar la cita en el servidor. Se ha restaurado en pantalla."
+      );
+    }
+  }
+
   async function deleteArrivedScheduledJob(scheduledId: number) {
     const scheduled = scheduledJobs.find((item) => item.id === scheduledId);
 
@@ -667,6 +714,7 @@ export function useScheduledJobs({
     updateScheduledJobField,
     updateScheduledJobTemplate,
     cancelScheduledJob,
+    deleteScheduledJobById,
     deleteArrivedScheduledJob,
     confirmScheduledArrival,
   };
