@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
 import 'screens/assistances_screen.dart';
@@ -11,6 +12,13 @@ final exteriorMode = ValueNotifier<bool>(false);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // App bloqueada en vertical: la tablet se usa en soporte de furgoneta y el
+  // giro accidental descolocaba la pantalla en mitad de una asistencia.
+  // portraitDown incluido porque en algunos soportes la tablet va invertida.
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
   await OfflineStore.init(); // base de datos local (modo offline)
   final prefs = await SharedPreferences.getInstance();
   exteriorMode.value = prefs.getBool('exteriorMode') ?? false;
@@ -85,7 +93,13 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset('assets/logo_horizontal2.png', width: 330),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Image.asset('assets/logo_horizontal2.png', width: 330),
+              ),
+            ),
             const SizedBox(height: 40),
             CircularProgressIndicator(color: AppColors.primary),
           ],

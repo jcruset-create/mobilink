@@ -80,7 +80,11 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.asset('assets/logo_horizontal2.png', width: 360),
+                  // scaleDown: en vertical el ancho útil puede ser menor de 360.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Image.asset('assets/logo_horizontal2.png', width: 360),
+                  ),
                   const SizedBox(height: 12),
                   Text(
                     'Acceso operarios',
@@ -107,8 +111,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // Dígitos PIN
-                  Row(
+                  // Dígitos PIN (scaleDown: 4 casillas de 64 no caben en el
+                  // ancho útil de una pantalla estrecha en vertical)
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(4, (i) {
                       return Container(
@@ -131,6 +139,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       );
                     }),
+                    ),
                   ),
 
                   if (_error != null) ...[

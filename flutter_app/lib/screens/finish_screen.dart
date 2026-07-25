@@ -173,7 +173,10 @@ class _FinishScreenState extends State<FinishScreen> {
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
         toolbarHeight: 110,
-        title: Image.asset('assets/logo_horizontal2.png', height: 100),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Image.asset('assets/logo_horizontal2.png', height: 100),
+        ),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),
@@ -191,130 +194,113 @@ class _FinishScreenState extends State<FinishScreen> {
             )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
-              child: Row(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Columna izquierda: foto + datos ──
-                  Expanded(
-                    flex: 1,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _label('Foto de la reparación *'),
-                        const SizedBox(height: 8),
-                        _photoBox(_photoReparacion, _pickPhoto,
-                            'Toca para fotografiar'),
-                        const SizedBox(height: 20),
-                        _label('Foto de la OR manual *'),
-                        const SizedBox(height: 8),
-                        _photoBox(_photoOr, _pickPhotoOr,
-                            'Fotografía la OR rellenada por el técnico'),
-                        const SizedBox(height: 20),
-                        _label('Datos del conductor *'),
-                        const SizedBox(height: 8),
-                        _TextField(
-                          controller: _nombreCtrl,
-                          hint: 'Nombre completo',
-                          icon: Icons.person,
-                          onChanged: (_) => setState(() {}),
-                        ),
-                        const SizedBox(height: 10),
-                        _TextField(
-                          controller: _dniCtrl,
-                          hint: 'DNI / NIE / Pasaporte',
-                          icon: Icons.badge,
-                          onChanged: (_) => setState(() {}),
-                        ),
-                        const SizedBox(height: 20),
-                        _label('Trabajos realizados *'),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _obsCtrl,
-                          maxLines: 4,
-                          onChanged: (_) => setState(() {}),
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: 'Describe los trabajos realizados...',
-                            hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
-                            filled: true,
-                            fillColor: const Color(0xFF16213e),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: Colors.white24),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: Colors.white24),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: Colors.teal),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        ListenableBuilder(
-                          listenable: Listenable.merge([_nombreCtrl, _dniCtrl, _sigController]),
-                          builder: (_, __) => SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: _canConfirm ? _confirm : null,
-                              icon: const Icon(Icons.check_circle),
-                              label: const Text('Confirmar finalización'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _canConfirm ? Colors.teal : Colors.white12,
-                                foregroundColor: _canConfirm ? Colors.white : Colors.white38,
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                  _label('Foto de la reparación *'),
+                  const SizedBox(height: 8),
+                  _photoBox(_photoReparacion, _pickPhoto,
+                      'Toca para fotografiar'),
+                  const SizedBox(height: 20),
+                  _label('Foto de la OR manual *'),
+                  const SizedBox(height: 8),
+                  _photoBox(_photoOr, _pickPhotoOr,
+                      'Fotografía la OR rellenada por el técnico'),
+                  const SizedBox(height: 20),
+                  _label('Datos del conductor *'),
+                  const SizedBox(height: 8),
+                  _TextField(
+                    controller: _nombreCtrl,
+                    hint: 'Nombre completo',
+                    icon: Icons.person,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: 10),
+                  _TextField(
+                    controller: _dniCtrl,
+                    hint: 'DNI / NIE / Pasaporte',
+                    icon: Icons.badge,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: 20),
+                  _label('Trabajos realizados *'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _obsCtrl,
+                    maxLines: 4,
+                    onChanged: (_) => setState(() {}),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Describe los trabajos realizados...',
+                      hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                      filled: true,
+                      fillColor: const Color(0xFF16213e),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.white24),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.white24),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Colors.teal),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  // ── Columna derecha: firma grande ──
-                  Expanded(
-                    flex: 1,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _label('Firma del conductor *'),
-                        const SizedBox(height: 8),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: _sigController.isEmpty
-                                  ? Colors.black26
-                                  : Colors.green.withOpacity(0.8),
-                              width: 1.5,
-                            ),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(11),
-                            child: Signature(
-                              controller: _sigController,
-                              height: 300,
-                              backgroundColor: Colors.white,
-                            ),
-                          ),
+                  const SizedBox(height: 20),
+                  // ── Firma (en vertical va debajo, no en columna aparte) ──
+                  _label('Firma del conductor *'),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _sigController.isEmpty
+                            ? Colors.black26
+                            : Colors.green.withOpacity(0.8),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(11),
+                      child: Signature(
+                        controller: _sigController,
+                        height: 220,
+                        backgroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => setState(() => _sigController.clear()),
+                        icon: const Icon(Icons.refresh, size: 16, color: Colors.white38),
+                        label: const Text('Borrar firma',
+                            style: TextStyle(color: Colors.white38, fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  ListenableBuilder(
+                    listenable: Listenable.merge([_nombreCtrl, _dniCtrl, _sigController]),
+                    builder: (_, __) => SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _canConfirm ? _confirm : null,
+                        icon: const Icon(Icons.check_circle),
+                        label: const Text('Confirmar finalización'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _canConfirm ? Colors.teal : Colors.white12,
+                          foregroundColor: _canConfirm ? Colors.white : Colors.white38,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
-                        const SizedBox(height: 6),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton.icon(
-                              onPressed: () => setState(() => _sigController.clear()),
-                              icon: const Icon(Icons.refresh, size: 16, color: Colors.white38),
-                              label: const Text('Borrar firma',
-                                  style: TextStyle(color: Colors.white38, fontSize: 12)),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ],

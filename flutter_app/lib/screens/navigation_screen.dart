@@ -175,11 +175,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
         toolbarHeight: 110,
-        title: Image.asset('assets/logo_horizontal2.png', height: 100),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Image.asset('assets/logo_horizontal2.png', height: 100),
+        ),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),
-      body: Row(
+      body: Column(
         children: [
           // ── Mapa ──────────────────────────────────────
           Expanded(
@@ -238,15 +241,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   ),
           ),
 
-          // ── Panel lateral ─────────────────────────────
-          Container(
-            width: 280,
-            color: const Color(0xFF16213e),
-            padding: const EdgeInsets.all(16),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+          // ── Panel inferior (en vertical va debajo del mapa) ────────────
+          Expanded(
+            flex: 4,
+            child: Container(
+              width: double.infinity,
+              color: const Color(0xFF16213e),
+              padding: const EdgeInsets.all(16),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                   // Destino
                   const Text('DESTINO',
                       style: TextStyle(
@@ -321,7 +326,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
                       color: Colors.teal,
                       onPressed: _initLocation,
                     ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

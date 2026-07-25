@@ -398,7 +398,10 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 80,
-        title: Image.asset('assets/logo_horizontal2.png', height: 70),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Image.asset('assets/logo_horizontal2.png', height: 70),
+        ),
         backgroundColor: AppColors.background,
         foregroundColor: Colors.white,
       ),
@@ -676,8 +679,10 @@ class _ActionButton extends StatelessWidget {
         foregroundColor: enabled ? _contrastColor(color) : AppColors.textDisabled,
         disabledBackgroundColor: AppColors.disabledBtn,
         disabledForegroundColor: AppColors.textDisabled,
-        minimumSize: Size(fullWidth ? double.infinity : 140, minHeight),
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+        // Sin ancho mínimo cuando va en fila: en vertical los tres botones de
+        // acciones rápidas se reparten menos de 140 px cada uno.
+        minimumSize: Size(fullWidth ? double.infinity : 0, minHeight),
+        padding: EdgeInsets.symmetric(vertical: 16, horizontal: fullWidth ? 20 : 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         elevation: 0,
       ),
@@ -788,16 +793,19 @@ class _WhatsAppCaptureCard extends StatelessWidget {
             children: [
               const Icon(Icons.chat, size: 16, color: Colors.green),
               const SizedBox(width: 8),
-              const Text(
-                'Archivos del cliente (WhatsApp)',
-                style: TextStyle(
-                  color: Colors.green,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1,
+              const Expanded(
+                child: Text(
+                  'Archivos del cliente (WhatsApp)',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1,
+                  ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               if (totalMedia > 0)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
