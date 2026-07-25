@@ -477,6 +477,35 @@ class TyreControlApi {
     }
   }
 
+  /// Catálogo de referencias de neumático (para la pantalla de consulta de la
+  /// APK): marca, modelo, medida y specs. Solo lectura.
+  static Future<List<Map<String, dynamic>>> listarCatalogoReferencias() async {
+    final data = await _db.from('tc_referencias_neumatico').select(
+        'profundidad_dibujo_mm, presion_maxima_bar, carga_maxima_kg, referencia_completa, '
+        'modelo:tc_cat_modelos_neumatico(nombre, foto_modelo_url, marca:tc_cat_marcas_neumatico(nombre)), '
+        'tyre_size:tyre_sizes(medida, indice_carga_simple, codigo_velocidad)')
+        .eq('activo', true).limit(2000);
+    final out = <Map<String, dynamic>>[];
+    for (final e in (data as List)) {
+      final r = Map<String, dynamic>.from(e as Map);
+      final mo = r['modelo'] is Map ? r['modelo'] as Map : null;
+      final ma = mo != null && mo['marca'] is Map ? mo['marca'] as Map : null;
+      final ts = r['tyre_size'] is Map ? r['tyre_size'] as Map : null;
+      out.add({
+        'marca': ma?['nombre'],
+        'modelo': mo?['nombre'],
+        'medida': ts?['medida'] ?? r['referencia_completa'],
+        'indice_carga': ts?['indice_carga_simple'],
+        'codigo_vel': ts?['codigo_velocidad'],
+        'foto': mo?['foto_modelo_url'],
+        'prof': (r['profundidad_dibujo_mm'] as num?)?.toDouble(),
+        'pres': (r['presion_maxima_bar'] as num?)?.toDouble(),
+        'carga': (r['carga_maxima_kg'] as num?)?.toDouble(),
+      });
+    }
+    return out;
+  }
+
   /// Intervenciones (sesiones de cambio con su informe) de un vehículo.
   static Future<List<Map<String, dynamic>>> listarIntervencionesVehiculo(String vehiculoId) async {
     final data = await _db.from('tc_intervenciones').select()

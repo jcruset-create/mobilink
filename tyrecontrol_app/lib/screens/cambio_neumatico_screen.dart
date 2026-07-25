@@ -4,6 +4,7 @@ import '../models/models.dart';
 import '../models/incidencias.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import 'catalogo_screen.dart';
 
 /// Cambio rápido de neumático (tablet, táctil).
 ///
@@ -412,6 +413,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       appBar: AppBar(
         title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
         actions: [
+          IconButton(
+            tooltip: 'Catálogo de neumáticos',
+            icon: const Icon(Icons.menu_book_outlined, color: Colors.white),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => CatalogoScreen(medidasBase: _medidasVehiculo)),
+            ),
+          ),
           TextButton.icon(
             onPressed: _trabajando ? null : _deshacer,
             icon: const Icon(Icons.undo, color: Colors.white),
