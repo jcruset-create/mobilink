@@ -3,9 +3,11 @@ import {
   AGENDA_DAY_LABELS,
   DEFAULT_AGENDA_CONFIG,
   getBridgeSaturday,
+  getFridayBridgeStatus,
   validateAgendaConfig,
   type AgendaConfig,
   type AgendaDaySchedule,
+  type AgendaSpecialDay,
 } from "../modules/agendaConfig";
 import { saveAgendaConfig } from "../modules/agendaConfigApi";
 
@@ -27,6 +29,15 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
   const [newHoliday, setNewHoliday] = useState("");
   const [newHolidayLabel, setNewHolidayLabel] = useState("");
   const [newHolidayYearly, setNewHolidayYearly] = useState(true);
+  const [newSpecial, setNewSpecial] = useState({
+    date: "",
+    label: "",
+    yearly: true,
+    morningStart: "08:30",
+    morningEnd: "14:00",
+    afternoonStart: "",
+    afternoonEnd: "",
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Festivo en viernes recién añadido, a la espera de decidir si se hace puente.
@@ -40,6 +51,15 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
     setNewHoliday("");
     setNewHolidayLabel("");
     setNewHolidayYearly(true);
+    setNewSpecial({
+      date: "",
+      label: "",
+      yearly: true,
+      morningStart: "08:30",
+      morningEnd: "14:00",
+      afternoonStart: "",
+      afternoonEnd: "",
+    });
     setBridgePrompt(null);
     setError("");
   }, [open, config]);
@@ -110,6 +130,63 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
     setDraft((prev) => ({
       ...prev,
       holidays: prev.holidays.filter((h) => h.date !== date),
+    }));
+  }
+
+  function addSpecialDay() {
+    const date = newSpecial.date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError("Selecciona la fecha de la jornada especial.");
+      return;
+    }
+
+    if (draft.specialDays.some((s) => s.date === date)) {
+      setError("Ese día ya tiene una jornada especial configurada.");
+      return;
+    }
+
+    setError("");
+    setDraft((prev) => ({
+      ...prev,
+      specialDays: [
+        ...prev.specialDays,
+        {
+          date,
+          label: newSpecial.label.trim(),
+          yearly: newSpecial.yearly,
+          closed: false,
+          morningStart: newSpecial.morningStart,
+          morningEnd: newSpecial.morningEnd,
+          afternoonStart: newSpecial.afternoonStart,
+          afternoonEnd: newSpecial.afternoonEnd,
+        },
+      ].sort((a, b) => a.date.localeCompare(b.date)),
+    }));
+
+    setNewSpecial({
+      date: "",
+      label: "",
+      yearly: true,
+      morningStart: "08:30",
+      morningEnd: "14:00",
+      afternoonStart: "",
+      afternoonEnd: "",
+    });
+  }
+
+  function updateSpecialDay(date: string, patch: Partial<AgendaSpecialDay>) {
+    setDraft((prev) => ({
+      ...prev,
+      specialDays: prev.specialDays.map((s) =>
+        s.date === date ? { ...s, ...patch } : s
+      ),
+    }));
+  }
+
+  function removeSpecialDay(date: string) {
+    setDraft((prev) => ({
+      ...prev,
+      specialDays: prev.specialDays.filter((s) => s.date !== date),
     }));
   }
 
@@ -245,6 +322,182 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
 
           <section>
             <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
+              Días con horario especial
+            </h4>
+            <p className="mb-2 text-xs text-slate-500">
+              Jornadas puntuales distintas al horario semanal, por ejemplo el 24 de
+              diciembre de 8:30 a 14:00.
+            </p>
+
+            <div className="rounded-2xl border border-slate-200 p-3">
+              <div className="grid gap-2 md:grid-cols-[170px_1fr]">
+                <input
+                  type="date"
+                  value={newSpecial.date}
+                  onChange={(e) => setNewSpecial((p) => ({ ...p, date: e.target.value }))}
+                  className="rounded-2xl border border-slate-200 px-3 py-3"
+                />
+                <input
+                  value={newSpecial.label}
+                  onChange={(e) => setNewSpecial((p) => ({ ...p, label: e.target.value }))}
+                  placeholder="Motivo (p. ej. Nochebuena)"
+                  className="rounded-2xl border border-slate-200 px-3 py-3"
+                />
+              </div>
+
+              <div className="mt-2 grid gap-2 md:grid-cols-4">
+                <div>
+                  <label className={labelClass}>Mañana desde</label>
+                  <input
+                    type="time"
+                    value={newSpecial.morningStart}
+                    onChange={(e) => setNewSpecial((p) => ({ ...p, morningStart: e.target.value }))}
+                    className={timeClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Mañana hasta</label>
+                  <input
+                    type="time"
+                    value={newSpecial.morningEnd}
+                    onChange={(e) => setNewSpecial((p) => ({ ...p, morningEnd: e.target.value }))}
+                    className={timeClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Tarde desde</label>
+                  <input
+                    type="time"
+                    value={newSpecial.afternoonStart}
+                    onChange={(e) => setNewSpecial((p) => ({ ...p, afternoonStart: e.target.value }))}
+                    className={timeClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Tarde hasta</label>
+                  <input
+                    type="time"
+                    value={newSpecial.afternoonEnd}
+                    onChange={(e) => setNewSpecial((p) => ({ ...p, afternoonEnd: e.target.value }))}
+                    className={timeClass}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={newSpecial.yearly}
+                    onChange={(e) => setNewSpecial((p) => ({ ...p, yearly: e.target.checked }))}
+                  />
+                  Se repite cada año en la misma fecha
+                </label>
+
+                <button
+                  type="button"
+                  onClick={addSpecialDay}
+                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+                >
+                  Añadir jornada especial
+                </button>
+              </div>
+            </div>
+
+            {draft.specialDays.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-400">
+                Todavía no hay jornadas especiales configuradas.
+              </p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {draft.specialDays.map((special) => (
+                  <div
+                    key={special.date}
+                    className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-amber-900">
+                      <span className="font-semibold">
+                        {formatSpanishDateKey(special.date)}
+                      </span>
+                      <span className="flex-1 truncate">
+                        {special.label || <span className="text-amber-500">Sin motivo</span>}
+                      </span>
+
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={special.yearly}
+                          onChange={() =>
+                            updateSpecialDay(special.date, { yearly: !special.yearly })
+                          }
+                        />
+                        Cada año
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={() => removeSpecialDay(special.date)}
+                        className="font-black"
+                        title="Quitar jornada especial"
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    <div className="mt-2 grid gap-2 md:grid-cols-4">
+                      <div>
+                        <label className={labelClass}>Mañana desde</label>
+                        <input
+                          type="time"
+                          value={special.morningStart}
+                          onChange={(e) =>
+                            updateSpecialDay(special.date, { morningStart: e.target.value })
+                          }
+                          className={timeClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Mañana hasta</label>
+                        <input
+                          type="time"
+                          value={special.morningEnd}
+                          onChange={(e) =>
+                            updateSpecialDay(special.date, { morningEnd: e.target.value })
+                          }
+                          className={timeClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Tarde desde</label>
+                        <input
+                          type="time"
+                          value={special.afternoonStart}
+                          onChange={(e) =>
+                            updateSpecialDay(special.date, { afternoonStart: e.target.value })
+                          }
+                          className={timeClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Tarde hasta</label>
+                        <input
+                          type="time"
+                          value={special.afternoonEnd}
+                          onChange={(e) =>
+                            updateSpecialDay(special.date, { afternoonEnd: e.target.value })
+                          }
+                          className={timeClass}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
               Días festivos
             </h4>
 
@@ -316,7 +569,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
             ) : (
               <div className="mt-3 space-y-2">
                 {draft.holidays.map((holiday) => {
-                  const bridge = getBridgeSaturday(draft, holiday.date);
+                  const bridge = getFridayBridgeStatus(draft, holiday.date);
 
                   return (
                     <div
@@ -330,21 +583,34 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                         {holiday.label || <span className="text-red-400">Sin motivo</span>}
                       </span>
 
-                      {bridge && (
+                      {bridge.state === "pending" && (
                         <button
                           type="button"
                           onClick={() =>
                             setBridgePrompt({
                               holidayDate: holiday.date,
                               holidayLabel: holiday.label,
-                              saturday: bridge,
+                              saturday: bridge.saturday,
                             })
                           }
-                          className="rounded-full border border-amber-400 bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
-                          title="Cae en viernes: puedes cerrar también el sábado"
+                          className="flex items-center gap-1 rounded-full border border-red-400 bg-white px-2 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100"
+                          title={`Cae en viernes: puedes cerrar también el sábado ${formatSpanishDateKey(
+                            bridge.saturday
+                          )}`}
                         >
-                          Viernes · hacer puente
+                          <span aria-hidden>🔺</span> Cae en viernes · hacer puente
                         </button>
+                      )}
+
+                      {bridge.state === "done" && (
+                        <span
+                          className="flex items-center gap-1 rounded-full border border-emerald-400 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
+                          title={`Puente hecho: el sábado ${formatSpanishDateKey(
+                            bridge.saturday
+                          )} también está cerrado`}
+                        >
+                          <span aria-hidden>🟢</span> Puente hecho
+                        </span>
                       )}
 
                       <label className="flex items-center gap-2 text-xs">

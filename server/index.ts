@@ -3279,9 +3279,34 @@ app.put("/api/agenda-config", requireSupervisorRole, async (req, res) => {
       })
       .sort((a: any, b: any) => a.date.localeCompare(b.date));
 
+    // Jornadas especiales: horario propio para una fecha concreta.
+    const seenSpecial = new Set<string>();
+    const specialDays = (Array.isArray(body.specialDays) ? body.specialDays : [])
+      .map((item: any) => {
+        const date = String(item?.date ?? "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+        return {
+          date,
+          label: String(item?.label ?? "").trim(),
+          yearly: item?.yearly === true,
+          closed: item?.closed === true,
+          morningStart: String(item?.morningStart ?? ""),
+          morningEnd: String(item?.morningEnd ?? ""),
+          afternoonStart: String(item?.afternoonStart ?? ""),
+          afternoonEnd: String(item?.afternoonEnd ?? ""),
+        };
+      })
+      .filter((item: any) => {
+        if (!item || seenSpecial.has(item.date)) return false;
+        seenSpecial.add(item.date);
+        return true;
+      })
+      .sort((a: any, b: any) => a.date.localeCompare(b.date));
+
     const value = JSON.stringify({
       days,
       holidays,
+      specialDays,
       closedSaturdaysInAugust: body.closedSaturdaysInAugust !== false,
     });
 

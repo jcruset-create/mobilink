@@ -43,12 +43,17 @@ import AgendaConfigModal from "./AgendaConfigModal";
 import {
   DEFAULT_AGENDA_CONFIG,
   getDayEnd as cfgGetDayEnd,
+  getDayEndForDate as cfgGetDayEndForDate,
   getDayStart as cfgGetDayStart,
+  getDayStartForDate as cfgGetDayStartForDate,
   getGridSlots,
   getHolidayForDate,
+  getSpecialDayForDate,
   isClosedDate as cfgIsClosedDate,
   isLunchTime as cfgIsLunchTime,
+  isLunchTimeForDate as cfgIsLunchTimeForDate,
   isWorkingTime as cfgIsWorkingTime,
+  isWorkingTimeForDate as cfgIsWorkingTimeForDate,
   type AgendaConfig,
 } from "../modules/agendaConfig";
 import { loadAgendaConfig } from "../modules/agendaConfigApi";
@@ -290,38 +295,37 @@ function getWeekDays(weekOffset = 0) {
 // "Configuración de agenda"; hasta entonces se usa el horario estándar.
 let activeAgendaConfig: AgendaConfig = DEFAULT_AGENDA_CONFIG;
 
-function getDayStart(dayIndex: number) {
-  return cfgGetDayStart(activeAgendaConfig, dayIndex);
+// Estas funciones aceptan una fecha opcional: cuando se pasa, se aplica la
+// jornada especial de ese día (p. ej. 24/12 de 8:30 a 14:00) en lugar del
+// horario general de su día de la semana.
+function getDayStart(dayIndex: number, date?: string) {
+  return date
+    ? cfgGetDayStartForDate(activeAgendaConfig, date)
+    : cfgGetDayStart(activeAgendaConfig, dayIndex);
 }
 
-function getDayEnd(dayIndex: number) {
-  return cfgGetDayEnd(activeAgendaConfig, dayIndex);
+function getDayEnd(dayIndex: number, date?: string) {
+  return date
+    ? cfgGetDayEndForDate(activeAgendaConfig, date)
+    : cfgGetDayEnd(activeAgendaConfig, dayIndex);
 }
 
 /** Descanso entre el turno de mañana y el de tarde. */
-function isLunchTime(dayIndex: number, time: string) {
-  return cfgIsLunchTime(activeAgendaConfig, dayIndex, time);
+function isLunchTime(dayIndex: number, time: string, date?: string) {
+  return date
+    ? cfgIsLunchTimeForDate(activeAgendaConfig, date, time)
+    : cfgIsLunchTime(activeAgendaConfig, dayIndex, time);
 }
 
-function isWorkingTime(dayIndex: number, time: string) {
-  return cfgIsWorkingTime(activeAgendaConfig, dayIndex, time);
+function isWorkingTime(dayIndex: number, time: string, date?: string) {
+  return date
+    ? cfgIsWorkingTimeForDate(activeAgendaConfig, date, time)
+    : cfgIsWorkingTime(activeAgendaConfig, dayIndex, time);
 }
 
 /** Rejilla común a todas las columnas, para que queden alineadas con las horas. */
 function getGridTimeSlots() {
   return getGridSlots(activeAgendaConfig, SLOT_MINUTES);
-}
-
-function getTimeSlotsForDay(dayIndex: number) {
-  const start = getDayStart(dayIndex);
-  const end = getDayEnd(dayIndex);
-  const slots: string[] = [];
-
-  for (let t = start; t < end; t += SLOT_MINUTES) {
-    slots.push(minutesToTime(t));
-  }
-
-  return slots;
 }
 
 function addMinutesToTime(time: string, minutes: number) {
@@ -369,6 +373,9 @@ function getClosedReason(date: string) {
   const holiday = getHolidayForDate(activeAgendaConfig, date);
   if (holiday) return `Festivo${holiday.label ? `: ${holiday.label}` : ""}`;
 
+  const special = getSpecialDayForDate(activeAgendaConfig, date);
+  if (special?.closed) return `Cerrado${special.label ? `: ${special.label}` : ""}`;
+
   const index = weekdayIndexMonFirst(date);
   if (index != null && activeAgendaConfig.days[index]?.closed) return "Día cerrado";
 
@@ -378,8 +385,8 @@ function getClosedReason(date: string) {
 function getValidSlotsForDate(date: string, dayIndex: number) {
   if (isClosedDate(date)) return [];
 
-  return getTimeSlotsForDay(dayIndex).filter(
-    (slot) => isWorkingTime(dayIndex, slot) && !isPastDateTime(date, slot)
+  return getGridTimeSlots().filter(
+    (slot) => isWorkingTime(dayIndex, slot, date) && !isPastDateTime(date, slot)
   );
 }
 
@@ -1869,14 +1876,34 @@ appendLog(
           >
             <div className={`p-3 text-xs font-medium ${th.headText}`}>Hora</div>
 
-            {finalVisibleDays.map((day) => (
-              <div
-                key={day.date}
-                className={`border-l ${th.gridBorder} p-3 text-sm font-semibold capitalize`}
-              >
-                {day.label}
-              </div>
-            ))}
+            {finalVisibleDays.map((day) => {
+              const special = getSpecialDayForDate(activeAgendaConfig, day.date);
+              const holiday = getHolidayForDate(activeAgendaConfig, day.date);
+
+              return (
+                <div
+                  key={day.date}
+                  className={`border-l ${th.gridBorder} p-3 text-sm font-semibold capitalize`}
+                >
+                  {day.label}
+
+                  {holiday ? (
+                    <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black uppercase text-red-700">
+                      {holiday.label || "Festivo"}
+                    </span>
+                  ) : special && !special.closed ? (
+                    <span
+                      className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800"
+                      title={`Horario especial: ${special.morningStart}–${special.morningEnd}${
+                        special.afternoonStart ? ` y ${special.afternoonStart}–${special.afternoonEnd}` : ""
+                      }`}
+                    >
+                      {special.label || "Horario especial"}
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
 
           <div
@@ -2097,7 +2124,7 @@ appendLog(
               // citas que hay en pantalla en ese momento, usamos un rango que
               // cubre desde ahora hasta el final del día — así siempre comparte
               // grupo (y por tanto ancho) con cualquier cita que se vea a la vez.
-              const endOfDayStr = minutesToTime(getDayEnd(day.index));
+              const endOfDayStr = minutesToTime(getDayEnd(day.index, day.date));
               const virtualQueueJobs = day.date === todayKey
                 ? queueJobs.map((qj) => ({
                     ...qj,
@@ -2114,8 +2141,10 @@ appendLog(
               const nowMinutes = now.getHours() * 60 + now.getMinutes();
               const showNowLine =
                 day.date === todayKey &&
-                nowMinutes >= getDayStart(day.index) &&
-                nowMinutes <= getDayEnd(day.index);
+                nowMinutes >= getDayStart(day.index, day.date) &&
+                nowMinutes <= getDayEnd(day.index, day.date);
+
+              const dayHoliday = getHolidayForDate(activeAgendaConfig, day.date);
 
               return (
                 <div
@@ -2123,18 +2152,29 @@ appendLog(
                   className={th.dayCol}
                   style={{ height: dayHeight }}
                 >
+                  {/* Festivo: nombre de la festividad centrado y en grande */}
+                  {dayHoliday && (
+                    <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-4">
+                      <span className="text-center text-2xl font-black uppercase leading-tight tracking-wide text-red-500/80">
+                        {dayHoliday.label || "Festivo"}
+                      </span>
+                    </div>
+                  )}
+
                   {slots.map((slot) => {
-                    const working = isWorkingTime(day.index, slot) && !closed;
+                    const working = isWorkingTime(day.index, slot, day.date) && !closed;
                     const past = isPastDateTime(day.date, slot);
                     const disabled = !working || past;
 
                     // Mediodía: mismo color que el fondo, sin líneas internas de
                     // separación y delimitado por una línea roja arriba y abajo.
-                    const lunch = isLunchTime(day.index, slot) && !closed;
+                    const lunch = isLunchTime(day.index, slot, day.date) && !closed;
                     const lunchFirst =
-                      lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) - SLOT_MINUTES));
+                      lunch &&
+                      !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) - SLOT_MINUTES), day.date);
                     const lunchLast =
-                      lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) + SLOT_MINUTES));
+                      lunch &&
+                      !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) + SLOT_MINUTES), day.date);
                     const lunchClass = `cursor-not-allowed border-b-transparent ${
                       dark ? "bg-slate-900" : "bg-slate-50"
                     }${

@@ -3,12 +3,16 @@ import {
   DEFAULT_AGENDA_CONFIG,
   getDayRanges,
   getBridgeSaturday,
+  getFridayBridgeStatus,
   getGridBounds,
   getGridSlots,
   getHolidayForDate,
+  getScheduleForDate,
   isClosedDate,
   isLunchTime,
+  isLunchTimeForDate,
   isWorkingTime,
+  isWorkingTimeForDate,
   normalizeAgendaConfig,
   validateAgendaConfig,
   weekdayIndexMonFirst,
@@ -111,6 +115,91 @@ describe("isClosedDate", () => {
   });
 });
 
+describe("días con horario especial", () => {
+  // 24/12/2026 es jueves: normalmente 08:30-13:30 y 15:00-18:30.
+  const nochebuena: AgendaConfig = {
+    ...cfg,
+    specialDays: [
+      {
+        date: "2026-12-24",
+        label: "Nochebuena",
+        yearly: true,
+        closed: false,
+        morningStart: "08:30",
+        morningEnd: "14:00",
+        afternoonStart: "",
+        afternoonEnd: "",
+      },
+    ],
+  };
+
+  it("aplica el horario especial en lugar del semanal", () => {
+    expect(isWorkingTimeForDate(nochebuena, "2026-12-24", "13:45")).toBe(true);
+    expect(isWorkingTimeForDate(nochebuena, "2026-12-24", "14:00")).toBe(false);
+    // Por la tarde ya no se trabaja, aunque el jueves normal sí
+    expect(isWorkingTimeForDate(nochebuena, "2026-12-24", "16:00")).toBe(false);
+    expect(isWorkingTimeForDate(nochebuena, "2026-12-23", "16:00")).toBe(true);
+  });
+
+  it("sin turno de tarde no hay descanso de mediodía", () => {
+    expect(isLunchTimeForDate(nochebuena, "2026-12-24", "14:30")).toBe(false);
+    expect(isLunchTimeForDate(nochebuena, "2026-12-23", "14:30")).toBe(true);
+  });
+
+  it("se repite cada año si está marcado", () => {
+    expect(isWorkingTimeForDate(nochebuena, "2027-12-24", "13:45")).toBe(true);
+    expect(isWorkingTimeForDate(nochebuena, "2027-12-24", "16:00")).toBe(false);
+  });
+
+  it("no se repite si no está marcado como anual", () => {
+    const soloUnAnyo: AgendaConfig = {
+      ...cfg,
+      specialDays: [{ ...nochebuena.specialDays[0], yearly: false }],
+    };
+    // En 2027 vuelve el horario normal del viernes (tarde incluida)
+    expect(isWorkingTimeForDate(soloUnAnyo, "2027-12-24", "16:00")).toBe(true);
+  });
+
+  it("getScheduleForDate devuelve la jornada especial", () => {
+    expect(getScheduleForDate(nochebuena, "2026-12-24")?.morningEnd).toBe("14:00");
+    expect(getScheduleForDate(nochebuena, "2026-12-23")?.morningEnd).toBe("13:30");
+  });
+
+  it("una jornada especial cerrada bloquea el día", () => {
+    const cerrado: AgendaConfig = {
+      ...cfg,
+      specialDays: [{ ...nochebuena.specialDays[0], closed: true }],
+    };
+    expect(isClosedDate(cerrado, "2026-12-24")).toBe(true);
+  });
+
+  it("la rejilla se amplía si una jornada especial empieza antes", () => {
+    const madrugador: AgendaConfig = {
+      ...cfg,
+      specialDays: [
+        { ...nochebuena.specialDays[0], morningStart: "07:00", morningEnd: "14:00" },
+      ],
+    };
+    expect(getGridBounds(madrugador).start).toBe(7 * 60);
+  });
+
+  it("normalizeAgendaConfig conserva las jornadas especiales", () => {
+    const result = normalizeAgendaConfig({
+      specialDays: [
+        { date: "2026-12-24", label: "Nochebuena", yearly: true, morningEnd: "14:00" },
+        { date: "no-valida" },
+      ],
+    });
+    expect(result.specialDays).toHaveLength(1);
+    expect(result.specialDays[0].morningEnd).toBe("14:00");
+    expect(result.specialDays[0].afternoonStart).toBe("");
+  });
+
+  it("config sin specialDays (formato antiguo) no rompe", () => {
+    expect(normalizeAgendaConfig({ days: [] }).specialDays).toEqual([]);
+  });
+});
+
 describe("getBridgeSaturday (puente cuando el festivo cae en viernes)", () => {
   it("propone el sábado siguiente si el festivo es viernes", () => {
     // 2027-09-10 es viernes
@@ -146,6 +235,35 @@ describe("getBridgeSaturday (puente cuando el festivo cae en viernes)", () => {
   it("cruza correctamente el cambio de mes y de año", () => {
     // 2027-12-31 es viernes → sábado 2028-01-01
     expect(getBridgeSaturday(cfg, "2027-12-31")).toBe("2028-01-01");
+  });
+});
+
+describe("getFridayBridgeStatus", () => {
+  it("no aplica si el festivo no cae en viernes", () => {
+    expect(getFridayBridgeStatus(cfg, "2026-09-10").state).toBe("none");
+  });
+
+  it("pendiente si cae en viernes y el sábado sigue abierto", () => {
+    const status = getFridayBridgeStatus(cfg, "2027-09-10");
+    expect(status.state).toBe("pending");
+    expect(status.state === "pending" && status.saturday).toBe("2027-09-11");
+  });
+
+  it("hecho si el sábado siguiente ya es festivo", () => {
+    const conPuente: AgendaConfig = {
+      ...cfg,
+      holidays: [
+        { date: "2027-09-10", label: "Diada", yearly: false },
+        { date: "2027-09-11", label: "Puente (Diada)", yearly: false },
+      ],
+    };
+    const status = getFridayBridgeStatus(conPuente, "2027-09-10");
+    expect(status.state).toBe("done");
+    expect(status.state === "done" && status.saturday).toBe("2027-09-11");
+  });
+
+  it("hecho también si el sábado ya está cerrado por ser de agosto", () => {
+    expect(getFridayBridgeStatus(cfg, "2026-08-07").state).toBe("done");
   });
 });
 
