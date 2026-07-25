@@ -2106,8 +2106,10 @@ appendLog(
                           !working
                             ? lunch
                               ? lunchClass
-                              : // Fuera de jornada / cerrado: azul marino
-                                (dark ? "cursor-not-allowed bg-blue-950" : "cursor-not-allowed bg-blue-950/80")
+                              : // Fuera de jornada / cerrado: mismo color que el fondo
+                                `cursor-not-allowed border-b-transparent ${
+                                  dark ? "bg-slate-900" : "bg-slate-50"
+                                }`
                             : cellClass
                         }`}
                       />
