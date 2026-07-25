@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   calcularFechaAviso,
   formatSpanishDateKey,
+  getFechaCaducidadPorDefecto,
   type CaducidadReminder,
 } from "../modules/caducidadHelpers";
 import {
@@ -19,14 +20,21 @@ type Props = {
   onSaved: (reminder: CaducidadReminder) => void;
 };
 
+// Solo tacógrafo: el tipo indica qué revisión de tacógrafo es.
 const TIPOS_CADUCIDAD = [
-  { value: "tacografo", label: "Revisión de tacógrafo" },
-  { value: "itv", label: "ITV" },
-  { value: "revision_periodica", label: "Revisión periódica" },
-  { value: "mantenimiento", label: "Mantenimiento" },
-  { value: "calibracion", label: "Calibración" },
-  { value: "documentacion", label: "Renovación documental" },
+  { value: "tacografo_analogico", label: "Revisión Tacógrafo Analógico" },
+  { value: "tacografo_digital_3_0", label: "Revisión Tacógrafo Digital 3.0" },
+  { value: "tacografo_digital_4_0", label: "Revisión Tacógrafo Digital 4.0" },
+  { value: "tacografo_digital_4_1", label: "Revisión Tacógrafo Digital 4.1" },
+  { value: "tacografo_digital_4_1_actualizacion", label: "Revisión Tacógrafo Digital 4.1 + Actualización" },
 ];
+
+function todayKey() {
+  const now = new Date();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${m}-${d}`;
+}
 
 function emptyDraft(workshopId: string): CaducidadDraft {
   return {
@@ -35,8 +43,9 @@ function emptyDraft(workshopId: string): CaducidadDraft {
     vehiculo: "",
     matricula: "",
     telefono: "",
-    tipo_caducidad: "tacografo",
-    fecha_caducidad: "",
+    tipo_caducidad: TIPOS_CADUCIDAD[0].value,
+    // La revisión de tacógrafo caduca a los 2 años → se propone hoy + 2 años (editable).
+    fecha_caducidad: getFechaCaducidadPorDefecto(todayKey()),
     dias_antelacion: 15,
     enviar_whatsapp: true,
     enviar_sms: true,
@@ -172,6 +181,9 @@ export default function CaducidadTacografoModal({
               onChange={(e) => setDraft((p) => ({ ...p, tipo_caducidad: e.target.value }))}
               className={inputClass}
             >
+              {!TIPOS_CADUCIDAD.some((tipo) => tipo.value === draft.tipo_caducidad) && (
+                <option value={draft.tipo_caducidad}>{draft.tipo_caducidad}</option>
+              )}
               {TIPOS_CADUCIDAD.map((tipo) => (
                 <option key={tipo.value} value={tipo.value}>
                   {tipo.label}
@@ -182,7 +194,7 @@ export default function CaducidadTacografoModal({
 
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <label className={labelClass}>Fecha de caducidad</label>
+              <label className={labelClass}>Fecha de caducidad (2 años desde hoy, editable)</label>
               <input
                 type="date"
                 value={draft.fecha_caducidad}

@@ -57,6 +57,23 @@ export function addDaysToDateKey(dateKey: string, days: number): string | null {
   return `${y}-${m}-${d}`;
 }
 
+// Suma años a una fecha 'YYYY-MM-DD' (29 de febrero → 28 si el destino no es bisiesto).
+export function addYearsToDateKey(dateKey: string, years: number): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+  if (!match) return null;
+  const y = Number(match[1]) + years;
+  const m = Number(match[2]);
+  let d = Number(match[3]);
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  if (d > daysInMonth) d = daysInMonth;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// La revisión del tacógrafo caduca a los 2 años de la fecha de creación/revisión.
+export function getFechaCaducidadPorDefecto(todayKey: string): string {
+  return addYearsToDateKey(todayKey, 2) ?? todayKey;
+}
+
 export function calcularFechaAviso(
   fechaCaducidad: string,
   diasAntelacion: number

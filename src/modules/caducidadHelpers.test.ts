@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   addDaysToDateKey,
+  addYearsToDateKey,
+  getFechaCaducidadPorDefecto,
   calcularFechaAviso,
   getEstadoVisual,
   getEstadoColorClass,
@@ -40,6 +42,20 @@ describe("calcularFechaAviso", () => {
 describe("addDaysToDateKey", () => {
   it("suma días", () => {
     expect(addDaysToDateKey("2026-12-31", 1)).toBe("2027-01-01");
+  });
+});
+
+describe("getFechaCaducidadPorDefecto (caducidad a los 2 años)", () => {
+  it("caso del enunciado: creado el 25/07/2026 caduca el 25/07/2028", () => {
+    expect(getFechaCaducidadPorDefecto("2026-07-25")).toBe("2028-07-25");
+  });
+
+  it("29 de febrero → 28 si el año destino no es bisiesto", () => {
+    expect(addYearsToDateKey("2028-02-29", 2)).toBe("2030-02-28");
+  });
+
+  it("fecha inválida devuelve el propio valor de entrada", () => {
+    expect(getFechaCaducidadPorDefecto("invalida")).toBe("invalida");
   });
 });
 
