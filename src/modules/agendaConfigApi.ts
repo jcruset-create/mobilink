@@ -18,6 +18,37 @@ export async function loadAgendaConfig(): Promise<AgendaConfig> {
   }
 }
 
+export type FestivoSugerido = {
+  date: string;
+  label: string;
+  scope: string;
+  yearly: boolean;
+};
+
+/** Pide a la IA el calendario de festivos de una ciudad y un año. */
+export async function suggestHolidaysWithAI(
+  year: number,
+  city: string
+): Promise<FestivoSugerido[]> {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/agenda-config/festivos-ia`,
+    {
+      method: "POST",
+      headers: getAdminHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ year, city }),
+    },
+    60000
+  );
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(data?.error || `Error consultando los festivos (${response.status})`);
+  }
+
+  return Array.isArray(data?.festivos) ? data.festivos : [];
+}
+
 export async function saveAgendaConfig(config: AgendaConfig): Promise<AgendaConfig> {
   const response = await fetchWithTimeout(`${API_BASE}/api/agenda-config`, {
     method: "PUT",

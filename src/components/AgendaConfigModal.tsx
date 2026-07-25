@@ -9,7 +9,11 @@ import {
   type AgendaDaySchedule,
   type AgendaSpecialDay,
 } from "../modules/agendaConfig";
-import { saveAgendaConfig } from "../modules/agendaConfigApi";
+import {
+  saveAgendaConfig,
+  suggestHolidaysWithAI,
+  type FestivoSugerido,
+} from "../modules/agendaConfigApi";
 
 type Props = {
   open: boolean;
@@ -40,6 +44,12 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Generador de festivos con IA
+  const [aiCity, setAiCity] = useState("Tarragona");
+  const [aiYear, setAiYear] = useState(String(new Date().getFullYear()));
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<FestivoSugerido[] | null>(null);
   // Festivo en viernes recién añadido, a la espera de decidir si se hace puente.
   const [bridgePrompt, setBridgePrompt] = useState<
     { holidayDate: string; holidayLabel: string; saturday: string } | null
@@ -61,6 +71,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
       afternoonEnd: "",
     });
     setBridgePrompt(null);
+    setAiResult(null);
     setError("");
   }, [open, config]);
 
@@ -188,6 +199,51 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
       ...prev,
       specialDays: prev.specialDays.filter((s) => s.date !== date),
     }));
+  }
+
+  async function generateHolidaysWithAI() {
+    const year = Number(aiYear);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      setError("Indica un año válido para buscar los festivos.");
+      return;
+    }
+    if (!aiCity.trim()) {
+      setError("Indica la ciudad para buscar los festivos.");
+      return;
+    }
+
+    setAiLoading(true);
+    setError("");
+    setAiResult(null);
+    try {
+      const festivos = await suggestHolidaysWithAI(year, aiCity.trim());
+      setAiResult(festivos);
+    } catch (e: any) {
+      setError(e?.message || "Error consultando los festivos con IA.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  /** Añade los festivos propuestos que aún no estén en la lista. */
+  function applyAiHolidays() {
+    if (!aiResult) return;
+
+    setDraft((prev) => {
+      const existing = new Set(prev.holidays.map((h) => h.date));
+      const nuevos = aiResult
+        .filter((f) => !existing.has(f.date))
+        .map((f) => ({ date: f.date, label: f.label, yearly: f.yearly }));
+
+      return {
+        ...prev,
+        holidays: [...prev.holidays, ...nuevos].sort((a, b) =>
+          a.date.localeCompare(b.date)
+        ),
+      };
+    });
+
+    setAiResult(null);
   }
 
   function toggleHolidayYearly(date: string) {
@@ -500,6 +556,101 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
             <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
               Días festivos
             </h4>
+
+            <div className="mb-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-3">
+              <p className="text-sm font-semibold text-indigo-900">
+                Generar festivos automáticamente
+              </p>
+              <p className="mt-1 text-xs text-indigo-700">
+                Consulta con IA los festivos no laborables (nacionales, autonómicos y
+                locales) de una ciudad. Revísalos antes de añadirlos.
+              </p>
+
+              <div className="mt-2 grid gap-2 md:grid-cols-[1fr_120px_auto]">
+                <input
+                  value={aiCity}
+                  onChange={(e) => setAiCity(e.target.value)}
+                  placeholder="Ciudad (p. ej. Tarragona)"
+                  className="rounded-2xl border border-indigo-200 px-3 py-3"
+                />
+                <input
+                  type="number"
+                  value={aiYear}
+                  onChange={(e) => setAiYear(e.target.value)}
+                  placeholder="Año"
+                  className="rounded-2xl border border-indigo-200 px-3 py-3"
+                />
+                <button
+                  type="button"
+                  onClick={() => void generateHolidaysWithAI()}
+                  disabled={aiLoading}
+                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  {aiLoading ? "Consultando..." : "Buscar festivos"}
+                </button>
+              </div>
+
+              {aiResult && (
+                <div className="mt-3 rounded-2xl border border-indigo-200 bg-white p-3">
+                  <p className="text-sm font-semibold text-slate-700">
+                    {aiResult.length} festivos encontrados en {aiCity} ({aiYear})
+                  </p>
+
+                  <div className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                    {aiResult.map((festivo) => {
+                      const yaEsta = draft.holidays.some((h) => h.date === festivo.date);
+
+                      return (
+                        <div
+                          key={festivo.date}
+                          className="flex flex-wrap items-center gap-2 text-sm text-slate-700"
+                        >
+                          <span className="w-24 font-semibold">
+                            {formatSpanishDateKey(festivo.date)}
+                          </span>
+                          <span className="flex-1 truncate">{festivo.label}</span>
+                          {festivo.scope && (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase text-slate-500">
+                              {festivo.scope}
+                            </span>
+                          )}
+                          <span className="text-xs text-slate-400">
+                            {festivo.yearly ? "cada año" : "solo este año"}
+                          </span>
+                          {yaEsta && (
+                            <span className="text-xs font-semibold text-emerald-600">
+                              ya añadido
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={applyAiHolidays}
+                      className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                    >
+                      Añadir a la lista
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiResult(null)}
+                      className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Descartar
+                    </button>
+                  </div>
+
+                  <p className="mt-2 text-xs text-slate-500">
+                    Los festivos móviles (Semana Santa) se añaden solo para ese año; los
+                    de fecha fija quedan marcados como "cada año".
+                  </p>
+                </div>
+              )}
+            </div>
 
             <div className="grid gap-2 md:grid-cols-[180px_1fr_auto]">
               <input

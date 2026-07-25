@@ -3323,6 +3323,82 @@ app.put("/api/agenda-config", requireSupervisorRole, async (req, res) => {
   }
 });
 
+/**
+ * Propone, con ayuda de la IA, el calendario de festivos no laborables de una
+ * ciudad y un año. No guarda nada: devuelve la lista para que el usuario la
+ * revise en el panel de configuración antes de aceptarla.
+ */
+app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, res) => {
+  try {
+    const year = Number(req.body?.year);
+    const city = String(req.body?.city ?? "").trim();
+
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({ error: "Año inválido" });
+    }
+
+    if (!city) {
+      return res.status(400).json({ error: "Indica la ciudad" });
+    }
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
+            "No inventes festivos: si no estás seguro de un festivo local, omítelo.",
+        },
+        {
+          role: "user",
+          content:
+            `Lista los días festivos NO laborables del año ${year} en ${city} (España), ` +
+            "incluyendo los festivos nacionales, los de su comunidad autónoma y los locales de esa ciudad. " +
+            'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre","ambito":"nacional|autonomico|local","fija":true|false}]}. ' +
+            '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
+            "(por ejemplo Viernes Santo o Lunes de Pascua). Ordena por fecha.",
+        },
+      ],
+    });
+
+    const raw = safeJsonParse<any>(response.choices[0]?.message?.content ?? "", null);
+    const items = Array.isArray(raw?.festivos) ? raw.festivos : [];
+
+    const seen = new Set<string>();
+    const festivos = items
+      .map((item: any) => {
+        const date = String(item?.fecha ?? "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+        if (!date.startsWith(`${year}-`)) return null;
+
+        return {
+          date,
+          label: String(item?.festividad ?? "").trim() || "Festivo",
+          scope: String(item?.ambito ?? "").trim(),
+          // Los festivos móviles (Semana Santa) no pueden repetirse cada año.
+          yearly: item?.fija === true,
+        };
+      })
+      .filter((item: any) => {
+        if (!item || seen.has(item.date)) return false;
+        seen.add(item.date);
+        return true;
+      })
+      .sort((a: any, b: any) => a.date.localeCompare(b.date));
+
+    if (!festivos.length) {
+      return res.status(502).json({ error: "La IA no devolvió ningún festivo válido" });
+    }
+
+    res.json({ year, city, festivos });
+  } catch (error: any) {
+    console.error("POST /api/agenda-config/festivos-ia error:", error);
+    res.status(500).json({ error: "Error consultando los festivos con IA" });
+  }
+});
+
 /* =========================================================
    ROADSIDE ASSISTANCES
 ========================================================= */
