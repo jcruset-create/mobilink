@@ -21,6 +21,7 @@ import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from 
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
+import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -9931,6 +9932,9 @@ app.post("/api/login-sso", async (req, res) => {
 
 // Perfil de sesión unificado: usuario + empresa + módulos con licencia
 // vigente. Es la fuente del menú del hub y de cualquier cliente (web/móvil).
+// Administración de tenants (solo SuperAdmin Mobilink)
+app.use("/api/admin", createAdminRouter());
+
 app.get("/api/me", authenticate, async (req, res) => {
   try {
     res.json(await buildMePayload(req.authCtx!));
@@ -14197,6 +14201,7 @@ initDb()
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
+      startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
     });
   })
