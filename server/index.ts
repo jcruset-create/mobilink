@@ -8902,6 +8902,20 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
       [id, JSON.stringify(nextData), deletedAtMs]
     );
 
+    // Si la cita venía de un recordatorio de caducidad, este vuelve a un
+    // estado coherente: AVISADO si ya se avisó al cliente, PENDIENTE si no.
+    await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = CASE
+             WHEN whatsapp_estado = 'enviado' OR sms_estado = 'enviado' THEN 'AVISADO'
+             ELSE 'PENDIENTE'
+           END,
+           cita_id = NULL,
+           actualizado_en_ms = $2
+       WHERE cita_id = $1 AND estado = 'CONVERTIDO_EN_CITA'`,
+      [id, deletedAtMs]
+    ).catch((e) => console.error("Error revirtiendo recordatorio de caducidad:", e));
+
     res.json({
       ok: true,
       scheduledJob: result.rows[0].data,
@@ -8909,6 +8923,498 @@ app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) =>
   } catch (error) {
     console.error("DELETE /api/scheduled-jobs/:id error:", error);
     res.status(500).json({ error: "Error eliminando cita programada" });
+  }
+});
+
+/* =========================================================
+   RECORDATORIOS DE CADUCIDAD (tacógrafo; ampliable a ITV,
+   revisiones, calibraciones, documentación...)
+========================================================= */
+
+const CADUCIDAD_NOTIFY_HOUR = process.env.CADUCIDAD_NOTIFY_HOUR || "08:00";
+const CADUCIDAD_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+// Estados generales: PENDIENTE → AVISADO → RESPONDIDO → CONVERTIDO_EN_CITA,
+// con CADUCADO / CANCELADO / ERROR_ENVIO como salidas laterales.
+
+// Fechas TEXT 'YYYY-MM-DD' (convención de la agenda). Aritmética en UTC para
+// evitar sorpresas de DST: solo se suma/resta días sobre la fecha calendario.
+function addDaysToDateKey(dateKey: string, days: number): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+  if (!match) return null;
+  const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const next = new Date(utc + days * 24 * 60 * 60 * 1000);
+  const y = next.getUTCFullYear();
+  const m = String(next.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(next.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function calcularFechaAvisoCaducidad(fechaCaducidad: string, diasAntelacion: number) {
+  return addDaysToDateKey(fechaCaducidad, -Math.max(0, Math.trunc(diasAntelacion)));
+}
+
+function normalizeCaducidadInput(body: any) {
+  const fechaCaducidad = String(body?.fecha_caducidad || "").trim();
+  const diasAntelacionRaw = Number(body?.dias_antelacion);
+  const diasAntelacion =
+    Number.isFinite(diasAntelacionRaw) && diasAntelacionRaw >= 0
+      ? Math.trunc(diasAntelacionRaw)
+      : 15;
+
+  const telefono = String(body?.telefono || "").trim();
+  const fechaAviso = calcularFechaAvisoCaducidad(fechaCaducidad, diasAntelacion);
+
+  const errors: string[] = [];
+  if (!telefono || !normalizeSpanishPhone(telefono)) errors.push("Teléfono obligatorio");
+  if (!fechaAviso) errors.push("Fecha de caducidad inválida (formato YYYY-MM-DD)");
+  if (!String(body?.matricula || "").trim()) errors.push("Matrícula obligatoria");
+
+  return {
+    errors,
+    values: {
+      workshopId: body?.workshopId != null ? String(body.workshopId) : null,
+      cliente_nombre: String(body?.cliente_nombre || "").trim(),
+      vehiculo: String(body?.vehiculo || "").trim(),
+      matricula: String(body?.matricula || "").trim().toUpperCase(),
+      telefono,
+      tipo_caducidad: String(body?.tipo_caducidad || "tacografo").trim() || "tacografo",
+      fecha_caducidad: fechaCaducidad,
+      dias_antelacion: diasAntelacion,
+      fecha_aviso: fechaAviso || "",
+      enviar_whatsapp: body?.enviar_whatsapp !== false,
+      enviar_sms: body?.enviar_sms !== false,
+      observaciones: String(body?.observaciones || "").trim(),
+    },
+  };
+}
+
+function formatSpanishDateKey(dateKey: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || ""));
+  if (!match) return dateKey;
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+const CADUCIDAD_TALLER_PHONE = process.env.CADUCIDAD_TALLER_PHONE || "977 21 00 00";
+
+function buildCaducidadSmsBody(rec: any) {
+  return (
+    `Recordatorio: la revision del tacografo del vehiculo ${rec.matricula} ` +
+    `caduca el ${formatSpanishDateKey(rec.fecha_caducidad)}. ` +
+    `Reserve cita en ${CADUCIDAD_TALLER_PHONE}.`
+  );
+}
+
+async function sendCaducidadWhatsApp(rec: any) {
+  const to = normalizeSpanishPhone(rec.telefono);
+  if (!to) return null;
+
+  const contentSid = process.env.TWILIO_CADUCIDAD_CONTENT_SID || "";
+
+  if (contentSid) {
+    // Plantilla aprobada (necesaria al iniciar conversación fuera de la ventana 24h):
+    // {{1}} nombre, {{2}} matrícula, {{3}} fecha caducidad, {{4}} teléfono taller.
+    return twilioClient.messages.create({
+      from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
+      to: `whatsapp:${to}`,
+      contentSid,
+      contentVariables: JSON.stringify({
+        "1": rec.cliente_nombre || "cliente",
+        "2": rec.matricula || "-",
+        "3": formatSpanishDateKey(rec.fecha_caducidad),
+        "4": CADUCIDAD_TALLER_PHONE,
+      }),
+    });
+  }
+
+  // Sin plantilla específica: texto libre (solo entrega dentro de la ventana de 24h).
+  return twilioClient.messages.create({
+    from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
+    to: `whatsapp:${to}`,
+    body:
+      `Hola, ${rec.cliente_nombre || "cliente"}.\n\n` +
+      `Le recordamos que la revisión del tacógrafo del vehículo ${rec.matricula} ` +
+      `caduca el ${formatSpanishDateKey(rec.fecha_caducidad)}.\n\n` +
+      `Puede reservar cita respondiendo a este mensaje o llamándonos al ${CADUCIDAD_TALLER_PHONE}.`,
+  });
+}
+
+async function sendCaducidadSms(rec: any) {
+  const to = normalizeSpanishPhone(rec.telefono);
+  if (!to) return null;
+
+  const from = process.env.TWILIO_SMS_FROM || "";
+  if (!from) {
+    throw Object.assign(new Error("TWILIO_SMS_FROM no configurado"), { code: "SMS_NOT_CONFIGURED" });
+  }
+
+  return twilioClient.messages.create({
+    from,
+    to,
+    body: buildCaducidadSmsBody(rec),
+  });
+}
+
+async function getCaducidadById(id: number) {
+  const result = await db.query(
+    `SELECT * FROM recordatorios_caducidad WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Envía los avisos de un recordatorio por los canales activos que sigan en
+ * 'pendiente'. Idempotente: cada canal se marca 'enviado' (con sid y timestamp)
+ * en cuanto Twilio acepta el mensaje, así una segunda ejecución no reenvía.
+ */
+async function enviarAvisosCaducidad(recId: number) {
+  const rec = await getCaducidadById(recId);
+  if (!rec) return { ok: false, error: "Recordatorio no encontrado" };
+
+  if (["CANCELADO", "CONVERTIDO_EN_CITA", "CADUCADO"].includes(rec.estado)) {
+    return { ok: false, error: `El recordatorio está en estado ${rec.estado}` };
+  }
+
+  const nowMs = Date.now();
+  const errores: string[] = [];
+
+  if (rec.enviar_whatsapp && rec.whatsapp_estado === "pendiente") {
+    try {
+      const message = await sendCaducidadWhatsApp(rec);
+      if (message) {
+        await db.query(
+          `UPDATE recordatorios_caducidad
+           SET whatsapp_estado = 'enviado', whatsapp_sid = $2,
+               whatsapp_enviado_en_ms = $3, actualizado_en_ms = $3
+           WHERE id = $1 AND whatsapp_estado = 'pendiente'`,
+          [rec.id, message.sid, nowMs]
+        );
+        console.log(`Caducidad ${rec.id}: WhatsApp enviado sid=${message.sid}`);
+      }
+    } catch (error: any) {
+      errores.push(`WhatsApp: ${error?.message || "error"}`);
+      await db.query(
+        `UPDATE recordatorios_caducidad
+         SET whatsapp_estado = 'error', ultimo_error = $2, actualizado_en_ms = $3
+         WHERE id = $1`,
+        [rec.id, String(error?.message || "Error WhatsApp"), nowMs]
+      );
+      console.error(`Caducidad ${rec.id}: error WhatsApp`, {
+        message: error?.message,
+        code: error?.code,
+        moreInfo: error?.moreInfo,
+      });
+    }
+  }
+
+  if (rec.enviar_sms && rec.sms_estado === "pendiente") {
+    try {
+      const message = await sendCaducidadSms(rec);
+      if (message) {
+        await db.query(
+          `UPDATE recordatorios_caducidad
+           SET sms_estado = 'enviado', sms_sid = $2,
+               sms_enviado_en_ms = $3, actualizado_en_ms = $3
+           WHERE id = $1 AND sms_estado = 'pendiente'`,
+          [rec.id, message.sid, nowMs]
+        );
+        console.log(`Caducidad ${rec.id}: SMS enviado sid=${message.sid}`);
+      }
+    } catch (error: any) {
+      errores.push(`SMS: ${error?.message || "error"}`);
+      await db.query(
+        `UPDATE recordatorios_caducidad
+         SET sms_estado = 'error', ultimo_error = $2, actualizado_en_ms = $3
+         WHERE id = $1`,
+        [rec.id, String(error?.message || "Error SMS"), nowMs]
+      );
+      console.error(`Caducidad ${rec.id}: error SMS`, error?.message);
+    }
+  }
+
+  // Estado general según el resultado de los canales
+  const after = await getCaducidadById(rec.id);
+  const canalOk =
+    (after.enviar_whatsapp && after.whatsapp_estado === "enviado") ||
+    (after.enviar_sms && after.sms_estado === "enviado");
+  const canalPendiente =
+    (after.enviar_whatsapp && after.whatsapp_estado === "pendiente") ||
+    (after.enviar_sms && after.sms_estado === "pendiente");
+
+  if (["PENDIENTE", "ERROR_ENVIO", "AVISADO"].includes(after.estado)) {
+    const nextEstado = canalOk ? "AVISADO" : canalPendiente ? after.estado : "ERROR_ENVIO";
+    if (nextEstado !== after.estado) {
+      await db.query(
+        `UPDATE recordatorios_caducidad SET estado = $2, actualizado_en_ms = $3 WHERE id = $1`,
+        [rec.id, nextEstado, nowMs]
+      );
+    }
+  }
+
+  return { ok: errores.length === 0, errores, recordatorio: await getCaducidadById(rec.id) };
+}
+
+let caducidadCheckerRunning = false;
+async function checkCaducidadRecordatorios() {
+  if (caducidadCheckerRunning) return;
+  caducidadCheckerRunning = true;
+  try {
+    const zoned = getZonedDateTimeParts(new Date(), AGENDA_TIME_ZONE);
+    const [h, m] = CADUCIDAD_NOTIFY_HOUR.split(":").map(Number);
+    if (zoned.minutesOfDay < h * 60 + (m || 0)) return;
+
+    const todayKey = zoned.dateKey;
+
+    // Caducados sin cita → CADUCADO (deja de avisarse)
+    await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = 'CADUCADO', actualizado_en_ms = $2
+       WHERE fecha_caducidad < $1
+         AND estado IN ('PENDIENTE', 'AVISADO', 'ERROR_ENVIO', 'RESPONDIDO')`,
+      [todayKey, Date.now()]
+    );
+
+    const result = await db.query(
+      `SELECT id FROM recordatorios_caducidad
+       WHERE fecha_aviso <= $1
+         AND estado = 'PENDIENTE'
+       ORDER BY fecha_aviso ASC, id ASC`,
+      [todayKey]
+    );
+
+    for (const row of result.rows) {
+      await enviarAvisosCaducidad(Number(row.id));
+    }
+  } catch (error) {
+    console.error("checkCaducidadRecordatorios error:", error);
+  } finally {
+    caducidadCheckerRunning = false;
+  }
+}
+
+function startCaducidadRecordatoriosChecker() {
+  console.log(`Avisos de caducidad de tacógrafo activos (a partir de las ${CADUCIDAD_NOTIFY_HOUR}).`);
+  void checkCaducidadRecordatorios();
+  setInterval(() => { void checkCaducidadRecordatorios(); }, CADUCIDAD_CHECK_INTERVAL_MS);
+}
+
+app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const clauses: string[] = [];
+    const params: any[] = [];
+    const addClause = (sql: string, value: any) => {
+      params.push(value);
+      clauses.push(sql.replace("?", `$${params.length}`));
+    };
+
+    const q = req.query;
+    if (q.estado) addClause(`estado = ?`, String(q.estado));
+    else clauses.push(`estado <> 'CANCELADO'`);
+    if (q.matricula) addClause(`matricula ILIKE ?`, `%${String(q.matricula)}%`);
+    if (q.cliente) addClause(`cliente_nombre ILIKE ?`, `%${String(q.cliente)}%`);
+    if (q.fechaAvisoDesde) addClause(`fecha_aviso >= ?`, String(q.fechaAvisoDesde));
+    if (q.fechaAvisoHasta) addClause(`fecha_aviso <= ?`, String(q.fechaAvisoHasta));
+    if (q.fechaCaducidadDesde) addClause(`fecha_caducidad >= ?`, String(q.fechaCaducidadDesde));
+    if (q.fechaCaducidadHasta) addClause(`fecha_caducidad <= ?`, String(q.fechaCaducidadHasta));
+
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const result = await db.query(
+      `SELECT * FROM recordatorios_caducidad ${where} ORDER BY fecha_caducidad ASC, id ASC`,
+      params
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("GET /api/recordatorios-caducidad error:", error);
+    res.status(500).json({ error: "Error cargando recordatorios de caducidad" });
+  }
+});
+
+app.get("/api/recordatorios-caducidad/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const rec = await getCaducidadById(Number(req.params.id));
+    if (!rec) return res.status(404).json({ error: "Recordatorio no encontrado" });
+    res.json(rec);
+  } catch (error) {
+    console.error("GET /api/recordatorios-caducidad/:id error:", error);
+    res.status(500).json({ error: "Error cargando el recordatorio" });
+  }
+});
+
+app.post("/api/recordatorios-caducidad", requireSupervisorRole, async (req, res) => {
+  try {
+    const { errors, values } = normalizeCaducidadInput(req.body);
+    if (errors.length) return res.status(400).json({ error: errors.join(". ") });
+
+    const nowMs = Date.now();
+    const result = await db.query(
+      `INSERT INTO recordatorios_caducidad (
+        "workshopId", cliente_nombre, vehiculo, matricula, telefono,
+        tipo_caducidad, fecha_caducidad, dias_antelacion, fecha_aviso,
+        enviar_whatsapp, enviar_sms, observaciones,
+        creado_en_ms, actualizado_en_ms
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+      RETURNING *`,
+      [
+        values.workshopId, values.cliente_nombre, values.vehiculo, values.matricula,
+        values.telefono, values.tipo_caducidad, values.fecha_caducidad,
+        values.dias_antelacion, values.fecha_aviso,
+        values.enviar_whatsapp, values.enviar_sms, values.observaciones, nowMs,
+      ]
+    );
+    res.json(result.rows[0]);
+  } catch (error: any) {
+    if (error?.code === "23505") {
+      return res.status(409).json({
+        error: "Ya existe un recordatorio activo para esa matrícula, tipo y fecha de caducidad",
+      });
+    }
+    console.error("POST /api/recordatorios-caducidad error:", error);
+    res.status(500).json({ error: "Error creando el recordatorio" });
+  }
+});
+
+app.put("/api/recordatorios-caducidad/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const rec = await getCaducidadById(Number(req.params.id));
+    if (!rec) return res.status(404).json({ error: "Recordatorio no encontrado" });
+
+    const { errors, values } = normalizeCaducidadInput({ ...rec, ...req.body });
+    if (errors.length) return res.status(400).json({ error: errors.join(". ") });
+
+    const nowMs = Date.now();
+
+    // Si cambia la fecha de aviso hacia el futuro, se rearma el ciclo de avisos.
+    const fechaCambia =
+      values.fecha_caducidad !== rec.fecha_caducidad || values.fecha_aviso !== rec.fecha_aviso;
+    const zoned = getZonedDateTimeParts(new Date(), AGENDA_TIME_ZONE);
+    const rearmar =
+      fechaCambia &&
+      values.fecha_aviso > zoned.dateKey &&
+      ["AVISADO", "ERROR_ENVIO", "CADUCADO"].includes(rec.estado);
+
+    const result = await db.query(
+      `UPDATE recordatorios_caducidad SET
+        "workshopId" = $2, cliente_nombre = $3, vehiculo = $4, matricula = $5,
+        telefono = $6, tipo_caducidad = $7, fecha_caducidad = $8,
+        dias_antelacion = $9, fecha_aviso = $10,
+        enviar_whatsapp = $11, enviar_sms = $12, observaciones = $13,
+        estado = $14, whatsapp_estado = $15, sms_estado = $16,
+        actualizado_en_ms = $17
+      WHERE id = $1
+      RETURNING *`,
+      [
+        rec.id, values.workshopId ?? rec.workshopId, values.cliente_nombre, values.vehiculo,
+        values.matricula, values.telefono, values.tipo_caducidad, values.fecha_caducidad,
+        values.dias_antelacion, values.fecha_aviso,
+        values.enviar_whatsapp, values.enviar_sms, values.observaciones,
+        rearmar ? "PENDIENTE" : rec.estado,
+        rearmar ? "pendiente" : rec.whatsapp_estado,
+        rearmar ? "pendiente" : rec.sms_estado,
+        nowMs,
+      ]
+    );
+    res.json(result.rows[0]);
+  } catch (error: any) {
+    if (error?.code === "23505") {
+      return res.status(409).json({
+        error: "Ya existe un recordatorio activo para esa matrícula, tipo y fecha de caducidad",
+      });
+    }
+    console.error("PUT /api/recordatorios-caducidad/:id error:", error);
+    res.status(500).json({ error: "Error actualizando el recordatorio" });
+  }
+});
+
+app.post("/api/recordatorios-caducidad/:id/cancelar", requireSupervisorRole, async (req, res) => {
+  try {
+    const result = await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = 'CANCELADO', actualizado_en_ms = $2
+       WHERE id = $1
+       RETURNING *`,
+      [Number(req.params.id), Date.now()]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Recordatorio no encontrado" });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("POST /api/recordatorios-caducidad/:id/cancelar error:", error);
+    res.status(500).json({ error: "Error cancelando el recordatorio" });
+  }
+});
+
+// DELETE = cancelar (soft-delete, coherente con el resto de la agenda)
+app.delete("/api/recordatorios-caducidad/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const result = await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = 'CANCELADO', actualizado_en_ms = $2
+       WHERE id = $1
+       RETURNING *`,
+      [Number(req.params.id), Date.now()]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Recordatorio no encontrado" });
+    res.json({ ok: true, recordatorio: result.rows[0] });
+  } catch (error) {
+    console.error("DELETE /api/recordatorios-caducidad/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el recordatorio" });
+  }
+});
+
+// Envío manual inmediato (WhatsApp y/o SMS según canal indicado o los flags)
+app.post("/api/recordatorios-caducidad/:id/enviar", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const canal = String(req.body?.canal || "").trim(); // "", "whatsapp" o "sms"
+    const rec = await getCaducidadById(id);
+    if (!rec) return res.status(404).json({ error: "Recordatorio no encontrado" });
+
+    // Reenvío explícito de un canal: se rearma ese canal a 'pendiente'
+    if (canal === "whatsapp" || canal === "sms") {
+      const col = canal === "whatsapp" ? "whatsapp_estado" : "sms_estado";
+      const flag = canal === "whatsapp" ? "enviar_whatsapp" : "enviar_sms";
+      await db.query(
+        `UPDATE recordatorios_caducidad
+         SET ${col} = 'pendiente', ${flag} = true, actualizado_en_ms = $2
+         WHERE id = $1`,
+        [id, Date.now()]
+      );
+    }
+
+    const resultado = await enviarAvisosCaducidad(id);
+    if (!resultado.ok && resultado.error) {
+      return res.status(400).json({ error: resultado.error });
+    }
+    res.json({
+      success: resultado.ok,
+      errores: resultado.errores ?? [],
+      recordatorio: resultado.recordatorio,
+    });
+  } catch (error) {
+    console.error("POST /api/recordatorios-caducidad/:id/enviar error:", error);
+    res.status(500).json({ error: "Error enviando el aviso" });
+  }
+});
+
+// Vincular con una cita ya creada en la agenda
+app.post("/api/recordatorios-caducidad/:id/convertir-cita", requireSupervisorRole, async (req, res) => {
+  try {
+    const citaId = Number(req.body?.citaId);
+    if (!Number.isFinite(citaId)) {
+      return res.status(400).json({ error: "Falta el identificador de la cita" });
+    }
+
+    const result = await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = 'CONVERTIDO_EN_CITA', cita_id = $2, actualizado_en_ms = $3
+       WHERE id = $1
+       RETURNING *`,
+      [Number(req.params.id), citaId, Date.now()]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Recordatorio no encontrado" });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("POST /api/recordatorios-caducidad/:id/convertir-cita error:", error);
+    res.status(500).json({ error: "Error convirtiendo el recordatorio en cita" });
   }
 });
 
@@ -13360,6 +13866,7 @@ initDb()
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
       startRecobrosNotifierChecker();
+      startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING

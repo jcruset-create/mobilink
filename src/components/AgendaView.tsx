@@ -39,6 +39,21 @@ import {
   type AgendaDateReminderPayload,
 } from "../modules/agendaDateReminderApi";
 
+import CaducidadTacografoModal from "./CaducidadTacografoModal";
+import {
+  getEstadoVisual,
+  getEstadoColorClass,
+  getEstadoLabel,
+  formatSpanishDateKey,
+  type CaducidadReminder,
+} from "../modules/caducidadHelpers";
+import {
+  loadCaducidadReminders,
+  cancelCaducidadReminder,
+  sendCaducidadReminder,
+  convertCaducidadReminder,
+} from "../modules/caducidadApi";
+
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
 type ScheduledJobStatus =
@@ -684,6 +699,36 @@ useEffect(() => {
 
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
 
+  // ---- Recordatorios de caducidad de tacógrafo ----
+  const [caducidadReminders, setCaducidadReminders] = useState<CaducidadReminder[]>([]);
+  const [caducidadModalOpen, setCaducidadModalOpen] = useState(false);
+  const [caducidadEditing, setCaducidadEditing] = useState<CaducidadReminder | null>(null);
+  // Recordatorio en proceso de "convertir en cita": al guardar la cita se vincula.
+  const [caducidadConvertingId, setCaducidadConvertingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCaducidadReminders()
+      .then((data) => {
+        if (!cancelled) setCaducidadReminders(data);
+      })
+      .catch((error) => {
+        console.error("Error cargando recordatorios de caducidad:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function upsertCaducidadLocal(reminder: CaducidadReminder) {
+    setCaducidadReminders((prev) => {
+      const exists = prev.some((item) => item.id === reminder.id);
+      return exists
+        ? prev.map((item) => (item.id === reminder.id ? reminder : item))
+        : [...prev, reminder];
+    });
+  }
+
 const [reminderDraft, setReminderDraft] = useState<ReminderDraft>({
   kind: "normal",
   title: "",
@@ -980,6 +1025,121 @@ function deleteDateReminder(id: number) {
   }
 
   appendLog(`Recordatorio eliminado: ${reminder.title}.`);
+}
+
+// ---- Acciones de recordatorios de caducidad ----
+
+function getVisibleCaducidadReminders() {
+  return caducidadReminders
+    .filter(belongsToSelectedWorkshop)
+    .filter((rec) => rec.estado !== "CANCELADO")
+    .filter((rec) =>
+      finalVisibleDays.some(
+        (day) => day.date === rec.fecha_caducidad || day.date === rec.fecha_aviso
+      )
+    )
+    .slice()
+    .sort((a, b) =>
+      a.fecha_caducidad !== b.fecha_caducidad
+        ? a.fecha_caducidad.localeCompare(b.fecha_caducidad)
+        : Number(a.id) - Number(b.id)
+    );
+}
+
+// Columna donde pintar la tarjeta: día de caducidad si es visible; si no, día de aviso.
+function getCaducidadGridColumn(rec: CaducidadReminder) {
+  const byCaducidad = finalVisibleDays.findIndex((day) => day.date === rec.fecha_caducidad);
+  const index =
+    byCaducidad >= 0
+      ? byCaducidad
+      : finalVisibleDays.findIndex((day) => day.date === rec.fecha_aviso);
+  if (index < 0) return null;
+  return `${index + 2} / ${index + 3}`;
+}
+
+async function sendCaducidadNow(rec: CaducidadReminder, canal?: "whatsapp" | "sms") {
+  try {
+    const result = await sendCaducidadReminder(rec.id, canal);
+    upsertCaducidadLocal(result.recordatorio);
+    if (result.errores.length > 0) {
+      alert(`Aviso con errores:\n${result.errores.join("\n")}`);
+    } else {
+      appendLog(
+        `Aviso de caducidad enviado (${canal || "todos los canales"}): ${rec.matricula}.`
+      );
+      alert("Aviso enviado correctamente.");
+    }
+  } catch (error: any) {
+    console.error("Error enviando aviso de caducidad:", error);
+    alert(error?.message || "Error enviando el aviso.");
+  }
+}
+
+async function cancelCaducidad(rec: CaducidadReminder) {
+  const ok = window.confirm(
+    `¿Descartar el recordatorio de caducidad de ${rec.matricula} (${formatSpanishDateKey(
+      rec.fecha_caducidad
+    )})?`
+  );
+  if (!ok) return;
+
+  try {
+    const updated = await cancelCaducidadReminder(rec.id);
+    upsertCaducidadLocal(updated);
+    appendLog(`Recordatorio de caducidad cancelado: ${rec.matricula}.`);
+  } catch (error: any) {
+    console.error("Error cancelando recordatorio de caducidad:", error);
+    alert(error?.message || "Error cancelando el recordatorio.");
+  }
+}
+
+// Abre el modal de cita existente con los datos del recordatorio precargados.
+// El usuario solo elige fecha/hora/duración; al guardar se vincula el recordatorio.
+function openConvertCaducidad(rec: CaducidadReminder) {
+  const currentWeekDays = getWeekDays(0);
+  const firstAvailable = getFirstAvailableSlotInWeek(currentWeekDays);
+
+  if (!firstAvailable) {
+    alert("No quedan horas disponibles esta semana.");
+    return;
+  }
+
+  const template = getFirstTemplateForArea("tacografo");
+  const templateKey = template?.key ?? "";
+
+  setWeekOffset(0);
+  setEditingJobId(null);
+  setSelectedSlot({ date: firstAvailable.date, startTime: firstAvailable.startTime });
+  setSelectedArea(template?.area ?? "tacografo");
+  setCaducidadConvertingId(rec.id);
+
+  setDraft({
+    templateKey,
+    plate: rec.matricula,
+    customerName: rec.cliente_nombre,
+    customerPhone: rec.telefono,
+    notes: [
+      rec.observaciones,
+      `Origen: recordatorio caducidad tacógrafo #${rec.id} (caduca ${formatSpanishDateKey(
+        rec.fecha_caducidad
+      )})`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    urgent: false,
+    sendWhatsAppOnSave: true,
+    manualReminderEnabled: false,
+    manualReminderDate: "",
+    manualReminderTime: "",
+    sendReminder24h: true,
+    sendReminder1h: true,
+    estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
+    linkedTemplateKey: "",
+    includedTaskIds: [],
+    quantity: "1",
+  });
+  setIncludedTasksOpen(false);
+  setModalOpen(true);
 }
 
   function normalizeMinutes(value: unknown, fallback = 0) {
@@ -1302,6 +1462,19 @@ area: template.area,
       setScheduledJobs((prev) => [...prev, scheduled]);
       appendLog(`Cita programada: ${scheduled.plate} · ${logLabel}.`);
 
+      if (caducidadConvertingId != null) {
+        try {
+          const updated = await convertCaducidadReminder(caducidadConvertingId, scheduled.id);
+          upsertCaducidadLocal(updated);
+          appendLog(`Recordatorio de caducidad convertido en cita: ${updated.matricula}.`);
+        } catch (error) {
+          console.error("Error vinculando recordatorio de caducidad:", error);
+          appendLog("La cita se creó pero no se pudo vincular el recordatorio de caducidad.");
+        } finally {
+          setCaducidadConvertingId(null);
+        }
+      }
+
       if (draft.sendWhatsAppOnSave && scheduled.customerPhone.trim()) {
         try {
           await apiFetch("/api/whatsapp/send-agenda-reminder", {
@@ -1452,8 +1625,17 @@ appendLog(
   }
 }
 
+  // Si el modal de cita se cierra sin guardar, se aborta la conversión pendiente.
+  useEffect(() => {
+    if (!modalOpen) setCaducidadConvertingId(null);
+  }, [modalOpen]);
+
   const visibleDateReminders = getVisibleDateReminders();
-  const allDayReminderRows = Math.max(1, visibleDateReminders.length);
+  const visibleCaducidadReminders = getVisibleCaducidadReminders();
+  const allDayReminderRows = Math.max(
+    1,
+    visibleDateReminders.length + visibleCaducidadReminders.length
+  );
 
   return (
     <div className={embeddedModalOnly ? "" : th.page}>
@@ -1500,6 +1682,17 @@ appendLog(
               className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
             >
               + Recordatorio fechas
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCaducidadEditing(null);
+                setCaducidadModalOpen(true);
+              }}
+              className="rounded-2xl bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700"
+            >
+              + Caducidad tacógrafo
             </button>
 
             <button
@@ -1658,6 +1851,103 @@ appendLog(
                   >
                     ×
                   </button>
+                </div>
+              );
+            })}
+
+            {visibleCaducidadReminders.map((rec, index) => {
+              const gridColumn = getCaducidadGridColumn(rec);
+              if (!gridColumn) return null;
+
+              const estadoVisual = getEstadoVisual(rec, todayKey);
+              const rowIndex = visibleDateReminders.length + index;
+
+              return (
+                <div
+                  key={`caducidad-${rec.id}`}
+                  title={
+                    `${rec.cliente_nombre} · ${rec.vehiculo || rec.matricula}\n` +
+                    `Caduca: ${formatSpanishDateKey(rec.fecha_caducidad)} · ` +
+                    `Aviso: ${formatSpanishDateKey(rec.fecha_aviso)}\n` +
+                    `WhatsApp: ${rec.whatsapp_estado} · SMS: ${rec.sms_estado}` +
+                    (rec.ultimo_error ? `\nÚltimo error: ${rec.ultimo_error}` : "")
+                  }
+                  className={`z-20 mx-1 my-1 flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase shadow-sm ${getEstadoColorClass(
+                    estadoVisual
+                  )}`}
+                  style={{
+                    gridColumn,
+                    gridRow: `${rowIndex + 1} / ${rowIndex + 2}`,
+                  }}
+                >
+                  <span className="truncate">
+                    Caducidad tacógrafo · {rec.matricula}
+                    <span className="ml-2 font-medium opacity-90">
+                      {rec.cliente_nombre} · Caduca {formatSpanishDateKey(rec.fecha_caducidad)} ·
+                      Aviso {formatSpanishDateKey(rec.fecha_aviso)} · {getEstadoLabel(estadoVisual)}
+                    </span>
+                  </span>
+
+                  <span className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void sendCaducidadNow(rec, "whatsapp");
+                      }}
+                      className="rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-black text-emerald-700"
+                      title="Enviar WhatsApp ahora"
+                    >
+                      WA
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void sendCaducidadNow(rec, "sms");
+                      }}
+                      className="rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-black text-sky-700"
+                      title="Enviar SMS ahora"
+                    >
+                      SMS
+                    </button>
+                    {estadoVisual !== "CONVERTIDO_EN_CITA" && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openConvertCaducidad(rec);
+                        }}
+                        className="rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-black text-blue-700"
+                        title="Convertir en cita"
+                      >
+                        Cita
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCaducidadEditing(rec);
+                        setCaducidadModalOpen(true);
+                      }}
+                      className="rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-black text-slate-700"
+                      title="Editar"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void cancelCaducidad(rec);
+                      }}
+                      className="rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-black text-slate-700"
+                      title="Descartar recordatorio"
+                    >
+                      ×
+                    </button>
+                  </span>
                 </div>
               );
             })}
@@ -2023,6 +2313,22 @@ appendLog(
             })}
           </div>
         </div>
+
+<CaducidadTacografoModal
+  open={caducidadModalOpen}
+  editing={caducidadEditing}
+  workshopId={String(safeSelectedWorkshopId)}
+  onClose={() => {
+    setCaducidadModalOpen(false);
+    setCaducidadEditing(null);
+  }}
+  onSaved={(reminder) => {
+    upsertCaducidadLocal(reminder);
+    appendLog(
+      `Recordatorio de caducidad ${caducidadEditing ? "actualizado" : "creado"}: ${reminder.matricula} · caduca ${reminder.fecha_caducidad}.`
+    );
+  }}
+/>
 
 {reminderModalOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
