@@ -13,6 +13,7 @@ import {
   fetchWithTimeout,
   loadScheduledJobsFromBackend,
   saveJobToBackend,
+  saveScheduledJobStatusToBackend,
   saveTechToBackend,
 } from "./workshopApi";
 import { applyScheduledJobV2FieldsToJob } from "./scheduledJobToWorkV2Adapter";
@@ -372,13 +373,19 @@ export function useScheduledJobs({
    * la cita se atendió. La cita desaparece de "Citas pendientes de llegada"
    * (ese listado solo mira las `programado`) y se queda guardada en la agenda
    * pintada como "Realizada".
+   *
+   * El estado se guarda con el endpoint de una sola cita, no con el PUT del
+   * listado completo: ese PUT reescribe toda la agenda y el cambio se perdía,
+   * así que al refrescar la cita volvía a salir como programada.
    */
-  function markScheduledJobDone(id: number) {
+  async function markScheduledJobDone(id: number) {
     const scheduled = scheduledJobs.find((item) => item.id === id);
 
     if (!scheduled) return;
 
-    setScheduledJobsAndSave((prev) =>
+    const previousStatus = scheduled.status;
+
+    setScheduledJobs((prev) =>
       prev.map((item) =>
         item.id === id
           ? {
@@ -390,7 +397,27 @@ export function useScheduledJobs({
       )
     );
 
-    appendLog(`Cita realizada: ${scheduled.plate}.`);
+    try {
+      await saveScheduledJobStatusToBackend(id, "realizado");
+
+      appendLog(`Cita realizada: ${scheduled.plate}.`);
+    } catch (error) {
+      console.error("Error marcando la cita como realizada:", error);
+
+      setScheduledJobs((prev) =>
+        prev.map((item) =>
+          item.id === id
+            ? { ...item, status: previousStatus, realizadoAtMs: null }
+            : item
+        )
+      );
+
+      appendLog(`Error marcando como realizada la cita ${scheduled.plate}.`);
+
+      alert(
+        "No se pudo guardar la cita como realizada. Se ha dejado como estaba."
+      );
+    }
   }
 
   /**

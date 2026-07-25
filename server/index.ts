@@ -9048,6 +9048,83 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
   }
 });
 
+/**
+ * Cambia el estado de UNA cita.
+ *
+ * El PUT del listado completo reescribe todas las citas de la agenda (un SELECT
+ * y un INSERT por cita), así que para un cambio de estado suelto es lento y
+ * frágil. Aquí solo se toca la fila afectada y el cliente recibe un error claro
+ * si algo falla, en vez de que el cambio se pierda en silencio.
+ */
+app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de cita inválido" });
+    }
+
+    const status = String(req.body?.status || "").toLowerCase().trim();
+
+    const allowedStatuses = ["programado", "realizado", "cerrado"];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ error: `Estado de cita no válido: ${status}` });
+    }
+
+    const now = Date.now();
+
+    const current = await db.query(
+      `
+      SELECT data
+      FROM scheduled_jobs
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (current.rowCount === 0) {
+      return res.status(404).json({ error: "Cita no encontrada" });
+    }
+
+    const currentData = current.rows[0].data ?? {};
+
+    const currentStatus = String(currentData.status || "").toLowerCase().trim();
+
+    // Una cita borrada no se reactiva cambiándole el estado.
+    if (["cancelado", "eliminado"].includes(currentStatus)) {
+      return res.status(409).json({ error: "La cita ya está cancelada o eliminada" });
+    }
+
+    const nextData = {
+      ...currentData,
+      status,
+      realizadoAtMs: status === "realizado" ? now : null,
+    };
+
+    const result = await db.query(
+      `
+      UPDATE scheduled_jobs
+      SET
+        data = $2,
+        "updatedAtMs" = $3
+      WHERE id = $1
+      RETURNING data
+      `,
+      [id, JSON.stringify(nextData), now]
+    );
+
+    res.json({
+      ok: true,
+      scheduledJob: result.rows[0].data,
+    });
+  } catch (error) {
+    console.error("PUT /api/scheduled-jobs/:id/status error:", error);
+    res.status(500).json({ error: "Error cambiando el estado de la cita" });
+  }
+});
+
 app.delete("/api/scheduled-jobs/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);

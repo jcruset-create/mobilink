@@ -6819,7 +6819,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
 
               <button
                 type="button"
-                onClick={() => agenda.markScheduledJobDone(job.id)}
+                onClick={() => void agenda.markScheduledJobDone(job.id)}
                 className="rounded-xl border border-green-300 bg-white px-2 py-2 text-xs font-bold text-green-700 hover:bg-green-50"
               >
                 Realizada
@@ -7228,7 +7228,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
                   <span><span className="text-amber-300">{s.startTime}</span> · {s.plate || s.templateLabel || s.area}{s.customerName ? <span className="text-slate-400"> · {s.customerName}</span> : null}</span>
                   <span className="flex shrink-0 gap-1">
                     <button type="button" onClick={() => agenda.confirmScheduledArrival(s)} className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">Llegó</button>
-                    <button type="button" onClick={() => agenda.markScheduledJobDone(s.id)} className="rounded border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">Realizada</button>
+                    <button type="button" onClick={() => void agenda.markScheduledJobDone(s.id)} className="rounded border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold text-emerald-300">Realizada</button>
                     <button type="button" onClick={() => void agenda.deleteScheduledJobById(s.id)} className="rounded border border-rose-400/40 bg-rose-400/10 px-2 py-0.5 text-[10px] font-bold text-rose-300">Cancelar</button>
                   </span>
                 </div>

@@ -205,6 +205,35 @@ export async function deleteScheduledJobFromBackend(id: number) {
     throw new Error(text || "No se pudo eliminar la cita programada");
   }
 }
+/**
+ * Cambia el estado de UNA cita sin reescribir toda la agenda.
+ * Devuelve la cita tal y como ha quedado guardada en el servidor.
+ */
+export async function saveScheduledJobStatusToBackend(
+  id: number,
+  status: "programado" | "realizado" | "cerrado"
+) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/scheduled-jobs/${id}/status`,
+    {
+      method: "PUT",
+      headers: getAdminHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({ status }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await readApiError(response);
+    throw new Error(error?.error || "No se pudo guardar el estado de la cita");
+  }
+
+  const data = await response.json();
+
+  return data?.scheduledJob ?? null;
+}
+
 export async function loadJobsFromBackend(scope: "live" | "all" = "live") {
   const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=${scope}`);
 
