@@ -278,6 +278,13 @@ function getDayEnd(dayIndex: number) {
   return 18 * 60 + 45;
 }
 
+// Franja de descanso del mediodía (13:30–15:00, lunes a viernes).
+function isLunchTime(dayIndex: number, time: string) {
+  if (dayIndex === 5) return false;
+  const minutes = timeToMinutes(time);
+  return minutes > 13 * 60 + 30 && minutes < 15 * 60;
+}
+
 function isWorkingTime(dayIndex: number, time: string) {
   const minutes = timeToMinutes(time);
 
@@ -2036,6 +2043,17 @@ appendLog(
                     const past = isPastDateTime(day.date, slot);
                     const disabled = !working || past;
 
+                    // Mediodía: mismo color que la cabecera, delimitado con una
+                    // línea roja al inicio y otra al final.
+                    const lunch = isLunchTime(day.index, slot);
+                    const lunchFirst =
+                      lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) - SLOT_MINUTES));
+                    const lunchLast =
+                      lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) + SLOT_MINUTES));
+                    const lunchClass = `cursor-not-allowed ${th.gridHead}${
+                      lunchFirst ? " border-t-2 border-t-red-500" : ""
+                    }${lunchLast ? " border-b-2 border-b-red-500" : ""}`;
+
                     let cellClass = dark ? "bg-slate-800/50" : "bg-slate-200/70";
 
                     // Editable (futuro y en horario): verde muy suave
@@ -2059,9 +2077,11 @@ appendLog(
                           openNewAppointment(day.date, slot);
                         }}
                         className={`relative border-b ${th.gridBorderSoft} ${
-                          // Descansos / fuera de horario (mediodía): azul marino
                           !isWorkingTime(day.index, slot)
-                            ? (dark ? "cursor-not-allowed bg-blue-950" : "cursor-not-allowed bg-blue-950/80")
+                            ? lunch
+                              ? lunchClass
+                              : // Fuera de jornada (antes/después): azul marino
+                                (dark ? "cursor-not-allowed bg-blue-950" : "cursor-not-allowed bg-blue-950/80")
                             : cellClass
                         }`}
                       />
