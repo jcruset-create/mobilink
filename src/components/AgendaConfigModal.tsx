@@ -594,7 +594,24 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                 <div className="mt-3 rounded-2xl border border-indigo-200 bg-white p-3">
                   <p className="text-sm font-semibold text-slate-700">
                     {aiResult.length} festivos encontrados en {aiCity} ({aiYear})
+                    {" · "}
+                    <span
+                      className={
+                        aiResult.filter((f) => f.scope === "local").length === 2
+                          ? "text-emerald-600"
+                          : "text-red-600"
+                      }
+                    >
+                      {aiResult.filter((f) => f.scope === "local").length} locales
+                    </span>
                   </p>
+
+                  {aiResult.filter((f) => f.scope === "local").length !== 2 && (
+                    <p className="mt-1 text-xs text-red-600">
+                      En España cada municipio tiene 2 festivos locales. Revisa el
+                      calendario oficial y añade a mano los que falten.
+                    </p>
+                  )}
 
                   <div className="mt-2 max-h-48 space-y-1 overflow-y-auto">
                     {aiResult.map((festivo) => {
@@ -610,8 +627,22 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                           </span>
                           <span className="flex-1 truncate">{festivo.label}</span>
                           {festivo.scope && (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase text-slate-500">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] uppercase ${
+                                festivo.scope === "local"
+                                  ? "bg-amber-100 font-bold text-amber-800"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
                               {festivo.scope}
+                            </span>
+                          )}
+                          {festivo.confidence === "baja" && (
+                            <span
+                              className="text-xs font-semibold text-red-600"
+                              title="La IA no está segura de este festivo: compruébalo"
+                            >
+                              revisar
                             </span>
                           )}
                           <span className="text-xs text-slate-400">

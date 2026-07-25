@@ -3342,23 +3342,29 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
     }
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.FESTIVOS_IA_MODEL || "gpt-4o",
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
             "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
-            "No inventes festivos: si no estás seguro de un festivo local, omítelo.",
+            "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
+            "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
+            "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
+            'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.',
         },
         {
           role: "user",
           content:
-            `Lista los días festivos NO laborables del año ${year} en ${city} (España), ` +
-            "incluyendo los festivos nacionales, los de su comunidad autónoma y los locales de esa ciudad. " +
-            'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre","ambito":"nacional|autonomico|local","fija":true|false}]}. ' +
+            `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
+            "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
+            'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
+            '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
             '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
-            "(por ejemplo Viernes Santo o Lunes de Pascua). Ordena por fecha.",
+            "(por ejemplo Viernes Santo o Lunes de Pascua). " +
+            `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
+            "(23 de septiembre). Ordena por fecha.",
         },
       ],
     });
@@ -3373,12 +3379,15 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
         if (!date.startsWith(`${year}-`)) return null;
 
+        const confidence = String(item?.confianza ?? "").trim().toLowerCase();
+
         return {
           date,
           label: String(item?.festividad ?? "").trim() || "Festivo",
           scope: String(item?.ambito ?? "").trim(),
           // Los festivos móviles (Semana Santa) no pueden repetirse cada año.
           yearly: item?.fija === true,
+          confidence: ["alta", "media", "baja"].includes(confidence) ? confidence : "media",
         };
       })
       .filter((item: any) => {

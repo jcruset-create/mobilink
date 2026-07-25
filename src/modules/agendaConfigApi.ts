@@ -23,6 +23,8 @@ export type FestivoSugerido = {
   label: string;
   scope: string;
   yearly: boolean;
+  /** Seguridad de la IA sobre ese festivo; los locales suelen ser los más dudosos. */
+  confidence: "alta" | "media" | "baja";
 };
 
 /** Pide a la IA el calendario de festivos de una ciudad y un año. */
