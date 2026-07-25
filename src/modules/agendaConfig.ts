@@ -148,6 +148,40 @@ export function getHolidayForDate(
   );
 }
 
+/**
+ * Si un festivo cae en viernes, propone hacer puente cerrando también el
+ * sábado siguiente. Devuelve null si no es viernes o si ese sábado ya está
+ * cerrado (festivo, día cerrado o sábado de agosto).
+ *
+ * El puente se propone siempre como fecha concreta, nunca anual: el año que
+ * viene ese festivo caerá en otro día de la semana.
+ */
+export function getBridgeSaturday(
+  config: AgendaConfig,
+  holidayDate: string
+): string | null {
+  if (weekdayIndexMonFirst(holidayDate) !== 4) return null;
+
+  const saturday = addDaysToDateKey(holidayDate, 1);
+  if (!saturday) return null;
+
+  return isClosedDate(config, saturday) ? null : saturday;
+}
+
+/** Suma días a una fecha 'YYYY-MM-DD' (aritmética UTC, sin efectos de DST). */
+export function addDaysToDateKey(dateKey: string, days: number): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+  if (!match) return null;
+
+  const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const next = new Date(utc + days * 24 * 60 * 60 * 1000);
+
+  const y = next.getUTCFullYear();
+  const m = String(next.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(next.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 /** El taller está cerrado ese día concreto (festivo, día cerrado o sábado de agosto). */
 export function isClosedDate(config: AgendaConfig, date: string): boolean {
   if (getHolidayForDate(config, date)) return true;

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_AGENDA_CONFIG,
   getDayRanges,
+  getBridgeSaturday,
   getGridBounds,
   getGridSlots,
   getHolidayForDate,
@@ -107,6 +108,44 @@ describe("isClosedDate", () => {
       days: cfg.days.map((d, i) => (i === 5 ? { ...d, closed: true } : d)),
     };
     expect(isClosedDate(sinSabados, "2026-07-25")).toBe(true);
+  });
+});
+
+describe("getBridgeSaturday (puente cuando el festivo cae en viernes)", () => {
+  it("propone el sábado siguiente si el festivo es viernes", () => {
+    // 2027-09-10 es viernes
+    expect(getBridgeSaturday(cfg, "2027-09-10")).toBe("2027-09-11");
+  });
+
+  it("no propone nada si el festivo no cae en viernes", () => {
+    // 2026-09-11 es viernes; 2026-09-10 es jueves
+    expect(getBridgeSaturday(cfg, "2026-09-10")).toBeNull();
+  });
+
+  it("no propone el puente si ese sábado ya está cerrado por ser de agosto", () => {
+    // 2026-08-07 es viernes y el 08-08 es sábado de agosto (ya cerrado)
+    expect(getBridgeSaturday(cfg, "2026-08-07")).toBeNull();
+  });
+
+  it("no propone el puente si ese sábado ya es festivo", () => {
+    const conSabadoFestivo: AgendaConfig = {
+      ...cfg,
+      holidays: [{ date: "2027-09-11", label: "Diada", yearly: false }],
+    };
+    expect(getBridgeSaturday(conSabadoFestivo, "2027-09-10")).toBeNull();
+  });
+
+  it("no propone el puente si los sábados están cerrados en el horario", () => {
+    const sinSabados: AgendaConfig = {
+      ...cfg,
+      days: cfg.days.map((d, i) => (i === 5 ? { ...d, closed: true } : d)),
+    };
+    expect(getBridgeSaturday(sinSabados, "2027-09-10")).toBeNull();
+  });
+
+  it("cruza correctamente el cambio de mes y de año", () => {
+    // 2027-12-31 es viernes → sábado 2028-01-01
+    expect(getBridgeSaturday(cfg, "2027-12-31")).toBe("2028-01-01");
   });
 });
 

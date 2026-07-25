@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   AGENDA_DAY_LABELS,
   DEFAULT_AGENDA_CONFIG,
+  getBridgeSaturday,
   validateAgendaConfig,
   type AgendaConfig,
   type AgendaDaySchedule,
@@ -28,6 +29,10 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
   const [newHolidayYearly, setNewHolidayYearly] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Festivo en viernes recién añadido, a la espera de decidir si se hace puente.
+  const [bridgePrompt, setBridgePrompt] = useState<
+    { holidayDate: string; holidayLabel: string; saturday: string } | null
+  >(null);
 
   useEffect(() => {
     if (!open) return;
@@ -35,6 +40,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
     setNewHoliday("");
     setNewHolidayLabel("");
     setNewHolidayYearly(true);
+    setBridgePrompt(null);
     setError("");
   }, [open, config]);
 
@@ -59,17 +65,45 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
       return;
     }
 
+    const label = newHolidayLabel.trim();
+
+    const next: AgendaConfig = {
+      ...draft,
+      holidays: [...draft.holidays, { date, label, yearly: newHolidayYearly }].sort(
+        (a, b) => a.date.localeCompare(b.date)
+      ),
+    };
+
     setError("");
+    setDraft(next);
+    setNewHoliday("");
+    setNewHolidayLabel("");
+    setNewHolidayYearly(true);
+
+    // Si cae en viernes, preguntar si se hace puente cerrando también el sábado.
+    const saturday = getBridgeSaturday(next, date);
+    setBridgePrompt(saturday ? { holidayDate: date, holidayLabel: label, saturday } : null);
+  }
+
+  function acceptBridge() {
+    if (!bridgePrompt) return;
+
+    const { saturday, holidayLabel } = bridgePrompt;
+
     setDraft((prev) => ({
       ...prev,
       holidays: [
         ...prev.holidays,
-        { date, label: newHolidayLabel.trim(), yearly: newHolidayYearly },
+        {
+          date: saturday,
+          // El puente depende del día de la semana, así que nunca es anual.
+          label: holidayLabel ? `Puente (${holidayLabel})` : "Puente",
+          yearly: false,
+        },
       ].sort((a, b) => a.date.localeCompare(b.date)),
     }));
-    setNewHoliday("");
-    setNewHolidayLabel("");
-    setNewHolidayYearly(true);
+
+    setBridgePrompt(null);
   }
 
   function removeHoliday(date: string) {
@@ -248,41 +282,91 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               Se repite cada año en la misma fecha
             </label>
 
+            {bridgePrompt && (
+              <div className="mt-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <p>
+                  El{" "}
+                  <strong>{formatSpanishDateKey(bridgePrompt.holidayDate)}</strong>
+                  {bridgePrompt.holidayLabel ? ` (${bridgePrompt.holidayLabel})` : ""} cae
+                  en <strong>viernes</strong>. ¿Quieres hacer puente y cerrar también el
+                  sábado <strong>{formatSpanishDateKey(bridgePrompt.saturday)}</strong>?
+                </p>
+
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={acceptBridge}
+                    className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+                  >
+                    Sí, cerrar el sábado
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBridgePrompt(null)}
+                    className="rounded-2xl border border-amber-300 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+                  >
+                    No, solo el viernes
+                  </button>
+                </div>
+              </div>
+            )}
+
             {draft.holidays.length === 0 ? (
               <p className="mt-3 text-sm text-slate-400">Todavía no hay festivos configurados.</p>
             ) : (
               <div className="mt-3 space-y-2">
-                {draft.holidays.map((holiday) => (
-                  <div
-                    key={holiday.date}
-                    className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
-                  >
-                    <span className="font-semibold">
-                      {formatSpanishDateKey(holiday.date)}
-                    </span>
-                    <span className="flex-1 truncate">
-                      {holiday.label || <span className="text-red-400">Sin motivo</span>}
-                    </span>
+                {draft.holidays.map((holiday) => {
+                  const bridge = getBridgeSaturday(draft, holiday.date);
 
-                    <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={holiday.yearly}
-                        onChange={() => toggleHolidayYearly(holiday.date)}
-                      />
-                      Cada año
-                    </label>
-
-                    <button
-                      type="button"
-                      onClick={() => removeHoliday(holiday.date)}
-                      className="font-black"
-                      title="Quitar festivo"
+                  return (
+                    <div
+                      key={holiday.date}
+                      className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
                     >
-                      ×
-                    </button>
-                  </div>
-                ))}
+                      <span className="font-semibold">
+                        {formatSpanishDateKey(holiday.date)}
+                      </span>
+                      <span className="flex-1 truncate">
+                        {holiday.label || <span className="text-red-400">Sin motivo</span>}
+                      </span>
+
+                      {bridge && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setBridgePrompt({
+                              holidayDate: holiday.date,
+                              holidayLabel: holiday.label,
+                              saturday: bridge,
+                            })
+                          }
+                          className="rounded-full border border-amber-400 bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+                          title="Cae en viernes: puedes cerrar también el sábado"
+                        >
+                          Viernes · hacer puente
+                        </button>
+                      )}
+
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={holiday.yearly}
+                          onChange={() => toggleHolidayYearly(holiday.date)}
+                        />
+                        Cada año
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={() => removeHoliday(holiday.date)}
+                        className="font-black"
+                        title="Quitar festivo"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
