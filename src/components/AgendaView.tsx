@@ -345,7 +345,15 @@ function isPastDateTime(date: string, time: string) {
   return timeToMinutes(time) <= nowMinutes;
 }
 
+// En agosto el taller cierra los sábados.
+function isClosedDate(date: string) {
+  const [, month] = String(date || "").split("-");
+  return month === "08" && weekdayIndexMonFirst(date) === 5;
+}
+
 function getValidSlotsForDate(date: string, dayIndex: number) {
+  if (isClosedDate(date)) return [];
+
   return getTimeSlotsForDay(dayIndex).filter(
     (slot) => isWorkingTime(dayIndex, slot) && !isPastDateTime(date, slot)
   );
@@ -1240,6 +1248,11 @@ function getEstimatedMinutesWithIncludedTasks(
       return;
     }
 
+    if (isClosedDate(date)) {
+      alert("El taller cierra los sábados de agosto.");
+      return;
+    }
+
     const firstTemplate = getFirstTemplateForArea("camion");
     const firstTemplateKey = firstTemplate?.key ?? "";
     const firstArea = firstTemplate?.area ?? "camion";
@@ -1361,6 +1374,11 @@ function getEstimatedMinutesWithIncludedTasks(
 
     if (isPastDateTime(selectedSlot.date, selectedSlot.startTime)) {
       alert("No se puede guardar una cita en una fecha u hora pasada.");
+      return;
+    }
+
+    if (isClosedDate(selectedSlot.date)) {
+      alert("El taller cierra los sábados de agosto.");
       return;
     }
 
@@ -1989,8 +2007,13 @@ appendLog(
             </div>
 
             {finalVisibleDays.map((day) => {
-              const slots = getTimeSlotsForDay(day.index);
+              // Todas las columnas comparten la rejilla de la jornada más larga
+              // para quedar alineadas con la columna de horas; las franjas fuera
+              // del horario del día (p. ej. sábado antes de las 9:00) se pintan
+              // como no laborables.
+              const slots = getTimeSlotsForDay(0);
               const dayStart = 8 * 60 + 30;
+              const closed = isClosedDate(day.date);
               const dayHeight = slots.length * SLOT_HEIGHT;
 
               const dayJobs = scheduledJobsForSelectedWorkshop
@@ -2039,22 +2062,22 @@ appendLog(
                   style={{ height: dayHeight }}
                 >
                   {slots.map((slot) => {
-                    const working = isWorkingTime(day.index, slot);
+                    const working = isWorkingTime(day.index, slot) && !closed;
                     const past = isPastDateTime(day.date, slot);
                     const disabled = !working || past;
 
-                    // Mediodía: mismo color que la cabecera, delimitado con una
-                    // línea roja al inicio y otra al final.
-                    const lunch = isLunchTime(day.index, slot);
+                    // Mediodía: mismo color que el fondo, sin líneas internas de
+                    // separación y delimitado por una línea roja arriba y abajo.
+                    const lunch = isLunchTime(day.index, slot) && !closed;
                     const lunchFirst =
                       lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) - SLOT_MINUTES));
                     const lunchLast =
                       lunch && !isLunchTime(day.index, minutesToTime(timeToMinutes(slot) + SLOT_MINUTES));
-                    const lunchClass = `cursor-not-allowed ${
+                    const lunchClass = `cursor-not-allowed border-b-transparent ${
                       dark ? "bg-slate-900" : "bg-slate-50"
                     }${
                       lunchFirst ? " border-t-2 border-t-red-500" : ""
-                    }${lunchLast ? " border-b-2 border-b-red-500" : ""}`;
+                    }${lunchLast ? " !border-b-2 !border-b-red-500" : ""}`;
 
                     let cellClass = dark ? "bg-slate-800/50" : "bg-slate-200/70";
 
@@ -2075,14 +2098,15 @@ appendLog(
                         key={`${day.date}-${slot}`}
                         style={{ height: SLOT_HEIGHT }}
                         onClick={() => {
-                          if (disabled || !isWorkingTime(day.index, slot)) return;
+                          if (disabled) return;
                           openNewAppointment(day.date, slot);
                         }}
+                        title={closed ? "Cerrado: sábados de agosto" : undefined}
                         className={`relative border-b ${th.gridBorderSoft} ${
-                          !isWorkingTime(day.index, slot)
+                          !working
                             ? lunch
                               ? lunchClass
-                              : // Fuera de jornada (antes/después): azul marino
+                              : // Fuera de jornada / cerrado: azul marino
                                 (dark ? "cursor-not-allowed bg-blue-950" : "cursor-not-allowed bg-blue-950/80")
                             : cellClass
                         }`}
