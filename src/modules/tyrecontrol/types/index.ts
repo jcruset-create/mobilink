@@ -115,6 +115,7 @@ export interface TipoVehiculo {
   numero_ruedas: number;
   activo: boolean;
   imagen_chasis_url?: string | null;
+  imagen_chasis_cambio_url?: string | null; // versión con ejes separados: solo la pantalla de cambio (APK)
   configuracion_ejes?: string | null;
   revision_intervalo_dias?: number | null; // periodicidad de revisión por defecto del tipo
   revision_intervalo_km?: number | null;

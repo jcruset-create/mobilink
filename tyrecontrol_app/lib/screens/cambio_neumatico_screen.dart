@@ -40,6 +40,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   List<PosicionVehiculo> _posiciones = [];
   Map<String, MontajeActual> _montajePorPosicion = {};
   String? _imagenChasis;
+  bool _ejesSeparados = false; // usando la imagen de chasis con ejes separados (remap de tarjetas)
   List<StockAlmacenLinea> _stock = [];
   Set<String> _medidasVehiculo = {}; // medidas base admitidas por el vehículo
   Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por NEUMÁTICO
@@ -144,8 +145,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
       final tipo = v['tipo'];
       final cfgEjes = v['config_ejes'];
+      // Imagen con los ejes separados: solo esta pantalla. Si existe, se usa y
+      // se remapean las tarjetas (ver _remapCambioY); si no, imagen normal.
+      final imgCambio = tipo is Map ? tipo['imagen_chasis_cambio_url'] as String? : null;
+      final usarCambio = imgCambio != null && imgCambio.isNotEmpty;
       String? img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
       if (img == null || img.isEmpty) img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
+      if (usarCambio) img = imgCambio;
 
       final posiciones = results[0] as List<PosicionVehiculo>;
       // Presión recomendada por eje (para las tarjetas).
@@ -167,6 +173,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         _datosCat = results[6] as Map<String, ({double? prof, double? pres})>;
         _presionesObjetivo = presObj;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
+        _ejesSeparados = usarCambio;
       });
       // El plano "antes" se congela con el estado de la PRIMERA carga.
       _montajeAntes ??= _snapshotActual();
@@ -506,11 +513,39 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   }
 
   ({double x, double y, double w, double h}) _coords(PosicionVehiculo p, int i) {
+    double x, y, w, h;
     if (p.posX != null && p.posY != null && p.posW != null && p.posH != null) {
-      return (x: p.posX!, y: p.posY!, w: p.posW!, h: p.posH!);
+      x = p.posX!; y = p.posY!; w = p.posW!; h = p.posH!;
+    } else {
+      final col = i % 2, row = i ~/ 2;
+      x = col == 0 ? 6.0 : 78.0; y = 8.0 + row * 18.0; w = 16.0; h = 13.0;
     }
-    final col = i % 2, row = i ~/ 2;
-    return (x: col == 0 ? 6.0 : 78.0, y: 8.0 + row * 18.0, w: 16.0, h: 13.0);
+    if (_ejesSeparados) y = _remapCambioY(y);
+    return (x: x, y: y, w: w, h: h);
+  }
+
+  // Remap vertical de las tarjetas para la imagen con los ejes separados. Debe
+  // coincidir con la edición de la foto: sobre la imagen 2x2x2 original (alto
+  // 1024 px) se estiran ×1.8 los DOS tramos ENTRE ejes; el frente, las bandas
+  // de ruedas y el faldón se dejan igual. Si esa imagen se regenera con otro
+  // factor/bandas, actualizar estas constantes para que las tarjetas cuadren.
+  static const List<List<double>> _kCambioSegs = [
+    [0.0, 168.0, 1.0], [168.0, 272.0, 1.0], [272.0, 420.0, 1.8],
+    [420.0, 516.0, 1.0], [516.0, 668.0, 1.8], [668.0, 772.0, 1.0], [772.0, 1024.0, 1.0],
+  ];
+  double _remapCambioY(double yPct) {
+    const origH = 1024.0;
+    final y = (yPct / 100.0 * origH).clamp(0.0, origH);
+    double newH = 0;
+    for (final s in _kCambioSegs) {
+      newH += (s[1] - s[0]) * s[2];
+    }
+    double cum = 0;
+    for (final s in _kCambioSegs) {
+      if (y <= s[1]) return (cum + (y - s[0]) * s[2]) / newH * 100.0;
+      cum += (s[1] - s[0]) * s[2];
+    }
+    return cum / newH * 100.0;
   }
 
   void _toggleSeleccion(String posId) {

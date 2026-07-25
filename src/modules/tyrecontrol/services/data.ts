@@ -150,6 +150,20 @@ export async function actualizarImagenChasis(tipoId: string, url: string | null)
   if (error) throw new Error(error.message);
 }
 
+// Imagen de chasis con los ejes separados: SOLO la usa la pantalla de "Cambiar
+// neumático" de la APK; la ficha y el resto siguen con imagen_chasis_url.
+export async function subirImagenChasisCambio(tipoId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `cambio/${tipoId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from("tc-chasis").upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
+}
+export async function actualizarImagenChasisCambio(tipoId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_vehiculo").update({ imagen_chasis_cambio_url: url }).eq("id", tipoId);
+  if (error) throw new Error(error.message);
+}
+
 export async function guardarOrdenRevisionPosicion(id: string, orden: number | null): Promise<void> {
   const { error } = await supabase.from("tc_posiciones_vehiculo").update({ orden_revision: orden }).eq("id", id);
   if (error) throw new Error(error.message);

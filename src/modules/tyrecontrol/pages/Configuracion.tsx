@@ -5,6 +5,7 @@ import {
   listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
   listarTiposVehiculo, actualizarConfiguracionEjes, actualizarIntervaloRevisionTipo,
+  subirImagenChasisCambio, actualizarImagenChasisCambio,
   listarTiposDeMedida, fijarTiposDeMedida, actualizarMedidaCategoria,
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
@@ -323,6 +324,24 @@ function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehicul
   const [valor, setValor] = useState(tipo.configuracion_ejes ?? "");
   const [dias, setDias] = useState(tipo.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "");
   const [saving, setSaving] = useState(false);
+  const [subiendoCambio, setSubiendoCambio] = useState(false);
+
+  async function subirCambio(file: File | null) {
+    if (!file) return;
+    setSubiendoCambio(true);
+    try {
+      const url = await subirImagenChasisCambio(tipo.id, file);
+      await actualizarImagenChasisCambio(tipo.id, url);
+      onGuardado();
+    } catch (e) { alert("No se pudo subir la imagen: " + (e as Error).message); }
+    finally { setSubiendoCambio(false); }
+  }
+  async function quitarCambio() {
+    if (!window.confirm("¿Quitar la imagen de la pantalla de cambio? Volverá a usarse la imagen normal.")) return;
+    setSubiendoCambio(true);
+    try { await actualizarImagenChasisCambio(tipo.id, null); onGuardado(); }
+    finally { setSubiendoCambio(false); }
+  }
   const cambiado = valor !== (tipo.configuracion_ejes ?? "") || dias !== (tipo.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "");
   async function guardar() {
     setSaving(true);
@@ -338,7 +357,25 @@ function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehicul
       <td className={tdCls + " font-semibold"}>{tipo.nombre}</td>
       <td className={tdCls + " text-slate-400"}>{tipo.descripcion ?? "—"}</td>
       <td className={tdCls + " text-slate-400"}>{tipo.numero_ejes}</td>
-      <td className={tdCls + " text-[11px]"}>{tipo.imagen_chasis_url ? <span className="text-emerald-400">Con imagen</span> : <span className="text-slate-500">Sin imagen</span>}</td>
+      <td className={tdCls + " text-[11px]"}>
+        <div>{tipo.imagen_chasis_url ? <span className="text-emerald-400">Con imagen</span> : <span className="text-slate-500">Sin imagen</span>}</div>
+        {puedeEditar && (
+          <div className="mt-1 flex items-center gap-2">
+            <span className="text-slate-500">Cambio:</span>
+            {tipo.imagen_chasis_cambio_url
+              ? <span className="text-sky-300">ejes separados</span>
+              : <span className="text-slate-600">usa la normal</span>}
+            <label className="cursor-pointer text-sky-400 hover:underline">
+              {subiendoCambio ? "subiendo…" : tipo.imagen_chasis_cambio_url ? "cambiar" : "subir"}
+              <input type="file" accept="image/*" className="hidden" disabled={subiendoCambio}
+                onChange={(e) => { void subirCambio(e.target.files?.[0] ?? null); e.currentTarget.value = ""; }} />
+            </label>
+            {tipo.imagen_chasis_cambio_url && (
+              <button onClick={quitarCambio} disabled={subiendoCambio} className="text-rose-400 hover:underline">quitar</button>
+            )}
+          </div>
+        )}
+      </td>
       <td className={tdCls}>
         {puedeEditar ? (
           <div className="flex flex-wrap items-center gap-2">
