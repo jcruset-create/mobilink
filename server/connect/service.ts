@@ -282,6 +282,7 @@ export async function findCandidates(
             AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')
        ) load ON true
       WHERE w."connectStatus" = 'active'
+        AND w."networkParticipation" = true
         AND (a.id IS NULL OR a.excluded = false)`,
     [since90],
   );
@@ -466,7 +467,11 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   const a = aRow.rows[0];
   const now = Date.now();
 
-  const coreId = await injectIntoCore(a, asg.workshopId);
+  // Talleres externos (sin Mobilink Assist): no hay inyección al core; los
+  // estados se actualizan manualmente desde Central Pro.
+  const wsType = await db.query(`SELECT "integrationType" FROM connect_workshops WHERE id = $1`, [asg.workshopId]);
+  const isExternal = wsType.rows[0]?.integrationType === "external";
+  const coreId = isExternal ? null : await injectIntoCore(a, asg.workshopId);
   await db.query(
     `UPDATE connect_assignments SET status = 'accepted', "respondedAtMs" = $1, "respondedBy" = $2 WHERE id = $3`,
     [now, actorName, assignmentId],
@@ -505,7 +510,9 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
       WHERE id = $7`,
     [asg.workshopId, coreId, asg.explanation, estimatedCost, costDetail, now, asg.assistanceId],
   );
-  await transition(asg.assistanceId, "assigned", "system", asg.mode === "offer" ? `Aceptada por ${actorName}` : asg.explanation);
+  await transition(asg.assistanceId, "assigned", "system",
+    (asg.mode === "offer" ? `Aceptada por ${actorName}` : asg.explanation) +
+    (isExternal ? " · Taller externo: seguimiento manual desde Central" : ""));
 }
 
 /** Aceptación de una oferta (portal del proveedor o aceptación telefónica del operador). */

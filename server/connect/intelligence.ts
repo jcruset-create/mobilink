@@ -415,6 +415,35 @@ export async function generateRecommendations(): Promise<number> {
     })) created++;
   }
 
+  // 5. Recomendación comercial: taller EXTERNO con volumen suficiente para
+  //    implantar Mobilink Assist (umbral: ≥20 asistencias/30 días o ≥50/90 días).
+  //    Nunca se envía nada automáticamente: solo se alerta al gestor comercial.
+  const commercial = await db.query(
+    `SELECT w.id, w.name,
+            COUNT(*) FILTER (WHERE ca."createdAtMs" >= $1)::int AS n30,
+            COUNT(*) FILTER (WHERE ca."createdAtMs" >= $2)::int AS n90,
+            COUNT(*) FILTER (WHERE ca."createdAtMs" >= $2 AND ca.status = 'finished')::int AS finished90
+       FROM connect_workshops w
+       JOIN connect_assistances ca ON ca."workshopId" = w.id
+      WHERE w."integrationType" = 'external'
+      GROUP BY w.id, w.name`,
+    [now - 30 * 24 * 3600_000, now - 90 * 24 * 3600_000],
+  );
+  for (const c of commercial.rows) {
+    if (c.n30 >= 20 || c.n90 >= 50) {
+      const clasificacion = c.n30 >= 40 ? "taller estratégico" : c.n30 >= 20 ? "colaborador frecuente" : "colaborador recurrente";
+      if (await recommend({
+        type: "commercial_assist", priority: "medium",
+        entityType: "workshop", entityId: String(c.id),
+        title: `${c.name}: volumen suficiente para recomendar la implantación de Mobilink Assist`,
+        description: `Taller externo con ${c.n30} asistencias en 30 días y ${c.n90} en 90 días (${c.finished90} finalizadas). Clasificación: ${clasificacion}.`,
+        explanation: `Umbral comercial: ≥20 asistencias/30 días o ≥50/90 días. La gestión manual de este volumen supone carga administrativa evitable.`,
+        proposedAction: "Preparar propuesta comercial de Mobilink Assist (requiere autorización de un gestor; no se envía nada automáticamente).",
+        expectedImpact: "Sincronización automática, menos llamadas manuales y trazabilidad completa del taller.",
+      })) created++;
+    }
+  }
+
   // Caducar recomendaciones vencidas
   await db.query(
     `UPDATE connect_recommendations SET status = 'expired' WHERE status = 'open' AND "expiresAtMs" < $1`,

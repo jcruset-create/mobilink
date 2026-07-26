@@ -10,6 +10,8 @@ type Workshop = {
   id: number; name: string; phone: string | null; latitude: number; longitude: number;
   radiusKm: number; connectStatus: string; currentScore: number;
   providerName: string | null; branchName: string | null; providerCompanyId: number | null;
+  networkParticipation: boolean; integrationType: "assist" | "external";
+  networkChangedBy: string | null;
 };
 
 export default function Talleres() {
@@ -19,7 +21,7 @@ export default function Talleres() {
   const [providers, setProviders] = useState<ProviderCompany[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "" });
+  const [form, setForm] = useState({ name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
 
   const load = useCallback(() => {
     boFetch<{ data: Workshop[] }>("/workshops").then((r) => setRows(r.data)).catch((e) => setError(e.message));
@@ -41,9 +43,10 @@ export default function Talleres() {
           name: form.name.trim(), latitude: lat, longitude: lng,
           radiusKm: Number(form.radiusKm) || 60, phone: form.phone || null,
           providerCompanyId: form.providerCompanyId ? Number(form.providerCompanyId) : null,
+          integrationType: form.integrationType,
         },
       });
-      setForm({ name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "" });
+      setForm({ name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
       load();
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -66,6 +69,10 @@ export default function Talleres() {
             <Input placeholder="Longitud" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} className="w-28" />
             <Input placeholder="Radio km" value={form.radiusKm} onChange={(e) => setForm({ ...form, radiusKm: e.target.value })} className="w-24" />
             <Input placeholder="Teléfono" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-36" />
+            <Select value={form.integrationType} onChange={(e) => setForm({ ...form, integrationType: e.target.value })}>
+              <option value="assist">Con Mobilink Assist</option>
+              <option value="external">Externo (sin Assist)</option>
+            </Select>
             <Button onClick={crear} disabled={busy}>Añadir</Button>
           </div>
         </Card>
@@ -77,15 +84,39 @@ export default function Talleres() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Taller</Th><Th>Empresa</Th><Th>Teléfono</Th><Th>Ubicación</Th><Th>Radio</Th><Th>Estado</Th><Th>Score</Th>
+              <Th>Taller</Th><Th>Empresa</Th><Th>Tipo</Th><Th>Red Mobilink</Th><Th>Teléfono</Th><Th>Radio</Th><Th>Estado</Th><Th>Score</Th>
             </tr></thead>
             <tbody>
               {rows.map((w) => (
                 <tr key={w.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                   <Td className="font-semibold text-slate-100">{w.name}</Td>
                   <Td>{w.providerName ?? "-"}{w.branchName ? ` · ${w.branchName}` : ""}</Td>
+                  <Td>
+                    <Badge className={w.integrationType === "external" ? "border-orange-500/40 bg-orange-500/10 text-orange-300" : "border-cyan-500/40 bg-cyan-500/10 text-cyan-300"}>
+                      {w.integrationType === "external" ? "Externo" : "Assist"}
+                    </Badge>
+                  </Td>
+                  <Td>
+                    {canEdit ? (
+                      <button
+                        disabled={busy}
+                        title={w.networkChangedBy ? `Último cambio: ${w.networkChangedBy}` : undefined}
+                        onClick={async () => {
+                          setBusy(true);
+                          try { await boFetch(`/workshops/${w.id}`, { method: "PATCH", body: { networkParticipation: !w.networkParticipation } }); load(); }
+                          catch (e: any) { setError(e.message); } finally { setBusy(false); }
+                        }}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] ${w.networkParticipation ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-red-500/40 bg-red-500/10 text-red-300"}`}
+                      >
+                        {w.networkParticipation ? "Adherido ✓" : "No adherido"}
+                      </button>
+                    ) : (
+                      <Badge className={w.networkParticipation ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-red-500/40 bg-red-500/10 text-red-300"}>
+                        {w.networkParticipation ? "Adherido" : "No adherido"}
+                      </Badge>
+                    )}
+                  </Td>
                   <Td>{w.phone ?? "-"}</Td>
-                  <Td>{w.latitude.toFixed(4)}, {w.longitude.toFixed(4)}</Td>
                   <Td>{w.radiusKm} km</Td>
                   <Td>
                     <Badge className={w.connectStatus === "active" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-slate-600 text-slate-400"}>

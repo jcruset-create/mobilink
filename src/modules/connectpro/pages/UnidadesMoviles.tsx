@@ -17,6 +17,7 @@ type Unit = {
   activeAssistanceId: number | null; expedientNumber: string | null;
   manualStatus: string | null; manualReason: string | null; manualByName: string | null;
   lastReportAtMs: number | null;
+  sharedWithCentral: boolean; sharedChangedBy: string | null;
 };
 
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -91,7 +92,7 @@ export default function UnidadesMoviles() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Unidad</Th><Th>Matrícula</Th><Th>Estado</Th><Th>Técnico</Th><Th>Asistencia</Th>
+              <Th>Unidad</Th><Th>Matrícula</Th><Th>Estado</Th><Th>Central</Th><Th>Técnico</Th><Th>Asistencia</Th>
               <Th>Posición</Th><Th>Últ. señal</Th><Th></Th>
             </tr></thead>
             <tbody>
@@ -108,6 +109,20 @@ export default function UnidadesMoviles() {
                           manual · {u.manualByName}{u.manualReason ? ` — ${u.manualReason}` : ""}
                         </div>
                       )}
+                    </Td>
+                    <Td>
+                      <button
+                        disabled={busy}
+                        title={u.sharedChangedBy ? `Último cambio: ${u.sharedChangedBy}` : "El taller decide qué unidades comparte con Central"}
+                        onClick={async () => {
+                          setBusy(true); setError(null);
+                          try { await boFetch(`/mobile-units/${u.id}/share`, { method: "PATCH", body: { shared: !u.sharedWithCentral } }); load(); }
+                          catch (e: any) { setError(e.message); } finally { setBusy(false); }
+                        }}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] ${u.sharedWithCentral ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-slate-600 bg-slate-800 text-slate-400"}`}
+                      >
+                        {u.sharedWithCentral ? "Compartida ✓" : "No compartida"}
+                      </button>
                     </Td>
                     <Td>{u.technicianRef ?? "-"}</Td>
                     <Td>

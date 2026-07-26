@@ -290,7 +290,7 @@ export default function InicioPage() {
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/15">
                     <Link2 className="h-5 w-5 text-cyan-400" />
                   </div>
-                  <span className="text-sm font-bold">Connect Pro</span>
+                  <span className="text-sm font-bold">Assist Central Pro</span>
                   <span className="ml-auto whitespace-nowrap rounded-full bg-cyan-500/15 px-2 py-0.5 text-[11px] font-bold text-cyan-300">Superadmin</span>
                 </div>
                 <p className="mb-3 text-[12px] text-slate-500">

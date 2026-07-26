@@ -120,6 +120,22 @@ export default function FichaAsistencia() {
                   Reasignar
                 </Button>
               )}
+              {/* Taller externo (sin Mobilink Assist): avance manual de estados */}
+              {!a.coreStatus && ["assigned", "technician_assigned", "en_route", "arrived", "in_progress"].includes(a.status) && (
+                ({
+                  assigned: ["technician_assigned", "en_route"],
+                  technician_assigned: ["en_route", "arrived"],
+                  en_route: ["arrived"],
+                  arrived: ["in_progress", "finished"],
+                  in_progress: ["finished"],
+                }[a.status] ?? []).map((next) => (
+                  <Button key={next} variant="ghost" disabled={busy}
+                    title="Actualización manual (taller externo)"
+                    onClick={() => action("manual-status", { status: next })}>
+                    → {ASSISTANCE_STATUS_LABELS[next]}
+                  </Button>
+                ))
+              )}
               {!["finished", "cancelled"].includes(a.status) && (
                 <Button variant="danger" onClick={cancelar} disabled={busy}>Cancelar</Button>
               )}

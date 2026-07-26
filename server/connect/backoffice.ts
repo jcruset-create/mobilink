@@ -424,12 +424,13 @@ export function createConnectBackofficeRouter(): Router {
     const now = Date.now();
     const r = await db.query(
       `INSERT INTO connect_workshops
-         ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING *`,
+         ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType", "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING *`,
       [
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
+        b.integrationType === "external" ? "external" : "assist",
         now,
       ],
     );
@@ -443,18 +444,61 @@ export function createConnectBackofficeRouter(): Router {
     if ((b.latitude != null && typeof b.latitude !== "number") || (b.longitude != null && typeof b.longitude !== "number")) {
       return err(res, 422, "validation_failed", "latitude y longitude deben ser numéricos");
     }
+    const u = req.connectUser!;
+    const now = Date.now();
     const r = await db.query(
       `UPDATE connect_workshops SET
          name = COALESCE($1, name), phone = COALESCE($2, phone),
          latitude = COALESCE($3, latitude), longitude = COALESCE($4, longitude),
-         "radiusKm" = COALESCE($5, "radiusKm"), "updatedAtMs" = $6
-       WHERE id = $7 RETURNING *`,
+         "radiusKm" = COALESCE($5, "radiusKm"),
+         "integrationType" = COALESCE($6, "integrationType"),
+         "networkParticipation" = COALESCE($7, "networkParticipation"),
+         "networkChangedBy" = CASE WHEN $7 IS NOT NULL THEN $8 ELSE "networkChangedBy" END,
+         "networkChangedAtMs" = CASE WHEN $7 IS NOT NULL THEN $9 ELSE "networkChangedAtMs" END,
+         "updatedAtMs" = $9
+       WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
-       b.radiusKm != null ? Number(b.radiusKm) : null, Date.now(), Number(req.params.id)],
+       b.radiusKm != null ? Number(b.radiusKm) : null,
+       b.integrationType === "external" || b.integrationType === "assist" ? b.integrationType : null,
+       typeof b.networkParticipation === "boolean" ? b.networkParticipation : null,
+       u.name, now, Number(req.params.id)],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    if (typeof b.networkParticipation === "boolean") {
+      await auditConnect({
+        req, action: b.networkParticipation ? "workshop.network_enabled" : "workshop.network_disabled",
+        resourceType: "workshop", resourceId: Number(req.params.id),
+      });
+    }
     await auditConnect({ req, action: "workshop.updated", resourceType: "workshop", resourceId: Number(req.params.id), detail: b });
     res.json(r.rows[0]);
+  });
+
+  // Estados manuales para asistencias en talleres externos (sin Mobilink Assist)
+  router.post("/assistances/:id/manual-status", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    const target = String(req.body?.status || "");
+    const allowed = ["technician_assigned", "en_route", "arrived", "in_progress", "finished"];
+    if (!allowed.includes(target)) return err(res, 422, "validation_failed", `Estado no permitido. Permitidos: ${allowed.join(", ")}`);
+    const a = await db.query(
+      `SELECT ca."coreAssistanceId", w."integrationType" FROM connect_assistances ca
+        LEFT JOIN connect_workshops w ON w.id = ca."workshopId" WHERE ca.id = $1`,
+      [id],
+    );
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (a.rows[0].coreAssistanceId != null && a.rows[0].integrationType !== "external") {
+      return err(res, 409, "not_manual", "Esta asistencia está integrada con Mobilink Assist: los estados se sincronizan solos");
+    }
+    try {
+      await transition(id, target as any, "user", `Actualización manual (taller externo) por ${u.name}`);
+      await auditConnect({ req, action: "assistance.manual_status", resourceType: "assistance", resourceId: id, detail: { target } });
+      const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      if (e instanceof InvalidTransitionError) return err(res, 409, "invalid_state_transition", e.message);
+      throw e;
+    }
   });
 
   // ── Asistencias (lectura Sprint 1; gestión completa en S2/S3) ──
@@ -1010,6 +1054,25 @@ export function createConnectBackofficeRouter(): Router {
       [Number(req.params.id)],
     );
     res.json({ data: r.rows });
+  });
+
+  // El taller decide qué unidades comparte con Central (auditable: quién y cuándo)
+  router.patch("/mobile-units/:id/share", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const shared = req.body?.shared;
+    if (typeof shared !== "boolean") return err(res, 422, "validation_failed", "shared (boolean) es obligatorio");
+    const r = await db.query(
+      `UPDATE connect_mobile_units
+          SET "sharedWithCentral" = $1, "sharedChangedBy" = $2, "sharedChangedAtMs" = $3, "updatedAtMs" = $3
+        WHERE id = $4 RETURNING *`,
+      [shared, u.name, Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
+    await auditConnect({
+      req, action: shared ? "mobile_unit.shared_with_central" : "mobile_unit.removed_from_central",
+      resourceType: "mobile_unit", resourceId: Number(req.params.id),
+    });
+    res.json(r.rows[0]);
   });
 
   router.patch("/mobile-units/:id/status", ...requireConnectRole("operator"), async (req, res) => {

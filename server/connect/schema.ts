@@ -539,6 +539,17 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "requiresAcceptance" BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "acceptTimeoutMin" INTEGER NOT NULL DEFAULT 10;
 
+    -- Integración Assist ↔ Central Pro: adhesión a la red, tipo de taller y unidades compartidas
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "networkParticipation" BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "networkChangedBy" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "networkChangedAtMs" BIGINT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "integrationType" TEXT NOT NULL DEFAULT 'assist';
+    -- assist (integrado: la asistencia se inyecta en Mobilink Assist)
+    -- external (taller sin Assist: gestión y estados manuales desde Central)
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "sharedWithCentral" BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "sharedChangedBy" TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "sharedChangedAtMs" BIGINT;
+
     -- Sprint 6: avisos de SLA (webhooks sla_risk / sla_breached una sola vez)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaRiskNotifiedAtMs" BIGINT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaBreachNotifiedAtMs" BIGINT;

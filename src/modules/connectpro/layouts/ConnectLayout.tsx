@@ -36,7 +36,7 @@ export default function ConnectLayout() {
           <img src={logoMobilink} alt="Mobilink" className="h-8 w-auto" />
           <span className="whitespace-nowrap text-sm font-black leading-none">
             <span className="text-white">Assist</span>{" "}
-            <span className="text-cyan-400">Connect</span>
+            <span className="text-cyan-400">Central</span>
             <span className="text-slate-100"> Pro</span>
           </span>
         </div>
