@@ -81,7 +81,34 @@ Sin esto no hay conexión posible. Pasos, en orden:
    `GET {baseUrl}/companies` una vez hay token.
 
 **Empezar siempre en un entorno Sandbox.** No se apunta a Production hasta que la primera
-entrega funcional pase en sandbox.
+entrega funcional pase en sandbox. En una cuenta de prueba con la empresa demo **CRONUS ES**
+el propio entorno de prueba hace de sandbox: se puede usar directamente.
+
+### 2.1 Comprobación de la conexión antes de programar
+
+Hay un script que valida los pasos anteriores sin tocar nada en BC (solo lecturas) y sin tocar
+la base de datos de Mobilink:
+
+```bash
+BC_TENANT_ID=<directory-tenant-id> \
+BC_CLIENT_ID=<application-client-id> \
+BC_CLIENT_SECRET=<secreto> \
+node scripts/bc-check.mjs            # opcional: node scripts/bc-check.mjs Sandbox
+```
+
+Comprueba en orden: token de Entra ID → entornos del tenant → empresas visibles por la API v2.0
+→ lecturas de `companyInformation`, `customers`, `items`, `salesQuotes`. Traduce los fallos
+típicos (`AADSTS7000215` = secreto caducado, 401/403 en `/companies` = app no habilitada dentro
+de BC) e imprime al final las variables de entorno y el JSON de config listos para pegar.
+
+Con eso resuelto, la secuencia en Mobilink es:
+
+```
+PUT  /api/v1/admin/connectors/business-central     ← baseUrl, aadTenantId, companyId, moneda
+POST /api/v1/admin/connectors/business-central/test ← debe dar ok:true sin "modo simulación"
+POST /api/v1/erp/sales-quotes                       ← primera entrega funcional (OT → presupuesto)
+GET  /api/v1/admin/operations                       ← la operación auditada en COMPLETED
+```
 
 ---
 
