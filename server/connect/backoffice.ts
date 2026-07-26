@@ -17,6 +17,7 @@ import {
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
+import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
@@ -134,6 +135,82 @@ export function createConnectBackofficeRouter(): Router {
       [Date.now(), req.connectUser!.id],
     );
     res.json({ ok: true });
+  });
+
+  // ── Centro de Inteligencia Operacional ────────────────────
+
+  router.get("/oi/dashboard", ...requireConnectRole("analyst"), async (_req, res) => {
+    res.json({ kpis: await kpiDashboard(), generated_at: Date.now() });
+  });
+
+  router.get("/oi/kpis/history", ...requireConnectRole("analyst"), async (req, res) => {
+    const days = Math.min(Number(req.query.days) || 30, 120);
+    const r = await db.query(
+      `SELECT "kpiCode", "periodDate", value FROM connect_kpi_values
+        WHERE "periodDate" >= to_char(now() - ($1 || ' days')::interval, 'YYYY-MM-DD')
+        ORDER BY "periodDate"`,
+      [days],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.patch("/oi/kpis/:code", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE connect_kpi_definitions SET
+         "targetValue" = COALESCE($1, "targetValue"),
+         "warningThreshold" = COALESCE($2, "warningThreshold"),
+         "criticalThreshold" = COALESCE($3, "criticalThreshold"),
+         active = COALESCE($4, active)
+       WHERE code = $5 RETURNING *`,
+      [b.targetValue ?? null, b.warningThreshold ?? null, b.criticalThreshold ?? null,
+       b.active ?? null, String(req.params.code)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "KPI no encontrado");
+    await auditConnect({ req, action: "oi.kpi_configured", detail: { code: req.params.code, ...b } });
+    res.json(r.rows[0]);
+  });
+
+  router.get("/oi/demand", ...requireConnectRole("analyst"), async (_req, res) => {
+    res.json(await demandOutlook());
+  });
+
+  router.get("/oi/recommendations", ...requireConnectRole("analyst"), async (req, res) => {
+    const status = req.query.status ? String(req.query.status) : "open";
+    const r = await db.query(
+      `SELECT * FROM connect_recommendations
+        WHERE $1 = 'all' OR status = $1 ORDER BY priority = 'high' DESC, id DESC LIMIT 100`,
+      [status],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/oi/recommendations/:id/accept", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const r = await db.query(
+      `UPDATE connect_recommendations
+          SET status = 'accepted', "resolvedByUserId" = $1, "resolvedByName" = $2, "resolvedAtMs" = $3
+        WHERE id = $4 AND status = 'open' RETURNING *`,
+      [u.id, u.name, Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Recomendación no encontrada o ya resuelta");
+    await auditConnect({ req, action: "oi.recommendation_accepted", resourceType: "recommendation", resourceId: Number(req.params.id) });
+    res.json(r.rows[0]);
+  });
+
+  router.post("/oi/recommendations/:id/reject", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const reason = String(req.body?.reason || "").trim();
+    const r = await db.query(
+      `UPDATE connect_recommendations
+          SET status = 'rejected', "resolvedByUserId" = $1, "resolvedByName" = $2,
+              "resolvedAtMs" = $3, "rejectionReason" = $4
+        WHERE id = $5 AND status = 'open' RETURNING *`,
+      [u.id, u.name, Date.now(), reason || null, Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Recomendación no encontrada o ya resuelta");
+    await auditConnect({ req, action: "oi.recommendation_rejected", resourceType: "recommendation", resourceId: Number(req.params.id), detail: { reason } });
+    res.json(r.rows[0]);
   });
 
   // ── Estadísticas (Sprint 6) ───────────────────────────────

@@ -418,6 +418,71 @@ export async function initConnect(): Promise<void> {
       UNIQUE ("authorizationId", "serviceTypeCode")
     );
 
+    -- Centro de Inteligencia Operacional: definiciones y valores de KPI
+    CREATE TABLE IF NOT EXISTS connect_kpi_definitions (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'operational',
+      unit TEXT NOT NULL DEFAULT '',
+      direction TEXT NOT NULL DEFAULT 'lower_better', -- lower_better | higher_better
+      "targetValue" DOUBLE PRECISION,
+      "warningThreshold" DOUBLE PRECISION,
+      "criticalThreshold" DOUBLE PRECISION,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "sortOrder" INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS connect_kpi_values (
+      id SERIAL PRIMARY KEY,
+      "kpiCode" TEXT NOT NULL,
+      "periodDate" TEXT NOT NULL,          -- YYYY-MM-DD del día cerrado
+      value DOUBLE PRECISION,
+      "sampleSize" INTEGER,
+      "calculatedAtMs" BIGINT NOT NULL,
+      UNIQUE ("kpiCode", "periodDate")
+    );
+
+    -- Predicciones (demanda por hora; extensible a otros tipos)
+    CREATE TABLE IF NOT EXISTS connect_predictions (
+      id SERIAL PRIMARY KEY,
+      "predictionType" TEXT NOT NULL,      -- demand_hourly
+      "targetKey" TEXT NOT NULL,           -- p.ej. 2026-07-26T18 (hora local)
+      "predictedValue" DOUBLE PRECISION NOT NULL,
+      "confidenceMin" DOUBLE PRECISION,
+      "confidenceMax" DOUBLE PRECISION,
+      "sampleSize" INTEGER,
+      "modelVersion" TEXT NOT NULL DEFAULT 'v1-hourly-profile',
+      "actualValue" DOUBLE PRECISION,
+      "errorValue" DOUBLE PRECISION,
+      "createdAtMs" BIGINT NOT NULL,
+      UNIQUE ("predictionType", "targetKey")
+    );
+
+    -- Recomendaciones de IA (accionables, explicables, con feedback)
+    CREATE TABLE IF NOT EXISTS connect_recommendations (
+      id SERIAL PRIMARY KEY,
+      "recommendationType" TEXT NOT NULL,
+      -- demand_peak | sla_risk_bulk | provider_degradation | coverage_gap
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'medium', -- low | medium | high
+      explanation TEXT,                    -- datos y factores utilizados
+      "proposedAction" TEXT,
+      "expectedImpact" TEXT,
+      "entityType" TEXT,
+      "entityId" TEXT,
+      status TEXT NOT NULL DEFAULT 'open', -- open | accepted | rejected | expired
+      "resolvedByUserId" INTEGER,
+      "resolvedByName" TEXT,
+      "resolvedAtMs" BIGINT,
+      "rejectionReason" TEXT,
+      "expiresAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_recommendations_status
+      ON connect_recommendations (status, id DESC);
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,
@@ -576,6 +641,33 @@ async function seedConnectDefaults(): Promise<void> {
       `INSERT INTO connect_vehicle_types (code, name, "sortOrder")
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
       [vehicleTypes[i][0], vehicleTypes[i][1], i],
+    );
+  }
+
+  // KPIs del Centro de Inteligencia Operacional (código, nombre, categoría,
+  // unidad, dirección, objetivo, aviso, crítico)
+  const kpis: Array<[string, string, string, string, string, number | null, number | null, number | null]> = [
+    ["created_today", "Servicios recibidos", "operational", "", "higher_better", null, null, null],
+    ["pending_assign", "Pendientes de asignación", "operational", "", "lower_better", 0, 3, 6],
+    ["active_now", "Servicios activos", "operational", "", "higher_better", null, null, null],
+    ["delayed_now", "Servicios con retraso (SLA)", "operational", "", "lower_better", 0, 1, 3],
+    ["avg_assign_min", "Tiempo medio de asignación", "time", "min", "lower_better", 10, 20, 40],
+    ["avg_arrival_min", "Tiempo medio de llegada", "time", "min", "lower_better", 45, 60, 90],
+    ["avg_resolution_min", "Tiempo medio de resolución", "time", "min", "lower_better", 90, 150, 240],
+    ["sla_pct", "Cumplimiento de SLA", "quality", "%", "higher_better", 90, 85, 75],
+    ["acceptance_pct", "Tasa de aceptación de ofertas", "providers", "%", "higher_better", 85, 75, 60],
+    ["cancel_pct", "Tasa de cancelación", "quality", "%", "lower_better", 5, 10, 20],
+    ["eta_accuracy_min", "Precisión del ETA (desvío medio)", "quality", "min", "lower_better", 10, 15, 25],
+    ["avg_cost", "Coste medio por servicio", "economic", "€", "lower_better", null, null, null],
+    ["billing_today", "Facturación estimada del día", "economic", "€", "higher_better", null, null, null],
+  ];
+  for (let i = 0; i < kpis.length; i++) {
+    const [code, name, category, unit, direction, target, warn, crit] = kpis[i];
+    await db.query(
+      `INSERT INTO connect_kpi_definitions
+         (code, name, category, unit, direction, "targetValue", "warningThreshold", "criticalThreshold", "sortOrder")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (code) DO NOTHING`,
+      [code, name, category, unit, direction, target, warn, crit, i],
     );
   }
 

@@ -7,7 +7,7 @@
 import {
   LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2, Warehouse,
   Truck, AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, type LucideIcon,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -22,6 +22,7 @@ export type ConnectNavItem = {
 
 export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "dashboard", path: "dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "analyst" },
+  { key: "inteligencia", path: "inteligencia", label: "Inteligencia operacional", icon: BrainCircuit, minRole: "analyst" },
   { key: "centro", path: "centro", label: "Centro de control", icon: Radio, minRole: "operator" },
   { key: "nueva", path: "nueva", label: "Nueva asistencia", icon: PlusCircle, minRole: "operator" },
   { key: "asistencias", path: "asistencias", label: "Asistencias", icon: ClipboardList, minRole: "analyst" },
