@@ -43,6 +43,26 @@ class TyreControlApi {
   static Future<List<Map<String, dynamic>>> listarEmpresasCliente() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
+
+    // Fuente principal: backend con service-role. La RLS del SaaS restringe
+    // tc_empresas al tenant del usuario, así que un técnico asignado a varios
+    // clientes (tc_operador_empresas) no puede leer sus nombres directamente.
+    try {
+      final token = currentSessionToken;
+      if (token != null) {
+        final res = await http.get(
+          Uri.parse('$kBackendUrl/api/tyrecontrol/mis-empresas'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 12));
+        if (res.statusCode == 200) {
+          final body = jsonDecode(res.body) as Map<String, dynamic>;
+          final lista = (body['empresas'] as List?) ?? const [];
+          final out = lista.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          if (out.isNotEmpty) return out;
+        }
+      }
+    } catch (_) {/* sin red / backend caído → fallback directo (RLS) */}
+
     final porId = <String, String>{}; // id → nombre (dedup)
 
     // Solo se muestran clientes cuyo NOMBRE se puede leer (RLS); nunca "—".

@@ -13261,6 +13261,49 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
   }
 });
 
+// Empresas (clientes) asignadas al operario, para la pantalla de selección de
+// cliente de la APK. Se resuelve con service-role (sin RLS): la RLS del SaaS
+// restringe tc_empresas al "tenant" del usuario, así que un técnico asignado a
+// varios clientes por tc_operador_empresas no podía leer los nombres.
+app.get("/api/tyrecontrol/mis-empresas", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Sin token" });
+
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return res.status(401).json({ error: "Token inválido" });
+    const uid = userData.user.id;
+
+    // Empresas asignadas explícitamente al operario (multi-cliente).
+    const { data: asignadas } = await supabase
+      .from("tc_operador_empresas")
+      .select("empresa:tc_empresas(id, nombre)")
+      .eq("usuario_id", uid);
+    let empresas = ((asignadas as any[]) || [])
+      .map((r) => r.empresa)
+      .filter((e: any) => e && e.id)
+      .map((e: any) => ({ id: e.id as string, nombre: (e.nombre as string) ?? "—" }));
+
+    // Sin asignación explícita → la empresa propia del perfil.
+    if (empresas.length === 0) {
+      const { data: perfil } = await supabase
+        .from("tc_usuarios")
+        .select("empresa:tc_empresas!tc_usuarios_empresa_id_fkey(id, nombre)")
+        .eq("id", uid)
+        .maybeSingle();
+      const e = (perfil as any)?.empresa;
+      if (e?.id) empresas = [{ id: e.id, nombre: e.nombre ?? "—" }];
+    }
+
+    empresas.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+    res.json({ empresas });
+  } catch (error: any) {
+    console.error("GET /api/tyrecontrol/mis-empresas error:", error);
+    res.status(500).json({ error: error?.message || "Error" });
+  }
+});
+
 // ── Gestión de usuarios desde el panel (admin/super-admin) ──────────────
 // Igual que requireTyreControlUser pero exige rol administrador (o
 // super-admin) con acceso al panel. Deja el perfil en req.
