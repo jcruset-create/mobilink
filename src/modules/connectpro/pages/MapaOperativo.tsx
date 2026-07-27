@@ -37,14 +37,42 @@ function zoomFactor(zoom: number): number {
   return Math.min(1, Math.max(0.35, (zoom - 4) / 7));
 }
 
+/**
+ * Punto de la asistencia: se reutiliza el marcador rojo de avería de Mobilink
+ * Assist (`public/marker_averia.png`), de modo que el mismo hecho se dibuja
+ * igual en todo el ecosistema.
+ *
+ * El estado sigue siendo legible sin depender del icono: lleva el punto de
+ * color de la leyenda en una esquina y el nombre del estado en el popup. Las
+ * urgentes añaden un aro rojo y un signo de admiración, para no comunicarlo
+ * solo con el color.
+ */
 function assistanceIcon(status: string, urgent: boolean, zoom: number) {
   const color = STATUS_COLORS[status] ?? "#94a3b8";
-  const s = Math.round(18 * zoomFactor(zoom));
-  const border = Math.max(1, Math.round(3 * zoomFactor(zoom)));
+  const f = zoomFactor(zoom);
+  const s = Math.round(40 * f);          // lado del marcador (la imagen es cuadrada)
+  const dot = Math.max(7, Math.round(14 * f));
+  // La punta del pin está a ~el 90 % de la altura de la imagen: ahí va el anclaje
+  const tipY = Math.round(s * 0.9);
   return L.divIcon({
-    html: `<div style="width:${s}px;height:${s}px;border-radius:50%;background:${color};
-             border:${border}px solid ${urgent ? "#ef4444" : "#0f172a"};box-shadow:0 1px 6px rgba(0,0,0,.5)"></div>`,
-    className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+    html: `
+      <div style="position:relative;width:${s}px;height:${s}px">
+        ${urgent ? `<div style="position:absolute;inset:${Math.round(s * 0.08)}px ${Math.round(s * 0.06)}px ${Math.round(s * 0.22)}px;
+             border:${Math.max(2, Math.round(3 * f))}px solid #ef4444;border-radius:50%;opacity:.85"></div>` : ""}
+        <img src="/marker_averia.png" alt="" width="${s}" height="${s}"
+             style="display:block;filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+        <span style="position:absolute;right:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
+             background:${color};border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;
+             box-shadow:0 1px 3px rgba(0,0,0,.6)"></span>
+        ${urgent ? `<span style="position:absolute;left:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
+             background:#ef4444;border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;color:#fff;
+             font:700 ${Math.max(8, Math.round(dot * 0.8))}px/1 system-ui;display:flex;align-items:center;
+             justify-content:center">!</span>` : ""}
+      </div>`,
+    className: "",
+    iconSize: [s, s],
+    iconAnchor: [s / 2, tipY],
+    popupAnchor: [0, -tipY],
   });
 }
 
@@ -174,7 +202,7 @@ export default function MapaOperativo() {
           {data?.assistances.map((a) => (
             <Marker key={`a${a.id}`} position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
               <Popup>
-                <b>#{a.id} — {a.customerName}</b><br />
+                <b>#{a.id} — {a.customerName}</b>{a.priority === "urgente" && " · URGENTE"}<br />
                 {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status} · {a.serviceType}<br />
                 {a.address}<br />
                 {a.workshopName && <>Taller: {a.workshopName}<br /></>}
