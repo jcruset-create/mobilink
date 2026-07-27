@@ -56,6 +56,14 @@ class OfflineStore {
     return [];
   }
 
+  /// Limpia los datos de LECTURA cacheados que son específicos de un cliente
+  /// (al cambiar de cliente o al cerrar sesión), para no mezclar datos entre
+  /// clientes. No toca la cola de guardado (`_outbox`) ni los catálogos
+  /// globales (tipos/motivos de incidencia).
+  static Future<void> limpiarDatosCliente() async {
+    await _cache.delete('recientes');
+  }
+
   // ── Cola de guardado de detalle de revision ──────────────────
   static Future<void> enqueueDetalle(Map<String, dynamic> detalle) async {
     await _outbox.add({

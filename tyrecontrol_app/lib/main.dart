@@ -7,6 +7,7 @@ import 'models/incidencias.dart';
 import 'theme/app_theme.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/cliente_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,7 +52,11 @@ class TyreControlApp extends StatelessWidget {
       title: 'Mobilink TyreControl',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
-      home: TyreControlApi.hasSession ? const HomeScreen() : const LoginScreen(),
+      // Gating de arranque: sin sesión → login; con sesión pero sin cliente
+      // elegido → pantalla de selección de cliente; con cliente → home.
+      home: !TyreControlApi.hasSession
+          ? const LoginScreen()
+          : (TyreControlApi.hayClienteSeleccionado ? const HomeScreen() : const ClienteScreen()),
     );
   }
 }

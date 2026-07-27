@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
+import '../models/cliente_activo.dart';
 
 /// Capa fina sobre supabase_flutter. No reimplementa reglas de negocio:
 /// las mismas RLS y RPCs que usa el panel web protegen y validan aqui.
@@ -19,6 +20,42 @@ class TyreControlApi {
   static bool get hasSession => _db.auth.currentSession != null;
   static User? get currentUser => _db.auth.currentUser;
   static String? get currentSessionToken => _db.auth.currentSession?.accessToken;
+
+  // ── Cliente activo de la sesión ──────────────────────────────
+  /// Cliente (empresa) con el que se trabaja durante la sesión. null = aún no
+  /// se ha seleccionado (obliga a pasar por la pantalla de selección).
+  static final ValueNotifier<ClienteActivo?> clienteActivo =
+      ValueNotifier<ClienteActivo?>(null);
+
+  /// true cuando ya se ha elegido cliente (o el modo admin-todos).
+  static bool get hayClienteSeleccionado => clienteActivo.value != null;
+
+  /// Empresa por la que filtrar las consultas. null si no hay cliente o si es
+  /// modo "Admin (Todos los clientes)" (en ese caso NO se filtra).
+  static String? get empresaActivaId => clienteActivo.value?.empresaId;
+
+  /// Empresas (clientes) que el usuario puede ver, para la pantalla inicial.
+  /// Confía en RLS (solo devuelve las permitidas), igual que el resto de la app.
+  static Future<List<Map<String, dynamic>>> listarEmpresasCliente() async {
+    final data = await _db.from('tc_empresas').select('id, nombre').order('nombre');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// ¿El usuario autenticado es administrador? (para mostrar "Admin (Todos los
+  /// clientes)"). Lee el perfil, que ya trae rol/es_admin/es_superadmin.
+  static Future<bool> esAdmin() async {
+    try {
+      final p = await obtenerMiPerfil();
+      if (p == null) return false;
+      final rol = (p['rol'] as String?)?.toLowerCase().trim();
+      return p['es_superadmin'] == true ||
+          p['es_admin'] == true ||
+          rol == 'administrador' ||
+          rol == 'admin';
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Login unificado con la app de asistencias: mismo nombre + PIN de
   /// 4 digitos. El servidor valida el PIN contra la tabla de operarios
@@ -42,7 +79,11 @@ class TyreControlApi {
     if (auth.user == null) throw Exception('No se ha podido iniciar sesión');
   }
 
-  static Future<void> signOut() => _db.auth.signOut();
+  static Future<void> signOut() async {
+    // Al cerrar sesión se olvida el cliente para obligar a re-seleccionar.
+    clienteActivo.value = null;
+    await _db.auth.signOut();
+  }
 
   static Future<Map<String, dynamic>?> obtenerMiPerfil() async {
     final uid = _db.auth.currentUser?.id;
@@ -78,13 +119,13 @@ class TyreControlApi {
   static Future<List<Vehiculo>> buscarVehiculos(String texto) async {
     final t = texto.trim();
     if (t.isEmpty) return [];
-    final data = await _db
+    var q = _db
         .from('tc_vehiculos')
         .select('*, empresa:tc_empresas(*), tipo:tc_tipos_vehiculo(*)')
         .or('matricula.ilike.%$t%,numero_unidad.ilike.%$t%')
-        .eq('activo', true)
-        .order('matricula')
-        .limit(15);
+        .eq('activo', true);
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('matricula').limit(15);
     return (data as List).map((e) => Vehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
@@ -210,12 +251,13 @@ class TyreControlApi {
   static Future<List<RevisionVehiculo>> listarRevisionesPendientesDelTecnico() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
-    final data = await _db
+    var q = _db
         .from('revisiones_vehiculo')
         .select()
         .eq('tecnico_id', uid)
-        .eq('estado_revision', 'borrador')
-        .order('fecha_revision', ascending: false);
+        .eq('estado_revision', 'borrador');
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('fecha_revision', ascending: false);
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
@@ -225,7 +267,7 @@ class TyreControlApi {
   static Future<List<RevisionVehiculo>> listarRevisionesCompletadasDelTecnico({int limite = 30}) async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
-    final data = await _db
+    var q = _db
         .from('revisiones_vehiculo')
         .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)')
         .eq('tecnico_id', uid)
@@ -234,9 +276,9 @@ class TyreControlApi {
           'completada_con_incidencias',
           'completada_incidencia_pendiente',
           'anulada',
-        ])
-        .order('created_at', ascending: false)
-        .limit(limite);
+        ]);
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('created_at', ascending: false).limit(limite);
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
@@ -614,6 +656,7 @@ class TyreControlApi {
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {
     var q = _db.from('tc_incidencias').select(
         '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje), problemas:tc_incidencia_problemas(id, tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))');
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
     if (estados.isNotEmpty) q = q.inFilter('estado', estados);
     final data = await q.order('detectada_at', ascending: false);
     final lista = (data as List)
@@ -695,10 +738,12 @@ class TyreControlApi {
   /// Refresca el contador de pendientes (no solucionadas/canceladas).
   static Future<int> contarIncidenciasPendientes() async {
     try {
-      final data = await _db
+      var q = _db
           .from('tc_incidencias')
           .select('id')
           .not('estado', 'in', '(solucionada,cancelada,no_procede)');
+      if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+      final data = await q;
       final n = (data as List).length;
       incidenciasPendientesCount.value = n;
       return n;
@@ -727,11 +772,13 @@ class TyreControlApi {
   /// Vehículos activos con cliente (empresa) y base (delegación) para la
   /// planificación. Ligero: solo los campos que la lista necesita.
   static Future<List<Map<String, dynamic>>> listarVehiculosPlanificacion() async {
-    final data = await _db
+    var q = _db
         .from('tc_vehiculos')
         .select(
             'id, matricula, numero_unidad, empresa_id, delegacion_id, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)')
         .eq('activo', true);
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q;
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
@@ -758,11 +805,12 @@ class TyreControlApi {
   /// Todos los vehículos (activos e inactivos, como el panel) con los joins
   /// que la tabla necesita: empresa, delegación, tipo y config de ejes.
   static Future<List<Map<String, dynamic>>> listarVehiculosCompleto() async {
-    final data = await _db
+    var q = _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)')
-        .order('matricula');
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)');
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('matricula');
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 

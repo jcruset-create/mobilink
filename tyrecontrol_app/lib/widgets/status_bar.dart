@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import '../models/cliente_activo.dart';
+import '../screens/cliente_screen.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -11,7 +13,7 @@ class TopStatusBar extends StatefulWidget implements PreferredSizeWidget {
   const TopStatusBar({super.key});
 
   @override
-  Size get preferredSize => const Size.fromHeight(184);
+  Size get preferredSize => const Size.fromHeight(148);
 
   @override
   State<TopStatusBar> createState() => _TopStatusBarState();
@@ -49,83 +51,125 @@ class _TopStatusBarState extends State<TopStatusBar> {
     } catch (_) {/* sin red: se queda el cacheado */}
   }
 
+  void _cambiarCliente(BuildContext context) {
+    // Vuelve a la selección de cliente, limpiando el stack (así no quedan
+    // pantallas del cliente anterior).
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const ClienteScreen()),
+      (_) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
       color: AppColors.background,
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: Row(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Logo a 4 cm de ancho (252 px lógicos)
-              Image.asset(
-                'assets/logo_cabecera.png',
-                width: 252,
-                fit: BoxFit.contain,
-                alignment: Alignment.centerLeft,
-              ),
-              const SizedBox(width: 14),
-              // Técnico + versión, al lado del logo (siempre visibles)
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+              // Fila 1: logo + técnico/versión + estado de sistema
+              Row(
+                children: [
+                  Image.asset(
+                    'assets/logo_cabecera.png',
+                    width: 150,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.centerLeft,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.person, size: 20, color: AppColors.textSecondary),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            _nombre ?? '—',
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary),
+                        Row(
+                          children: [
+                            const Icon(Icons.person, size: 18, color: AppColors.textSecondary),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                _nombre ?? '—',
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_version.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 23, top: 1),
+                            child: Text(_version, style: const TextStyle(fontSize: 12, color: AppColors.textHint)),
                           ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      ValueListenableBuilder<bool>(
+                        valueListenable: OfflineStore.offline,
+                        builder: (_, isOffline, __) => _Pill(
+                          icon: isOffline ? Icons.cloud_off : Icons.cloud_done,
+                          color: isOffline ? AppColors.warning : AppColors.success,
+                          label: isOffline ? 'Sin conexión' : 'Conectado',
+                        ),
+                      ),
+                      ValueListenableBuilder<int>(
+                        valueListenable: OfflineStore.pendingCount,
+                        builder: (_, n, __) => n == 0
+                            ? const SizedBox.shrink()
+                            : Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: _Pill(icon: Icons.sync, color: AppColors.info, label: '$n por sincronizar'),
+                              ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Fila 2: cliente activo (siempre visible) + botón "Cambiar"
+              ValueListenableBuilder<ClienteActivo?>(
+                valueListenable: TyreControlApi.clienteActivo,
+                builder: (_, cli, __) {
+                  final esAdmin = cli?.esAdminTodos ?? false;
+                  final color = esAdmin ? AppColors.warning : AppColors.primary;
+                  return Container(
+                    padding: const EdgeInsets.only(left: 12, right: 4, top: 4, bottom: 4),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: color.withValues(alpha: 0.55)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(esAdmin ? Icons.admin_panel_settings : Icons.business, size: 18, color: color),
+                        const SizedBox(width: 8),
+                        const Text('Cliente:', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            cli?.nombre ?? 'Sin cliente',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color),
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => _cambiarCliente(context),
+                          icon: const Icon(Icons.swap_horiz, size: 18),
+                          label: const Text('Cambiar'),
+                          style: TextButton.styleFrom(foregroundColor: color, visualDensity: VisualDensity.compact),
                         ),
                       ],
                     ),
-                    if (_version.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 25, top: 2),
-                        child: Text(
-                          _version,
-                          style: const TextStyle(
-                              fontSize: 13, color: AppColors.textHint),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              // Estado del sistema, a la derecha
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  ValueListenableBuilder<bool>(
-                    valueListenable: OfflineStore.offline,
-                    builder: (_, isOffline, __) => _Pill(
-                      icon: isOffline ? Icons.cloud_off : Icons.cloud_done,
-                      color: isOffline ? AppColors.warning : AppColors.success,
-                      label: isOffline ? 'Sin conexión' : 'Conectado',
-                    ),
-                  ),
-                  ValueListenableBuilder<int>(
-                    valueListenable: OfflineStore.pendingCount,
-                    builder: (_, n, __) => n == 0
-                        ? const SizedBox.shrink()
-                        : Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: _Pill(
-                                icon: Icons.sync,
-                                color: AppColors.info,
-                                label: '$n por sincronizar'),
-                          ),
-                  ),
-                ],
+                  );
+                },
               ),
             ],
           ),
