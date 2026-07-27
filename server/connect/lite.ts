@@ -18,7 +18,7 @@ import multer from "multer";
 import sharp from "sharp";
 import db from "../db.ts";
 import { supabase, SUPABASE_ROADSIDE_BUCKET } from "../supabase.ts";
-import { transition, InvalidTransitionError, rejectAssignment } from "./service.ts";
+import { transition, InvalidTransitionError, rejectAssignment, acceptAssignment } from "./service.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
 import { notifyLiteUser } from "./litePush.ts";
@@ -629,7 +629,6 @@ export function createConnectLiteRouter(): Router {
     try {
       if (a.status === "awaiting_acceptance" && asg.rows[0]?.status === "sent") {
         // Oferta pendiente: la aceptación la consolida (misma ruta que el portal)
-        const { acceptAssignment } = await import("./service.ts");
         await acceptAssignment(asg.rows[0].id, `${s.userName} (Lite)`);
       } else if (!["assigned", "technician_assigned"].includes(a.status)) {
         return err(res, 409, "invalid_state", `No se puede aceptar una asistencia en estado ${a.status}`);
