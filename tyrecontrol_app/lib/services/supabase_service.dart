@@ -34,11 +34,60 @@ class TyreControlApi {
   /// modo "Admin (Todos los clientes)" (en ese caso NO se filtra).
   static String? get empresaActivaId => clienteActivo.value?.empresaId;
 
-  /// Empresas (clientes) que el usuario puede ver, para la pantalla inicial.
-  /// Confía en RLS (solo devuelve las permitidas), igual que el resto de la app.
+  /// Empresas (clientes) con las que el técnico puede trabajar, para la
+  /// pantalla inicial. La autorización multi-cliente vive en la M2M
+  /// `tc_operador_empresas` (un operario puede tener varias empresas); la
+  /// empresa directa del perfil (tc_empresas por RLS) no basta. Si el operario
+  /// no tiene asignación explícita ("modo automático"), se usa lo que permita
+  /// la RLS de tc_empresas.
   static Future<List<Map<String, dynamic>>> listarEmpresasCliente() async {
-    final data = await _db.from('tc_empresas').select('id, nombre').order('nombre');
-    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final uid = _db.auth.currentUser?.id;
+    if (uid == null) return [];
+    final porId = <String, String>{}; // id → nombre (dedup)
+
+    // 1) Empresas asignadas al operario (multi-cliente, tabla M2M).
+    try {
+      final asignadas = await _db
+          .from('tc_operador_empresas')
+          .select('empresa:tc_empresas(id, nombre)')
+          .eq('usuario_id', uid);
+      for (final e in (asignadas as List)) {
+        final emp = (e as Map)['empresa'];
+        if (emp is Map && emp['id'] != null) {
+          porId[emp['id'] as String] = (emp['nombre'] as String?) ?? '—';
+        }
+      }
+    } catch (_) {/* sin M2M o sin permiso: se cubre con los vehículos */}
+
+    // 2) Empresas presentes en los vehículos que el operario puede ver (misma
+    //    derivación que la pantalla de Vehículos, ya probada con multi-empresa).
+    //    Cubre el nombre si la RLS de tc_empresas no lo diera por el embed M2M.
+    try {
+      final vehis = await _db
+          .from('tc_vehiculos')
+          .select('empresa_id, empresa:tc_empresas(nombre)')
+          .eq('activo', true);
+      for (final v in (vehis as List)) {
+        final m = Map<String, dynamic>.from(v as Map);
+        final id = m['empresa_id'] as String?;
+        if (id == null) continue;
+        final nombre = m['empresa'] is Map ? m['empresa']['nombre'] as String? : null;
+        porId[id] = nombre ?? porId[id] ?? '—';
+      }
+    } catch (_) {/* best-effort */}
+
+    // 3) Fallback total: las que permita la RLS de tc_empresas.
+    if (porId.isEmpty) {
+      final todas = await _db.from('tc_empresas').select('id, nombre').order('nombre');
+      for (final x in (todas as List)) {
+        final m = Map<String, dynamic>.from(x as Map);
+        if (m['id'] != null) porId[m['id'] as String] = (m['nombre'] as String?) ?? '—';
+      }
+    }
+
+    final out = porId.entries.map((e) => {'id': e.key, 'nombre': e.value}).toList();
+    out.sort((a, b) => (a['nombre'] as String).toLowerCase().compareTo((b['nombre'] as String).toLowerCase()));
+    return out;
   }
 
   /// ¿El usuario autenticado es administrador? (para mostrar "Admin (Todos los
