@@ -34,6 +34,8 @@ class AppColors {
   static const tireAdvertencia  = Color(0xFFF59E0B); // ambar
   static const tireGrave        = Color(0xFFEF4444); // rojo
   static const tireNoAccesible  = Color(0xFF374151); // negro/gris oscuro
+  static const tireNuevo        = Color(0xFF00E676); // verde brillante — sin estrenar
+  static const tireBien         = Color(0xFF86EFAC); // verde mas claro — dentro de umbral
 }
 
 // ── Tamanos: modo normal vs "exterior" (sol directo / guantes) ──
@@ -165,7 +167,7 @@ class AppTheme {
 }
 
 // ── Estado visual de una posicion durante la revision ───────────
-enum TireStatus { pendiente, seleccionado, revisado, advertencia, grave, noAccesible }
+enum TireStatus { pendiente, seleccionado, revisado, advertencia, grave, noAccesible, nuevo }
 
 Color tireStatusColor(TireStatus s) {
   switch (s) {
@@ -175,6 +177,7 @@ Color tireStatusColor(TireStatus s) {
     case TireStatus.advertencia:  return AppColors.tireAdvertencia;
     case TireStatus.grave:        return AppColors.tireGrave;
     case TireStatus.noAccesible:  return AppColors.tireNoAccesible;
+    case TireStatus.nuevo:        return AppColors.tireNuevo;
   }
 }
 
@@ -186,5 +189,30 @@ IconData tireStatusIcon(TireStatus s) {
     case TireStatus.advertencia:  return Icons.warning_rounded;
     case TireStatus.grave:        return Icons.error;
     case TireStatus.noAccesible:  return Icons.lock;
+    case TireStatus.nuevo:        return Icons.fiber_new;
   }
 }
+
+/// Color de RELLENO de la tarjeta del plano: el recuadro entero se pinta del
+/// color del estado para que se lea de un vistazo a distancia, con guantes y
+/// con reflejos. Devuelve null en los estados sin diagnostico (pendiente,
+/// seleccionado, no accesible), que mantienen el fondo normal de tarjeta.
+///   nuevo → verde brillante · bien → verde mas claro
+///   justo → naranja         · mal  → rojo
+Color? tireStatusFill(TireStatus s) {
+  switch (s) {
+    case TireStatus.nuevo:        return AppColors.tireNuevo;
+    case TireStatus.revisado:     return AppColors.tireBien;
+    case TireStatus.advertencia:  return AppColors.tireAdvertencia;
+    case TireStatus.grave:        return AppColors.tireGrave;
+    case TireStatus.pendiente:
+    case TireStatus.seleccionado:
+    case TireStatus.noAccesible:
+      return null;
+  }
+}
+
+/// Color de texto legible encima de [tireStatusFill]. Los rellenos claros
+/// (verdes y naranja) piden texto oscuro; el rojo, texto blanco.
+Color tireStatusOnFill(TireStatus s) =>
+    s == TireStatus.grave ? Colors.white : AppColors.background;

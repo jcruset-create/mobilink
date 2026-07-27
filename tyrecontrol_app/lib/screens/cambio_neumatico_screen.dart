@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
+import '../models/umbrales.dart';
+import '../services/pausa_controller.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
 
 /// Cambio rápido de neumático (tablet, táctil).
@@ -45,6 +48,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   List<StockAlmacenLinea> _stock = [];
   Set<String> _medidasVehiculo = {}; // medidas base admitidas por el vehículo
   Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por NEUMÁTICO
+  UmbralConfig? _umbralEmpresa; // umbrales de profundidad para pintar el estado
+  Map<String, UmbralConfig> _umbralPorMedida = {};
+  PausaController? _pausas; // inactividad de la sesión de cambio (productividad)
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   Map<String, ({double? prof, double? pres})> _datosCat = {}; // catálogo por modelo (dibujo/presión máx)
   bool _trabajando = false;
@@ -117,6 +123,14 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       final v = await TyreControlApi.obtenerVehiculoCompleto(widget.vehiculoId);
       if (v == null) throw Exception('Vehículo no encontrado');
       _empresaId = v['empresa_id'] as String?;
+      // Pausas de productividad: se crean al conocer la empresa (una vez).
+      if (_empresaId != null) {
+        _pausas ??= PausaController(
+          contexto: 'operacion',
+          empresaId: _empresaId!,
+          vehiculoId: widget.vehiculoId,
+        );
+      }
       _matricula = (v['matricula'] as String?) ?? '';
       final tipoId = v['tipo_vehiculo_id'] as String?;
 
@@ -161,6 +175,10 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       if (ejesSet.isNotEmpty) {
         presObj = await TyreControlApi.presionesObjetivoDeVehiculo(widget.vehiculoId, ejesSet);
       }
+      // Umbrales de profundidad: deciden si la rueda está bien, justa o mal.
+      final ({UmbralConfig? empresa, Map<String, UmbralConfig> porMedida}) umb = _empresaId != null
+          ? await TyreControlApi.umbralesDeEmpresa(_empresaId!)
+          : (empresa: null, porMedida: <String, UmbralConfig>{});
 
       if (!mounted) return;
       setState(() {
@@ -173,6 +191,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         _mediciones = results[5] as Map<String, RevisionDetalleDraft>;
         _datosCat = results[6] as Map<String, ({double? prof, double? pres})>;
         _presionesObjetivo = presObj;
+        _umbralEmpresa = umb.empresa;
+        _umbralPorMedida = umb.porMedida;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
         _ejesSeparados = usarCambio;
       });
@@ -264,11 +284,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     // Cierra la intervención (agrupa las operaciones de la sesión + informe IA)
     // aportando el estado "antes" y las incidencias de origen para la trazabilidad.
     setState(() => _trabajando = true);
+    // Cronometraje: una pausa sin reanudar se cierra al finalizar la sesión.
+    await _pausas?.cerrarSiActiva();
     await TyreControlApi.cerrarIntervencion(
       widget.vehiculoId, _abiertoEn,
       montajeAntes: _montajeAntes,
       incidencias: _incidenciasOrigen(),
       imagenChasis: _imagenChasis,
+      pausaSeg: _pausas?.pausaSeg,
+      nPausas: _pausas?.numPausas,
     );
     if (mounted) setState(() => _trabajando = false);
 
@@ -413,6 +437,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       appBar: AppBar(
         title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
         actions: [
+          if (_pausas != null) BotonPausa(controller: _pausas!),
           IconButton(
             tooltip: 'Catálogo de neumáticos',
             icon: const Icon(Icons.menu_book_outlined, color: Colors.white),
@@ -440,16 +465,20 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
-              : Stack(children: [
+              : _conPausa(Stack(children: [
                   Row(children: [
                     Expanded(child: _zonaPlano()),
                     _panelStock(),
                   ]),
                   if (_trabajando)
                     const Positioned.fill(child: ColoredBox(color: Color(0x66000000), child: Center(child: CircularProgressIndicator()))),
-                ]),
+                ])),
     );
   }
+
+  /// Overlay de "Trabajo en pausa" sobre el contenido cuando toca.
+  Widget _conPausa(Widget child) =>
+      _pausas == null ? child : PausaOverlay(controller: _pausas!, child: child);
 
   // ── Plano + zonas de destino ──────────────────────────────────────────────
   Widget _zonaPlano() {
@@ -642,8 +671,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  // Verde oscuro para neumáticos NUEVOS recién montados (sin revisión aún).
-  static const _verdeNuevo = Color(0xFF166534);
+  /// Umbral efectivo: override por medida del neumático → empresa → app.
+  Umbrales _umbralDe(PosicionVehiculo p) {
+    final medida = _montajePorPosicion[p.id]?.neumatico?.medida;
+    UmbralConfig? c;
+    if (medida != null) {
+      c = _umbralPorMedida[medida.toUpperCase().replaceAll(RegExp(r'\s+'), '')];
+    }
+    c ??= _umbralEmpresa;
+    if (c == null) return Umbrales.def;
+    return Umbrales(profCriticaMm: c.minimaMm, profAvisoMm: c.avisoMm);
+  }
 
   Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false, bool conIncidencia = false}) {
     final n = m.neumatico;
@@ -658,26 +696,45 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
     final esNuevoReciente = med == null && (n?.origen == 'almacen_generico' || n?.origen == 'catalogo_sin_stock');
-    // Prioridad de color de borde: arrastrando > nuevo reciente (verde oscuro) >
-    // incidencia abierta (rojo) > resaltado por incidencia (ámbar) > normal (verde).
+    // Estado de la rueda: nuevo (verde brillante) > incidencia abierta (rojo) >
+    // diagnóstico por umbral (verde claro / naranja / rojo). Sin datos, gris.
+    final TireStatus estado = esNuevoReciente
+        ? TireStatus.nuevo
+        : (conIncidencia
+            ? TireStatus.grave
+            : (med == null && prof == null
+                ? TireStatus.pendiente
+                : _umbralDe(p).evaluar(
+                    med ?? RevisionDetalleDraft(posicionId: p.id, profundidadMm: prof),
+                    presionObjetivo: obj?.presion,
+                    margenPresion: obj?.margen)));
+    // El recuadro se pinta ENTERO del color del estado: es lo que se lee de un
+    // vistazo con guantes y reflejos. Arrastrando manda el azul de "en
+    // movimiento" y se deja sin pintar para no confundir.
+    final fill = arrastrando ? null : tireStatusFill(estado);
+    // El marco sigue marcando el contexto de la operación (arrastre, rueda
+    // resaltada por incidencia); el relleno marca el estado.
     final borde = arrastrando
         ? AppColors.info
-        : (esNuevoReciente
-            ? _verdeNuevo
-            : (conIncidencia ? AppColors.danger : (resaltar ? AppColors.warning : AppColors.success)));
+        : (resaltar
+            ? AppColors.warning
+            : (fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : tireStatusColor(estado)));
+    final cTexto = fill != null ? tireStatusOnFill(estado) : AppColors.textPrimary;
+    final cSuave = fill != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
+    final cAcento = fill != null ? cTexto : borde;
     final card = Container(
       width: cardW,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.surface.withValues(alpha: 0.94),
+        color: fill ?? AppColors.surface.withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: borde, width: (resaltar || conIncidencia) ? 3 : 2),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
-        Text(n?.marca ?? '—', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
-        Text(n?.medida ?? '', style: const TextStyle(fontSize: 9, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
-        Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(n?.marca ?? '—', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(n?.medida ?? '', style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
       ]),
     );
     return arrastrando ? Material(color: Colors.transparent, child: card) : card;
@@ -763,8 +820,86 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                   if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
                 ]),
         ),
+        // ── Montaje SIN control de stock ─────────────────────────
+        // Al final y separado del stock a propósito: el botón usado ya decide
+        // el comportamiento (no hay checkboxes ni preguntas de inventario).
+        const Divider(height: 1, color: AppColors.cardBorder),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('SIN CONTROL DE STOCK',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+            const SizedBox(height: 8),
+            _btnSinStock('Montar neumático NUEVO', AppColors.success, montarEn, 'nuevo'),
+            const SizedBox(height: 8),
+            _btnSinStock('Montar neumático USADO', AppColors.warning, montarEn, 'usado'),
+          ]),
+        ),
       ]),
     );
+  }
+
+  Widget _btnSinStock(String label, Color color, PosicionVehiculo? montarEn, String condicion) {
+    return OutlinedButton.icon(
+      onPressed: _trabajando ? null : () => _montarSinStock(condicion, montarEn),
+      icon: Icon(Icons.add_circle_outline, color: color),
+      label: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(50),
+        side: BorderSide(color: color.withValues(alpha: montarEn != null ? 0.9 : 0.4)),
+        alignment: Alignment.centerLeft,
+      ),
+    );
+  }
+
+  /// Flujo sin stock: posición vacía seleccionada → catálogo (medida ya
+  /// filtrada) → elegir → montar. El botón pulsado decide nuevo/usado y que
+  /// NO se toca el inventario; solo el usado pide las profundidades reales.
+  Future<void> _montarSinStock(String condicion, PosicionVehiculo? p) async {
+    if (p == null) {
+      _aviso('Toca primero una posición VACÍA en el plano y vuelve a pulsar el botón.', ok: false);
+      return;
+    }
+    final ref = await Navigator.of(context).push<Map<String, dynamic>>(MaterialPageRoute(
+      builder: (_) => CatalogoScreen(
+        medidasBase: _medidasVehiculo,
+        seleccion: true,
+        subtitulo: 'Montar ${condicion.toUpperCase()} en ${p.codigoPosicion}',
+      ),
+    ));
+    if (ref == null || !mounted) return; // canceló
+    final refId = ref['id'] as String?;
+    if (refId == null) {
+      _aviso('Esta referencia del catálogo no se puede montar (sin id).', ok: false);
+      return;
+    }
+    double? profUsado;
+    if (condicion == 'usado') {
+      profUsado = await _pedirProfundidad();
+      if (profUsado == null) return; // canceló
+    }
+    setState(() => _trabajando = true);
+    try {
+      await TyreControlApi.montarDesdeCatalogo(
+        vehiculoId: widget.vehiculoId,
+        posicionId: p.id,
+        referenciaId: refId,
+        condicion: condicion,
+        profundidadUsado: profUsado,
+      );
+      _posicionesMontadas.add(p.id);
+      HapticFeedback.mediumImpact();
+      await _cargar();
+      if (mounted) setState(() => _posSeleccionada = null);
+      _aviso('Montado ${ref['marca']} ${ref['modelo'] ?? ''} (${condicion == 'nuevo' ? 'nuevo' : 'usado'}, sin stock) en ${p.codigoPosicion}', ok: true);
+    } catch (e) {
+      final txt = '$e'.contains('MEDIDA_INCOMPATIBLE')
+          ? 'Medida no homologada para este vehículo.'
+          : 'Error al montar: $e';
+      _aviso(txt, ok: false);
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
   }
 
   // Bloque de operaciones para la posición seleccionada, según su avería.

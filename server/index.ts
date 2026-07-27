@@ -1546,13 +1546,14 @@ app.get("/api/health", (_req, res) => {
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
 app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
-    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis } = req.body ?? {};
+    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis,
+      inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
     // Operaciones de la sesión aún sin intervención.
     const { data: ops, error } = await supabase
       .from("operaciones_neumaticos")
-      .select("id, empresa_id, tecnico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
+      .select("id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
         "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
         "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
         "neumatico:tc_neumaticos(marca, modelo, medida)")
@@ -1647,11 +1648,37 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
 
     const empresaId = (activas[0] as any).empresa_id;
     const tecnicoId = (activas[0] as any).tecnico_id ?? null;
+
+    // Cronometraje automático (Analítica de Productividad): la APK manda las
+    // marcas de inicio/fin de la sesión de cambio y el total de pausas; aquí
+    // se calculan duración y tiempo efectivo (duración = trabajo + pausa).
+    const tIni = inicioAt ? new Date(inicioAt) : null;
+    const tFin = finAt ? new Date(finAt) : null;
+    const durSeg = tIni && tFin && !isNaN(+tIni) && !isNaN(+tFin)
+      ? Math.max(0, Math.round((+tFin - +tIni) / 1000)) : null;
+    const pSeg = Number.isFinite(Number(pausaSeg)) ? Math.max(0, Math.round(Number(pausaSeg))) : 0;
+    // Tipo dominante y neumáticos afectados, derivados de las operaciones.
+    const cuenta = new Map<string, number>();
+    const neus = new Set<string>();
+    for (const o of activas as any[]) {
+      cuenta.set(o.tipo_operacion, (cuenta.get(o.tipo_operacion) ?? 0) + 1);
+      if (o.neumatico_id) neus.add(o.neumatico_id);
+    }
+    const tipoPrincipal = [...cuenta.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
     const { data: interv, error: e2 } = await supabase
       .from("tc_intervenciones")
       .insert({
         empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId,
         resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
+        inicio_at: tIni && !isNaN(+tIni) ? tIni.toISOString() : null,
+        fin_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : null,
+        duracion_seg: durSeg,
+        trabajo_seg: durSeg != null ? Math.max(0, durSeg - pSeg) : null,
+        pausa_seg: pSeg,
+        n_pausas: Number.isFinite(Number(nPausas)) ? Math.max(0, Math.round(Number(nPausas))) : 0,
+        tipo_principal: tipoPrincipal,
+        n_neumaticos: neus.size || null,
         montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
         montaje_despues: montajeDespues.length ? montajeDespues : null,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,

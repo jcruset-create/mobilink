@@ -13,6 +13,9 @@ class VehicleLayoutImage extends StatefulWidget {
   final Map<String, RevisionDetalleDraft> detalles;
   final Map<String, TireStatus> estados;
   final Map<String, UltimaMedicion> ultimas; // última medición conocida por posición
+  /// Valores ya resueltos por posición (revisión → neumático → catálogo /
+  /// presión objetivo del eje). Si falta la posición, se usa [detalles].
+  final Map<String, ({double? prof, double? pres})> valores;
   final String? seleccionadaId;
   final double? liveProf; // medida en curso de la rueda activa
   final double? livePres;
@@ -26,6 +29,7 @@ class VehicleLayoutImage extends StatefulWidget {
     required this.detalles,
     required this.estados,
     this.ultimas = const {},
+    this.valores = const {},
     required this.seleccionadaId,
     required this.liveProf,
     required this.livePres,
@@ -143,6 +147,7 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
         neumatico: widget.montajePorPosicion[p.id]?.neumatico,
         draft: widget.detalles[p.id],
         status: widget.estados[p.id] ?? TireStatus.pendiente,
+        valor: widget.valores[p.id],
         ultima: widget.ultimas[p.id],
         seleccionada: p.id == widget.seleccionadaId,
         liveProf: p.id == widget.seleccionadaId ? widget.liveProf : null,
@@ -158,6 +163,7 @@ class _TarjetaPosicion extends StatelessWidget {
   final Neumatico? neumatico;
   final RevisionDetalleDraft? draft;
   final TireStatus status;
+  final ({double? prof, double? pres})? valor;
   final UltimaMedicion? ultima;
   final bool seleccionada;
   final double? liveProf;
@@ -169,6 +175,7 @@ class _TarjetaPosicion extends StatelessWidget {
     required this.neumatico,
     required this.draft,
     required this.status,
+    required this.valor,
     required this.ultima,
     required this.seleccionada,
     required this.liveProf,
@@ -190,10 +197,17 @@ class _TarjetaPosicion extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Recuadro pintado entero del color del estado (nuevo / bien / justo / mal).
+    // Mientras se mide, la rueda activa manda: se queda con el marco azul.
+    final fill = seleccionada ? null : tireStatusFill(status);
     final color = seleccionada ? AppColors.tireSeleccionado : tireStatusColor(status);
+    final cTexto = fill != null ? tireStatusOnFill(status) : AppColors.textPrimary;
+    final cSuave = fill != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
+    final cTenue = fill != null ? cTexto.withValues(alpha: 0.60) : AppColors.textHint;
+    final cAcento = fill != null ? cTexto : color;
 
-    final prof = liveProf ?? draft?.profundidadMm;
-    final pres = livePres ?? draft?.presionBar;
+    final prof = liveProf ?? draft?.profundidadMm ?? valor?.prof;
+    final pres = livePres ?? draft?.presionBar ?? valor?.pres;
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
 
@@ -208,8 +222,11 @@ class _TarjetaPosicion extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
           decoration: BoxDecoration(
-            color: AppColors.surface.withValues(alpha: 0.92),
-            border: Border.all(color: color, width: seleccionada ? 3 : 2),
+            color: fill ?? AppColors.surface.withValues(alpha: 0.92),
+            border: Border.all(
+              color: fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : color,
+              width: seleccionada ? 3 : 2,
+            ),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
@@ -219,7 +236,7 @@ class _TarjetaPosicion extends StatelessWidget {
               Text(
                 p.nombre ?? p.codigoPosicion,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color),
+                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -228,7 +245,7 @@ class _TarjetaPosicion extends StatelessWidget {
                 Text(
                   neumatico!.marca ?? '—',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -236,7 +253,7 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     neumatico!.modelo!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 10, color: cSuave),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -244,7 +261,7 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     medida,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 9, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 9, color: cSuave),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -254,19 +271,19 @@ class _TarjetaPosicion extends StatelessWidget {
               Text(
                 '$profTxt · $presTxt',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
               if (ultima != null && (ultima!.fecha != null || _ultimaMedidasTxt() != null)) ...[
                 const SizedBox(height: 2),
-                const Divider(height: 1, thickness: 0.5, color: AppColors.cardBorder),
+                Divider(height: 1, thickness: 0.5, color: fill != null ? cTexto.withValues(alpha: 0.30) : AppColors.cardBorder),
                 const SizedBox(height: 2),
                 if (ultima!.fecha != null)
                   Text(
                     'Últ. rev. ${_fmtFecha(ultima!.fecha!)}',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 9, color: AppColors.textHint),
+                    style: TextStyle(fontSize: 9, color: cTenue),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -274,7 +291,7 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     _ultimaMedidasTxt()!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 9, color: AppColors.textHint),
+                    style: TextStyle(fontSize: 9, color: cTenue),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

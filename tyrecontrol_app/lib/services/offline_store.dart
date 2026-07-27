@@ -74,10 +74,14 @@ class OfflineStore {
     pendingCount.value = _outbox.length;
   }
 
-  static Future<void> enqueueCompletar(String revisionId) async {
+  /// [extra] lleva el cronometraje (finAt, tipoRevision, nNeumaticos,
+  /// pausaSeg, nPausas): el Finalizar pudo pulsarse horas antes de que haya
+  /// red, y el fin_at debe ser el de ese momento, no el del flush.
+  static Future<void> enqueueCompletar(String revisionId, {Map<String, dynamic>? extra}) async {
     await _outbox.add({
       'type': 'completar',
       'revisionId': revisionId,
+      if (extra != null) 'extra': extra,
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
     pendingCount.value = _outbox.length;
@@ -171,7 +175,15 @@ class OfflineStore {
       if (type == 'detalle') {
         await TyreControlApi.guardarDetalleRevision(Map<String, dynamic>.from(item['payload'] as Map));
       } else if (type == 'completar') {
-        await TyreControlApi.completarRevision(item['revisionId'] as String);
+        final extra = item['extra'] is Map ? Map<String, dynamic>.from(item['extra'] as Map) : null;
+        await TyreControlApi.completarRevisionConTiempos(
+          item['revisionId'] as String,
+          finAt: extra?['finAt'] != null ? DateTime.tryParse(extra!['finAt'] as String) : null,
+          tipoRevision: extra?['tipoRevision'] as String?,
+          nNeumaticos: extra?['nNeumaticos'] as int?,
+          pausaSeg: extra?['pausaSeg'] as int?,
+          nPausas: extra?['nPausas'] as int?,
+        );
       } else if (type == 'foto') {
         final path = item['localPath'] as String;
         final f = File(path);
