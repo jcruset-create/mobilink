@@ -531,6 +531,10 @@ export async function initConnect(): Promise<void> {
     -- manual | api | partner | import | reopen | derived | core
 
     -- Sprint 2: creación manual con borradores y ficha completa
+    -- Las asistencias creadas desde el centro de control no tienen partner
+    -- (el partner es el cliente B2B que las crea por API). Todo el código ya
+    -- lo trataba como opcional; era el esquema el que iba por detrás.
+    ALTER TABLE connect_assistances ALTER COLUMN "partnerId" DROP NOT NULL;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "expedientNumber" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "clientName" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS requester TEXT NOT NULL DEFAULT '{}';
