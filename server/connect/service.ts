@@ -135,6 +135,40 @@ export interface CreateAssistanceInput {
   slaMinutes?: number | null;
 }
 
+/**
+ * Nº de expediente automático y correlativo por año: `AS-2026-00042`.
+ * El INSERT … ON CONFLICT DO UPDATE es atómico, así que dos altas simultáneas
+ * nunca reciben el mismo número. La primera vez del año el contador arranca por
+ * encima del mayor número ya usado, por si se han migrado expedientes.
+ */
+export async function nextExpedientNumber(atMs = Date.now()): Promise<string> {
+  const year = new Date(atMs).getFullYear();
+  const scope = `expedient:${year}`;
+  const prefix = `AS-${year}-`;
+
+  const exists = await db.query(`SELECT 1 FROM connect_counters WHERE scope = $1`, [scope]);
+  if (!exists.rows[0]) {
+    const max = await db.query(
+      `SELECT COALESCE(MAX(NULLIF(replace("expedientNumber", $1, ''), '')::INTEGER), 0) AS m
+         FROM connect_assistances
+        WHERE "expedientNumber" ~ ('^' || $1 || '[0-9]+$')`,
+      [prefix],
+    );
+    await db.query(
+      `INSERT INTO connect_counters (scope, value) VALUES ($1, $2) ON CONFLICT (scope) DO NOTHING`,
+      [scope, Number(max.rows[0]?.m ?? 0)],
+    );
+  }
+
+  const r = await db.query(
+    `INSERT INTO connect_counters (scope, value) VALUES ($1, 1)
+     ON CONFLICT (scope) DO UPDATE SET value = connect_counters.value + 1
+     RETURNING value`,
+    [scope],
+  );
+  return `${prefix}${String(r.rows[0].value).padStart(5, "0")}`;
+}
+
 export async function createAssistance(input: CreateAssistanceInput): Promise<{ row: any; duplicated: boolean }> {
   const now = Date.now();
 
@@ -148,6 +182,8 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
 
   const initialStatus = input.draft ? "draft" : "pending";
   const origin = input.origin ?? "api";
+  // Si no llega expediente (creación manual sin rellenarlo, API, import…), se genera.
+  const expedientNumber = String(input.expedientNumber ?? "").trim() || (await nextExpedientNumber(now));
   const r = await db.query(
     `INSERT INTO connect_assistances
        (uuid, "partnerId", "externalReference", "idempotencyKey", status, priority, "serviceType",
@@ -176,7 +212,7 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
       origin,
       input.controlCenterId ?? null,
       input.createdByUserId ?? null,
-      input.expedientNumber ?? null,
+      expedientNumber,
       input.clientName ?? null,
       JSON.stringify(input.requester ?? {}),
       JSON.stringify(input.locationDetails ?? {}),

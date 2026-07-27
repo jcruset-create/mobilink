@@ -118,7 +118,13 @@ export default function NuevaAsistencia() {
 
       <div className="flex flex-col gap-4">
         <Section title="Expediente">
-          <Field label="Nº expediente"><Input value={f.expedientNumber} onChange={set("expedientNumber")} className="w-40" /></Field>
+          <Field label="Nº expediente">
+            <Input
+              value={f.expedientNumber} onChange={set("expedientNumber")} className="w-40"
+              placeholder={`Auto · AS-${new Date().getFullYear()}-…`}
+              title="Si lo dejas vacío se genera un número correlativo automáticamente"
+            />
+          </Field>
           <Field label="Referencia externa"><Input value={f.externalReference} onChange={set("externalReference")} className="w-40" /></Field>
           <Field label="Cliente de cartera">
             <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>

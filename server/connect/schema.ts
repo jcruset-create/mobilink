@@ -505,6 +505,12 @@ export async function initConnect(): Promise<void> {
       "updatedAtMs" BIGINT NOT NULL
     );
 
+    -- Contadores correlativos (nº de expediente por año, etc.)
+    CREATE TABLE IF NOT EXISTS connect_counters (
+      scope TEXT PRIMARY KEY,
+      value INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS connect_mobile_unit_events (
       id SERIAL PRIMARY KEY,
       "unitId" INTEGER NOT NULL REFERENCES connect_mobile_units(id) ON DELETE CASCADE,
