@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -157,8 +157,14 @@ export default function InicioPage() {
             <div className="text-[12px] font-semibold leading-tight">👤 {username || nombre || "Usuario"}</div>
             {nombre && username && <div className="text-[10px] text-slate-400">{nombre}</div>}
           </div>
+          <a
+            href="/descargas.html"
+            className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
+          >
+            <Download className="h-4 w-4" /> <span className="hidden sm:inline">Descargar apps</span>
+          </a>
           <button onClick={salir} className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
-            <LogOut className="h-4 w-4" /> Salir
+            <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Salir</span>
           </button>
         </div>
       </header>

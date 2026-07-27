@@ -14152,6 +14152,68 @@ const requireLicensesAdmin: express.RequestHandler = (req, res, next) => {
 mountLicenses(app, requireLicensesAdmin);
 
 /* =========================================================
+   DESCARGA DE APKS — sirve siempre la más reciente de /public
+   Ficheros: mobilink-assist-<v>.apk, tyrecontrol-<v>.apk,
+             mobilink-stockflow-<v>.apk
+========================================================= */
+
+const APK_APPS: Record<string, { prefix: string; label: string }> = {
+  assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
+  tyrecontrol: { prefix: "tyrecontrol-", label: "Mobilink TyreControl" },
+  stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+};
+
+// Devuelve el APK más reciente (mayor versión) para un prefijo dado
+function latestApkFor(prefix: string): { file: string; version: string } | null {
+  try {
+    const dir = path.join(__dirname, "../public");
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"));
+    if (!files.length) return null;
+    const withVer = files.map((f) => ({
+      file: f,
+      version: f.slice(prefix.length, -4), // entre prefijo y ".apk"
+    }));
+    // Orden por versión semántica descendente
+    withVer.sort((a, b) => {
+      const pa = a.version.split(".").map((n) => parseInt(n, 10) || 0);
+      const pb = b.version.split(".").map((n) => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
+      }
+      return 0;
+    });
+    return withVer[0];
+  } catch {
+    return null;
+  }
+}
+
+// JSON con la última versión de cada app (lo consume /descargas.html)
+app.get("/api/apps/list", (_req, res) => {
+  const out = Object.entries(APK_APPS).map(([key, { prefix, label }]) => {
+    const latest = latestApkFor(prefix);
+    return {
+      key,
+      label,
+      version: latest?.version ?? null,
+      url: latest ? `/apps/${key}` : null,
+    };
+  });
+  res.json(out);
+});
+
+// Descarga directa de la última APK de una app
+app.get("/apps/:app", (req, res) => {
+  const app0 = APK_APPS[String(req.params.app)];
+  if (!app0) return res.status(404).json({ error: "App no encontrada" });
+  const latest = latestApkFor(app0.prefix);
+  if (!latest) return res.status(404).json({ error: "Sin APK disponible" });
+  res.download(path.join(__dirname, "../public", latest.file));
+});
+
+/* =========================================================
    MOBILINK CONNECT PRO (partners bajo /api/connect/v1)
 ========================================================= */
 

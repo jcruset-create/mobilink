@@ -61,37 +61,42 @@
     <div class="sub">Descarga de aplicaciones · Android</div>
   </header>
 
-  <div class="grid">
-    <div class="card">
-      <div class="icon assist">A</div>
-      <div class="info">
-        <h2>Mobilink Assist</h2>
-        <p class="desc">Asistencias en carretera para operarios.</p>
-        <p class="ver">Versión 1.7.2</p>
-      </div>
-      <a class="btn" href="/mobilink-assist-1.7.2.apk" download>Descargar</a>
-    </div>
-
-    <div class="card">
-      <div class="icon tyre">T</div>
-      <div class="info">
-        <h2>Mobilink TyreControl</h2>
-        <p class="desc">Revisión de neumáticos en campo.</p>
-        <p class="ver">Versión 0.23.0</p>
-      </div>
-      <a class="btn" href="/tyrecontrol-0.23.0.apk" download>Descargar</a>
-    </div>
-
-    <div class="card">
-      <div class="icon stock">S</div>
-      <div class="info">
-        <h2>Mobilink Stock Flow</h2>
-        <p class="desc">Gestión de traspasos de almacén.</p>
-        <p class="ver">Versión 1.2.1</p>
-      </div>
-      <a class="btn" href="/mobilink-stockflow-1.2.1.apk" download>Descargar</a>
-    </div>
+  <div class="grid" id="apps">
+    <div class="card"><div class="info"><p class="desc">Cargando aplicaciones…</p></div></div>
   </div>
+
+  <script>
+    var META = {
+      assist: { cls: "assist", ini: "A", desc: "Asistencias en carretera para operarios." },
+      tyrecontrol: { cls: "tyre", ini: "T", desc: "Revisión de neumáticos en campo." },
+      stockflow: { cls: "stock", ini: "S", desc: "Gestión de traspasos de almacén." }
+    };
+    fetch("/api/apps/list")
+      .then(function (r) { return r.json(); })
+      .then(function (apps) {
+        var grid = document.getElementById("apps");
+        grid.innerHTML = "";
+        apps.forEach(function (a) {
+          var m = META[a.key] || { cls: "assist", ini: "?", desc: "" };
+          var card = document.createElement("div");
+          card.className = "card";
+          var btn = a.url
+            ? '<a class="btn" href="' + a.url + '">Descargar</a>'
+            : '<span class="ver">No disponible</span>';
+          card.innerHTML =
+            '<div class="icon ' + m.cls + '">' + m.ini + '</div>' +
+            '<div class="info"><h2>' + a.label + '</h2>' +
+            '<p class="desc">' + m.desc + '</p>' +
+            '<p class="ver">' + (a.version ? "Versión " + a.version : "") + '</p></div>' +
+            btn;
+          grid.appendChild(card);
+        });
+      })
+      .catch(function () {
+        document.getElementById("apps").innerHTML =
+          '<div class="card"><div class="info"><p class="desc">No se pudieron cargar las aplicaciones. Inténtalo más tarde.</p></div></div>';
+      });
+  </script>
 
   <div class="note">
     <b>Cómo instalar:</b> pulsa «Descargar», abre el archivo <b>.apk</b> descargado y acepta
