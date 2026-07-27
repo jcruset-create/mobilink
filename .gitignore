@@ -33,3 +33,7 @@ supabase/.temp/
 *.sw?
 
 .tmp.driveupload/
+
+# Flutter (solo se versiona lib/ + pubspec)
+*/.dart_tool/
+*/.flutter-plugins-dependencies
