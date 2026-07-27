@@ -309,6 +309,118 @@ class TyreControlApi {
         );
   }
 
+  /// Cierra la revisión con su cronometraje (Analítica de Productividad).
+  /// [finAt] es el momento en que el técnico pulsó Finalizar — importa cuando
+  /// el cierre llega por la cola offline horas después.
+  static Future<void> completarRevisionConTiempos(
+    String revisionId, {
+    String estado = 'completada',
+    DateTime? finAt,
+    String? tipoRevision,
+    int? nNeumaticos,
+    int? pausaSeg,
+    int? nPausas,
+  }) async {
+    final upd = <String, dynamic>{'estado_revision': estado};
+    if (finAt != null) {
+      upd['fin_at'] = finAt.toUtc().toIso8601String();
+      // inicio_at se fijó al crear la revisión; se lee para la duración.
+      final r = await _db.from('revisiones_vehiculo').select('inicio_at').eq('id', revisionId).maybeSingle();
+      final ini = r?['inicio_at'] != null ? DateTime.tryParse(r!['inicio_at'] as String) : null;
+      if (ini != null) {
+        final dur = finAt.toUtc().difference(ini.toUtc()).inSeconds;
+        if (dur >= 0) {
+          upd['duracion_seg'] = dur;
+          upd['trabajo_seg'] = (dur - (pausaSeg ?? 0)).clamp(0, dur);
+        }
+      }
+    }
+    if (tipoRevision != null) upd['tipo_revision'] = tipoRevision;
+    if (nNeumaticos != null) upd['n_neumaticos'] = nNeumaticos;
+    if (pausaSeg != null) upd['pausa_seg'] = pausaSeg;
+    if (nPausas != null) upd['n_pausas'] = nPausas;
+    await _db.from('revisiones_vehiculo').update(upd).eq('id', revisionId);
+  }
+
+  // ── Productividad: pausas y estadísticas ─────────────────────
+  /// Guarda una pausa terminada. Best-effort: sin red no bloquea el trabajo
+  /// (los totales de la sesión viajan igualmente en la fila padre).
+  static Future<void> registrarPausa({
+    required String contexto,
+    required String empresaId,
+    String? vehiculoId,
+    String? revisionId,
+    required String motivo,
+    String? observaciones,
+    required DateTime inicio,
+    required DateTime fin,
+  }) async {
+    try {
+      await _db.from('tc_pausas_trabajo').insert({
+        'contexto': contexto,
+        'empresa_id': empresaId,
+        'tecnico_id': _db.auth.currentUser?.id,
+        'vehiculo_id': vehiculoId,
+        'revision_id': revisionId,
+        'motivo': motivo,
+        'observaciones': observaciones,
+        'inicio_at': inicio.toUtc().toIso8601String(),
+        'fin_at': fin.toUtc().toIso8601String(),
+      });
+    } catch (_) {/* sin red o RLS: la fila padre ya lleva los totales */}
+  }
+
+  /// Estadísticas agregadas (calculadas en Postgres, nunca en memoria).
+  /// [tab] = 'revisiones' | 'operaciones'. Filtros null = sin filtrar.
+  static Future<Map<String, dynamic>> estadisticasProductividad(
+    String tab, {
+    DateTime? desde,
+    DateTime? hasta,
+    String? empresaId,
+    String? tecnicoId,
+    String? tipoVehiculoId,
+    String? tipo,
+  }) async {
+    String? d(DateTime? x) => x == null ? null : x.toIso8601String().substring(0, 10);
+    final data = await _db.rpc(
+      tab == 'operaciones' ? 'tc_prod_operaciones' : 'tc_prod_revisiones',
+      params: {
+        'p_desde': d(desde),
+        'p_hasta': d(hasta),
+        // Sin filtro explícito, manda el cliente activo de la sesión.
+        'p_empresa': empresaId ?? empresaActivaId,
+        'p_tecnico': tecnicoId,
+        'p_tipo_vehiculo': tipoVehiculoId,
+        'p_tipo': tipo,
+      },
+    );
+    return data is Map ? Map<String, dynamic>.from(data) : {};
+  }
+
+  /// Técnicos visibles (filtro de Analítica). La RLS limita el alcance.
+  static Future<List<({String id, String nombre})>> listarTecnicos() async {
+    try {
+      final data = await _db.from('tc_usuarios').select('id, nombre').eq('activo', true).order('nombre');
+      return (data as List)
+          .map((e) => (id: e['id'] as String, nombre: (e['nombre'] as String?) ?? '—'))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Tipos de vehículo (filtro de Analítica).
+  static Future<List<({String id, String nombre})>> listarTiposVehiculo() async {
+    try {
+      final data = await _db.from('tc_tipos_vehiculo').select('id, nombre').order('nombre');
+      return (data as List)
+          .map((e) => (id: e['id'] as String, nombre: (e['nombre'] as String?) ?? '—'))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   static Future<void> completarRevision(String revisionId, {String estado = 'completada'}) async {
     await _db.from('revisiones_vehiculo').update({'estado_revision': estado}).eq('id', revisionId);
   }
@@ -562,6 +674,37 @@ class TyreControlApi {
   }
 
   /// Clave normalizada marca|modelo|medida-base (ignora índice y espacios).
+  /// Monta una referencia del CATÁLOGO en una posición, SIN control de stock:
+  /// no descuenta almacén ni genera movimientos de inventario. El neumático
+  /// queda con origen 'catalogo_sin_stock' (el marcador para los informes).
+  /// Nuevo → el RPC asigna la profundidad de dibujo del catálogo; usado →
+  /// [profundidadUsado] son los mm reales medidos por el técnico.
+  static Future<void> montarDesdeCatalogo({
+    required String vehiculoId,
+    required String posicionId,
+    required String referenciaId,
+    String condicion = 'nuevo',
+    double? profundidadUsado,
+    bool forzarMedida = false,
+  }) async {
+    final datos = <String, dynamic>{};
+    if (condicion == 'usado' && profundidadUsado != null) {
+      datos['profundidad_actual_mm'] = profundidadUsado.toString();
+    }
+    await _db.rpc('tc_montar_desde_catalogo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_posicion': posicionId,
+      'p_referencia': referenciaId,
+      'p_control_individual': false,
+      'p_datos': datos,
+      'p_km': null,
+      'p_fecha': null,
+      'p_obs': 'Montaje sin control de stock (APK)',
+      'p_forzar_medida': forzarMedida,
+      'p_condicion': condicion,
+    });
+  }
+
   static String claveCatalogo(String? marca, String? modelo, String? medida) {
     final base = (medida ?? '').toUpperCase().replaceAll(RegExp(r'\s+'), '');
     final m = RegExp(r'(\d{2,3})(?:/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)').firstMatch(base);
@@ -597,7 +740,7 @@ class TyreControlApi {
   /// APK): marca, modelo, medida y specs. Solo lectura.
   static Future<List<Map<String, dynamic>>> listarCatalogoReferencias() async {
     final data = await _db.from('tc_referencias_neumatico').select(
-        'profundidad_dibujo_mm, presion_maxima_bar, carga_maxima_kg, referencia_completa, '
+        'id, profundidad_dibujo_mm, presion_maxima_bar, carga_maxima_kg, referencia_completa, '
         'modelo:tc_cat_modelos_neumatico(nombre, foto_modelo_url, marca:tc_cat_marcas_neumatico(nombre)), '
         'tyre_size:tyre_sizes(medida, indice_carga_simple, codigo_velocidad)')
         .eq('activo', true).limit(2000);
@@ -652,6 +795,8 @@ class TyreControlApi {
     List<Map<String, dynamic>>? montajeAntes,
     List<Map<String, dynamic>>? incidencias,
     String? imagenChasis,
+    int? pausaSeg,
+    int? nPausas,
   }) async {
     try {
       await http.post(
@@ -665,6 +810,12 @@ class TyreControlApi {
         body: jsonEncode({
           'vehiculoId': vehiculoId,
           'desde': desde.toUtc().toIso8601String(),
+          // Cronometraje: la sesión de cambio va de abrir la pantalla a pulsar
+          // Finalizar; el servidor calcula duración y tiempo efectivo.
+          'inicioAt': desde.toUtc().toIso8601String(),
+          'finAt': DateTime.now().toUtc().toIso8601String(),
+          if (pausaSeg != null) 'pausaSeg': pausaSeg,
+          if (nPausas != null) 'nPausas': nPausas,
           if (montajeAntes != null) 'montajeAntes': montajeAntes,
           if (incidencias != null) 'incidencias': incidencias,
           if (imagenChasis != null) 'imagenChasis': imagenChasis,

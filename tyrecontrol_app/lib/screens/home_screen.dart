@@ -4,6 +4,7 @@ import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
+import 'analitica_screen.dart';
 import 'identify_vehicle_screen.dart';
 import 'incidencias_screen.dart';
 import 'login_screen.dart';
@@ -142,6 +143,15 @@ class _InicioTab extends StatelessWidget {
             children: [
               Expanded(
                 child: _BigTile(
+                  icon: Icons.insights,
+                  label: 'Analítica',
+                  small: true,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AnaliticaScreen())),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: _BigTile(
                   icon: Icons.build,
                   label: 'Herramientas',
                   small: true,
@@ -158,6 +168,18 @@ class _InicioTab extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 14),
+          // Cerrar sesión también aquí (además de Perfil): en la tablet es lo
+          // que se busca al acabar la jornada.
+          OutlinedButton.icon(
+            onPressed: () => doLogout(context),
+            icon: const Icon(Icons.logout, color: AppColors.danger),
+            label: const Text('Cerrar sesión', style: TextStyle(color: AppColors.danger)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: AppColors.danger),
+              minimumSize: const Size.fromHeight(52),
+            ),
           ),
             ],
           ),

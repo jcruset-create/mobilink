@@ -2,12 +2,17 @@ import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
-/// Consulta (solo lectura) del catálogo de neumáticos para el técnico.
-/// La medida viene ya filtrada por la del vehículo; el técnico solo busca
-/// por marca y modelo.
+/// Catálogo de neumáticos para el técnico, filtrado por la medida del
+/// vehículo. Dos usos:
+///  · consulta (por defecto): solo lectura, como hasta ahora.
+///  · selección ([seleccion] = true): tocar una tarjeta devuelve la
+///    referencia elegida (Navigator.pop con el mapa) — lo usa el montaje
+///    SIN control de stock de la pantalla de cambio.
 class CatalogoScreen extends StatefulWidget {
   final Set<String> medidasBase; // medidas del vehículo, normalizadas. Vacío = todas.
-  const CatalogoScreen({super.key, this.medidasBase = const {}});
+  final bool seleccion;
+  final String? subtitulo; // p. ej. "Montar NUEVO en E3_IZQ"
+  const CatalogoScreen({super.key, this.medidasBase = const {}, this.seleccion = false, this.subtitulo});
 
   @override
   State<CatalogoScreen> createState() => _CatalogoScreenState();
@@ -18,6 +23,8 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
   bool _loading = true;
   String? _error;
   String _q = '';
+  String? _fMarca;
+  String? _fModelo; // depende de la marca seleccionada
 
   static String _baseMedida(String? s) {
     final t = (s ?? '').toUpperCase().replaceAll(RegExp(r'\s+'), '');
@@ -45,11 +52,19 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
     }
   }
 
+  /// Referencias de la medida del vehículo (base de los filtros de marca/modelo).
+  List<Map<String, dynamic>> get _deMedida {
+    final medidas = widget.medidasBase;
+    return _todas
+        .where((r) => medidas.isEmpty || medidas.contains(_baseMedida(r['medida'] as String?)))
+        .toList();
+  }
+
   List<Map<String, dynamic>> get _filtradas {
     final q = _q.trim().toLowerCase();
-    final medidas = widget.medidasBase;
-    final list = _todas.where((r) {
-      if (medidas.isNotEmpty && !medidas.contains(_baseMedida(r['medida'] as String?))) return false;
+    final list = _deMedida.where((r) {
+      if (_fMarca != null && (r['marca'] as String?) != _fMarca) return false;
+      if (_fModelo != null && (r['modelo'] as String?) != _fModelo) return false;
       if (q.isEmpty) return true;
       final txt = '${r['marca'] ?? ''} ${r['modelo'] ?? ''}'.toLowerCase();
       return txt.contains(q);
@@ -58,20 +73,33 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
     return list;
   }
 
+  List<String> get _marcas =>
+      (_deMedida.map((r) => r['marca'] as String?).whereType<String>().toSet().toList()..sort());
+
+  /// Modelos de la marca seleccionada (o de todas si no hay marca elegida).
+  List<String> get _modelos => (_deMedida
+      .where((r) => _fMarca == null || r['marca'] == _fMarca)
+      .map((r) => r['modelo'] as String?)
+      .whereType<String>()
+      .toSet()
+      .toList()
+    ..sort());
+
   @override
   Widget build(BuildContext context) {
     final medidaTxt = widget.medidasBase.isEmpty ? 'todas las medidas' : widget.medidasBase.join(' · ');
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Catálogo de neumáticos'),
+        title: Text(widget.seleccion ? 'Elegir neumático' : 'Catálogo de neumáticos'),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(22),
           child: Padding(
             padding: const EdgeInsets.only(left: 16, bottom: 8),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text('Medida: $medidaTxt',
+              child: Text(
+                  widget.subtitulo != null ? '${widget.subtitulo} · Medida: $medidaTxt' : 'Medida: $medidaTxt',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
             ),
           ),
@@ -93,6 +121,19 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
                 contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
               ),
             ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Row(children: [
+              Expanded(child: _dropFiltro('Marca', _fMarca, _marcas, (v) => setState(() {
+                _fMarca = v;
+                // Al cambiar de marca, un modelo de otra marca no tiene sentido.
+                if (v != null && _fModelo != null && !_modelos.contains(_fModelo)) _fModelo = null;
+                if (v == null) _fModelo = null;
+              }))),
+              const SizedBox(width: 8),
+              Expanded(child: _dropFiltro('Modelo', _fModelo, _modelos, (v) => setState(() => _fModelo = v))),
+            ]),
           ),
           Expanded(child: _cuerpo()),
         ],
@@ -124,6 +165,28 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
     );
   }
 
+  Widget _dropFiltro(String hint, String? valor, List<String> opciones, ValueChanged<String?> onChanged) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: valor != null ? AppColors.info : AppColors.cardBorder),
+      ),
+      child: DropdownButton<String?>(
+        value: valor,
+        hint: Text(hint, style: const TextStyle(color: AppColors.textHint)),
+        isExpanded: true,
+        underline: const SizedBox.shrink(),
+        items: [
+          DropdownMenuItem(value: null, child: Text('$hint: todas')),
+          for (final o in opciones) DropdownMenuItem(value: o, child: Text(o, overflow: TextOverflow.ellipsis)),
+        ],
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   Widget _fila(Map<String, dynamic> r) {
     final foto = r['foto'] as String?;
     final prof = r['prof'] as double?;
@@ -132,7 +195,7 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
     final ic = r['indice_carga']?.toString();
     final cv = r['codigo_vel']?.toString();
     final idxTxt = [if (ic != null && ic.isNotEmpty) ic, if (cv != null && cv.isNotEmpty) cv].join('');
-    return Container(
+    final card = Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -158,15 +221,26 @@ class _CatalogoScreenState extends State<CatalogoScreen> {
                 maxLines: 1, overflow: TextOverflow.ellipsis),
             Text('${r['medida'] ?? ''}${idxTxt.isNotEmpty ? '  $idxTxt' : ''}',
                 style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-            const SizedBox(height: 4),
-            Wrap(spacing: 8, runSpacing: 4, children: [
-              _chip(Icons.straighten, prof != null ? '${prof.toStringAsFixed(prof % 1 == 0 ? 0 : 1)} mm' : '— mm'),
-              _chip(Icons.speed, pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar'),
-              _chip(Icons.fitness_center, carga != null ? '${carga.toStringAsFixed(0)} kg' : '— kg'),
-            ]),
+            // En modo selección la tarjeta es deliberadamente simple (marca,
+            // modelo, medida): elegir rápido, sin datos comerciales.
+            if (!widget.seleccion) ...[
+              const SizedBox(height: 4),
+              Wrap(spacing: 8, runSpacing: 4, children: [
+                _chip(Icons.straighten, prof != null ? '${prof.toStringAsFixed(prof % 1 == 0 ? 0 : 1)} mm' : '— mm'),
+                _chip(Icons.speed, pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar'),
+                _chip(Icons.fitness_center, carga != null ? '${carga.toStringAsFixed(0)} kg' : '— kg'),
+              ]),
+            ],
           ]),
         ),
+        if (widget.seleccion) const Icon(Icons.chevron_right, color: AppColors.textHint),
       ]),
+    );
+    if (!widget.seleccion) return card;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => Navigator.of(context).pop(r),
+      child: card,
     );
   }
 
