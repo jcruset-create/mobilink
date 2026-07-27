@@ -47,7 +47,10 @@ class TyreControlApi {
   static Future<Map<String, dynamic>?> obtenerMiPerfil() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return null;
-    return await _db.from('tc_usuarios').select('*, empresa:tc_empresas(*)').eq('id', uid).maybeSingle();
+    // Desambiguar el embed: hay 2 relaciones tc_usuarios↔tc_empresas (FK
+    // directa empresa_id + M2M tc_operador_empresas). Sin el nombre de la FK,
+    // PostgREST devuelve PGRST201 y la app peta al cargar el perfil.
+    return await _db.from('tc_usuarios').select('*, empresa:tc_empresas!tc_usuarios_empresa_id_fkey(*)').eq('id', uid).maybeSingle();
   }
 
   // ── Catalogo: fotos de modelo ────────────────────────────────
