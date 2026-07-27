@@ -45,6 +45,8 @@ class TyreControlApi {
     if (uid == null) return [];
     final porId = <String, String>{}; // id → nombre (dedup)
 
+    // Solo se muestran clientes cuyo NOMBRE se puede leer (RLS); nunca "—".
+
     // 1) Empresas asignadas al operario (multi-cliente, tabla M2M).
     try {
       final asignadas = await _db
@@ -53,15 +55,16 @@ class TyreControlApi {
           .eq('usuario_id', uid);
       for (final e in (asignadas as List)) {
         final emp = (e as Map)['empresa'];
-        if (emp is Map && emp['id'] != null) {
-          porId[emp['id'] as String] = (emp['nombre'] as String?) ?? '—';
+        final nombre = emp is Map ? emp['nombre'] as String? : null;
+        if (emp is Map && emp['id'] != null && nombre != null && nombre.isNotEmpty) {
+          porId[emp['id'] as String] = nombre;
         }
       }
     } catch (_) {/* sin M2M o sin permiso: se cubre con los vehículos */}
 
     // 2) Empresas presentes en los vehículos que el operario puede ver (misma
-    //    derivación que la pantalla de Vehículos, ya probada con multi-empresa).
-    //    Cubre el nombre si la RLS de tc_empresas no lo diera por el embed M2M.
+    //    derivación que la pantalla de Vehículos). Solo se añade si su nombre
+    //    es legible (RLS de tc_empresas lo permite); si no, no se muestra.
     try {
       final vehis = await _db
           .from('tc_vehiculos')
@@ -70,9 +73,8 @@ class TyreControlApi {
       for (final v in (vehis as List)) {
         final m = Map<String, dynamic>.from(v as Map);
         final id = m['empresa_id'] as String?;
-        if (id == null) continue;
         final nombre = m['empresa'] is Map ? m['empresa']['nombre'] as String? : null;
-        porId[id] = nombre ?? porId[id] ?? '—';
+        if (id != null && nombre != null && nombre.isNotEmpty) porId[id] = nombre;
       }
     } catch (_) {/* best-effort */}
 
