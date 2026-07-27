@@ -499,22 +499,37 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   Widget _plano() {
     return LayoutBuilder(builder: (ctx, c) {
-      // Rellenamos toda el área disponible (la imagen se estira) para que los
-      // ejes queden bien separados y las etiquetas/incidencias se lean. En una
-      // tablet vertical sobra altura, así que priorizamos ocupar el alto.
       final w = c.maxWidth;
       final h = (c.maxHeight.isFinite && c.maxHeight > 0)
           ? c.maxHeight
           : w / _aspect!;
+      // Rectángulo (ox,oy,iw,ih) donde se dibuja la imagen dentro del área w×h.
+      // Imagen NORMAL (compacta): se estira a todo el alto (BoxFit.fill) para
+      // separar los ejes y aprovechar la tablet vertical.
+      // Imagen de "ejes separados": ya viene proporcionada; se respeta su
+      // aspecto (contain) para que las RUEDAS no salgan ovaladas ("de bici").
+      double ox = 0, oy = 0, iw = w, ih = h;
+      if (_ejesSeparados) {
+        final a = _aspect!; // ancho / alto de la imagen
+        if (w / h >= a) {
+          ih = h; iw = h * a; ox = (w - iw) / 2; oy = 0;
+        } else {
+          iw = w; ih = w / a; ox = 0; oy = (h - ih) / 2;
+        }
+      }
       return SizedBox(
         width: w, height: h,
         child: Stack(children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Image.network(_imagenChasis!, width: w, height: h, fit: BoxFit.fill,
-                errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
+          Positioned(
+            left: ox, top: oy, width: iw, height: ih,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(_imagenChasis!, width: iw, height: ih, fit: BoxFit.fill,
+                  errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
+            ),
           ),
-          for (int i = 0; i < _posiciones.length; i++) _tarjetaPosicion(_posiciones[i], i, w, h),
+          for (int i = 0; i < _posiciones.length; i++)
+            _tarjetaPosicion(_posiciones[i], i, ox, oy, iw, ih),
         ]),
       );
     });
@@ -560,9 +575,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     setState(() => _posSeleccionada = _posSeleccionada == posId ? null : posId);
   }
 
-  Widget _tarjetaPosicion(PosicionVehiculo p, int i, double w, double h) {
+  Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih) {
     final co = _coords(p, i);
-    final cardW = (co.w / 100 * w).clamp(96.0, 200.0);
+    final cardW = (co.w / 100 * iw).clamp(96.0, 200.0);
     final m = _montajePorPosicion[p.id];
     final resaltar = p.id == widget.posicionInicialId;
     final problemas = _problemasVigentes(p.id);
@@ -574,8 +589,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           )
         : null;
     return Positioned(
-      left: (co.x / 100 * w).clamp(0.0, w - cardW),
-      top: (co.y / 100 * h).clamp(0.0, h - 44),
+      left: (ox + co.x / 100 * iw).clamp(0.0, ox + iw - cardW),
+      top: (oy + co.y / 100 * ih).clamp(0.0, oy + ih - 44),
       width: cardW,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
