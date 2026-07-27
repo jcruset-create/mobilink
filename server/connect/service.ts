@@ -13,6 +13,7 @@ import db from "../db.ts";
 import { enqueueWebhookEvent } from "./webhooks.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
+import { notifyLiteWorkshop } from "./litePush.ts";
 
 // ---------------------------------------------------------------------------
 // Máquina de estados
@@ -20,7 +21,8 @@ import { createAlert } from "./alerts.ts";
 
 export const CONNECT_STATUSES = [
   "draft", "pending", "searching", "awaiting_acceptance", "assigned", "technician_assigned",
-  "en_route", "arrived", "in_progress", "finished", "cancelled", "no_coverage", "assignment_failed",
+  "en_route", "arrived", "in_progress", "finished", "returning_to_workshop", "at_workshop",
+  "cancelled", "no_coverage", "assignment_failed",
 ] as const;
 export type ConnectStatus = (typeof CONNECT_STATUSES)[number];
 
@@ -34,7 +36,10 @@ const TRANSITIONS: Record<string, ConnectStatus[]> = {
   en_route: ["arrived", "in_progress", "cancelled"],
   arrived: ["in_progress", "finished", "cancelled"],
   in_progress: ["finished", "cancelled"],
-  finished: [],
+  // Cierre del ciclo operativo: la unidad puede regresar al taller o no hacerlo
+  finished: ["returning_to_workshop"],
+  returning_to_workshop: ["at_workshop"],
+  at_workshop: [],
   cancelled: [],
   no_coverage: ["searching", "cancelled"],
   assignment_failed: ["searching", "cancelled"],
@@ -48,8 +53,8 @@ const CORE_STATUS_MAP: Record<string, ConnectStatus> = {
   en_punto: "arrived",
   inicio_reparacion: "in_progress",
   finalizada: "finished",
-  en_camino_base: "finished",
-  llegada_taller: "finished",
+  en_camino_base: "returning_to_workshop",
+  llegada_taller: "at_workshop",
   redirigida: "in_progress",
   cancelada: "cancelled",
 };
@@ -503,11 +508,19 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   const a = aRow.rows[0];
   const now = Date.now();
 
-  // Talleres externos (sin Mobilink Assist): no hay inyección al core; los
-  // estados se actualizan manualmente desde Central Pro.
-  const wsType = await db.query(`SELECT "integrationType" FROM connect_workshops WHERE id = $1`, [asg.workshopId]);
-  const isExternal = wsType.rows[0]?.integrationType === "external";
-  const coreId = isExternal ? null : await injectIntoCore(a, asg.workshopId);
+  // Solo los talleres integrados con Mobilink Assist completo reciben la
+  // asistencia inyectada en el core:
+  //   assist   → INSERT en roadside_assistances (el técnico la ve en su APK)
+  //   lite     → la gestiona la APK Mobilink Assist Lite contra Connect
+  //   external → sin digitalizar: Central actualiza los estados a mano
+  const wsType = await db.query(
+    `SELECT "integrationType", name FROM connect_workshops WHERE id = $1`,
+    [asg.workshopId],
+  );
+  const integrationType = String(wsType.rows[0]?.integrationType ?? "assist");
+  const isLite = integrationType === "lite";
+  const isExternal = integrationType === "external";
+  const coreId = isLite || isExternal ? null : await injectIntoCore(a, asg.workshopId);
   await db.query(
     `UPDATE connect_assignments SET status = 'accepted', "respondedAtMs" = $1, "respondedBy" = $2 WHERE id = $3`,
     [now, actorName, assignmentId],
@@ -548,7 +561,17 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   );
   await transition(asg.assistanceId, "assigned", "system",
     (asg.mode === "offer" ? `Aceptada por ${actorName}` : asg.explanation) +
-    (isExternal ? " · Taller externo: seguimiento manual desde Central" : ""));
+    (isExternal ? " · Taller externo: seguimiento manual desde Central" : "") +
+    (isLite ? " · Taller Mobilink Assist Lite: seguimiento desde la APK del operario" : ""));
+
+  // Aviso push a los dispositivos del taller Lite (nunca datos sensibles)
+  if (isLite) {
+    await notifyLiteWorkshop(asg.workshopId, {
+      title: "Nueva asistencia asignada",
+      body: `${a.expedientNumber ?? `#${asg.assistanceId}`} · ${a.address || "Ver detalles en la app"}`,
+      data: { type: "assistance_assigned", assistanceId: String(asg.assistanceId) },
+    }).catch((err) => console.error("[Lite] push asignación:", err?.message));
+  }
 }
 
 /** Aceptación de una oferta (portal del proveedor o aceptación telefónica del operador). */
@@ -770,11 +793,15 @@ function safeParse(value: unknown): any {
 
 export async function syncFromCore(): Promise<number> {
   const r = await db.query(
+    // 'finished' ya NO es terminal (queda la vuelta al taller), pero se acota a
+    // 48 h de actividad para no arrastrar indefinidamente asistencias cerradas.
     `SELECT ca.id, ca.status AS connect_status, ra.status AS core_status,
             ra."assignedTechName", ra."cancelledAtMs"
        FROM connect_assistances ca
        JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-      WHERE ca.status NOT IN ('finished', 'cancelled', 'no_coverage')`,
+      WHERE ca.status NOT IN ('at_workshop', 'cancelled', 'no_coverage')
+        AND (ca.status <> 'finished' OR ca."updatedAtMs" > $1)`,
+    [Date.now() - 48 * 3600_000],
   );
   let changed = 0;
   for (const row of r.rows) {
@@ -794,7 +821,10 @@ export async function syncFromCore(): Promise<number> {
 }
 
 async function applyForward(id: number, from: ConnectStatus, target: ConnectStatus, techName?: string) {
-  const path: ConnectStatus[] = ["assigned", "technician_assigned", "en_route", "arrived", "in_progress", "finished"];
+  const path: ConnectStatus[] = [
+    "assigned", "technician_assigned", "en_route", "arrived", "in_progress",
+    "finished", "returning_to_workshop", "at_workshop",
+  ];
   if (target === "cancelled") {
     await transition(id, "cancelled", "core", "Cancelada en el taller");
     return;

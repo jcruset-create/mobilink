@@ -10,6 +10,7 @@ import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { Card, Badge, Button, ErrorBanner } from "../components/ui";
 import AsignacionTab from "../components/AsignacionTab";
 import ComunicacionesTab from "../components/ComunicacionesTab";
+import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 type Detail = {
@@ -39,7 +40,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Asignación", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Asignación", "Seguimiento", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -120,17 +121,20 @@ export default function FichaAsistencia() {
                   Reasignar
                 </Button>
               )}
-              {/* Taller externo (sin Mobilink Assist): avance manual de estados */}
-              {!a.coreStatus && ["assigned", "technician_assigned", "en_route", "arrived", "in_progress"].includes(a.status) && (
+              {/* Taller sin integración directa (externo o Lite sin conexión):
+                  avance manual de estados desde Central, siempre auditado */}
+              {!a.coreStatus && ["assigned", "technician_assigned", "en_route", "arrived", "in_progress", "finished", "returning_to_workshop"].includes(a.status) && (
                 ({
                   assigned: ["technician_assigned", "en_route"],
                   technician_assigned: ["en_route", "arrived"],
                   en_route: ["arrived"],
                   arrived: ["in_progress", "finished"],
                   in_progress: ["finished"],
+                  finished: ["returning_to_workshop"],
+                  returning_to_workshop: ["at_workshop"],
                 }[a.status] ?? []).map((next) => (
                   <Button key={next} variant="ghost" disabled={busy}
-                    title="Actualización manual (taller externo)"
+                    title="Actualización manual desde Central (queda auditada)"
                     onClick={() => action("manual-status", { status: next })}>
                     → {ASSISTANCE_STATUS_LABELS[next]}
                   </Button>
@@ -180,6 +184,9 @@ export default function FichaAsistencia() {
         )}
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
+        )}
+        {tab === "Seguimiento" && (
+          <SeguimientoLiteTab assistanceId={a.id} canOperate={canOperate} onChanged={load} />
         )}
         {tab === "Comunicaciones" && (
           <ComunicacionesTab assistanceId={a.id} canOperate={canOperate} />

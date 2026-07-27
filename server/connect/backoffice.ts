@@ -15,6 +15,10 @@ import {
   findCandidates, offerToWorkshop, acceptAssignment, rejectAssignment, withdrawAndReassign,
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
+import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
+import {
+  WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
+} from "./liteRules.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
@@ -22,6 +26,19 @@ import { createAlert } from "./alerts.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
+}
+
+/** Código corto e irrepetible que el taller Lite teclea en la APK (p. ej. TALLERSUR-7431). */
+async function generateLiteCode(name: string): Promise<string> {
+  const base = String(name || "taller")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "TALLER";
+  for (let i = 0; i < 20; i++) {
+    const code = `${base}-${crypto.randomInt(1000, 9999)}`;
+    const hit = await db.query(`SELECT 1 FROM connect_workshops WHERE "liteCode" = $1`, [code]);
+    if (!hit.rows[0]) return code;
+  }
+  return `${base}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
 export function createConnectBackofficeRouter(): Router {
@@ -430,10 +447,15 @@ export function createConnectBackofficeRouter(): Router {
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
-        b.integrationType === "external" ? "external" : "assist",
+        WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : "assist",
         now,
       ],
     );
+    // Los talleres Lite necesitan un código corto para el login de la APK
+    if (r.rows[0].integrationType === "lite") {
+      await db.query(`UPDATE connect_workshops SET "liteCode" = $1 WHERE id = $2 AND "liteCode" IS NULL`,
+        [await generateLiteCode(r.rows[0].name), r.rows[0].id]);
+    }
     await auditConnect({ req, action: "workshop.created", resourceType: "workshop", resourceId: r.rows[0].id });
     res.status(201).json(r.rows[0]);
   });
@@ -455,15 +477,31 @@ export function createConnectBackofficeRouter(): Router {
          "networkParticipation" = COALESCE($7, "networkParticipation"),
          "networkChangedBy" = CASE WHEN $7 IS NOT NULL THEN $8 ELSE "networkChangedBy" END,
          "networkChangedAtMs" = CASE WHEN $7 IS NOT NULL THEN $9 ELSE "networkChangedAtMs" END,
+         "liteSettings" = COALESCE($11, "liteSettings"),
+         features = COALESCE($12, features),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
        b.radiusKm != null ? Number(b.radiusKm) : null,
-       b.integrationType === "external" || b.integrationType === "assist" ? b.integrationType : null,
+       WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : null,
        typeof b.networkParticipation === "boolean" ? b.networkParticipation : null,
-       u.name, now, Number(req.params.id)],
+       u.name, now, Number(req.params.id),
+       b.liteSettings ? JSON.stringify(b.liteSettings) : null,
+       b.features ? JSON.stringify(b.features) : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
+    if (r.rows[0].integrationType === "lite" && !r.rows[0].liteCode) {
+      const code = await generateLiteCode(r.rows[0].name);
+      await db.query(`UPDATE connect_workshops SET "liteCode" = $1 WHERE id = $2`, [code, r.rows[0].id]);
+      r.rows[0].liteCode = code;
+    }
+    if (b.integrationType) {
+      await auditConnect({
+        req, action: "workshop.tier_changed", resourceType: "workshop", resourceId: Number(req.params.id),
+        detail: { integrationType: r.rows[0].integrationType, tier: WORKSHOP_TIER[r.rows[0].integrationType] },
+      });
+    }
     if (typeof b.networkParticipation === "boolean") {
       await auditConnect({
         req, action: b.networkParticipation ? "workshop.network_enabled" : "workshop.network_disabled",
@@ -474,12 +512,266 @@ export function createConnectBackofficeRouter(): Router {
     res.json(r.rows[0]);
   });
 
+  // ── Mobilink Assist Lite: operarios, dispositivos y seguimiento ──────────
+
+  /** Operarios del taller Lite (equivalente a los técnicos de un taller FULL). */
+  router.get("/workshops/:id/lite-users", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT u.id, u.name, u.username, u.email, u.phone, u.role, u.active, u."lastLoginAtMs", u."createdAtMs",
+              (SELECT COUNT(*) FROM connect_lite_devices d WHERE d."userId" = u.id AND d."revokedAtMs" IS NULL) AS "devices"
+         FROM connect_lite_users u WHERE u."workshopId" = $1 ORDER BY u.name`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/workshops/:id/lite-users", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const workshopId = Number(req.params.id);
+    const b = req.body ?? {};
+    const name = String(b.name || "").trim();
+    const username = String(b.username || "").trim().toLowerCase();
+    const pin = String(b.pin || "").trim();
+    if (!name || !username) return err(res, 422, "validation_failed", "name y username son obligatorios");
+    if (!/^\d{4,8}$/.test(pin)) return err(res, 422, "validation_failed", "El PIN debe tener entre 4 y 8 dígitos");
+
+    const w = await db.query(`SELECT id, "integrationType", "liteCode" FROM connect_workshops WHERE id = $1`, [workshopId]);
+    if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    if (w.rows[0].integrationType !== "lite") {
+      return err(res, 409, "not_lite", "El taller no tiene Mobilink Assist Lite habilitado");
+    }
+    const salt = newPinSalt();
+    const now = Date.now();
+    try {
+      const r = await db.query(
+        `INSERT INTO connect_lite_users
+           (uuid, "workshopId", "providerCompanyId", name, username, email, phone, "pinHash", "pinSalt", role, "createdAtMs", "updatedAtMs")
+         SELECT $1, $2, w."providerCompanyId", $3, $4, $5, $6, $7, $8, $9, $10, $10
+           FROM connect_workshops w WHERE w.id = $2
+         RETURNING id, name, username, role, active, "createdAtMs"`,
+        [
+          crypto.randomUUID(), workshopId, name, username, b.email ?? null, b.phone ?? null,
+          hashPin(pin, salt), salt, b.role === "workshop_admin" ? "workshop_admin" : "operator", now,
+        ],
+      );
+      await auditConnect({ req, action: "lite.user_created", resourceType: "lite_user", resourceId: r.rows[0].id, detail: { workshopId, username } });
+      res.status(201).json({ ...r.rows[0], workshopCode: w.rows[0].liteCode });
+    } catch (e: any) {
+      if (String(e?.message).includes("duplicate")) {
+        return err(res, 409, "duplicate", "Ya existe un usuario con ese nombre de acceso en el taller");
+      }
+      throw e;
+    }
+  });
+
+  router.patch("/lite-users/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const b = req.body ?? {};
+    const pin = b.pin != null ? String(b.pin).trim() : null;
+    if (pin != null && !/^\d{4,8}$/.test(pin)) {
+      return err(res, 422, "validation_failed", "El PIN debe tener entre 4 y 8 dígitos");
+    }
+    const salt = pin != null ? newPinSalt() : null;
+    const r = await db.query(
+      `UPDATE connect_lite_users SET
+         name = COALESCE($1, name), role = COALESCE($2, role), active = COALESCE($3, active),
+         email = COALESCE($4, email), phone = COALESCE($5, phone),
+         "pinHash" = COALESCE($6, "pinHash"), "pinSalt" = COALESCE($7, "pinSalt"),
+         "updatedAtMs" = $8
+       WHERE id = $9 RETURNING id, name, username, role, active`,
+      [
+        b.name ?? null,
+        b.role === "workshop_admin" || b.role === "operator" ? b.role : null,
+        typeof b.active === "boolean" ? b.active : null,
+        b.email ?? null, b.phone ?? null,
+        pin != null && salt ? hashPin(pin, salt) : null, salt, Date.now(), id,
+      ],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Usuario no encontrado");
+    // Desactivar o cambiar el PIN cierra las sesiones abiertas
+    if (b.active === false || pin != null) {
+      await db.query(`UPDATE connect_lite_devices SET "revokedAtMs" = $1 WHERE "userId" = $2 AND "revokedAtMs" IS NULL`,
+        [Date.now(), id]);
+    }
+    await auditConnect({
+      req, action: pin != null ? "lite.user_pin_reset" : "lite.user_updated",
+      resourceType: "lite_user", resourceId: id, detail: { active: b.active, role: b.role },
+    });
+    res.json(r.rows[0]);
+  });
+
+  router.get("/workshops/:id/lite-devices", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT d.id, d."deviceId", d.platform, d."osVersion", d."appVersion",
+              d."gpsPermission", d."cameraPermission", d."notifPermission",
+              d."fcmToken" IS NOT NULL AS "pushEnabled", d."lastSeenAtMs", d."revokedAtMs", d."createdAtMs",
+              u.name AS "userName", u.id AS "userId"
+         FROM connect_lite_devices d JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."workshopId" = $1 ORDER BY d."lastSeenAtMs" DESC NULLS LAST LIMIT 100`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/lite-devices/:id/revoke", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `UPDATE connect_lite_devices SET "revokedAtMs" = $1, "fcmToken" = NULL
+        WHERE id = $2 AND "revokedAtMs" IS NULL RETURNING id`,
+      [Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Dispositivo no encontrado o ya revocado");
+    await auditConnect({ req, action: "lite.device_revoked", resourceType: "lite_device", resourceId: Number(req.params.id) });
+    res.json({ ok: true });
+  });
+
+  /** Todo lo que el taller ha reportado: rastro GPS, evidencias, firma y KPIs. */
+  router.get("/assistances/:id/lite", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    const a = await db.query(
+      `SELECT ca.id, ca.status, ca."liteUserId", ca."liteUserName", ca."resultCode", ca."resolutionNotes",
+              ca."odometerKm", ca."workedMinutes", ca."operatorLat", ca."operatorLng",
+              ca."operatorAccuracyM", ca."operatorSpeedKmh", ca."operatorLocationAtMs",
+              ca.latitude, ca.longitude, w.name AS "workshopName", w."integrationType",
+              w.latitude AS "workshopLat", w.longitude AS "workshopLng"
+         FROM connect_assistances ca
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+        WHERE ca.id = $1`,
+      [id],
+    );
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    const [track, files, signature, device] = await Promise.all([
+      db.query(
+        `SELECT lat, lng, "accuracyM", "speedKmh", "headingDeg", status, "deviceTsMs"
+           FROM connect_assistance_tracks WHERE "assistanceId" = $1 ORDER BY "deviceTsMs" LIMIT 2000`,
+        [id],
+      ),
+      db.query(
+        `SELECT id, category, url, "fileName", "sizeBytes", lat, lng, "createdAtMs"
+           FROM connect_assistance_files WHERE "assistanceId" = $1 AND "deletedAtMs" IS NULL ORDER BY id`,
+        [id],
+      ),
+      db.query(
+        `SELECT id, "signerName", "signerDocument", url, "signedAtMs"
+           FROM connect_assistance_signatures WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 1`,
+        [id],
+      ),
+      db.query(
+        `SELECT d."lastSeenAtMs", d.platform, d."appVersion", d."gpsPermission", d."notifPermission",
+                d."fcmToken" IS NOT NULL AS "pushEnabled"
+           FROM connect_lite_devices d
+          WHERE d."userId" = (SELECT "liteUserId" FROM connect_assistances WHERE id = $1)
+            AND d."revokedAtMs" IS NULL
+          ORDER BY d."lastSeenAtMs" DESC NULLS LAST LIMIT 1`,
+        [id],
+      ),
+    ]);
+
+    const lastAtMs = a.rows[0].operatorLocationAtMs ? Number(a.rows[0].operatorLocationAtMs) : null;
+    res.json({
+      assistance: a.rows[0],
+      tier: WORKSHOP_TIER[a.rows[0].integrationType] ?? null,
+      track: track.rows.map((p: any) => ({ ...p, deviceTsMs: Number(p.deviceTsMs) })),
+      files: files.rows,
+      signature: signature.rows[0] ?? null,
+      device: device.rows[0] ?? null,
+      kpis: await assistanceKpis(id),
+      // "Ubicación desactualizada" es información operativa, no un color
+      locationStale: lastAtMs ? Date.now() - lastAtMs > 5 * 60_000 : null,
+      lastLocationAtMs: lastAtMs,
+    });
+  });
+
+  /** KPIs agregados del taller (sirven igual para FULL, LITE y EXTERNAL). */
+  router.get("/workshops/:id/kpis", ...requireConnectRole("analyst"), async (req, res) => {
+    const workshopId = Number(req.params.id);
+    const days = Math.min(Number(req.query.days) || 30, 365);
+    const since = Date.now() - days * 24 * 3600_000;
+
+    const rows = await db.query(
+      `SELECT ca.id, ca.status, ca."acceptedAtMs", ca."slaDeadlineAtMs", ca."resultCode"
+         FROM connect_assistances ca
+        WHERE ca."workshopId" = $1 AND ca."createdAtMs" > $2`,
+      [workshopId, since],
+    );
+    const ids = rows.rows.map((r: any) => r.id);
+    const history = ids.length
+      ? (await db.query(
+          `SELECT "assistanceId", "toStatus", "occurredAtMs" FROM connect_status_history
+            WHERE "assistanceId" = ANY($1::int[]) ORDER BY id`,
+          [ids],
+        )).rows
+      : [];
+    const corrections = ids.length
+      ? (await db.query(
+          `SELECT "resourceId", COUNT(*)::int AS n FROM connect_audit_logs
+            WHERE action = 'assistance.manual_status' AND "resourceId" = ANY($1::text[])
+            GROUP BY "resourceId"`,
+          [ids.map(String)],
+        )).rows
+      : [];
+    const rejections = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_rejections WHERE "workshopId" = $1 AND "createdAtMs" > $2`,
+      [workshopId, since],
+    );
+    const offers = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_assignments WHERE "workshopId" = $1 AND "createdAtMs" > $2`,
+      [workshopId, since],
+    );
+
+    const byAssistance = new Map<number, { toStatus: string; occurredAtMs: number }[]>();
+    for (const h of history) {
+      const list = byAssistance.get(h.assistanceId) ?? [];
+      list.push({ toStatus: h.toStatus, occurredAtMs: Number(h.occurredAtMs) });
+      byAssistance.set(h.assistanceId, list);
+    }
+    const correctionsById = new Map(corrections.map((c: any) => [Number(c.resourceId), c.n]));
+
+    const per = rows.rows.map((r: any) => {
+      const hist = byAssistance.get(r.id) ?? [];
+      return {
+        id: r.id,
+        status: r.status,
+        kpis: computeLiteKpis(hist, {
+          acceptedAtMs: r.acceptedAtMs ? Number(r.acceptedAtMs) : null,
+          slaDeadlineAtMs: r.slaDeadlineAtMs ? Number(r.slaDeadlineAtMs) : null,
+        }),
+        statusQuality: statusQualityScore(hist, correctionsById.get(r.id) ?? 0),
+      };
+    });
+
+    const avg = (pick: (x: typeof per[number]) => number | null | undefined) => {
+      const values = per.map(pick).filter((v): v is number => typeof v === "number");
+      return values.length ? Math.round(values.reduce((s, v) => s + v, 0) / values.length) : null;
+    };
+    const finished = per.filter((p) => ["finished", "at_workshop"].includes(p.status)).length;
+    const slaValues = per.map((p) => p.kpis.slaMet).filter((v): v is boolean => typeof v === "boolean");
+
+    res.json({
+      days,
+      services: per.length,
+      finished,
+      unresolved: rows.rows.filter((r: any) => r.resultCode === "not_repaired" || r.resultCode === "customer_absent").length,
+      offers: offers.rows[0].n,
+      rejections: rejections.rows[0].n,
+      rejectionRate: offers.rows[0].n ? Math.round((rejections.rows[0].n / offers.rows[0].n) * 100) : null,
+      acceptanceRate: offers.rows[0].n ? Math.round(((offers.rows[0].n - rejections.rows[0].n) / offers.rows[0].n) * 100) : null,
+      slaCompliance: slaValues.length ? Math.round((slaValues.filter(Boolean).length / slaValues.length) * 100) : null,
+      avgAcceptMin: avg((p) => p.kpis.acceptMin),
+      avgTravelMin: avg((p) => p.kpis.travelMin),
+      avgAssignToArrivalMin: avg((p) => p.kpis.assignToArrivalMin),
+      avgWorkMin: avg((p) => p.kpis.workMin),
+      avgTotalMin: avg((p) => p.kpis.totalMin),
+      avgReturnMin: avg((p) => p.kpis.returnMin),
+      avgStatusQuality: avg((p) => p.statusQuality),
+    });
+  });
+
   // Estados manuales para asistencias en talleres externos (sin Mobilink Assist)
   router.post("/assistances/:id/manual-status", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const id = Number(req.params.id);
     const target = String(req.body?.status || "");
-    const allowed = ["technician_assigned", "en_route", "arrived", "in_progress", "finished"];
+    const allowed = Object.keys(LITE_STATUS_LABELS);
     if (!allowed.includes(target)) return err(res, 422, "validation_failed", `Estado no permitido. Permitidos: ${allowed.join(", ")}`);
     const a = await db.query(
       `SELECT ca."coreAssistanceId", w."integrationType" FROM connect_assistances ca
@@ -491,7 +783,8 @@ export function createConnectBackofficeRouter(): Router {
       return err(res, 409, "not_manual", "Esta asistencia está integrada con Mobilink Assist: los estados se sincronizan solos");
     }
     try {
-      await transition(id, target as any, "user", `Actualización manual (taller externo) por ${u.name}`);
+      const tier = WORKSHOP_TIER[a.rows[0].integrationType] ?? "EXTERNAL";
+      await transition(id, target as any, "user", `Corrección manual desde Central (taller ${tier}) por ${u.name}`);
       await auditConnect({ req, action: "assistance.manual_status", resourceType: "assistance", resourceId: id, detail: { target } });
       const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
       res.json(r.rows[0]);

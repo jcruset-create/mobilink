@@ -75,6 +75,8 @@ export const ASSISTANCE_STATUS_LABELS: Record<string, string> = {
   arrived: "En el lugar",
   in_progress: "En intervención",
   finished: "Finalizada",
+  returning_to_workshop: "Vuelta al taller",
+  at_workshop: "En taller",
   cancelled: "Cancelada",
   no_coverage: "Sin cobertura",
   assignment_failed: "Fallo de asignación",
@@ -91,9 +93,30 @@ export const ASSISTANCE_STATUS_STYLES: Record<string, string> = {
   arrived: "border-cyan-500/40 bg-cyan-500/10 text-cyan-300",
   in_progress: "border-teal-500/40 bg-teal-500/10 text-teal-300",
   finished: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  returning_to_workshop: "border-lime-500/40 bg-lime-500/10 text-lime-300",
+  at_workshop: "border-green-600/40 bg-green-600/10 text-green-300",
   cancelled: "border-red-500/40 bg-red-500/10 text-red-300",
   no_coverage: "border-orange-500/40 bg-orange-500/10 text-orange-300",
   assignment_failed: "border-red-500/60 bg-red-500/15 text-red-300",
+};
+
+/** Producto contratado por el taller (connect_workshops.integrationType). */
+export type WorkshopIntegrationType = "assist" | "lite" | "external";
+
+export const WORKSHOP_TIER: Record<WorkshopIntegrationType, "FULL" | "LITE" | "EXTERNAL"> = {
+  assist: "FULL", lite: "LITE", external: "EXTERNAL",
+};
+
+export const WORKSHOP_TIER_LABELS: Record<WorkshopIntegrationType, string> = {
+  assist: "Mobilink Assist",
+  lite: "Assist Lite",
+  external: "Externo",
+};
+
+export const WORKSHOP_TIER_STYLES: Record<WorkshopIntegrationType, string> = {
+  assist: "border-cyan-500/40 bg-cyan-500/10 text-cyan-300",
+  lite: "border-violet-500/40 bg-violet-500/10 text-violet-300",
+  external: "border-orange-500/40 bg-orange-500/10 text-orange-300",
 };
 
 export function fmtDateTime(ms: number | null | undefined): string {

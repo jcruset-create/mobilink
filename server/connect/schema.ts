@@ -580,6 +580,152 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "positionText" TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_mobile_units_core
       ON connect_mobile_units ("coreVehicleId") WHERE "coreVehicleId" IS NOT NULL;
+
+    -- ============================================================
+    -- Mobilink Assist Lite — talleres colaboradores sin Assist completo
+    -- ============================================================
+
+    -- integrationType pasa a tener tres valores (producto contratado):
+    --   assist   → FULL     (Mobilink Assist completo, inyección al core)
+    --   lite     → LITE     (APK Mobilink Assist Lite contra Central Pro)
+    --   external → EXTERNAL (sin digitalizar, estados manuales)
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS features TEXT NOT NULL DEFAULT '{}';
+    -- Código corto que el taller teclea en la APK (además de su id)
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteCode" TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_workshops_lite_code
+      ON connect_workshops ("liteCode") WHERE "liteCode" IS NOT NULL;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteSettings" TEXT NOT NULL DEFAULT '{}';
+    -- {arrivalRadiusUrbanM, arrivalRadiusRuralM, workshopRadiusM, trackWhileWorking, finishRules:{...}}
+
+    -- Resultado y datos de cierre reportados por el taller (Lite o externo)
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resultCode" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resolutionNotes" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "odometerKm" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "workedMinutes" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "acceptedAtMs" BIGINT;
+    -- Operario Lite responsable y última posición conocida de su dispositivo
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "liteUserId" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "liteUserName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorLat" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorLng" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorAccuracyM" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorSpeedKmh" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorLocationAtMs" BIGINT;
+
+    -- Usuarios operativos del taller Lite (no son usuarios de Central Pro:
+    -- son el equivalente a techs del core, con PIN y sesión de dispositivo)
+    CREATE TABLE IF NOT EXISTS connect_lite_users (
+      id SERIAL PRIMARY KEY,
+      uuid TEXT NOT NULL UNIQUE,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id),
+      "providerCompanyId" INTEGER,
+      name TEXT NOT NULL,
+      username TEXT NOT NULL,              -- código corto de acceso, único por taller
+      email TEXT,
+      phone TEXT,
+      "pinHash" TEXT NOT NULL,             -- sha256(pin + salt); nunca el PIN
+      "pinSalt" TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'operator', -- workshop_admin | operator
+      active BOOLEAN NOT NULL DEFAULT true,
+      "lastLoginAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      UNIQUE ("workshopId", username)
+    );
+
+    -- Dispositivos y sesiones (token opaco; solo se guarda su hash)
+    CREATE TABLE IF NOT EXISTS connect_lite_devices (
+      id SERIAL PRIMARY KEY,
+      "userId" INTEGER NOT NULL REFERENCES connect_lite_users(id) ON DELETE CASCADE,
+      "workshopId" INTEGER NOT NULL,
+      "deviceId" TEXT NOT NULL,
+      "tokenHash" TEXT NOT NULL UNIQUE,
+      platform TEXT,
+      "osVersion" TEXT,
+      "appVersion" TEXT,
+      "fcmToken" TEXT,
+      "gpsPermission" TEXT,
+      "cameraPermission" TEXT,
+      "notifPermission" TEXT,
+      "lastSeenAtMs" BIGINT,
+      "revokedAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_user ON connect_lite_devices ("userId");
+    CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_ws ON connect_lite_devices ("workshopId");
+
+    -- Rastro GPS del operario durante la asistencia (solo servicios activos)
+    CREATE TABLE IF NOT EXISTS connect_assistance_tracks (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "liteUserId" INTEGER,
+      "deviceId" INTEGER,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "headingDeg" DOUBLE PRECISION,
+      status TEXT,
+      "deviceTsMs" BIGINT NOT NULL,
+      "serverTsMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_tracks_assistance
+      ON connect_assistance_tracks ("assistanceId", "deviceTsMs");
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_tracks_dedupe
+      ON connect_assistance_tracks ("assistanceId", "deviceTsMs", lat, lng);
+
+    -- Evidencias (fotografías y documentos) subidas desde la APK
+    CREATE TABLE IF NOT EXISTS connect_assistance_files (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "workshopId" INTEGER,
+      "liteUserId" INTEGER,
+      category TEXT NOT NULL DEFAULT 'other',
+      url TEXT NOT NULL,
+      "storagePath" TEXT,
+      "fileName" TEXT,
+      "mimeType" TEXT,
+      "sizeBytes" INTEGER,
+      sha256 TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      "deviceTsMs" BIGINT,
+      "deletedAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_files_assistance ON connect_assistance_files ("assistanceId");
+
+    -- Firma del cliente (una vigente por asistencia; el histórico se conserva)
+    CREATE TABLE IF NOT EXISTS connect_assistance_signatures (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "workshopId" INTEGER,
+      "liteUserId" INTEGER,
+      "signerName" TEXT NOT NULL,
+      "signerDocument" TEXT,
+      "consentText" TEXT,
+      "consentAccepted" BOOLEAN NOT NULL DEFAULT true,
+      url TEXT NOT NULL,
+      "storagePath" TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      "signedAtMs" BIGINT NOT NULL,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_signatures_assistance
+      ON connect_assistance_signatures ("assistanceId");
+
+    -- Idempotencia de operaciones enviadas desde la APK (cola offline)
+    CREATE TABLE IF NOT EXISTS connect_lite_actions (
+      "clientActionId" TEXT PRIMARY KEY,
+      "liteUserId" INTEGER,
+      "assistanceId" INTEGER,
+      kind TEXT NOT NULL,
+      result TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_lite_actions_created
+      ON connect_lite_actions ("createdAtMs");
   `);
 
   await seedConnectDefaults();
