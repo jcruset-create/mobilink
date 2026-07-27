@@ -184,17 +184,21 @@ class _BigTile extends StatelessWidget {
         child: Container(
           width: double.infinity,
           height: small ? 96 : (primary ? 140 : 88),
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: primary ? null : Border.all(color: AppColors.cardBorder),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon, color: fg, size: primary ? 38 : 30),
-              const SizedBox(height: 8),
-              Text(label, textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: primary ? 20 : 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Flexible(
+                child: Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: fg, fontSize: primary ? 20 : 16, fontWeight: FontWeight.w700)),
+              ),
             ],
           ),
         ),
