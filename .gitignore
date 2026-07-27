@@ -37,3 +37,8 @@ supabase/.temp/
 # Flutter (solo se versiona lib/ + pubspec)
 */.dart_tool/
 */.flutter-plugins-dependencies
+*/android/
+*/build/
+*/.metadata
+*/analysis_options.yaml
+lite_app/.gitignore

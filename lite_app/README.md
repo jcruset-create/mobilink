@@ -76,11 +76,36 @@ Después hay que añadir a `android/app/src/main/AndroidManifest.xml`, dentro de
 
 Y el nombre visible de la app en `<application android:label="Mobilink Assist Lite">`.
 
+Dentro de `<queries>` hay que declarar los esquemas que abre `url_launcher`
+(`geo:` para navegación, `tel:` para llamar y `https:` para la política de
+privacidad); si no, los botones no hacen nada en Android 11+.
+
+Además, en `android/app/build.gradle.kts`:
+
+```kotlin
+android {
+    ndkVersion = "27.0.12077973"   // lo exigen url_launcher_android y geolocator
+    ...
+}
+```
+
+Y en `android/gradle.properties`, bajar la memoria del demonio de Gradle: el
+valor que genera Flutter (`-Xmx8G -XX:MaxMetaspaceSize=4G`) no cabe en equipos
+de 16 GB y el demonio muere a mitad de compilación.
+
+```properties
+org.gradle.jvmargs=-Xmx2G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError
+```
+
 ## Compilar
 
 ```bash
 flutter build apk --release
 ```
+
+Si una compilación anterior se ha quedado a medias, Windows deja bloqueado
+`build/`: parar el demonio (`android\gradlew.bat --stop`), borrar la carpeta
+`build` y repetir.
 
 Copiar al Escritorio como `mobilink-assist-lite-<versión>.apk` (la versión sale
 de `pubspec.yaml`, p. ej. `mobilink-assist-lite-0.1.0.apk`). Verificar con
