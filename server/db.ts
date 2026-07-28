@@ -614,6 +614,16 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS wcs_job_idx ON whatsapp_capture_sessions(job_id);
     CREATE INDEX IF NOT EXISTS wcs_status_idx ON whatsapp_capture_sessions(status);
 
+    -- Un único número de WhatsApp para todo el ecosistema: la sesión de
+    -- captura puede pertenecer a una asistencia del core (job_id), a una de
+    -- Central Pro (connect_assistance_id) o a un alta que aún no existe
+    -- (ambas a null; se vincula al crear la asistencia).
+    ALTER TABLE whatsapp_capture_sessions ALTER COLUMN job_id DROP NOT NULL;
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS connect_assistance_id INTEGER;
+    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
+    CREATE INDEX IF NOT EXISTS wcs_connect_idx
+      ON whatsapp_capture_sessions(connect_assistance_id);
+
     CREATE TABLE IF NOT EXISTS whatsapp_capture_messages (
       id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL REFERENCES whatsapp_capture_sessions(id) ON DELETE CASCADE,

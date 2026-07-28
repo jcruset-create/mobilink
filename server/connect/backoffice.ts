@@ -25,9 +25,58 @@ import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES } from "../core/ai.ts";
+import {
+  activeCaptureSession, captureMessages, saveCaptureAnalysis, normalize as normalizeCapture,
+} from "../core/whatsappCapture.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
+}
+
+/**
+ * Archiva lo recibido por WhatsApp en la asistencia de Central Pro: las fotos,
+ * audios y documentos pasan a ser evidencias, y los textos y ubicaciones se
+ * añaden como comunicaciones. Es idempotente: reabrir y volver a cerrar una
+ * sesión no duplica nada.
+ */
+async function archivarCaptura(sessionId: number, assistanceId: number): Promise<void> {
+  const mensajes = await captureMessages(sessionId);
+  const now = Date.now();
+  const ws = await db.query(`SELECT "workshopId" FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const workshopId = ws.rows[0]?.workshopId ?? null;
+
+  for (const m of mensajes) {
+    const url = m.media_stored_url || m.media_url;
+    if (url && ["image", "video", "audio", "document"].includes(m.message_type)) {
+      await db.query(
+        `INSERT INTO connect_assistance_files
+           ("assistanceId", "workshopId", category, url, "fileName", "mimeType", "deviceTsMs", "createdAtMs")
+         SELECT $1, $2, 'other', $3, $4, $5, $6, $7
+          WHERE NOT EXISTS (SELECT 1 FROM connect_assistance_files WHERE "assistanceId" = $1 AND url = $3)`,
+        [
+          assistanceId, workshopId, url,
+          `WhatsApp ${m.message_type} ${new Date(m.received_at).toLocaleTimeString("es-ES")}`,
+          m.message_type === "image" ? "image/jpeg" : null, m.received_at, now,
+        ],
+      ).catch((e: any) => console.error("[Connect] archivar evidencia:", e?.message));
+    }
+
+    const texto =
+      m.message_type === "text" ? m.text_content :
+      m.message_type === "location" ? `Ubicación: ${m.address ?? `${m.latitude}, ${m.longitude}`}` :
+      m.message_type === "contact" ? `Contacto: ${m.contact_name ?? ""} ${m.contact_phone ?? ""}`.trim() :
+      m.message_type === "audio" && m.transcript ? `Audio: ${m.transcript}` : null;
+    if (texto) {
+      await db.query(
+        `INSERT INTO connect_communications ("assistanceId", channel, direction, body, "byName", "createdAtMs")
+         SELECT $1, 'whatsapp', 'inbound', $2, $3, $4
+          WHERE NOT EXISTS (
+            SELECT 1 FROM connect_communications
+             WHERE "assistanceId" = $1 AND body = $2 AND channel = 'whatsapp')`,
+        [assistanceId, String(texto).slice(0, 2000), m.from_phone ?? "WhatsApp", m.received_at],
+      ).catch((e: any) => console.error("[Connect] archivar mensaje:", e?.message));
+    }
+  }
 }
 
 /** Código corto e irrepetible que el taller Lite teclea en la APK (p. ej. TALLERSUR-7431). */
@@ -899,6 +948,110 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       detail: { campos: Object.keys(data).length, imagenes: images.length, conTexto: !!text },
     });
     res.json({ data });
+  });
+
+  // ── Captura de WhatsApp (mismo número de entrada que Mobilink Assist) ────
+
+  /**
+   * Sesión de captura activa y sus mensajes. La sesión puede ser de Central
+   * Pro, de una asistencia del core o de un alta que aún no existe; se
+   * devuelve siempre para que el operador vea si el número está ocupado.
+   */
+  router.get("/whatsapp-capture/active", ...requireConnectRole("operator"), async (_req, res) => {
+    const session = await activeCaptureSession();
+    if (!session) return res.json({ session: null });
+    res.json({ session: { ...session, messages: await captureMessages(session.id) } });
+  });
+
+  router.get("/whatsapp-capture/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [Number(req.params.id)]);
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+    const session = normalizeCapture(r.rows[0]);
+    res.json({ session: { ...session, messages: await captureMessages(session.id) } });
+  });
+
+  /**
+   * Abre la captura. Sin `assistanceId` queda a la espera (alta nueva): los
+   * WhatsApp entrantes se guardan y se vinculan al crear la asistencia.
+   */
+  router.post("/whatsapp-capture/start", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const assistanceId = req.body?.assistanceId != null ? Number(req.body.assistanceId) : null;
+
+    const activa = await activeCaptureSession();
+    if (activa) {
+      if (assistanceId != null && activa.connect_assistance_id === assistanceId) {
+        return res.json({ session: { ...activa, messages: await captureMessages(activa.id) } });
+      }
+      return err(res, 409, "capture_busy",
+        activa.job_id != null
+          ? "Hay una captura activa en Mobilink Assist. Ciérrala antes de empezar otra."
+          : "Ya hay una captura de WhatsApp activa. Ciérrala antes de empezar otra.");
+    }
+    if (assistanceId != null) {
+      const a = await db.query(`SELECT id FROM connect_assistances WHERE id = $1`, [assistanceId]);
+      if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    }
+
+    const now = Date.now();
+    const ins = await db.query(
+      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, status, started_at, created_by)
+       VALUES (NULL, $1, 'ACTIVE', $2, $3) RETURNING *`,
+      [assistanceId, now, u.name],
+    );
+    await auditConnect({
+      req, action: "whatsapp.capture_started", resourceType: "assistance",
+      resourceId: assistanceId ?? undefined, detail: { sessionId: ins.rows[0].id },
+    });
+    res.status(201).json({ session: { ...normalizeCapture(ins.rows[0]), messages: [] } });
+  });
+
+  /**
+   * Cierra la captura, archiva las evidencias en la asistencia (si ya existe)
+   * y lanza el análisis con IA.
+   */
+  router.post("/whatsapp-capture/:id/close", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const r = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+    if (r.rows[0].status === "CLOSED") return err(res, 409, "already_closed", "La sesión ya está cerrada");
+
+    const now = Date.now();
+    await db.query(`UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`, [id, now]);
+    const assistanceId = r.rows[0].connect_assistance_id;
+    if (assistanceId) await archivarCaptura(id, Number(assistanceId));
+
+    // El análisis puede tardar unos segundos: no se bloquea la respuesta
+    saveCaptureAnalysis(id)
+      .then((s) => console.log(`[Connect] captura #${id} analizada (${Object.keys(s).length} campos)`))
+      .catch((e) => console.error("[Connect] análisis de captura:", e?.message));
+
+    await auditConnect({ req, action: "whatsapp.capture_closed", resourceType: "assistance", resourceId: assistanceId ?? undefined, detail: { sessionId: id } });
+    const upd = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
+    res.json({ session: normalizeCapture(upd.rows[0]) });
+  });
+
+  /** Vincula una captura a la asistencia recién creada y archiva lo recibido. */
+  router.post("/whatsapp-capture/:id/link", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const assistanceId = Number(req.body?.assistanceId);
+    const a = await db.query(`SELECT id FROM connect_assistances WHERE id = $1`, [assistanceId]);
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    await db.query(
+      `UPDATE whatsapp_capture_sessions SET connect_assistance_id = $2 WHERE id = $1`,
+      [id, assistanceId],
+    );
+    await archivarCaptura(id, assistanceId);
+    await auditConnect({ req, action: "whatsapp.capture_linked", resourceType: "assistance", resourceId: assistanceId, detail: { sessionId: id } });
+    res.json({ ok: true });
+  });
+
+  /** Análisis con IA a demanda (sin cerrar la sesión). */
+  router.post("/whatsapp-capture/:id/analyze", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const suggestions = await saveCaptureAnalysis(id);
+    res.json({ suggestions });
   });
 
   // ── Asistencias (lectura Sprint 1; gestión completa en S2/S3) ──
