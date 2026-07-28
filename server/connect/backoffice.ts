@@ -347,6 +347,7 @@ export function createConnectBackofficeRouter(): Router {
                 COALESCE(ca."liteUserName", ra."assignedTechName")                      AS "operatorName",
                 COALESCE(ra."assignedVehicleName", mu.name)                             AS "vehicleName",
                 COALESCE(mu.plate, rv.plate)                                            AS "vehiclePlate",
+                mu."connectionStatus"                                                   AS "vehicleConnection",
                 CASE
                   WHEN ca."operatorLat" IS NOT NULL THEN 'lite'
                   WHEN ra."operatorLat" IS NOT NULL THEN 'assist'
