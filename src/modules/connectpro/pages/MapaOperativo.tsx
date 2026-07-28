@@ -62,31 +62,43 @@ function zoomFactor(zoom: number): number {
  * `marker_averia.png` original, que venía sobre fondo blanco opaco), de modo
  * que el mismo hecho se dibuja igual en todo el ecosistema.
  *
- * El estado se lee en el popup, no en el propio pin. Las urgentes llevan aro
- * rojo y signo de admiración, para no comunicarlo solo con el color.
+ * Debajo del pin va el estado con el color de la leyenda, igual que la
+ * matrícula bajo la furgoneta: así el estado se lee en el propio mapa sin
+ * tener que abrir el popup ni interpretar un color suelto. Las urgentes llevan
+ * además aro rojo y signo de admiración.
  */
-function assistanceIcon(_status: string, urgent: boolean, zoom: number) {
+function assistanceIcon(status: string, urgent: boolean, zoom: number) {
+  const color = STATUS_COLORS[status] ?? "#94a3b8";
+  const label = ASSISTANCE_STATUS_LABELS[status] ?? status;
   const f = zoomFactor(zoom);
   const s = Math.round(40 * f);          // lado del marcador (la imagen es cuadrada)
   const dot = Math.max(7, Math.round(14 * f));
+  const font = Math.max(8, Math.round(10 * f));
+  const badgeH = Math.round(font * 1.9);
+  const w = Math.max(s, 110);
   // La punta del pin está a ~el 90 % de la altura de la imagen: ahí va el anclaje
   const tipY = Math.round(s * 0.9);
   return L.divIcon({
     html: `
-      <div style="position:relative;width:${s}px;height:${s}px">
-        ${urgent ? `<div style="position:absolute;inset:${Math.round(s * 0.08)}px ${Math.round(s * 0.06)}px ${Math.round(s * 0.22)}px;
-             border:${Math.max(2, Math.round(3 * f))}px solid #ef4444;border-radius:50%;opacity:.85"></div>` : ""}
-        <img src="/marker-asistencia.png" alt="" width="${s}" height="${s}"
-             style="display:block;width:${s}px;height:${s}px;max-width:none;
-             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
-        ${urgent ? `<span style="position:absolute;left:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
-             background:#ef4444;border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;color:#fff;
-             font:700 ${Math.max(8, Math.round(dot * 0.8))}px/1 system-ui;display:flex;align-items:center;
-             justify-content:center">!</span>` : ""}
+      <div style="text-align:center;width:${w}px">
+        <div style="position:relative;width:${s}px;height:${s}px;margin:0 auto">
+          ${urgent ? `<div style="position:absolute;inset:${Math.round(s * 0.08)}px ${Math.round(s * 0.06)}px ${Math.round(s * 0.22)}px;
+               border:${Math.max(2, Math.round(3 * f))}px solid #ef4444;border-radius:50%;opacity:.85"></div>` : ""}
+          <img src="/marker-asistencia.png" alt="" width="${s}" height="${s}"
+               style="display:block;width:${s}px;height:${s}px;max-width:none;
+               filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+          ${urgent ? `<span style="position:absolute;left:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
+               background:#ef4444;border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;color:#fff;
+               font:700 ${Math.max(8, Math.round(dot * 0.8))}px/1 system-ui;display:flex;align-items:center;
+               justify-content:center">!</span>` : ""}
+        </div>
+        <div style="display:inline-block;background:rgba(15,23,42,.92);color:${color};
+             border:1px solid ${color};font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
+             margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${urgent ? "! " : ""}${label}</div>
       </div>`,
     className: "",
-    iconSize: [s, s],
-    iconAnchor: [s / 2, tipY],
+    iconSize: [w, s + badgeH],
+    iconAnchor: [w / 2, tipY],
     popupAnchor: [0, -tipY],
   });
 }
