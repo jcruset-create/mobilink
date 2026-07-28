@@ -23,6 +23,7 @@ import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
+import { drivingRoute } from "./routing.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
@@ -344,6 +345,7 @@ export function createConnectBackofficeRouter(): Router {
                 ca."operatorSpeedKmh"                                                   AS "vehicleSpeedKmh",
                 COALESCE(ca."liteUserName", ra."assignedTechName")                      AS "operatorName",
                 COALESCE(ra."assignedVehicleName", mu.name)                             AS "vehicleName",
+                COALESCE(mu.plate, rv.plate)                                            AS "vehiclePlate",
                 CASE
                   WHEN ca."operatorLat" IS NOT NULL THEN 'lite'
                   WHEN ra."operatorLat" IS NOT NULL THEN 'assist'
@@ -353,6 +355,14 @@ export function createConnectBackofficeRouter(): Router {
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
            LEFT JOIN connect_mobile_units mu ON mu."activeAssistanceId" = ca.id
+           -- Matrícula del vehículo del core: por id de Webfleet o por nombre.
+           -- LATERAL con LIMIT 1 para que un nombre repetido no duplique filas.
+           LEFT JOIN LATERAL (
+             SELECT v.plate FROM roadside_vehicles v
+              WHERE (ra."webfleetVehicleId" IS NOT NULL AND v."webfleetVehicleId" = ra."webfleetVehicleId")
+                 OR (ra."assignedVehicleName" IS NOT NULL AND v.name = ra."assignedVehicleName")
+              LIMIT 1
+           ) rv ON true
           WHERE ca.status NOT IN ('finished', 'at_workshop', 'cancelled', 'draft')
             AND ca.latitude IS NOT NULL`,
       ),
@@ -364,6 +374,35 @@ export function createConnectBackofficeRouter(): Router {
       ),
     ]);
     res.json({ assistances: assistances.rows, workshops: workshops.rows });
+  });
+
+  /**
+   * Ruta por carretera de la unidad asignada hasta el punto de la asistencia.
+   * Devuelve `route: null` cuando no hay clave de Google o no hay ruta: el mapa
+   * cae a la línea recta y lo dice, en vez de fingir un trazado.
+   */
+  router.get("/assistances/:id/route", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const r = await db.query(
+      `SELECT ca.latitude, ca.longitude,
+              COALESCE(ca."operatorLat", ra."operatorLat", mu.latitude)  AS "vehicleLat",
+              COALESCE(ca."operatorLng", ra."operatorLng", mu.longitude) AS "vehicleLng"
+         FROM connect_assistances ca
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+         LEFT JOIN connect_mobile_units mu ON mu."activeAssistanceId" = ca.id
+        WHERE ca.id = $1`,
+      [id],
+    );
+    const a = r.rows[0];
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (a.latitude == null || a.vehicleLat == null) return res.json({ route: null });
+
+    const route = await drivingRoute(
+      id,
+      { lat: Number(a.vehicleLat), lng: Number(a.vehicleLng) },
+      { lat: Number(a.latitude), lng: Number(a.longitude) },
+    );
+    res.json({ route });
   });
 
   // ── Empresas proveedoras ──────────────────────────────────
