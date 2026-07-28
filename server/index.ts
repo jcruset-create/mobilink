@@ -13215,108 +13215,75 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
   try {
     const techName = String(req.body?.techName || "").trim();
     const code = String(req.body?.code || "").trim();
-    const expectedCode = await getExpectedRoadsideOperatorCode(techName);
-
-    if (!techName || !code || !expectedCode || code !== expectedCode) {
-      return res.status(401).json({ error: "Operario o código incorrecto" });
+    if (!techName || !code) {
+      return res.status(400).json({ error: "Introduce tu nombre y PIN" });
     }
 
-    const slug = techName
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[̀-ͯ]/g, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    const email = `apk-${slug}@seatyrecheck.app`;
-
-    // ¿Ya existe el usuario? (tc_usuarios.id == auth.users.id)
-    const { data: existente } = await supabase
+    // Login SOLO contra usuarios de TyreControl con acceso a la APK. Los
+    // operarios de Assist (tabla techs) YA NO pueden entrar en TyreControl.
+    // El PIN es la propia contraseña del usuario en Supabase Auth (se fija al
+    // crear el usuario y se cambia desde Usuarios); aquí solo resolvemos su
+    // email y la APK hace signInWithPassword(email, PIN) → Supabase valida.
+    const { data: usuarios } = await supabase
       .from("tc_usuarios")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
-
-    let userId: string;
-    if (existente) {
-      userId = existente.id;
-      // Mantener la contraseña de Supabase sincronizada con el PIN actual
-      await supabase.auth.admin.updateUserById(userId, { password: code });
-      await supabase
-        .from("tc_usuarios")
-        .update({ acceso_apk: true, activo: true, nombre: techName })
-        .eq("id", userId);
-    } else {
-      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
-        email,
-        password: code,
-        email_confirm: true,
-      });
-      if (createErr || !created.user) {
-        throw new Error(createErr?.message || "No se pudo crear el usuario");
-      }
-      userId = created.user.id;
-
-      // Empresa de referencia: Mobilink Tarragona (nombre legacy "SEA Tarragona"
-      // aceptado hasta ejecutar la migración de datos; si no, la más antigua).
-      const { data: empresa } = await supabase
-        .from("tc_empresas")
-        .select("id")
-        .in("nombre", ["Mobilink Tarragona", "SEA Tarragona"])
-        .order("nombre", { ascending: true }) // "Mobilink..." < "SEA..." → prioriza el nuevo
-        .limit(1)
-        .maybeSingle();
-      let empresaId = empresa?.id;
-      if (!empresaId) {
-        const { data: primera } = await supabase
-          .from("tc_empresas")
-          .select("id")
-          .order("created_at", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        empresaId = primera?.id;
-      }
-      if (!empresaId) throw new Error("No hay empresas en TyreControl");
-
-      const { error: insertErr } = await supabase.from("tc_usuarios").insert({
-        id: userId,
-        empresa_id: empresaId,
-        nombre: techName,
-        email,
-        rol: "operador",
-        acceso_apk: true,
-        acceso_panel: false,
-        activo: true,
-      });
-      if (insertErr) throw new Error(insertErr.message);
+      .select("id, email, nombre, activo, acceso_apk, empresas_manual")
+      .ilike("nombre", techName)
+      .eq("acceso_apk", true)
+      .eq("activo", true)
+      .limit(1);
+    const user = (usuarios || [])[0];
+    if (!user || !user.email) {
+      return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
 
-    // El técnico de SEA atiende a todas las flotas: asignar todas las
-    // empresas activas (la RLS de operador solo muestra las asignadas).
-    // EXCEPTO si el usuario tiene asignación manual desde el panel
-    // (empresas_manual): entonces sus empresas las gestiona el administrador
-    // y el login no las toca.
-    const { data: perfilUsuario } = await supabase
-      .from("tc_usuarios")
-      .select("empresas_manual")
-      .eq("id", userId)
-      .maybeSingle();
-    if (!perfilUsuario?.empresas_manual) {
+    // Empresas: si no tiene asignación manual, ve todas las activas (default);
+    // si es "manual", las gestiona el administrador desde Usuarios.
+    if (!user.empresas_manual) {
       const { data: empresas } = await supabase
         .from("tc_empresas")
         .select("id")
         .eq("activo", true);
       if (empresas && empresas.length > 0) {
         await supabase.from("tc_operador_empresas").upsert(
-          empresas.map((e: { id: string }) => ({ usuario_id: userId, empresa_id: e.id })),
+          empresas.map((e: { id: string }) => ({ usuario_id: user.id, empresa_id: e.id })),
           { onConflict: "usuario_id,empresa_id" }
         );
       }
     }
 
-    res.json({ ok: true, email, techName });
+    res.json({ ok: true, email: user.email, techName: user.nombre });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/login-operario error:", error);
     res.status(500).json({ error: error?.message || "Error iniciando sesión" });
+  }
+});
+
+// Cambiar la contraseña/PIN de un usuario de TyreControl (solo admin/super).
+app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Sin token" });
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return res.status(401).json({ error: "No autenticado" });
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("rol, es_superadmin, activo")
+      .eq("id", userData.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.activo) return res.status(403).json({ error: "Perfil no válido" });
+    if (perfil.es_superadmin !== true && perfil.rol !== "administrador") {
+      return res.status(403).json({ error: "Permisos insuficientes" });
+    }
+
+    const nueva = String(req.body?.password ?? "");
+    if (nueva.length < 4) return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
+    const { error } = await supabase.auth.admin.updateUserById(String(req.params.id), { password: nueva });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error("POST /api/tyrecontrol/usuarios/:id/password error:", error);
+    res.status(500).json({ error: error?.message || "Error cambiando la contraseña" });
   }
 });
 

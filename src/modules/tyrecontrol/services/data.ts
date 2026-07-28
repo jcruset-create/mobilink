@@ -322,6 +322,20 @@ export async function eliminarUsuario(id: string): Promise<void> {
   if (!r.ok) throw new Error((j as any)?.error || "Error eliminando usuario");
 }
 
+/// Cambia la contraseña/PIN de un usuario (vía backend, service-role).
+export async function cambiarPasswordUsuario(id: string, password: string): Promise<void> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ password }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error cambiando la contraseña");
+}
+
 // ── Neumáticos ───────────────────────────────────────────────
 const NEU_SELECT = "*, empresa:tc_empresas(*)";
 
