@@ -27,8 +27,16 @@ type MapAssistance = {
   // Unidad asignada: móvil del operario Lite, móvil del técnico de Assist o GPS de la unidad
   vehicleLat: number | null; vehicleLng: number | null; vehicleAtMs: number | null;
   vehicleSpeedKmh: number | null; operatorName: string | null; vehicleName: string | null;
-  vehicleSource: "lite" | "assist" | "unit" | null;
+  vehiclePlate: string | null; vehicleSource: "lite" | "assist" | "unit" | null;
 };
+/** Ruta en coche devuelta por el backend (Google Routes API v2). */
+type RutaCarretera = {
+  points: [number, number][];
+  distanceKm: number;
+  etaMinutes: number;
+  computedAtMs: number;
+};
+
 type MapWorkshop = {
   id: number; name: string; latitude: number; longitude: number; radiusKm: number;
   connectStatus: string; currentScore: number; providerName: string | null;
@@ -54,13 +62,10 @@ function zoomFactor(zoom: number): number {
  * `marker_averia.png` original, que venía sobre fondo blanco opaco), de modo
  * que el mismo hecho se dibuja igual en todo el ecosistema.
  *
- * El estado sigue siendo legible sin depender del icono: lleva el punto de
- * color de la leyenda en una esquina y el nombre del estado en el popup. Las
- * urgentes añaden un aro rojo y un signo de admiración, para no comunicarlo
- * solo con el color.
+ * El estado se lee en el popup, no en el propio pin. Las urgentes llevan aro
+ * rojo y signo de admiración, para no comunicarlo solo con el color.
  */
-function assistanceIcon(status: string, urgent: boolean, zoom: number) {
-  const color = STATUS_COLORS[status] ?? "#94a3b8";
+function assistanceIcon(_status: string, urgent: boolean, zoom: number) {
   const f = zoomFactor(zoom);
   const s = Math.round(40 * f);          // lado del marcador (la imagen es cuadrada)
   const dot = Math.max(7, Math.round(14 * f));
@@ -74,9 +79,6 @@ function assistanceIcon(status: string, urgent: boolean, zoom: number) {
         <img src="/marker-asistencia.png" alt="" width="${s}" height="${s}"
              style="display:block;width:${s}px;height:${s}px;max-width:none;
              filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
-        <span style="position:absolute;right:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
-             background:${color};border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;
-             box-shadow:0 1px 3px rgba(0,0,0,.6)"></span>
         ${urgent ? `<span style="position:absolute;left:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
              background:#ef4444;border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;color:#fff;
              font:700 ${Math.max(8, Math.round(dot * 0.8))}px/1 system-ui;display:flex;align-items:center;
@@ -94,7 +96,9 @@ const POSICION_VIEJA_MS = 5 * 60_000;
 
 /**
  * Unidad asignada a la asistencia, con el mismo aspecto que en «Localización
- * de flota»: la furgoneta y, debajo, la matrícula o el nombre de la unidad.
+ * de flota»: la furgoneta y, debajo, la matrícula. Si el vehículo no tiene
+ * matrícula registrada se cae al nombre de la unidad o al operario, para no
+ * dejar la etiqueta vacía.
  *
  * Si la última posición es antigua se atenúa y la etiqueta lo dice, para no
  * dar por buena una posición que ya no lo es.
@@ -144,6 +148,7 @@ export default function MapaOperativo() {
   const { user } = useConnectAuth();
   const canEdit = hasRole(user, "cc_admin");
   const [data, setData] = useState<{ assistances: MapAssistance[]; workshops: MapWorkshop[] } | null>(null);
+  const [rutas, setRutas] = useState<Record<number, RutaCarretera>>({});
   const [showCoverage, setShowCoverage] = useState(false);
   const [adjustMode, setAdjustMode] = useState(false);
   const [zoom, setZoom] = useState(9);
@@ -163,10 +168,39 @@ export default function MapaOperativo() {
     } catch (e: any) { setError(e.message); load(); }
   };
 
+  /**
+   * Rutas por carretera de cada unidad en camino. Se piden aparte del mapa
+   * porque el backend las cachea: así el refresco cada 15 s no dispara una
+   * llamada facturable a Google por cada unidad.
+   */
+  const cargarRutas = useCallback(async (asistencias: MapAssistance[]) => {
+    const conUnidad = asistencias.filter((a) => a.vehicleLat != null && a.vehicleLng != null);
+    const resultados = await Promise.all(
+      conUnidad.map((a) =>
+        boFetch<{ route: RutaCarretera | null }>(`/assistances/${a.id}/route`)
+          .then((r) => [a.id, r.route] as const)
+          .catch(() => [a.id, null] as const),
+      ),
+    );
+    setRutas((previas) => {
+      const siguiente = { ...previas };
+      for (const [id, ruta] of resultados) {
+        // Si esta vez no hay ruta, se conserva la anterior: mejor una ruta de
+        // hace un minuto que volver de golpe a la línea recta.
+        if (ruta) siguiente[id] = ruta;
+      }
+      for (const id of Object.keys(siguiente)) {
+        if (!conUnidad.some((a) => String(a.id) === id)) delete siguiente[Number(id)];
+      }
+      return siguiente;
+    });
+  }, []);
+
   const load = useCallback(() => {
     boFetch<{ assistances: MapAssistance[]; workshops: MapWorkshop[] }>("/map")
-      .then(setData).catch((e) => setError(e.message));
-  }, []);
+      .then((d) => { setData(d); void cargarRutas(d.assistances); })
+      .catch((e) => setError(e.message));
+  }, [cargarRutas]);
 
   useEffect(() => {
     load();
@@ -250,6 +284,7 @@ export default function MapaOperativo() {
           {data?.assistances.map((a) => {
             const conUnidad = a.vehicleLat != null && a.vehicleLng != null;
             const vieja = conUnidad && (!a.vehicleAtMs || Date.now() - Number(a.vehicleAtMs) > POSICION_VIEJA_MS);
+            const ruta = rutas[a.id];
             return (
               <span key={`a${a.id}`}>
                 <Marker position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
@@ -264,19 +299,31 @@ export default function MapaOperativo() {
                 </Marker>
                 {conUnidad && (
                   <>
-                    {/* Trayecto pendiente hasta el punto: discontinuo, no es la ruta real */}
-                    <Polyline
-                      positions={[[a.vehicleLat!, a.vehicleLng!], [a.latitude, a.longitude]]}
-                      pathOptions={{ color: vieja ? "#64748b" : "#8b5cf6", weight: 2, dashArray: "6 6", opacity: 0.85 }}
-                    />
+                    {/* Ruta real por carretera; si no hay, línea recta discontinua
+                        (y el popup avisa de que es una aproximación) */}
+                    {ruta ? (
+                      <Polyline
+                        positions={ruta.points}
+                        pathOptions={{ color: vieja ? "#64748b" : "#8b5cf6", weight: 4, opacity: 0.85 }}
+                      />
+                    ) : (
+                      <Polyline
+                        positions={[[a.vehicleLat!, a.vehicleLng!], [a.latitude, a.longitude]]}
+                        pathOptions={{ color: vieja ? "#64748b" : "#8b5cf6", weight: 2, dashArray: "6 6", opacity: 0.85 }}
+                      />
+                    )}
                     <Marker
                       position={[a.vehicleLat!, a.vehicleLng!]}
-                      icon={vehicleIcon(zoom, vieja, a.vehicleName ?? a.operatorName ?? `#${a.id}`)}
+                      icon={vehicleIcon(zoom, vieja, a.vehiclePlate ?? a.vehicleName ?? a.operatorName ?? `#${a.id}`)}
                     >
                       <Popup>
-                        <b>{a.vehicleName ?? "Unidad asignada"}</b><br />
+                        <b>{a.vehiclePlate ?? a.vehicleName ?? "Unidad asignada"}</b>
+                        {a.vehiclePlate && a.vehicleName ? ` · ${a.vehicleName}` : ""}<br />
                         {a.operatorName && <>Operario: {a.operatorName}<br /></>}
                         Asistencia #{a.id} · {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status}<br />
+                        {ruta
+                          ? <>Por carretera: {ruta.distanceKm} km · {ruta.etaMinutes} min<br /></>
+                          : <>Sin ruta disponible: la línea es una aproximación en recta<br /></>}
                         {a.vehicleSpeedKmh != null && <>{Math.round(a.vehicleSpeedKmh)} km/h<br /></>}
                         {vieja ? "⚠ Posición desactualizada" : "Posición actual"}
                         {a.vehicleAtMs ? ` (${fmtDateTime(Number(a.vehicleAtMs))})` : ""}<br />
