@@ -10,7 +10,7 @@ export type RolApp = { value: string; label: string };
 export type PantallaApp = { key: string; label: string };
 
 export type ModuloApp = {
-  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia";
+  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia" | "workplanner";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
@@ -149,6 +149,17 @@ export const MODULOS_APP: ModuloApp[] = [
     pantallas: [
       { key: "dashboard", label: "Panel" },
       { key: "fichajes", label: "Fichajes" },
+    ],
+  },
+  {
+    key: "workplanner",
+    label: "Mobilink WorkPlanner",
+    roles: ROL_ACCESO,
+    pantallas: [
+      { key: "operativo2", label: "Operativo 2" },
+      { key: "agenda", label: "Agenda" },
+      { key: "estadisticas", label: "Análisis y estadísticas" },
+      { key: "configuracion", label: "Configuración" },
     ],
   },
 ];
