@@ -28,6 +28,7 @@ type MapAssistance = {
   vehicleLat: number | null; vehicleLng: number | null; vehicleAtMs: number | null;
   vehicleSpeedKmh: number | null; operatorName: string | null; vehicleName: string | null;
   vehiclePlate: string | null; vehicleSource: "lite" | "assist" | "unit" | null;
+  vehicleConnection: string | null;
 };
 /** Ruta en coche devuelta por el backend (Google Routes API v2). */
 type RutaCarretera = {
@@ -103,8 +104,35 @@ function assistanceIcon(status: string, urgent: boolean, zoom: number) {
   });
 }
 
-/** Antigüedad a partir de la cual la posición deja de considerarse fiable. */
-const POSICION_VIEJA_MS = 5 * 60_000;
+/**
+ * Antigüedad a partir de la cual la posición deja de considerarse fiable.
+ * Depende de cada cuánto reporta la fuente: el móvil del operario manda
+ * posición cada 15-60 s mientras se desplaza, mientras que un GPS de flota
+ * (Webfleet) reporta cada varios minutos, así que exigirle lo mismo marcaría
+ * como dudosas unidades que están perfectamente conectadas.
+ */
+const POSICION_VIEJA_MS: Record<string, number> = {
+  lite: 5 * 60_000,
+  assist: 10 * 60_000,
+  unit: 20 * 60_000,
+};
+
+/** ¿Hay que avisar de que la posición ya no es de fiar? */
+function posicionDesactualizada(a: MapAssistance): boolean {
+  if (a.vehicleConnection === "offline" || a.vehicleConnection === "no_connection") return true;
+  if (!a.vehicleAtMs) return true;
+  const limite = POSICION_VIEJA_MS[a.vehicleSource ?? "unit"] ?? POSICION_VIEJA_MS.unit;
+  return Date.now() - Number(a.vehicleAtMs) > limite;
+}
+
+/** Antigüedad en texto, para decirlo en vez de insinuarlo con un icono. */
+function haceCuanto(ms: number | null): string {
+  if (!ms) return "sin fecha";
+  const min = Math.round((Date.now() - Number(ms)) / 60000);
+  if (min < 1) return "hace menos de 1 min";
+  if (min < 60) return `hace ${min} min`;
+  return `hace ${Math.round(min / 60)} h`;
+}
 
 /**
  * Unidad asignada a la asistencia, con el mismo aspecto que en «Localización
@@ -314,7 +342,7 @@ export default function MapaOperativo() {
           ))}
           {data?.assistances.map((a) => {
             const conUnidad = a.vehicleLat != null && a.vehicleLng != null;
-            const vieja = conUnidad && (!a.vehicleAtMs || Date.now() - Number(a.vehicleAtMs) > POSICION_VIEJA_MS);
+            const vieja = conUnidad && posicionDesactualizada(a);
             const ruta = rutas[a.id];
             return (
               <span key={`a${a.id}`}>
@@ -357,7 +385,8 @@ export default function MapaOperativo() {
                           : <>Sin ruta disponible: la línea es una aproximación en recta<br /></>}
                         {a.vehicleSpeedKmh != null && <>{Math.round(a.vehicleSpeedKmh)} km/h<br /></>}
                         {vieja ? "⚠ Posición desactualizada" : "Posición actual"}
-                        {a.vehicleAtMs ? ` (${fmtDateTime(Number(a.vehicleAtMs))})` : ""}<br />
+                        {a.vehicleAtMs ? ` · ${haceCuanto(Number(a.vehicleAtMs))} (${fmtDateTime(Number(a.vehicleAtMs))})` : ""}
+                        {a.vehicleConnection ? ` · ${a.vehicleConnection}` : ""}<br />
                         <span style={{ color: "#64748b" }}>Origen: {VEHICLE_SOURCE_LABELS[a.vehicleSource ?? ""] ?? "desconocido"}</span>
                       </Popup>
                     </Marker>
