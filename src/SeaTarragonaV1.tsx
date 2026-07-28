@@ -227,7 +227,21 @@ import { applyManualTechStatusOverrides } from "./modules/workshopPureHelpers";
 import { getAdminHeaders } from "./modules/adminHeaders";
 import { useScheduledJobs } from "./modules/useScheduledJobs";
 
-export default function SeaTarragonaV1({ initialView, permitirLoginClasico }: { initialView?: AppView; permitirLoginClasico?: boolean } = {}) {
+export default function SeaTarragonaV1({
+  initialView,
+  permitirLoginClasico,
+  embebido,
+}: {
+  initialView?: AppView;
+  permitirLoginClasico?: boolean;
+  /**
+   * Modo embebido: el panel se renderiza dentro de otro módulo (p. ej.
+   * Mobilink WorkPlanner), que ya aporta su propia cabecera y navegación.
+   * Oculta el título/versión del panel y la barra de conmutación de vistas
+   * para no duplicar navegación ni permitir saltos fuera del módulo.
+   */
+  embebido?: boolean;
+} = {}) {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
   const [rules, setRules] = useState<string[]>([]);
   const [newRule, setNewRule] = useState("");
@@ -4676,14 +4690,14 @@ if (!isAuthenticated) {
   );
 }
 return (
-  <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900">
+  <div className={`bg-slate-50 text-slate-900 ${embebido ? "px-2 py-3" : "min-h-screen px-2 py-6"}`}>
     <div className="mx-auto w-full max-w-[98vw] space-y-6">
 <div
   ref={stickyHeaderRef}
-  className="sticky top-0 z-30 bg-slate-50 pb-2 pt-2"
+  className={`z-30 bg-slate-50 pb-2 pt-2 ${embebido ? "" : "sticky top-0"}`}
 >
   <div className="flex flex-col gap-2">
-<div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between">
+<div className={`flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between ${embebido ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-2">
           <UserCog className="h-5 w-5 shrink-0 text-slate-600" />
           <div>
@@ -4730,7 +4744,7 @@ return (
     ))}
   </select>
 </div>
-       <div className="flex flex-wrap gap-2">
+       <div className={`flex-wrap gap-2 ${embebido ? "hidden" : "flex"}`}>
   {canView("operativo") && (
     <button
       type="button"

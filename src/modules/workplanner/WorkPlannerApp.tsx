@@ -1,6 +1,11 @@
+import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert } from "lucide-react";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
+import { supabase } from "../administracion/services/supabase";
+
+/** Clave del módulo en app_licencias / app_usuario_modulos. */
+export const MODULO_WORKPLANNER = "workplanner";
 
 // Menú del módulo. Estadísticas y Configuración quedan preparadas como
 // placeholders ("Próximamente") para las próximas fases.
@@ -27,14 +32,110 @@ function Proximamente({ titulo }: { titulo: string }) {
   );
 }
 
+function SinLicencia() {
+  const navigate = useNavigate();
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center p-6">
+      <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-8 text-center">
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500/15">
+          <ShieldAlert className="h-6 w-6 text-amber-400" />
+        </div>
+        <h2 className="text-base font-bold text-amber-200">Módulo no disponible</h2>
+        <p className="mt-2 text-sm text-amber-300/80">
+          Tu empresa no tiene licencia vigente de Mobilink WorkPlanner, o tu usuario no tiene
+          acceso a este módulo. Contacta con un administrador.
+        </p>
+        <button
+          onClick={() => navigate("/inicio")}
+          className="mt-4 rounded-xl bg-slate-700 px-4 py-2 text-sm font-medium text-slate-100 hover:bg-slate-600"
+        >
+          Volver al inicio
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Comprueba que el usuario tiene acceso a WorkPlanner Y que su empresa tiene
+ * la licencia vigente del módulo. WorkPlanner se licencia de forma
+ * INDEPENDIENTE del panel de taller ('taller'): tenerlo o no tenerlo no
+ * implica nada sobre el otro módulo.
+ *
+ * Devuelve null mientras carga, true/false una vez resuelto.
+ */
+function useAccesoWorkplanner() {
+  const [permitido, setPermitido] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let activo = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      const user = data.session?.user;
+      if (!user) { if (activo) setPermitido(false); return; }
+
+      // El superadmin de plataforma ve todos los módulos.
+      try {
+        const { data: u } = await supabase
+          .from("app_usuarios")
+          .select("es_superadmin")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (u?.es_superadmin) { if (activo) setPermitido(true); return; }
+      } catch { /* tabla sin migrar: seguimos */ }
+
+      // app_mis_modulos ya cruza permiso de usuario × licencia vigente.
+      try {
+        const { data: rows, error } = await supabase.rpc("app_mis_modulos");
+        if (error) throw error;
+        const ok = (rows ?? []).some((r: { modulo: string }) => r.modulo === MODULO_WORKPLANNER);
+        if (activo) setPermitido(ok);
+        return;
+      } catch { /* migración SaaS no aplicada: fallback */ }
+
+      // Fallback sin RPC: solo permiso de usuario (la licencia se valida en
+      // servidor cuando la migración esté aplicada).
+      try {
+        const { data: rows } = await supabase
+          .from("app_usuario_modulos")
+          .select("modulo")
+          .eq("user_id", user.id);
+        const ok = (rows ?? []).some((r) => r.modulo === MODULO_WORKPLANNER);
+        if (activo) setPermitido(ok);
+      } catch {
+        // Entorno sin las tablas SaaS: no bloqueamos el módulo.
+        if (activo) setPermitido(true);
+      }
+    })();
+    return () => { activo = false; };
+  }, []);
+
+  return permitido;
+}
+
 /**
  * Mobilink WorkPlanner: agrupa Operativo 2 y la agenda (Agenda 2) del panel
  * de taller bajo un menú propio, con Estadísticas y Configuración preparadas
- * para fases futuras. Las vistas funcionales reutilizan SeaTarragonaV1 vía
- * initialView (mismo mecanismo que /operativo2), sin duplicar código.
+ * para fases futuras. Las vistas funcionales reutilizan SeaTarragonaV1 en
+ * modo embebido (sin su cabecera ni su conmutador de vistas), sin duplicar
+ * código.
  */
 export default function WorkPlannerApp() {
   const navigate = useNavigate();
+  const permitido = useAccesoWorkplanner();
+
+  async function salir() {
+    // Cierra tanto la sesión de plataforma como el login interno del panel.
+    try {
+      localStorage.removeItem("sea-authenticated");
+      localStorage.removeItem("sea-admin-token");
+      localStorage.removeItem("sea-role");
+      localStorage.removeItem("sea-allowed-views");
+      localStorage.removeItem("sea-user-name");
+    } catch { /* noop */ }
+    await supabase.auth.signOut();
+    navigate("/acceso", { replace: true });
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
@@ -51,45 +152,59 @@ export default function WorkPlannerApp() {
             <CalendarClock className="h-4 w-4 text-sky-400" />
             <span className="text-[13px] font-black">Mobilink WorkPlanner</span>
           </div>
-          <nav className="flex items-center gap-1">
-            {SECCIONES.map((s) => {
-              const Icon = s.icon;
-              return (
-                <NavLink
-                  key={s.key}
-                  to={`/workplanner/${s.key}`}
-                  className={({ isActive }) =>
-                    `flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition ${
-                      isActive
-                        ? "bg-sky-600 text-white"
-                        : s.proximamente
-                          ? "text-slate-500 hover:bg-slate-800 hover:text-slate-400"
-                          : "text-slate-300 hover:bg-slate-800 hover:text-white"
-                    }`
-                  }
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {s.label}
-                  {s.proximamente && (
-                    <span className="rounded-full border border-slate-600 px-1.5 py-px text-[9px] font-bold uppercase text-slate-500">
-                      Próx.
-                    </span>
-                  )}
-                </NavLink>
-              );
-            })}
-          </nav>
+          {permitido && (
+            <nav className="flex items-center gap-1">
+              {SECCIONES.map((s) => {
+                const Icon = s.icon;
+                return (
+                  <NavLink
+                    key={s.key}
+                    to={`/workplanner/${s.key}`}
+                    className={({ isActive }) =>
+                      `flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition ${
+                        isActive
+                          ? "bg-sky-600 text-white"
+                          : s.proximamente
+                            ? "text-slate-500 hover:bg-slate-800 hover:text-slate-400"
+                            : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                      }`
+                    }
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {s.label}
+                    {s.proximamente && (
+                      <span className="rounded-full border border-slate-600 px-1.5 py-px text-[9px] font-bold uppercase text-slate-500">
+                        Próx.
+                      </span>
+                    )}
+                  </NavLink>
+                );
+              })}
+            </nav>
+          )}
+          <button
+            onClick={salir}
+            className="ml-auto flex shrink-0 items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
+          >
+            <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Salir</span>
+          </button>
         </div>
       </header>
 
-      <Routes>
-        <Route index element={<Navigate to="/workplanner/operativo2" replace />} />
-        <Route path="operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />
-        <Route path="agenda" element={<SeaTarragonaV1 initialView="agenda2" />} />
-        <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
-        <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
-        <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />
-      </Routes>
+      {permitido === null ? (
+        <div className="p-6 text-center text-sm text-slate-500">Cargando…</div>
+      ) : !permitido ? (
+        <SinLicencia />
+      ) : (
+        <Routes>
+          <Route index element={<Navigate to="/workplanner/operativo2" replace />} />
+          <Route path="operativo2" element={<SeaTarragonaV1 initialView="operativo2" embebido />} />
+          <Route path="agenda" element={<SeaTarragonaV1 initialView="agenda2" embebido />} />
+          <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
+          <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
+          <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />
+        </Routes>
+      )}
     </div>
   );
 }

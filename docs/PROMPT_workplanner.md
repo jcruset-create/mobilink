@@ -88,6 +88,19 @@ Rutas bajo `/workplanner/*` en `App.tsx`:
 4. Nota final: qué se ha reutilizado tal cual y qué queda como deuda (extracción de vistas,
    contenido de Estadísticas y Configuración).
 
+## 3 bis. Fase 2 — modo embebido y licencia propia (aplicada)
+
+- `SeaTarragonaV1` acepta la prop `embebido`: oculta su cabecera de título/versión y su barra
+  de conmutación de vistas, y deja de ser `sticky` para no chocar con la topbar del módulo.
+  El panel de taller en `/`, `/panel`, `/operativo2` y `/asistencias` no cambia (sin la prop).
+- WorkPlanner aporta la única navegación (4 secciones) y su propio botón **Salir**, que cierra
+  la sesión de plataforma y el login interno del panel.
+- **Licenciamiento independiente**: `workplanner` es un módulo más de `app_licencias`
+  (migración `supabase/migrations/saas_fase1c_modulo_workplanner.sql`), separado de `taller`.
+  Tener WorkPlanner no implica tener el panel de taller ni al revés. El acceso directo por URL
+  a `/workplanner/*` valida permiso + licencia vía `app_mis_modulos`; sin licencia se muestra
+  "Módulo no disponible". El selector de licencias de `/admin/empresas` ya lo incluye.
+
 ## 4. Restricciones
 
 - Español en toda la UI, mismo estilo visual que `/inicio` y el resto de módulos.
