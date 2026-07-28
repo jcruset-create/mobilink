@@ -528,8 +528,13 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
       Row(children: [
         Expanded(
           child: FilledButton.icon(
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId))),
+            // Al volver de Cambiar se recarga la ficha: los montajes se
+            // escriben en BD dentro de esa pantalla, pero la ficha guarda su
+            // estado y sin recargar seguiría mostrando el plano "antiguo".
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(
+                    builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId)))
+                .then((_) { if (mounted) _cargar(); }),
             icon: const Icon(Icons.swap_horiz),
             label: const Text('Cambiar'),
           ),
