@@ -25,6 +25,7 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _intervenciones = [];
+  List<Map<String, dynamic>> _sueltas = [];
 
   @override
   void initState() {
@@ -35,9 +36,18 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   Future<void> _cargar() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final iv = await TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId);
+      final res = await Future.wait([
+        TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId),
+        TyreControlApi.listarOperacionesVehiculo(widget.vehiculoId),
+      ]);
       if (!mounted) return;
-      setState(() => _intervenciones = iv);
+      final todas = res[1];
+      setState(() {
+        _intervenciones = res[0];
+        // Movimientos que no pertenecen a ninguna intervención (p. ej. montar
+        // desde catálogo sin cerrar sesión de cambio): antes no salían aquí.
+        _sueltas = todas.where((o) => o['intervencion_id'] == null).toList();
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -191,29 +201,44 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
-              : _intervenciones.isEmpty
+              : (_intervenciones.isEmpty && _sueltas.isEmpty)
                   ? const Center(child: Padding(padding: EdgeInsets.all(24),
-                      child: Text('Sin intervenciones registradas para este vehículo.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint))))
+                      child: Text('Sin operaciones registradas para este vehículo.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint))))
                   : RefreshIndicator(
                       onRefresh: _cargar,
-                      child: ListView.builder(
+                      child: ListView(
                         padding: const EdgeInsets.all(12),
-                        itemCount: _intervenciones.length,
-                        itemBuilder: (_, i) {
-                          final iv = _intervenciones[i];
-                          final informe = ((iv['resumen_ia'] as String?)?.isNotEmpty == true ? iv['resumen_ia'] : iv['resumen']) as String? ?? '—';
-                          return Card(
-                            color: AppColors.surface,
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
-                              title: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
-                                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                              subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
-                              trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
-                              onTap: () => _verDetalle(iv),
-                            ),
-                          );
-                        },
+                        children: [
+                          // Movimientos sueltos: montajes/cambios hechos fuera
+                          // de una intervención cerrada. Van primero porque son
+                          // los más recientes y antes no se veían.
+                          if (_sueltas.isNotEmpty) ...[
+                            const Text('MOVIMIENTOS SUELTOS',
+                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            ..._sueltas.map(_filaOperacion),
+                            const SizedBox(height: 16),
+                          ],
+                          if (_intervenciones.isNotEmpty) ...[
+                            const Text('INTERVENCIONES',
+                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            ..._intervenciones.map((iv) {
+                              final informe = ((iv['resumen_ia'] as String?)?.isNotEmpty == true ? iv['resumen_ia'] : iv['resumen']) as String? ?? '—';
+                              return Card(
+                                color: AppColors.surface,
+                                margin: const EdgeInsets.only(bottom: 8),
+                                child: ListTile(
+                                  title: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
+                                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                                  subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+                                  trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
+                                  onTap: () => _verDetalle(iv),
+                                ),
+                              );
+                            }),
+                          ],
+                        ],
                       ),
                     ),
     );

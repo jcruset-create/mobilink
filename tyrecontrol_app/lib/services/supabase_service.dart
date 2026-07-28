@@ -789,6 +789,20 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// TODAS las operaciones de un vehículo (montajes, sustituciones, cambios de
+  /// posición…), estén o no agrupadas en una intervención. Los montajes sueltos
+  /// (p. ej. montar desde catálogo sin cerrar intervención) no tienen
+  /// intervencion_id, así que sin esto no aparecían en ningún sitio.
+  static Future<List<Map<String, dynamic>>> listarOperacionesVehiculo(String vehiculoId) async {
+    final data = await _db.from('operaciones_neumaticos').select(
+        'id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, intervencion_id, observaciones, '
+        'posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), '
+        'posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), '
+        'neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)')
+        .eq('vehiculo_id', vehiculoId).order('created_at', ascending: false).limit(500);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   /// Cierra la intervención de cambio (agrupa operaciones + informe con IA)
   /// llamando al backend. Best-effort: si falla, no bloquea el flujo.
   ///
