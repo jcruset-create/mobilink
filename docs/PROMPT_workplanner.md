@@ -101,6 +101,36 @@ Rutas bajo `/workplanner/*` en `App.tsx`:
   a `/workplanner/*` valida permiso + licencia vía `app_mis_modulos`; sin licencia se muestra
   "Módulo no disponible". El selector de licencias de `/admin/empresas` ya lo incluye.
 
+## 3 ter. Fase 3 — extracción de vistas (parcial, aplicada)
+
+Aplicado:
+
+- **`src/components/Operativo2View.tsx`**: la vista Operativo 2 sale de las 415 líneas inline
+  de `SeaTarragonaV1` a un componente propio con props explícitas (datos, derivados y las 18
+  acciones del ciclo de trabajo). Copia mecánica, sin cambios de comportamiento.
+- En modo embebido el panel hace **early-return** de la vista pedida: WorkPlanner ya no monta
+  el resto del JSX del panel. `Operativo2View` acepta `embebido` (fluye en el layout en vez de
+  ser un overlay `fixed` que tapaba la topbar) y oculta su barra de navegación al panel.
+- La agenda ya era un componente propio (`AgendaView`) y también entra por early-return.
+- `onVolverModulo`: "Volver" de la agenda devuelve a WorkPlanner, no al panel.
+- Corregido: el login SSO pisaba `initialView`, así que entrar directo a `/workplanner/agenda`
+  aterrizaba en Operativo 2.
+
+### Pendiente para vender WorkPlanner realmente suelto
+
+1. **Motor de datos compartido.** Las dos vistas siguen necesitando el núcleo del panel
+   (carga de jobs/techs, `useScheduledJobs` con `allocateJob`, y las 18 acciones). Son ~4.400
+   líneas y 438 declaraciones en `SeaTarragonaV1`. Extraerlas a un hook `useWorkshopEngine`
+   compartido es la fase siguiente; hacerlo de golpe y sin tests es arriesgado, así que debe ir
+   por partes y con verificación en cada corte.
+2. **Autenticación del panel.** `POST /api/login-sso` (server/index.ts:9927) devuelve 404
+   "Tu usuario no tiene acceso al panel de taller" salvo que el usuario exista como usuario del
+   panel o sea superadmin, y las vistas visibles dependen de su `allowedViews`. Un cliente que
+   solo contrate WorkPlanner necesita, o bien un usuario de panel con `operativo2`/`agenda2`,
+   o bien que el endpoint conceda acceso por licencia de `workplanner`. Esto último implica
+   decidir **qué token de escritura recibe** ese usuario (hoy `adminToken` es la contraseña de
+   un usuario de panel o `ADMIN_PASSWORD`): es una decisión de seguridad, no un detalle técnico.
+
 ## 4. Restricciones
 
 - Español en toda la UI, mismo estilo visual que `/inicio` y el resto de módulos.
