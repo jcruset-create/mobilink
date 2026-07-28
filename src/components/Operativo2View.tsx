@@ -93,6 +93,13 @@ export type Operativo2ViewProps = {
   reassignJob: (jobId: number, techName: string) => void;
   addExtraSupportToJob: (jobId: number, supportName: string) => void;
   removeSupportByNameFromJob: (jobId: number, nameToRemove: string) => void;
+
+  /**
+   * Modo embebido (Mobilink WorkPlanner): la vista fluye dentro del layout del
+   * módulo en vez de ocupar la pantalla como overlay, y oculta su barra de
+   * navegación al resto de vistas del panel de taller.
+   */
+  embebido?: boolean;
 };
 
 /**
@@ -157,6 +164,7 @@ export default function Operativo2View({
   reassignJob,
   addExtraSupportToJob,
   removeSupportByNameFromJob,
+  embebido,
 }: Operativo2ViewProps) {
   const [op2CitaOpen, setOp2CitaOpen] = useState(false);
   const isTestTech = (name: string) => /prova|prueba|\btest\b/i.test(name);
@@ -197,9 +205,9 @@ export default function Operativo2View({
   const bloqueadosCount = visibleJobs.filter((j) => j.status === "bloqueado").length;
 
   return (
-    <div className="fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100">
-      {/* Barra superior */}
-      <div className="mb-2 flex items-center justify-between">
+    <div className={embebido ? "bg-slate-900 p-3 text-slate-100" : "fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100"}>
+      {/* Barra superior (solo en el panel: dentro de WorkPlanner navega su menú) */}
+      <div className={`mb-2 items-center justify-between ${embebido ? "hidden" : "flex"}`}>
         <span className="text-sm font-bold">📊 Mobilink · Operativo 2{userName ? <span className="ml-2 rounded bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-100">👤 {userName}</span> : null}</span>
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => { setView("operarios"); void reloadMaintenanceAvailabilityFromBackend(); }} className="rounded bg-sky-700 px-3 py-1 text-[12px] font-semibold text-white hover:bg-sky-600">Técnicos</button>

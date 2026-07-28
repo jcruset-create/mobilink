@@ -198,8 +198,20 @@ export default function WorkPlannerApp() {
       ) : (
         <Routes>
           <Route index element={<Navigate to="/workplanner/operativo2" replace />} />
-          <Route path="operativo2" element={<SeaTarragonaV1 initialView="operativo2" embebido />} />
-          <Route path="agenda" element={<SeaTarragonaV1 initialView="agenda2" embebido />} />
+          <Route
+            path="operativo2"
+            element={<SeaTarragonaV1 initialView="operativo2" embebido />}
+          />
+          <Route
+            path="agenda"
+            element={
+              <SeaTarragonaV1
+                initialView="agenda2"
+                embebido
+                onVolverModulo={() => navigate("/workplanner/operativo2")}
+              />
+            }
+          />
           <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
           <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
           <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />
