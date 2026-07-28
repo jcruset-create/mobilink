@@ -169,18 +169,8 @@ class _InicioTab extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          // Cerrar sesión también aquí (además de Perfil): en la tablet es lo
-          // que se busca al acabar la jornada.
-          OutlinedButton.icon(
-            onPressed: () => doLogout(context),
-            icon: const Icon(Icons.logout, color: AppColors.danger),
-            label: const Text('Cerrar sesión', style: TextStyle(color: AppColors.danger)),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppColors.danger),
-              minimumSize: const Size.fromHeight(52),
-            ),
-          ),
+          // "Cerrar sesión" vive ahora en la cabecera (a la derecha del estado
+          // de conexión), que es donde se busca; aquí solo queda el menú.
             ],
           ),
         ),

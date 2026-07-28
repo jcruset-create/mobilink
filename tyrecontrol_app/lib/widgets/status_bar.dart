@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../models/cliente_activo.dart';
 import '../screens/cliente_screen.dart';
+import '../screens/login_screen.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -49,6 +50,31 @@ class _TopStatusBarState extends State<TopStatusBar> {
         if (mounted) setState(() => _nombre = nombre);
       }
     } catch (_) {/* sin red: se queda el cacheado */}
+  }
+
+  Future<void> _cerrarSesion(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Cerrar sesión'),
+        content: const Text('¿Salir de la aplicación?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.of(c).pop(true),
+            child: const Text('Cerrar sesión', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await TyreControlApi.signOut(); // olvida el cliente activo
+    await OfflineStore.limpiarDatosCliente(); // limpia cachés del cliente
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
   }
 
   void _cambiarCliente(BuildContext context) {
@@ -130,6 +156,15 @@ class _TopStatusBarState extends State<TopStatusBar> {
                               ),
                       ),
                     ],
+                  ),
+                  // Cerrar sesión: a la derecha del estado, en la cabecera, para
+                  // tenerlo siempre a mano al acabar la jornada.
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: () => _cerrarSesion(context),
+                    icon: const Icon(Icons.logout, color: AppColors.danger),
+                    tooltip: 'Cerrar sesión',
+                    visualDensity: VisualDensity.compact,
                   ),
                 ],
               ),
