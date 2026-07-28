@@ -459,6 +459,12 @@ export async function initDb() {
 
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT NULL;
+
+    -- PIN del portal de taller hasheado (PBKDF2, ver server/core/credentials.ts).
+    -- "workshopPin" queda solo para los PIN heredados en claro: en el primer
+    -- login correcto se re-guardan aquí y se borra el valor en claro.
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPinHash" TEXT DEFAULT NULL;
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPinSalt" TEXT DEFAULT NULL;
   `);
 
   await pool.query(`
