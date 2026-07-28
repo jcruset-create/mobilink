@@ -1,90 +1,95 @@
 # PROMPT — Mobilink WorkPlanner
 
-> Este documento es el **prompt maestro** del módulo WorkPlanner. No es código todavía; es el
-> encargo que se ejecutará en una fase posterior. Léelo entero y confirma el alcance antes de
-> tocar nada.
+> Prompt maestro del módulo **Mobilink WorkPlanner**. No es código todavía; es el encargo que se
+> ejecutará en la siguiente fase. Léelo entero y confirma el alcance antes de tocar nada.
 
 ---
 
 ## 0. Contexto (ya construido)
 
-- La agenda actual vive en el panel de taller (`src/components/AgendaView.tsx`) con trabajos
-  programados (`ScheduledJob`, helpers en `src/modules/scheduledJobHelpers.ts`,
-  `src/modules/useScheduledJobs.ts` y los helpers V2 `scheduledJobV2*`).
-- El estado de los operarios/técnicos se gestiona en `src/modules/techStatus.ts` (estados:
-  disponible, refuerzo, ocupado, nodisponible, permiso, vacaciones, baja, otro_taller,
-  supervisor) con bloqueos duros en `HARD_BLOCKED_TECH_STATUSES` y horarios en
-  `techStatusScheduleHelpers.ts`.
-- La jerarquía Empresas > Talleres > Unidades y Operarios ya existe (módulo Central Pro,
-  commits recientes).
-- El hub de entrada por permisos es `/inicio` (`src/pages/InicioPage.tsx`) con el catálogo de
-  módulos en `src/modules/administracion/config/modulosApp.ts` (`MODULOS_APP`) y permisos en
+- El hub de entrada es `/inicio` (`src/pages/InicioPage.tsx`): rejilla de tarjetas por módulo
+  (Empresas y licencias, Licencias, Assist Central Pro, Panel de taller…), catálogo en
+  `MODULOS_APP` (`src/modules/administracion/config/modulosApp.ts`) y permisos en
   `app_usuario_modulos`.
+- El panel de taller (`src/SeaTarragonaV1.tsx`) contiene las vistas internas definidas en
+  `src/modules/permissions.ts` (`AppView`), entre ellas **`operativo2` ("Operativo 2")** y
+  **`agenda` ("Agenda")** — ojo: también existe `agenda2` ("Agenda 2").
+- `SeaTarragonaV1` ya acepta la prop `initialView`; la ruta `/operativo2` en `App.tsx` es el
+  precedente exacto: `<SeaTarragonaV1 initialView="operativo2" />`. Lo mismo se hace con
+  `/asistencias`.
 
 ## 1. Objetivo
 
-**WorkPlanner** es la vista de planificación de trabajo por operario y por día/semana: un
-tablero que cruza la agenda de trabajos programados con la disponibilidad real de los operarios,
-para poder asignar, mover y equilibrar la carga sin salir de una sola pantalla.
+Crear en el menú de `/inicio` un módulo llamado **Mobilink WorkPlanner** que agrupe, dentro de
+un layout propio con menú lateral/topbar, cuatro secciones:
 
-No sustituye a la agenda del panel de taller; la complementa con una vista orientada a
-**capacidad y asignación**, no a la cola del día.
+1. **Operativo 2** — la vista `operativo2` actual del panel de taller, integrada.
+2. **Agenda** — la vista de agenda actual del panel de taller, integrada.
+3. **Análisis y estadísticas** — *placeholder* (fase futura).
+4. **Configuración** — *placeholder* (fase futura).
+
+**Alcance de esta fase:** solo Operativo 2 y Agenda funcionales. Estadísticas y Configuración
+aparecen en el menú, preparadas (entrada visible, ruta creada), pero muestran una pantalla
+"Próximamente" y no contienen lógica.
 
 ## 2. Qué construir
 
-### 2.1 Módulo `src/modules/workplanner/`
+### 2.1 Tarjeta en `/inicio`
 
-Seguir el patrón de los módulos existentes (p. ej. `tyrecontrol`): `config/navigation.ts`,
-`pages/`, `services/`, `types/`.
+- Nueva tarjeta "Mobilink WorkPlanner" en `InicioPage.tsx`, con el mismo estilo que las
+  existentes (icono lucide, p. ej. `CalendarClock` o `ClipboardList`; descripción corta:
+  "Planificación del trabajo: operativo, agenda y análisis"), botón **Entrar** →
+  `/workplanner`.
+- Añadir `workplanner` a `MODULOS_APP` con rol único de acceso y pantallas `operativo2`,
+  `agenda`, `estadisticas`, `configuracion`, para el gating por `app_usuario_modulos`
+  (superadmin lo ve siempre, como el resto).
 
-Pantallas (fase 1):
+### 2.2 Módulo `src/modules/workplanner/`
 
-1. **Planificador semanal** (`/workplanner/semana`)
-   - Rejilla operarios (filas) × días de la semana (columnas).
-   - Cada celda muestra los trabajos programados del operario ese día (chips con hora,
-     matrícula/cliente y fase, reutilizando `getScheduledJobCurrentPhaseLabel`).
-   - Los días en que el operario tiene un estado de `HARD_BLOCKED_TECH_STATUSES`
-     (vacaciones, baja…) se pintan bloqueados y no admiten asignación.
-   - Drag & drop (o mover con menú contextual como fallback) de un trabajo entre operarios y
-     días: reutilizar las mutaciones existentes de asignación (`assignmentMutations.ts`,
-     `useScheduledJobs.ts`), sin duplicar lógica de escritura.
-   - Indicador de carga por celda (nº de trabajos / umbral configurable) con colores
-     verde/ámbar/rojo.
+Seguir el patrón de módulos existentes: `config/navigation.ts`, `pages/`, layout propio
+(oscuro slate + acento sky, enlace "Inicio" y botón Salir como los demás módulos).
 
-2. **Vista día** (`/workplanner/dia`)
-   - Mismo cruce pero con franjas horarias, para el reparto fino del día siguiente.
+Rutas bajo `/workplanner/*` en `App.tsx`:
 
-3. **Sin asignar** (panel lateral en ambas vistas)
-   - Trabajos programados sin operario: origen de los drag & drop.
+| Ruta | Contenido en esta fase |
+|---|---|
+| `/workplanner` | redirección a `/workplanner/operativo2` |
+| `/workplanner/operativo2` | `SeaTarragonaV1` con `initialView="operativo2"` |
+| `/workplanner/agenda` | `SeaTarragonaV1` con `initialView` de la agenda |
+| `/workplanner/estadisticas` | pantalla "Próximamente" (placeholder) |
+| `/workplanner/configuracion` | pantalla "Próximamente" (placeholder) |
 
-### 2.2 Integración con la plataforma
+- El menú del módulo muestra las cuatro entradas; Estadísticas y Configuración con distintivo
+  "Próximamente" (o atenuadas) pero navegables a su placeholder, de modo que la estructura de
+  navegación quede lista para las fases siguientes.
+- **Integración de las vistas**: reutilizar `SeaTarragonaV1` vía `initialView` (mismo mecanismo
+  que `/operativo2` y `/asistencias`), sin duplicar ni extraer todavía el código de esas vistas.
+  Si el header propio de `SeaTarragonaV1` choca visualmente con el layout del módulo, la opción
+  mínima es aceptarlo en esta fase y documentarlo; extraer las vistas a componentes propios es
+  deuda para otra fase.
+- **Punto a confirmar antes de programar**: cuál de las dos agendas integra WorkPlanner —
+  `agenda` ("Agenda") o `agenda2` ("Agenda 2"). Por defecto se integrará la que esté en uso
+  real hoy en el panel; confirmar con el usuario.
 
-- Añadir `workplanner` a `MODULOS_APP` con rol único de acceso (`ROL_ACCESO`) y pantallas
-  `semana`, `dia`.
-- Tarjeta en `/inicio` como el resto de módulos; gating por `app_usuario_modulos`.
-- Rutas en `App.tsx` bajo `/workplanner/*` con layout propio (topbar oscura slate + acento sky,
-  enlace "Inicio", botón Salir), como los demás módulos.
+### 2.3 Lo que NO se hace en esta fase
 
-### 2.3 Datos
-
-- **No crear tablas nuevas en fase 1**: leer y escribir sobre las estructuras existentes de
-  trabajos programados y estado de técnicos, a través de los helpers/APIs actuales.
-- Cargas en paralelo y suscripción/refresco igual que la agenda (reutilizar `useAutoSync` si
-  aplica). Ningún acceso directo a Supabase desde componentes: siempre vía `services/`.
+- Ninguna tabla nueva ni cambio en Supabase.
+- No se toca el panel de taller ni sus rutas actuales (`/`, `/operativo2`, `/asistencias`
+  siguen igual).
+- Nada de lógica en Estadísticas ni Configuración: solo menú + placeholder.
+- Solo web; sin cambios en apps Flutter/Android.
 
 ## 3. Entregables
 
-1. Módulo `src/modules/workplanner/` + rutas + tarjeta en `/inicio` + entrada en `MODULOS_APP`.
-2. `npm run build` limpio y tests de los helpers puros nuevos (cálculo de carga, agrupación
-   operario×día) siguiendo el patrón de `agendaConfig.test.ts`.
-3. Versión en `src/version.ts`, commit + push.
-4. Lista final: qué se ha reutilizado de la agenda y qué helpers nuevos se han añadido.
+1. Tarjeta "Mobilink WorkPlanner" en `/inicio` + entrada `workplanner` en `MODULOS_APP`.
+2. Módulo `src/modules/workplanner/` con layout, navegación de 4 entradas y las 4 rutas
+   (2 funcionales + 2 placeholders).
+3. `npm run build` limpio, versión en `src/version.ts`, commit + push.
+4. Nota final: qué se ha reutilizado tal cual y qué queda como deuda (extracción de vistas,
+   contenido de Estadísticas y Configuración).
 
 ## 4. Restricciones
 
-- No tocar la agenda actual del panel de taller ni su flujo de escritura: WorkPlanner escribe
-  por las mismas mutaciones, no por caminos nuevos.
+- Español en toda la UI, mismo estilo visual que `/inicio` y el resto de módulos.
+- WorkPlanner no es un control de seguridad: el gating real sigue siendo el de cada vista.
 - No renombrar identificadores técnicos existentes (misma regla que el renombrado Mobilink).
-- Español en toda la UI, mismo estilo visual que `/inicio` y Administración.
-- Fase 1 sin apps móviles: solo web. La versión para `android-tecnicos`/Flutter queda como
-  deuda documentada.
