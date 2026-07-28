@@ -172,23 +172,31 @@ function vehicleIcon(zoom: number, stale: boolean, label: string) {
  * Taller de la red: mismo tratamiento que el punto de la asistencia pero con
  * el marcador verde de Mobilink Assist y el nombre del taller debajo.
  */
+// A partir de este zoom se muestra el nombre del taller; por debajo se oculta
+// para que las etiquetas no se solapen con el mapa alejado.
+const WORKSHOP_LABEL_MIN_ZOOM = 9;
+
 function workshopIcon(zoom: number, nombre: string) {
   const f = zoomFactor(zoom);
   const s = Math.round(40 * f);
   const font = Math.max(8, Math.round(10 * f));
-  const badgeH = Math.round(font * 1.9);
-  const w = Math.max(s, 110);
+  const showLabel = zoom >= WORKSHOP_LABEL_MIN_ZOOM;
+  const badgeH = showLabel ? Math.round(font * 1.9) : 0;
+  const w = showLabel ? Math.max(s, 110) : s;
   const tipY = Math.round(s * 0.9);
   const texto = nombre.length > 20 ? `${nombre.slice(0, 19)}…` : nombre;
+  const labelHtml = showLabel
+    ? `<div style="display:inline-block;background:rgba(15,23,42,.92);color:#22c55e;border:1px solid #22c55e;
+             font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
+             margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${texto}</div>`
+    : "";
   return L.divIcon({
     html: `
       <div style="text-align:center;width:${w}px">
         <img src="/marker-taller.png" alt="" width="${s}" height="${s}"
              style="display:block;margin:0 auto;width:${s}px;height:${s}px;max-width:none;
              filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
-        <div style="display:inline-block;background:rgba(15,23,42,.92);color:#22c55e;border:1px solid #22c55e;
-             font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
-             margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${texto}</div>
+        ${labelHtml}
       </div>`,
     className: "",
     iconSize: [w, s + badgeH],
