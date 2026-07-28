@@ -14,6 +14,7 @@ import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
 import ConnectProApp from "./modules/connectpro/ConnectProApp";
+import WorkPlannerApp from "./modules/workplanner/WorkPlannerApp";
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -134,6 +135,7 @@ export default function App() {
       <Route path="/admin/empresas" element={<AdminEmpresasPage />} />
       <Route path="/connect/*" element={<ConnectProApp />} />
       <Route path="/operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />
+      <Route path="/workplanner/*" element={<WorkPlannerApp />} />
       {/* Asistencias en carretera como módulo aparte del operativo */}
       <Route path="/asistencias" element={<SeaTarragonaV1 initialView="asistencias" />} />
       <Route path="/login" element={<Login />} />

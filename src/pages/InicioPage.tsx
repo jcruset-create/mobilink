@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, CalendarClock, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -20,6 +20,7 @@ const ICONOS: Record<string, LucideIcon> = {
   toolcontrol: Hammer,
   safety: HardHat,
   presencia: Clock,
+  workplanner: CalendarClock,
 };
 
 const COLORES: Record<string, { bg: string; text: string }> = {
@@ -30,6 +31,7 @@ const COLORES: Record<string, { bg: string; text: string }> = {
   toolcontrol: { bg: "bg-orange-500/15", text: "text-orange-400" },
   safety: { bg: "bg-lime-500/15", text: "text-lime-400" },
   presencia: { bg: "bg-cyan-500/15", text: "text-cyan-400" },
+  workplanner: { bg: "bg-sky-500/15", text: "text-sky-400" },
 };
 
 const BASES: Record<string, string> = {
@@ -40,6 +42,7 @@ const BASES: Record<string, string> = {
   toolcontrol: "/toolcontrol",
   safety: "/safety",
   presencia: "/presencia",
+  workplanner: "/workplanner",
 };
 
 function rutaModulo(modulo: string): string {
