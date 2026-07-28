@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
+import CapturaWhatsApp from "../components/CapturaWhatsApp";
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 
@@ -64,6 +65,8 @@ export default function NuevaAsistencia() {
   const [iaImagenes, setIaImagenes] = useState<string[]>([]);
   const [iaBusy, setIaBusy] = useState(false);
   const [iaMsg, setIaMsg] = useState<string | null>(null);
+  // Sesión de captura de WhatsApp, para vincularla a la asistencia al crearla
+  const [capturaId, setCapturaId] = useState<number | null>(null);
 
   useEffect(() => {
     boFetch<{ service_types: ServiceType[]; vehicle_types?: VehicleType[] }>("/catalogs")
@@ -193,6 +196,12 @@ export default function NuevaAsistencia() {
     setError(null);
     try {
       const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft) });
+      // Las fotos y mensajes recibidos por WhatsApp pasan a la asistencia creada
+      if (capturaId) {
+        await boFetch(`/whatsapp-capture/${capturaId}/link`, {
+          method: "POST", body: { assistanceId: row.id },
+        }).catch(() => {/* la asistencia ya existe: no bloquear por esto */});
+      }
       navigate(`/connect/asistencias/${row.id}`);
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -201,6 +210,15 @@ export default function NuevaAsistencia() {
     <div className="max-w-5xl">
       <PageTitle title="Nueva asistencia" subtitle="Crea una asistencia manualmente. Puedes guardarla como borrador si faltan datos." />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+      {/* Recepción directa de WhatsApp (mismo número que Mobilink Assist) */}
+      <CapturaWhatsApp
+        onSugerencias={(datos) => {
+          const n = aplicarExtraccion(datos);
+          setIaMsg(n > 0 ? `WhatsApp: ${n} campo${n !== 1 ? "s" : ""} rellenado${n !== 1 ? "s" : ""}.` : null);
+        }}
+        onSesion={setCapturaId}
+      />
 
       {/* Importación por IA: la misma que en Mobilink Assist */}
       <Card className="mb-4 border-violet-500/30 p-4">

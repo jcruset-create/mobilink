@@ -23,6 +23,7 @@ import { initConnect, mountConnect, startConnectWorker } from "./connect/index.t
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES } from "./core/ai.ts";
+import { saveCaptureAnalysis } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -12019,123 +12020,8 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
   }
 }
 
-async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<string, any>> {
-  const result = await db.query(
-    `SELECT message_type, text_content, latitude, longitude, address,
-            contact_name, contact_phone, media_stored_url, media_url, transcript, received_at
-     FROM whatsapp_capture_messages
-     WHERE session_id = $1
-     ORDER BY received_at ASC`,
-    [sessionId]
-  );
-  const messages = result.rows;
-  if (!messages.length) return {};
-
-  // Build context for AI — text lines + image URLs for vision
-  const lines: string[] = [];
-  const imageUrls: string[] = [];
-  for (const m of messages) {
-    const hora = m.received_at
-      ? new Date(m.received_at).toLocaleTimeString("es-ES", { hour12: false, timeZone: "Europe/Madrid" })
-      : "";
-    const ts = hora ? ` ${hora}` : "";
-    if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO${ts}] ${m.text_content}`);
-    else if (m.message_type === "location") lines.push(`[UBICACION${ts}] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
-    else if (m.message_type === "contact") lines.push(`[CONTACTO${ts}] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
-    else if (m.message_type === "image") {
-      const url = m.media_stored_url || m.media_url;
-      if (url) imageUrls.push(url);
-      lines.push(`[IMAGEN${ts} enviada]`);
-    }
-    else if (m.message_type === "audio") lines.push(m.transcript ? `[AUDIO${ts} transcrito] ${m.transcript}` : `[AUDIO${ts} sin transcribir]`);
-    else if (m.message_type === "document") {
-      // Muchas fotos de documentos (DNI, permisos, albaranes) llegan como
-      // "document"; si son imagen, también hay que leerlas.
-      const url = m.media_stored_url || m.media_url;
-      if (url && /\.(jpe?g|png|webp|heic|heif)(\?|$)/i.test(url)) imageUrls.push(url);
-      lines.push(`[DOCUMENTO${ts}]`);
-    }
-  }
-
-  const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
-Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
-
-${AI_IMAGE_RULES}
-
-UBICACIONES MÚLTIPLES:
-- Si la sesión contiene varias ubicaciones GPS, usa SIEMPRE la más reciente (la de hora más tardía) para latitude/longitude/address/municipio/provincia. Una ubicación posterior corrige a la anterior: el conductor puede haberse movido o haber enviado primero una ubicación equivocada.
-- Excepción: si un mensaje de texto o audio posterior indica lo contrario (p. ej. "la buena es la primera", "ignora la última ubicación"), obedece al texto.
-- Si las ubicaciones difieren mucho entre sí y no hay texto que lo aclare, usa la última pero baja "confidence" a "medium" y menciónalo en "resumen" (p. ej. "Se recibieron 2 ubicaciones distintas; se usa la última").
-
-CAMPOS DE MATRÍCULA:
-- La BLANCA va en "plate" y la ROJA del remolque en "plateRemolque", sin espacios ni guiones.
-- Si en una imagen aparecen las dos juntas, la blanca es del camión y la roja del remolque.
-
-Responde SOLO con JSON válido, sin markdown.
-Campos a extraer (null si no disponible):
-{
-  "customerName": string,
-  "conductorNombre": string,
-  "empresa": string,
-  "contactoNombre": string,
-  "contactoTelefono": string,
-  "plate": string (matrícula BLANCA del vehículo averiado/camión, sin espacios ni guiones),
-  "plateRemolque": string (matrícula ROJA del remolque, formato R+4 dígitos+3 letras, ej. R0000BBB, o null),
-  "vehicleBrand": string,
-  "vehicleModel": string,
-  "vehicleDescription": string,
-  "latitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
-  "longitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
-  "address": string,
-  "municipio": string,
-  "provincia": string,
-  "conductorTelefono": string (teléfono del conductor si aparece, aunque sea en una foto),
-  "tipoAveria": string,
-  "descripcionAveria": string,
-  "datosDetectados": [
-    { "campo": string, "valor": string, "origen": "imagen"|"texto"|"audio" }
-  ],
-  "resumen": string (resumen breve de 1-2 frases),
-  "confidence": "high"|"medium"|"low"
-}
-
-"datosDetectados" es para todo dato relevante que hayas leído y que NO encaje
-en los campos de arriba: nº de póliza, aseguradora, nº de albarán o pedido,
-DNI, empresa de transporte, nº de expediente del cliente, kilómetros, medida
-de neumático, contacto alternativo… Así no se pierde nada de lo que venga en
-una foto. Si no hay nada, devuelve una lista vacía.`;
-
-  // Build vision-capable user message content
-  type ContentPart =
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string; detail: "auto" } };
-
-  const userContent: ContentPart[] = [
-    { type: "text", text: `Mensajes de la sesión:\n${lines.join("\n")}` },
-    ...imageUrls.map((url) => ({
-      type: "image_url" as const,
-      image_url: { url, detail: "auto" as const },
-    })),
-  ];
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.1,
-      max_tokens: 700,
-    });
-    const raw = response.choices[0]?.message?.content ?? "{}";
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    console.error("analyzeCaptureSesionWithAI error:", e);
-    return {};
-  }
-}
+// El análisis de la sesión de captura vive en core/whatsappCapture.ts:
+// lo comparten Mobilink Assist y Central Pro, que reciben por el mismo número.
 
 // Helper: detect message type from Twilio payload
 function detectMessageType(body: Record<string, any>): string {
@@ -12221,16 +12107,36 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
     // enrutan a la sesión activa). Si la que bloquea es de una asistencia ya
     // cerrada, se cierra sola y se permite la nueva.
     const existing = await db.query(
-      `SELECT s.id, s.job_id, COALESCE(NULLIF(ra.plate, ''), ra."plateRemolque") AS plate, ra."customerName", ra.status AS job_status
+      `SELECT s.id, s.job_id, s.connect_assistance_id,
+              COALESCE(NULLIF(ra.plate, ''), ra."plateRemolque") AS plate,
+              ra."customerName", ra.status AS job_status, ca.status AS connect_status
        FROM whatsapp_capture_sessions s
        LEFT JOIN roadside_assistances ra ON ra.id = s.job_id
+       LEFT JOIN connect_assistances ca ON ca.id = s.connect_assistance_id
        WHERE s.status = 'ACTIVE'`
     );
     const CLOSED = new Set(["llegada_taller", "redirigida", "cancelada"]);
+    const CONNECT_CLOSED = new Set(["at_workshop", "cancelled"]);
     for (const active of existing.rows) {
       // Misma asistencia: ya tiene su captura, no creamos otra
       if (Number(active.job_id) === Number(job_id)) {
         return res.status(409).json({ error: "Esta asistencia ya tiene una captura activa" });
+      }
+      // Captura de Central Pro (mismo número de WhatsApp): solo se cierra sola
+      // si su asistencia ya está cerrada; si sigue viva, manda ella.
+      if (active.connect_assistance_id != null || active.job_id == null) {
+        const cerrada = active.connect_status != null && CONNECT_CLOSED.has(active.connect_status);
+        if (cerrada) {
+          await db.query(
+            `UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`,
+            [active.id, Date.now()]
+          );
+          continue;
+        }
+        return res.status(409).json({
+          error: "Hay una captura activa en Assist Central Pro. Ciérrala antes de empezar otra.",
+          activeSession: active,
+        });
       }
       // Captura huérfana (asistencia cerrada o inexistente) → cerrarla automáticamente
       if (!active.job_status || CLOSED.has(active.job_status)) {
@@ -12322,15 +12228,9 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     }
 
     // Run AI analysis asynchronously — don't block the response
-    analyzeCaptureSesionWithAI(id).then(async (suggestions) => {
-      if (Object.keys(suggestions).length > 0) {
-        await db.query(
-          `UPDATE whatsapp_capture_sessions SET ai_suggestions = $2 WHERE id = $1`,
-          [id, JSON.stringify(suggestions)]
-        );
-        console.log(`WhatsApp capture session #${id} AI analysis complete`);
-      }
-    }).catch((e) => console.error("AI analysis error:", e));
+    saveCaptureAnalysis(id)
+      .then((s) => console.log(`WhatsApp capture session #${id} analizada (${Object.keys(s).length} campos)`))
+      .catch((e) => console.error("AI analysis error:", e));
 
     const updated = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
     return res.json(updated.rows[0]);
