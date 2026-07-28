@@ -10,6 +10,7 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState, KpiCard } from "../components/ui";
 import TablaUnidades from "../components/TablaUnidades";
+import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import TarifasEditor from "../components/TarifasEditor";
 import {
   WORKSHOP_TIER, WORKSHOP_TIER_LABELS, WORKSHOP_TIER_STYLES, fmtDateTime,
@@ -45,7 +46,7 @@ type Ficha = {
 };
 
 const TIERS: WorkshopIntegrationType[] = ["assist", "lite", "external"];
-const TABS = ["Resumen", "Talleres", "Unidades", "Tarifas"] as const;
+const TABS = ["Resumen", "Talleres", "Operarios", "Unidades", "Tarifas"] as const;
 
 /** Campo editable de la ficha (edición en línea, cc_admin). */
 function Campo({ label, value, onSave, canEdit, placeholder }: {
@@ -86,11 +87,25 @@ export default function FichaEmpresa() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [nuevoTaller, setNuevoTaller] = useState({ name: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
+  // Operarios de todos los talleres de la empresa, agrupados por taller
+  const [operarios, setOperarios] = useState<Record<number, Operator[]> | null>(null);
 
   const load = useCallback(() => {
     boFetch<Ficha>(`/providers/${id}`).then(setF).catch((e) => setError(e.message));
   }, [id]);
   useEffect(load, [load]);
+
+  // Los operarios se cargan al abrir la pestaña, taller a taller
+  useEffect(() => {
+    if (tab !== "Operarios" || !f || operarios) return;
+    Promise.all(
+      f.workshops.map((w) =>
+        boFetch<{ data: Operator[] }>(`/workshops/${w.id}/operators`)
+          .then((r) => [w.id, r.data] as const)
+          .catch(() => [w.id, [] as Operator[]] as const),
+      ),
+    ).then((pares) => setOperarios(Object.fromEntries(pares)));
+  }, [tab, f, operarios]);
 
   const patch = async (body: Record<string, unknown>) => {
     try { await boFetch(`/providers/${id}`, { method: "PATCH", body }); load(); }
@@ -294,6 +309,39 @@ export default function FichaEmpresa() {
             </Card>
           )}
         </div>
+      )}
+
+      {tab === "Operarios" && (
+        !operarios ? <p className="text-sm text-slate-500">Cargando operarios…</p> : (
+          <div className="flex flex-col gap-5">
+            {f.workshops.map((w) => {
+              const ops = operarios[w.id] ?? [];
+              return (
+                <div key={w.id}>
+                  <h3 className="mb-2 text-[13px] font-semibold text-slate-300">
+                    <Link className="hover:text-cyan-300" to={`/connect/empresas/${id}/talleres/${w.id}`}>{w.name}</Link>
+                    <span className="ml-2 font-normal text-slate-500">
+                      {ops.length} operario{ops.length !== 1 ? "s" : ""}
+                    </span>
+                  </h3>
+                  {ops.length === 0 ? (
+                    <p className="text-[13px] text-slate-500">
+                      Sin operarios ni contactos.{" "}
+                      <Link className="text-cyan-300 hover:underline" to={`/connect/empresas/${id}/talleres/${w.id}`}>
+                        Añadir desde la ficha del taller →
+                      </Link>
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {ops.map((op) => <TarjetaOperario key={`${w.id}-${op.source}-${op.id}`} op={op} />)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {f.workshops.length === 0 && <EmptyState message="La empresa no tiene talleres todavía." />}
+          </div>
+        )
       )}
 
       {tab === "Unidades" && (
