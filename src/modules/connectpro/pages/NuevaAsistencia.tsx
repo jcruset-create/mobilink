@@ -58,6 +58,12 @@ export default function NuevaAsistencia() {
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Extracción por IA: pegar la conversación de WhatsApp o subir capturas
+  const [iaAbierto, setIaAbierto] = useState(false);
+  const [iaTexto, setIaTexto] = useState("");
+  const [iaImagenes, setIaImagenes] = useState<string[]>([]);
+  const [iaBusy, setIaBusy] = useState(false);
+  const [iaMsg, setIaMsg] = useState<string | null>(null);
 
   useEffect(() => {
     boFetch<{ service_types: ServiceType[]; vehicle_types?: VehicleType[] }>("/catalogs")
@@ -71,6 +77,86 @@ export default function NuevaAsistencia() {
 
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value } as Form);
+
+  /** Vuelca al formulario lo que ha entendido la IA, sin pisar lo ya escrito. */
+  const aplicarExtraccion = (d: Record<string, any>): number => {
+    const texto = (v: unknown) => (v == null ? "" : String(v));
+    const mapa: Partial<Record<keyof Form, unknown>> = {
+      expedientNumber: d.expedientNumber, externalReference: d.externalReference, clientName: d.clientName,
+      serviceType: d.serviceType, priority: d.priority === "urgente" ? "urgente" : undefined,
+      slaMinutes: d.slaMinutes, customerName: d.customerName, customerPhone: d.customerPhone,
+      requesterName: d.requesterName, requesterPhone: d.requesterPhone, requesterEmail: d.requesterEmail,
+      address: d.address, lat: d.latitude, lng: d.longitude,
+      road: d.road, km: d.km, direction: d.direction, placeRef: d.placeRef,
+      vehicleType: d.vehicleType, make: d.make, model: d.model, plate: d.plate, vin: d.vin,
+      fuel: d.fuel, weight: d.weight, cargo: d.cargo,
+      description: d.description, diagnosis: d.diagnosis,
+    };
+    let aplicados = 0;
+    const siguiente: Form = { ...f };
+    for (const [clave, valor] of Object.entries(mapa) as [keyof Form, unknown][]) {
+      if (valor == null || texto(valor) === "") continue;
+      // Lo que ya haya escrito el operador manda sobre la IA
+      if (texto(siguiente[clave]).trim() !== "" && clave !== "priority" && clave !== "serviceType" && clave !== "vehicleType") continue;
+      (siguiente as any)[clave] = texto(valor);
+      aplicados++;
+    }
+    if (d.trailer === true && !siguiente.trailer) { siguiente.trailer = true; aplicados++; }
+    if (d.dangerous === true && !siguiente.dangerous) { siguiente.dangerous = true; aplicados++; }
+
+    // Los datos sueltos leídos en fotos se acumulan en observaciones internas
+    const extras: { campo: string; valor: string }[] = Array.isArray(d.datosDetectados) ? d.datosDetectados : [];
+    const lineasExtra = extras
+      .filter((x) => x?.campo && x?.valor)
+      .map((x) => `${x.campo}: ${x.valor}`)
+      .filter((l) => !siguiente.notes.includes(l));
+    if (lineasExtra.length) {
+      siguiente.notes = [siguiente.notes, ...lineasExtra].filter(Boolean).join("\n");
+      aplicados += lineasExtra.length;
+    }
+    if (d.notes && !siguiente.notes.includes(String(d.notes))) {
+      siguiente.notes = [siguiente.notes, String(d.notes)].filter(Boolean).join("\n");
+      aplicados++;
+    }
+    setF(siguiente);
+    return aplicados;
+  };
+
+  const analizarConIA = async () => {
+    if (!iaTexto.trim() && iaImagenes.length === 0) {
+      setIaMsg("Pega la conversación o añade una captura.");
+      return;
+    }
+    setIaBusy(true);
+    setIaMsg(null);
+    try {
+      const r = await boFetch<{ data: Record<string, any> }>("/ai-extract", {
+        method: "POST",
+        body: { text: iaTexto.trim(), images: iaImagenes },
+      });
+      const aplicados = aplicarExtraccion(r.data ?? {});
+      setIaMsg(
+        aplicados > 0
+          ? `La IA ha rellenado ${aplicados} campo${aplicados !== 1 ? "s" : ""}. Revísalos antes de crear.`
+          : "La IA no ha encontrado datos aprovechables (o ya estaban rellenos).",
+      );
+    } catch (e: any) {
+      setIaMsg(e.message);
+    } finally {
+      setIaBusy(false);
+    }
+  };
+
+  const añadirImagenes = (files: FileList | null) => {
+    if (!files) return;
+    const restantes = 6 - iaImagenes.length;
+    for (const file of Array.from(files).slice(0, Math.max(0, restantes))) {
+      if (file.size > 6 * 1024 * 1024) { setIaMsg("Cada imagen debe ocupar menos de 6 MB."); continue; }
+      const lector = new FileReader();
+      lector.onload = () => setIaImagenes((prev) => [...prev, String(lector.result)]);
+      lector.readAsDataURL(file);
+    }
+  };
 
   const buildBody = (draft: boolean) => ({
     draft,
@@ -115,6 +201,59 @@ export default function NuevaAsistencia() {
     <div className="max-w-5xl">
       <PageTitle title="Nueva asistencia" subtitle="Crea una asistencia manualmente. Puedes guardarla como borrador si faltan datos." />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+      {/* Importación por IA: la misma que en Mobilink Assist */}
+      <Card className="mb-4 border-violet-500/30 p-4">
+        {!iaAbierto ? (
+          <Button variant="ghost" onClick={() => setIaAbierto(true)}>
+            ✨ Rellenar con IA (pegar WhatsApp o subir captura)
+          </Button>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-violet-300">Extracción por IA</h2>
+              <button onClick={() => setIaAbierto(false)} className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
+            <textarea
+              value={iaTexto}
+              onChange={(e) => setIaTexto(e.target.value)}
+              rows={3}
+              placeholder="Pega aquí la conversación de WhatsApp, un correo o los datos que te han pasado…"
+              className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-[13px] text-slate-100 placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+            />
+            {iaImagenes.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {iaImagenes.map((src, i) => (
+                  <div key={i} className="relative">
+                    <img src={src} alt="captura" className="h-16 w-16 rounded-lg border border-slate-600 object-cover" />
+                    <button
+                      onClick={() => setIaImagenes((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1 -top-1 rounded-full bg-slate-900 px-1 text-[11px] text-red-400"
+                      title="Quitar"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer rounded-lg border border-slate-600 px-3 py-2 text-[13px] text-slate-300 hover:bg-slate-700">
+                Añadir captura o foto
+                <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => añadirImagenes(e.target.files)} />
+              </label>
+              <Button onClick={analizarConIA} disabled={iaBusy}>
+                {iaBusy ? "Analizando…" : "Analizar y rellenar"}
+              </Button>
+              {iaMsg && <span className="text-[12px] text-slate-400">{iaMsg}</span>}
+            </div>
+            <p className="text-[12px] text-slate-500">
+              Lee también el texto de las fotos (datos del conductor, teléfonos, albaranes…). Nunca
+              sobrescribe lo que ya hayas escrito, y lo que no encaja en un campo va a observaciones internas.
+            </p>
+          </div>
+        )}
+      </Card>
 
       <div className="flex flex-col gap-4">
         <Section title="Expediente">
