@@ -3,6 +3,11 @@
 > Reorganización de las pantallas de red de Assist Central Pro para que
 > reflejen la jerarquía real del negocio. Escrito antes de programar; revisar
 > y ajustar lo marcado como **[DECISIÓN]** si procede.
+>
+> Decisiones ya tomadas por el usuario (28-07-2026):
+> — Las delegaciones desaparecen: solo quedan talleres.
+> — Dentro del taller, lista de operarios con ficha (datos y teléfono) para
+>   llamarles directamente, ligada a los operarios reales de Mobilink Assist.
 
 ## Objetivo
 
@@ -11,13 +16,17 @@ apartados planos e independientes del menú. La jerarquía real es:
 
 ```
 Empresa de asistencia (connect_provider_companies)
-└── Taller / delegación (connect_workshops, FULL | LITE | EXTERNAL)
-    └── Unidad móvil (connect_mobile_units)
+└── Taller (connect_workshops, FULL | LITE | EXTERNAL)
+    ├── Unidad móvil (connect_mobile_units)
+    └── Operario (techs del core / connect_lite_users / contacto manual)
 ```
 
 La navegación debe contarla: entras en una empresa y ves sus talleres; entras
-en un taller y ves sus unidades. Sin duplicar entidades ni romper lo que ya
-funciona.
+en un taller y ves sus unidades y sus operarios (con teléfono, para llamarles
+directamente). Sin duplicar entidades ni romper lo que ya funciona.
+
+**Las delegaciones (`connect_branches`) desaparecen de la interfaz**: el
+taller es el único nodo entre empresa y unidades/operarios.
 
 ## Estado actual (análisis, no tocar sin leer)
 
@@ -27,24 +36,28 @@ funciona.
 - `connect_workshops.branchId` → delegación (opcional). ✔
 - `connect_mobile_units.providerCompanyId` (NOT NULL) y `branchId`. ✔
 - `connect_mobile_units` **NO tiene `workshopId`**: las unidades cuelgan de la
-  empresa, no del taller. **Este es el único hueco real del modelo.**
-- `connect_branches` (delegaciones) existe y se gestiona dentro de Empresas.
-  **[DECISIÓN]** Talleres y delegaciones son conceptos casi solapados
-  (SEA: taller = delegación). Propuesta: mantener `connect_branches` como
-  dato administrativo (dirección fiscal de la delegación) y usar SIEMPRE el
-  taller como nodo operativo. NO fusionarlas en esta fase.
+  empresa, no del taller. **Hueco nº 1 del modelo.**
+- Los operarios de Assist (`techs` del core: nombre, teléfono, estado en vivo,
+  `roadsideCapable`, `es_supervisor`) **NO tienen vínculo con taller**: el
+  core nació monotaller. **Hueco nº 2 del modelo.**
+- `connect_branches` (delegaciones): **DECIDIDO — desaparecen**. Taller y
+  delegación eran conceptos solapados; queda solo el taller. La tabla no se
+  borra (datos históricos), pero se retira toda su interfaz y sus altas. Si
+  una empresa tenía delegaciones que en realidad eran talleres, se dan de
+  alta como talleres.
 
 ### Pantallas actuales
 
 | Página | Qué hace hoy | Destino |
 | --- | --- | --- |
-| `Empresas.tsx` (175 líneas) | Alta de empresa, autorizar/cerrar, delegaciones y tarifas inline | Se convierte en lista → ficha |
+| `Empresas.tsx` (175 líneas) | Alta de empresa, autorizar/cerrar, delegaciones y tarifas inline | Se convierte en lista → ficha; el bloque de delegaciones se elimina |
 | `Talleres.tsx` (347) | Lista plana con producto (FULL/LITE/EXTERNAL), red, panel Lite | Su contenido pasa a la ficha de empresa y a la ficha de taller |
 | `UnidadesMoviles.tsx` (170) | Lista plana en vivo (estado, GPS, estado manual) | Sigue existiendo como vista transversal + aparece dentro de cada taller |
 
 ### Endpoints ya existentes (reutilizar, no duplicar)
 
-- `GET /providers`, `GET /providers/:id/branches`, `GET /providers/:id/workshops`
+- `GET /providers`, `GET /providers/:id/workshops`
+  (`GET/POST /providers/:id/branches` se retiran junto con su interfaz)
 - `GET /workshops`, `POST /workshops`, `PATCH /workshops/:id`
 - `GET /workshops/:id/lite-users`, `/lite-devices`, `/kpis` (panel Lite)
 - `GET /mobile-units` (todas), `PATCH /mobile-units/:id/{share,status}`
@@ -64,6 +77,14 @@ funciona.
 5. Las unidades de un taller LITE no vienen de Webfleet: son los dispositivos
    de los operarios. **No** crear filas en `connect_mobile_units` para Lite;
    la ficha del taller Lite ya enseña sus dispositivos.
+6. **Operarios** — `ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopId" TEXT;`
+   (mismo formato que `connect_workshops.coreWorkshopId`). Backfill: si solo
+   hay un taller FULL con `coreWorkshopId`, asignar ese a todos los `techs`
+   (caso SEA). Editable después desde la ficha del taller (cc_admin).
+7. **Contactos manuales de taller** (para talleres EXTERNAL y teléfonos extra
+   de cualquier taller): tabla nueva `connect_workshop_contacts`
+   (`id, workshopId, name, phone, role TEXT, notes, active, createdAtMs,
+   updatedAtMs`). Alta/edición desde la ficha del taller (operator).
 
 ## Navegación y pantallas
 
@@ -96,10 +117,11 @@ Pestañas:
    `Talleres.tsx`: producto (selector FULL/LITE/EXTERNAL), red Mobilink,
    radio, score, botón "Gestionar Lite" (reutilizar `LitePanel` tal cual) y
    alta de taller nuevo (ya con `providerCompanyId` fijado).
-2. **Delegaciones** — lo que hoy está inline en Empresas.
-3. **Unidades** — todas las unidades de la empresa, agrupadas por taller,
+2. **Unidades** — todas las unidades de la empresa, agrupadas por taller,
    con las columnas de la vista transversal.
-4. **KPIs** — agregado de `GET /workshops/:id/kpis` de sus talleres.
+3. **KPIs** — agregado de `GET /workshops/:id/kpis` de sus talleres.
+
+(Sin pestaña de delegaciones: han desaparecido.)
 
 ### Ficha de taller (`/connect/empresas/:id/talleres/:wid`)
 
@@ -107,14 +129,27 @@ Cabecera: nombre, empresa (enlace de vuelta), producto, código Lite si LITE,
 teléfono, coordenadas (enlace al mapa), red Mobilink.
 
 Pestañas:
-1. **Unidades móviles** — `GET /workshops/:wid/mobile-units` (endpoint nuevo,
+1. **Operarios** — lista unificada con ficha por operario: nombre, teléfono
+   con enlace `tel:` (botón grande "Llamar"), rol y estado. La fuente depende
+   del producto del taller, pero la tarjeta es la misma:
+   - **FULL** → `techs` del core (vía `techs.workshopId` ↔
+     `connect_workshops.coreWorkshopId`): estado en vivo (libre / en trabajo /
+     en asistencia con nº de expediente), `roadsideCapable`, supervisor.
+     Ligados de verdad: son los mismos operarios que ve Mobilink Assist, no
+     una copia.
+   - **LITE** → `connect_lite_users`: rol, último acceso, dispositivos.
+   - **EXTERNAL** → `connect_workshop_contacts` (contactos manuales).
+   - En cualquier taller se pueden añadir además contactos manuales
+     (encargado, centralita…) desde esta misma pestaña.
+   Endpoint unificado: `GET /workshops/:wid/operators` →
+   `{ name, phone, role, source: "assist"|"lite"|"contact", status, extra }`.
+2. **Unidades móviles** — `GET /workshops/:wid/mobile-units` (endpoint nuevo,
    filtro de `/mobile-units` por `workshopId`). Misma tabla en vivo de
    `UnidadesMoviles.tsx` (extraer la tabla a un componente
    `TablaUnidades.tsx` y reutilizarla en las tres vistas). Acción "Mover a
    otro taller" (cc_admin).
-   - Si el taller es LITE: en su lugar, dispositivos y operarios (lo que ya
-     enseña `LitePanel`).
-2. **Operarios Lite** (solo LITE) — panel actual.
+   - Si el taller es LITE: en su lugar, dispositivos de los operarios (lo que
+     ya enseña `LitePanel`).
 3. **KPIs** — `GET /workshops/:wid/kpis` (ya existe).
 4. **Asistencias** — últimas asistencias del taller
    (`GET /assistances?workshopId=` — añadir el filtro al endpoint listado).
@@ -122,10 +157,16 @@ Pestañas:
 ## Backend nuevo (poco)
 
 - `GET /api/connect/bo/workshops/:id/mobile-units` (operator)
+- `GET /api/connect/bo/workshops/:id/operators` (operator) — lista unificada
+  techs / lite_users / contactos según el producto del taller
+- `POST/PATCH /api/connect/bo/workshops/:id/contacts` (operator) — contactos manuales
 - `PATCH /api/connect/bo/mobile-units/:id` acepta `workshopId` (cc_admin, auditado)
+- `PATCH /api/connect/bo/techs/:id` — solo `workshopId` (cc_admin, auditado):
+  mover un operario de Assist a otro taller
 - `GET /api/connect/bo/assistances` acepta `?workshopId=`
 - `GET /api/connect/bo/providers/:id` (ficha: empresa + contadores)
-- Migración + backfill del punto anterior
+- Migraciones + backfills de los puntos 1, 6 y 7
+- Retirar `GET/POST /providers/:id/branches` (y su UI)
 
 ## Reglas
 
@@ -141,19 +182,30 @@ Pestañas:
 
 ## Orden de implementación
 
-1. Migración `workshopId` en unidades + backfill + sync heredando taller.
-2. Endpoints nuevos (4).
+1. Migraciones: `workshopId` en unidades y en `techs`, tabla
+   `connect_workshop_contacts`, backfills; sync de unidades heredando taller.
+2. Endpoints nuevos (operators, contacts, mobile-units por taller, movers,
+   filtro de asistencias, ficha de empresa).
 3. Extraer `TablaUnidades.tsx` de `UnidadesMoviles.tsx` (sin cambio visual).
-4. Ficha de taller (usa 2 y 3).
+4. Ficha de taller con pestaña Operarios primero (usa 2 y 3).
 5. Ficha de empresa (usa la de taller).
-6. Adelgazar `Empresas.tsx` a lista + enlaces; enlazar desde `Talleres.tsx` y
-   `UnidadesMoviles.tsx`.
+6. Adelgazar `Empresas.tsx` a lista + enlaces (eliminando delegaciones);
+   enlazar desde `Talleres.tsx` y `UnidadesMoviles.tsx`.
 7. `npm run build`, typecheck del server y prueba visual de las tres rutas.
 
 ## Criterios de aceptación
 
-- Desde Empresas se llega a un taller y a sus unidades sin usar el menú.
-- Una unidad puede moverse de taller y queda auditado.
+- Desde Empresas se llega a un taller, a sus unidades y a sus operarios sin
+  usar el menú.
+- En la ficha del taller, cada operario tiene su tarjeta con teléfono y botón
+  de llamada; los de un taller FULL son los mismos `techs` que ve Mobilink
+  Assist (mismo id, estado en vivo), no una copia.
+- Se pueden añadir contactos manuales a cualquier taller (imprescindible para
+  los EXTERNAL, que no tienen operarios digitales).
+- Una unidad puede moverse de taller y queda auditado; un operario de Assist
+  también.
+- No queda ningún rastro de delegaciones en la interfaz (ni pestaña, ni alta,
+  ni columna), aunque la tabla siga en la base de datos.
 - El panel Lite completo funciona igual dentro de la ficha de taller.
 - Las vistas transversales siguen operativas y enlazan a las fichas.
 - Ningún dato se duplica: mismas tablas, mismos ids.
