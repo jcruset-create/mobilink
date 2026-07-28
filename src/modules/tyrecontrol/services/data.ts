@@ -119,9 +119,18 @@ export type NuevoUsuario = {
 };
 
 export async function crearUsuario(input: NuevoUsuario): Promise<void> {
-  const { data, error } = await supabase.functions.invoke("crear-usuario", { body: input });
-  if (error) throw new Error(error.message);
-  if (data && (data as any).error) throw new Error((data as any).error);
+  // La Edge Function "crear-usuario" no está desplegada; se usa el backend
+  // (server en Render, con service-role), igual que para eliminar usuarios.
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error creando usuario");
 }
 
 // ── Catálogo: tipos y posiciones ─────────────────────────────

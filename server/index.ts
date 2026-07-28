@@ -13396,6 +13396,67 @@ function requireTyreControlAdmin(
   });
 }
 
+// Crea un usuario (Auth + fila tc_usuarios), como la antigua Edge Function
+// "crear-usuario" (que no está desplegada → daba "Failed to send a request to
+// the Edge Function"). Se hace aquí con service-role. Solo admin/super-admin.
+app.post("/api/tyrecontrol/usuarios", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Sin token" });
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return res.status(401).json({ error: "No autenticado" });
+    const callerId = userData.user.id;
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("rol, empresa_id, es_superadmin, activo")
+      .eq("id", callerId)
+      .maybeSingle();
+    if (!perfil || !perfil.activo) return res.status(403).json({ error: "Perfil no válido" });
+    const esSuper = perfil.es_superadmin === true;
+    const esAdmin = perfil.rol === "administrador";
+    if (!esSuper && !esAdmin) return res.status(403).json({ error: "Permisos insuficientes" });
+
+    const b = req.body ?? {};
+    const nombre = String(b.nombre ?? "").trim();
+    const email = String(b.email ?? "").trim().toLowerCase();
+    const password = String(b.password ?? "");
+    const rol = String(b.rol ?? "cliente");
+    const accesoApk = Boolean(b.acceso_apk ?? false);
+    const accesoPanel = Boolean(b.acceso_panel ?? true);
+    // Un admin normal solo crea en SU empresa; el super-admin en la que indique.
+    const empresaId = esSuper ? String(b.empresa_id ?? perfil.empresa_id) : perfil.empresa_id;
+
+    if (!nombre || !email || !password) return res.status(400).json({ error: "Nombre, email y contraseña son obligatorios" });
+    if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
+
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
+    if (createErr || !created.user) return res.status(400).json({ error: createErr?.message ?? "No se pudo crear el usuario" });
+
+    const { error: insErr } = await supabase.from("tc_usuarios").insert({
+      id: created.user.id,
+      empresa_id: empresaId,
+      nombre,
+      email,
+      rol,
+      acceso_apk: accesoApk,
+      acceso_panel: accesoPanel,
+      es_superadmin: false,
+      activo: true,
+    });
+    if (insErr) {
+      // rollback del usuario de auth si falla el perfil
+      await supabase.auth.admin.deleteUser(created.user.id);
+      return res.status(400).json({ error: insErr.message });
+    }
+    res.json({ ok: true, id: created.user.id });
+  } catch (error: any) {
+    console.error("POST /api/tyrecontrol/usuarios error:", error);
+    res.status(500).json({ error: error?.message || "Error interno" });
+  }
+});
+
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
 // un 409 y se recomienda desactivarlo en su lugar: no se pierde histórico.
