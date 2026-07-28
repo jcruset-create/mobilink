@@ -5,10 +5,12 @@ import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../models/models.dart';
 import '../models/umbrales.dart';
 import '../services/offline_store.dart';
+import '../services/pausa_controller.dart';
 import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/pausa_trabajo.dart';
 import '../widgets/vehicle_schema.dart';
 import '../widgets/vehicle_layout_image.dart';
 import 'incidencia_flow_screen.dart';
@@ -47,6 +49,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   Map<String, UmbralConfig> _umbralPorMedida = {}; // overrides por medida (normalizada)
   final Set<String> _incidenciaAutoCreada = {}; // posiciones con incidencia auto ya generada
   RevisionVehiculo? _revision;
+  PausaController? _pausas; // cronometraje de inactividad de esta revisión
   int _index = 0;
   bool _finalizando = false;
   bool _ofreciendoFinal = false; // hay un diálogo de finalizar abierto
@@ -139,6 +142,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
             vehiculoId: widget.vehiculo.id,
             kmVehiculo: _kmRevision,
           );
+      // Cronometraje: inicio_at lo puso la BD al crear la revisión; aquí solo
+      // se gestionan las pausas de inactividad.
+      _pausas = PausaController(
+        contexto: 'revision',
+        empresaId: widget.vehiculo.empresaId,
+        vehiculoId: widget.vehiculo.id,
+        revisionId: _revision!.id,
+      );
 
       for (final p in posiciones) {
         _detalles[p.id] = RevisionDetalleDraft(posicionId: p.id, neumaticoId: _montajePorPosicion[p.id]?.neumaticoId);
@@ -539,23 +550,45 @@ class _ReviewScreenState extends State<ReviewScreen> {
   Future<void> _finalizar({String estado = 'completada'}) async {
     setState(() => _finalizando = true);
     try {
+      // Cronometraje automático: fin = ahora; el tipo se DEDUCE de lo medido
+      // (alguna presión anotada → "profundidades + presiones"), el técnico no
+      // introduce nada a mano. Una pausa sin reanudar se cierra aquí.
+      await _pausas?.cerrarSiActiva();
+      final finAt = DateTime.now();
+      final conPresion = _detalles.values.any((d) => d.presionBar != null);
+      final nNeu = _detalles.values.where((d) => d.medido && !d.noAccesible && !d.neumaticoAusente).length;
+      final extra = {
+        'finAt': finAt.toUtc().toIso8601String(),
+        'tipoRevision': conPresion ? 'profundidades_presiones' : 'solo_profundidades',
+        'nNeumaticos': nNeu,
+        'pausaSeg': _pausas?.pausaSeg ?? 0,
+        'nPausas': _pausas?.numPausas ?? 0,
+      };
       if (OfflineStore.pendingCount.value > 0) {
         // Hay detalles en cola (no había cobertura al medirlos): encolamos el
         // completar para que suba DESPUÉS de ellos e intentamos vaciar ya
         // (si hay cobertura, se sube todo ahora → online).
-        await OfflineStore.enqueueCompletar(_revision!.id);
+        await OfflineStore.enqueueCompletar(_revision!.id, extra: extra);
         await OfflineStore.flush();
       } else {
         // Todo guardado online: completamos directo en el servidor.
         try {
-          await TyreControlApi.completarRevision(_revision!.id, estado: estado);
+          await TyreControlApi.completarRevisionConTiempos(
+            _revision!.id,
+            estado: estado,
+            finAt: finAt,
+            tipoRevision: extra['tipoRevision'] as String,
+            nNeumaticos: nNeu,
+            pausaSeg: _pausas?.pausaSeg ?? 0,
+            nPausas: _pausas?.numPausas ?? 0,
+          );
           OfflineStore.offline.value = false;
         } on PostgrestException {
-          await OfflineStore.enqueueCompletar(_revision!.id);
+          await OfflineStore.enqueueCompletar(_revision!.id, extra: extra);
           await OfflineStore.flush();
         } catch (_) {
           OfflineStore.offline.value = true;
-          await OfflineStore.enqueueCompletar(_revision!.id);
+          await OfflineStore.enqueueCompletar(_revision!.id, extra: extra);
         }
       }
       if (!mounted) return;
@@ -594,8 +627,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             Text('${widget.vehiculo.empresa?.nombre ?? ''} · ${_kmRevision.round()} km', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
           ],
         ),
+        actions: [if (_pausas != null) BotonPausa(controller: _pausas!)],
       ),
-      body: Column(
+      body: _conPausa(Column(
         children: [
           _SondaBar(
             sonda: _sonda,
@@ -648,9 +682,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
             onIncidencia: _abrirIncidencias,
           ),
         ],
-      ),
+      )),
     );
   }
+
+  /// Cubre el body con el overlay de pausa cuando el trabajo está pausado.
+  Widget _conPausa(Widget child) =>
+      _pausas == null ? child : PausaOverlay(controller: _pausas!, child: child);
 }
 
 // ── Barra de estado de la sonda ────────────────────────────────
