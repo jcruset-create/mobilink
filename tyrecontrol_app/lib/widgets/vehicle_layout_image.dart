@@ -99,11 +99,17 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
     return LayoutBuilder(
       builder: (context, c) {
         // Ajustar la imagen dentro del área disponible manteniendo su aspecto:
-        // primero por ancho y, si se pasa de alto, se recorta por alto.
+        // primero por ancho y, si se pasa de alto, se encoge por alto. En un
+        // scroll (maxHeight infinito, p.ej. la ficha) se aplica un tope propio
+        // proporcional a la pantalla para que TODAS las imágenes de chasis
+        // salgan con la misma medida visual, da igual su resolución o aspecto.
+        final maxH = c.maxHeight.isFinite
+            ? c.maxHeight
+            : MediaQuery.of(context).size.height * 0.66;
         double w = c.maxWidth;
         double h = w / aspect;
-        if (c.maxHeight.isFinite && h > c.maxHeight) {
-          h = c.maxHeight;
+        if (h > maxH) {
+          h = maxH;
           w = h * aspect;
         }
         return Center(
