@@ -4,6 +4,7 @@ import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import 'home_screen.dart';
+import 'login_screen.dart';
 
 /// Pantalla inicial (tras login): el técnico elige el CLIENTE con el que va a
 /// trabajar durante la sesión. Si es administrador, además puede elegir
@@ -52,6 +53,15 @@ class _ClienteScreenState extends State<ClienteScreen> {
     }
   }
 
+  Future<void> _salir() async {
+    await TyreControlApi.signOut();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
+
   void _seleccionar(ClienteActivo c) async {
     // Cambiar de cliente limpia los datos cacheados del cliente anterior.
     await OfflineStore.limpiarDatosCliente();
@@ -98,6 +108,17 @@ class _ClienteScreenState extends State<ClienteScreen> {
                   ),
                   const SizedBox(height: 18),
                   Expanded(child: _cuerpo()),
+                  // Siempre disponible: permite volver al login para entrar con
+                  // otro usuario (o si la sesión cacheada quedó sin clientes).
+                  const SizedBox(height: 6),
+                  TextButton.icon(
+                    onPressed: _salir,
+                    icon: const Icon(Icons.logout, size: 18, color: AppColors.textSecondary),
+                    label: Text(
+                      _nombreTecnico != null ? 'Salir / cambiar de usuario' : 'Salir',
+                      style: const TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
                 ],
               ),
             ),
