@@ -1837,16 +1837,65 @@ async function upsertModelo(marcaId: string, nombre: string): Promise<string> {
 async function upsertTyreSize(medida: string, icSimple: string, icDoble: string | null, velocidad: string): Promise<string> {
   const { ancho, perfil, diametro } = parsearMedida(medida);
   const medidaStr = construirMedidaTs(ancho, perfil, diametro);
-  const referencia_completa = construirReferenciaTs(medidaStr, icSimple, icDoble, velocidad);
+  const vel = velocidad.trim() || null;
+  const referencia_completa = construirReferenciaTs(medidaStr, icSimple, icDoble, vel ?? "").trim();
   const { data } = await supabase.from("tyre_sizes").select("id").eq("referencia_completa", referencia_completa).limit(1).maybeSingle();
   if (data) return (data as any).id;
   const medida_id = await resolverMedidaId(medidaStr);
   const { data: c, error } = await supabase.from("tyre_sizes").insert({
     medida: medidaStr, referencia_completa, medida_id, ancho, perfil, diametro_llanta: diametro,
-    indice_carga_simple: icSimple, indice_carga_doble: icDoble, codigo_velocidad: velocidad, activo: true,
+    indice_carga_simple: icSimple, indice_carga_doble: icDoble, codigo_velocidad: vel, activo: true,
   }).select("id").single();
   if (error) throw new Error(error.message);
   return (c as any).id;
+}
+
+// Propone índice de carga y código de velocidad para una medida cuando el
+// neumático real no los trae: consulta otras referencias/neumáticos de la
+// MISMA medida y devuelve la combinación de índices más frecuente. Así se
+// puede catalogar de un clic sin dejar la referencia incompleta.
+export interface IndicesPropuestos {
+  indiceCargaSimple: string; indiceCargaDoble: string | null; codigoVelocidad: string;
+}
+export async function proponerIndicesMedida(medida: string): Promise<IndicesPropuestos | null> {
+  let medidaStr: string;
+  try {
+    const { ancho, perfil, diametro } = parsearMedida(medida);
+    medidaStr = construirMedidaTs(ancho, perfil, diametro);
+  } catch { return null; }
+
+  const cuenta = new Map<string, { v: IndicesPropuestos; n: number }>();
+  const anota = (simple?: string | null, doble?: string | null, vel?: string | null) => {
+    const s = (simple ?? "").trim();
+    const ve = (vel ?? "").trim().toUpperCase();
+    if (!s) return; // sin índice de carga no sirve como propuesta
+    const d = (doble ?? "").trim() || null;
+    const clave = `${s}|${d ?? ""}|${ve}`;
+    const found = cuenta.get(clave);
+    if (found) found.n += 1;
+    else cuenta.set(clave, { v: { indiceCargaSimple: s, indiceCargaDoble: d, codigoVelocidad: ve }, n: 1 });
+  };
+
+  // 1) tyre_sizes canónicos de la misma medida (fuente más fiable).
+  const { data: sizes } = await supabase.from("tyre_sizes")
+    .select("indice_carga_simple, indice_carga_doble, codigo_velocidad")
+    .eq("medida", medidaStr).eq("activo", true).limit(500);
+  for (const ts of (sizes ?? []) as any[]) anota(ts.indice_carga_simple, ts.indice_carga_doble, ts.codigo_velocidad);
+
+  // 2) Si no hay, mirar neumáticos reales de la misma medida con índices.
+  if (cuenta.size === 0) {
+    const valorCanonico = medidaStr.replace(/\s+/g, "");
+    const { data: neus } = await supabase.from("tc_neumaticos")
+      .select("indice_carga, indice_velocidad")
+      .eq("medida", valorCanonico).eq("activo", true).limit(1000);
+    for (const n of (neus ?? []) as any[]) {
+      const [s, d] = String(n.indice_carga ?? "").split("/");
+      anota(s, d, n.indice_velocidad);
+    }
+  }
+
+  if (cuenta.size === 0) return null;
+  return Array.from(cuenta.values()).sort((a, b) => b.n - a.n)[0].v;
 }
 
 // Crea (o reutiliza) la referencia de catálogo para una combinación
@@ -1858,7 +1907,8 @@ export async function crearReferenciaNeumatico(input: {
   const icSimple = input.indiceCargaSimple.trim();
   const velocidad = input.codigoVelocidad.trim().toUpperCase();
   if (!icSimple) throw new Error("Falta el índice de carga");
-  if (!velocidad) throw new Error("Falta el código de velocidad");
+  // El código de velocidad es opcional (la columna admite null): permite
+  // catalogar aunque la propuesta por medida no lo aporte.
   const marcaId = await upsertMarca(input.marca);
   const modeloId = await upsertModelo(marcaId, input.modelo);
   const tyreSizeId = await upsertTyreSize(input.medida, icSimple, input.indiceCargaDoble?.trim() || null, velocidad);
