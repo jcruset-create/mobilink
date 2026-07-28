@@ -232,6 +232,7 @@ export default function SeaTarragonaV1({
   initialView,
   permitirLoginClasico,
   embebido,
+  onVolverModulo,
 }: {
   initialView?: AppView;
   permitirLoginClasico?: boolean;
@@ -242,6 +243,8 @@ export default function SeaTarragonaV1({
    * para no duplicar navegación ni permitir saltos fuera del módulo.
    */
   embebido?: boolean;
+  /** En modo embebido, "volver" devuelve al módulo anfitrión en vez de al panel. */
+  onVolverModulo?: () => void;
 } = {}) {
   const [initialAutoAssignDone, setInitialAutoAssignDone] = useState(false);
   const [rules, setRules] = useState<string[]>([]);
@@ -4462,6 +4465,68 @@ if (view === "entradas2" && canView("entradas2")) {
     </div>
   );
 }
+const operativo2Element = (
+  <Operativo2View
+    userName={userName}
+    setView={setView}
+    canView={canView}
+    jobs={jobs}
+    visibleJobs={visibleJobs}
+    visibleTechs={visibleTechs}
+    quickTemplates={quickTemplates}
+    visibleQuickTemplates={visibleQuickTemplates}
+    visibleLinkedTemplates={visibleLinkedTemplates}
+    customExtraTasks={customExtraTasks}
+    selectedWorkshopId={selectedWorkshopId}
+    maintenanceTasks={maintenanceTasks}
+    maintenanceTechCandidates={maintenanceTechCandidates}
+    availableTechsSummary={availableTechsSummary}
+    workingTechsSummary={workingTechsSummary}
+    runningJobs={runningJobs}
+    waitingJobs={waitingJobs}
+    pausedJobs={pausedJobs}
+    validationJobs={validationJobs}
+    quickDraft={quickDraft}
+    setQuickDraft={setQuickDraft}
+    quickSelectedArea={quickSelectedArea}
+    setQuickSelectedArea={setQuickSelectedArea}
+    quickSelectedMode={quickSelectedMode}
+    setQuickSelectedMode={setQuickSelectedMode}
+    maintenanceDraft={maintenanceDraft}
+    setMaintenanceDraft={setMaintenanceDraft}
+    setQuickEntryOpen={setQuickEntryOpen}
+    scheduledTechStatuses={scheduledTechStatuses}
+    setScheduledTechStatuses={setScheduledTechStatuses}
+    agenda={agenda}
+    roadside={roadside}
+    maintenanceAvailability={maintenanceAvailability}
+    reloadMaintenanceAvailabilityFromBackend={reloadMaintenanceAvailabilityFromBackend}
+    isTechBlockedByOutsideMaintenance={isTechBlockedByOutsideMaintenance}
+    appendLog={appendLog}
+    assignQuickMaintenanceTask={assignQuickMaintenanceTask}
+    deleteWaitingJob={deleteWaitingJob}
+    pauseJob={pauseJob}
+    reactivatePausedJob={reactivatePausedJob}
+    updateValidationResponsible={updateValidationResponsible}
+    addValidationExtraSupport={addValidationExtraSupport}
+    removeValidationSupportByName={removeValidationSupportByName}
+    authorizeProposedJob={authorizeProposedJob}
+    rejectProposedJob={rejectProposedJob}
+    assignOrReserveWaitingJobManually={assignOrReserveWaitingJobManually}
+    deleteValidationJob={deleteValidationJob}
+    sendValidationJobToQueue={sendValidationJobToQueue}
+    finishJob={finishJob}
+    reassignJob={reassignJob}
+    addExtraSupportToJob={addExtraSupportToJob}
+    removeSupportByNameFromJob={removeSupportByNameFromJob}
+    embebido={embebido}
+  />
+);
+
+// En modo embebido (Mobilink WorkPlanner) el panel renderiza SOLO la vista
+// pedida: sin cabecera, sin conmutador y sin montar el resto del panel.
+if (view === "operativo2" && embebido) return operativo2Element;
+
 if (view === "agenda" && canView("agenda")) {
   return (
     <AgendaView
@@ -4495,7 +4560,7 @@ if (view === "agenda2" && (canView("agenda2") || canView("agenda"))) {
   customExtraTasks={customExtraTasks}
   linkedTemplates={visibleLinkedTemplates}
   AREA_META={AREA_META}
-  onBack={() => setView("operativo")}
+  onBack={embebido && onVolverModulo ? onVolverModulo : () => setView("operativo")}
   appendLog={appendLog}
   confirmScheduledArrival={agenda.confirmScheduledArrival}
   cancelScheduledJob={agenda.cancelScheduledJob}
@@ -6924,62 +6989,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
   </section>
 )}
 {/* ── OPERATIVO 2: pantalla de oficina (oscura) ── */}
-{view === "operativo2" && (
-  <Operativo2View
-    userName={userName}
-    setView={setView}
-    canView={canView}
-    jobs={jobs}
-    visibleJobs={visibleJobs}
-    visibleTechs={visibleTechs}
-    quickTemplates={quickTemplates}
-    visibleQuickTemplates={visibleQuickTemplates}
-    visibleLinkedTemplates={visibleLinkedTemplates}
-    customExtraTasks={customExtraTasks}
-    selectedWorkshopId={selectedWorkshopId}
-    maintenanceTasks={maintenanceTasks}
-    maintenanceTechCandidates={maintenanceTechCandidates}
-    availableTechsSummary={availableTechsSummary}
-    workingTechsSummary={workingTechsSummary}
-    runningJobs={runningJobs}
-    waitingJobs={waitingJobs}
-    pausedJobs={pausedJobs}
-    validationJobs={validationJobs}
-    quickDraft={quickDraft}
-    setQuickDraft={setQuickDraft}
-    quickSelectedArea={quickSelectedArea}
-    setQuickSelectedArea={setQuickSelectedArea}
-    quickSelectedMode={quickSelectedMode}
-    setQuickSelectedMode={setQuickSelectedMode}
-    maintenanceDraft={maintenanceDraft}
-    setMaintenanceDraft={setMaintenanceDraft}
-    setQuickEntryOpen={setQuickEntryOpen}
-    scheduledTechStatuses={scheduledTechStatuses}
-    setScheduledTechStatuses={setScheduledTechStatuses}
-    agenda={agenda}
-    roadside={roadside}
-    maintenanceAvailability={maintenanceAvailability}
-    reloadMaintenanceAvailabilityFromBackend={reloadMaintenanceAvailabilityFromBackend}
-    isTechBlockedByOutsideMaintenance={isTechBlockedByOutsideMaintenance}
-    appendLog={appendLog}
-    assignQuickMaintenanceTask={assignQuickMaintenanceTask}
-    deleteWaitingJob={deleteWaitingJob}
-    pauseJob={pauseJob}
-    reactivatePausedJob={reactivatePausedJob}
-    updateValidationResponsible={updateValidationResponsible}
-    addValidationExtraSupport={addValidationExtraSupport}
-    removeValidationSupportByName={removeValidationSupportByName}
-    authorizeProposedJob={authorizeProposedJob}
-    rejectProposedJob={rejectProposedJob}
-    assignOrReserveWaitingJobManually={assignOrReserveWaitingJobManually}
-    deleteValidationJob={deleteValidationJob}
-    sendValidationJobToQueue={sendValidationJobToQueue}
-    finishJob={finishJob}
-    reassignJob={reassignJob}
-    addExtraSupportToJob={addExtraSupportToJob}
-    removeSupportByNameFromJob={removeSupportByNameFromJob}
-  />
-)}
+{view === "operativo2" && operativo2Element}
 {/* ── fin Operativo 2 ── */}
 
 {view === "operativo" && !canView("operativo") && (
