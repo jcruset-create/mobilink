@@ -96,7 +96,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('PIN de acceso (el mismo que en Mobilink Assist)', style: tt.bodyMedium),
+                    child: Text('PIN de acceso (4 dígitos)', style: tt.bodyMedium),
                   ),
                   const SizedBox(height: 12),
 

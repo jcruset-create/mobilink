@@ -128,10 +128,11 @@ class TyreControlApi {
     }
   }
 
-  /// Login unificado con la app de asistencias: mismo nombre + PIN de
-  /// 4 digitos. El servidor valida el PIN contra la tabla de operarios
-  /// y sincroniza por detras el usuario Supabase; aqui solo hacemos el
-  /// signInWithPassword con el email sintetico que nos devuelve.
+  /// Login de TyreControl: nombre + PIN PROPIO del usuario (independiente de
+  /// Assist). El servidor comprueba que existe un usuario de TyreControl con
+  /// ese nombre y acceso a la APK, y devuelve su email; el PIN se valida contra
+  /// Supabase Auth (la contraseña del propio usuario, que se fija/cambia desde
+  /// Usuarios). Los operarios de Assist ya NO pueden entrar aquí.
   static Future<void> signInOperario(String techName, String pin) async {
     final res = await http
         .post(
@@ -142,12 +143,16 @@ class TyreControlApi {
         .timeout(const Duration(seconds: 15));
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Operario o código incorrecto');
+      throw Exception(data['error'] ?? 'Usuario o PIN incorrectos');
     }
     final email = data['email'] as String;
 
-    final auth = await _db.auth.signInWithPassword(email: email, password: pin);
-    if (auth.user == null) throw Exception('No se ha podido iniciar sesión');
+    try {
+      final auth = await _db.auth.signInWithPassword(email: email, password: pin);
+      if (auth.user == null) throw Exception('Usuario o PIN incorrectos');
+    } on AuthException {
+      throw Exception('Usuario o PIN incorrectos');
+    }
   }
 
   static Future<void> signOut() async {
