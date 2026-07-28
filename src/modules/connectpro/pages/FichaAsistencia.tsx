@@ -79,7 +79,7 @@ export default function FichaAsistencia() {
   const requester = parse(a.requester);
   const vehicle = parse(a.vehicle);
   const loc = parse(a.locationDetails);
-  const slaRisk = a.slaDeadlineAtMs && !["finished", "cancelled"].includes(a.status)
+  const slaRisk = a.slaDeadlineAtMs && !["finished", "returning_to_workshop", "at_workshop", "cancelled"].includes(a.status)
     ? a.slaDeadlineAtMs - Date.now() : null;
 
   return (
@@ -140,7 +140,7 @@ export default function FichaAsistencia() {
                   </Button>
                 ))
               )}
-              {!["finished", "cancelled"].includes(a.status) && (
+              {!["finished", "returning_to_workshop", "at_workshop", "cancelled"].includes(a.status) && (
                 <Button variant="danger" onClick={cancelar} disabled={busy}>Cancelar</Button>
               )}
             </div>
@@ -196,7 +196,7 @@ export default function FichaAsistencia() {
             <Row label="Coste estimado" value={a.estimatedCost != null ? `${a.estimatedCost.toFixed(2)} ${a.costCurrency}` : "Sin tarifa aplicable"} />
             <Row label="Detalle del cálculo" value={a.costDetail} />
             <Row label="Coste final" value={a.finalCost != null ? `${a.finalCost.toFixed(2)} ${a.costCurrency}` : "Pendiente de cierre"} />
-            {canOperate && ["finished", "arrived", "in_progress"].includes(a.status) && (
+            {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
               <div className="mt-3">
                 <Button
                   variant="ghost" disabled={busy}

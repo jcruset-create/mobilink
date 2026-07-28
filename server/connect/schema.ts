@@ -505,6 +505,38 @@ export async function initConnect(): Promise<void> {
       "updatedAtMs" BIGINT NOT NULL
     );
 
+    -- ============================================================
+    -- Jerarquía Empresa → Taller → Unidades y Operarios
+    -- ============================================================
+
+    -- Ficha completa de la empresa (datos fiscales y de facturación)
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "legalName" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "taxId" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS address TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "postalCode" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS province TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS web TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "billingEmail" TEXT;
+
+    -- Las unidades cuelgan del taller, no solo de la empresa
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "workshopId" INTEGER;
+
+    -- Contactos manuales del taller (imprescindible en talleres EXTERNAL,
+    -- útil en todos: encargado, centralita, guardia…)
+    CREATE TABLE IF NOT EXISTS connect_workshop_contacts (
+      id SERIAL PRIMARY KEY,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      phone TEXT,
+      role TEXT,
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_ws_contacts ON connect_workshop_contacts ("workshopId");
+
     -- Contadores correlativos (nº de expediente por año, etc.)
     CREATE TABLE IF NOT EXISTS connect_counters (
       scope TEXT PRIMARY KEY,
@@ -730,6 +762,40 @@ export async function initConnect(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_connect_lite_actions_created
       ON connect_lite_actions ("createdAtMs");
+  `);
+
+  // Backfills idempotentes de la jerarquía (solo actúan sobre filas sin dato)
+  await db.query(`
+    -- Unidad → taller, vínculo EXACTO: el vehículo del core dice a qué taller
+    -- pertenece (roadside_vehicles."workshopId" ↔ connect_workshops."coreWorkshopId")
+    UPDATE connect_mobile_units mu
+       SET "workshopId" = w.id
+      FROM roadside_vehicles rv, connect_workshops w
+     WHERE mu."workshopId" IS NULL
+       AND rv.id = mu."coreVehicleId"
+       AND rv."workshopId" IS NOT NULL
+       AND w."coreWorkshopId" = rv."workshopId";
+  `);
+  await db.query(`
+    -- Fallback: si la empresa de la unidad tiene UN solo taller, asignarlo
+    UPDATE connect_mobile_units mu
+       SET "workshopId" = w.id
+      FROM connect_workshops w
+     WHERE mu."workshopId" IS NULL
+       AND w."providerCompanyId" = mu."providerCompanyId"
+       AND (SELECT COUNT(*) FROM connect_workshops w2
+             WHERE w2."providerCompanyId" = mu."providerCompanyId") = 1;
+  `);
+  await db.query(`
+    -- Operarios del core → taller: si solo hay un taller integrado (caso SEA)
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
+    UPDATE techs
+       SET "workshopId" = (SELECT w."coreWorkshopId" FROM connect_workshops w
+                            WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL
+                            LIMIT 1)
+     WHERE "workshopId" IS NULL
+       AND (SELECT COUNT(DISTINCT w."coreWorkshopId") FROM connect_workshops w
+             WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL) = 1;
   `);
 
   await seedConnectDefaults();
