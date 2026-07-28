@@ -756,6 +756,7 @@ class TyreControlApi {
       final ma = mo != null && mo['marca'] is Map ? mo['marca'] as Map : null;
       final ts = r['tyre_size'] is Map ? r['tyre_size'] as Map : null;
       out.add({
+        'id': r['id'],
         'marca': ma?['nombre'],
         'modelo': mo?['nombre'],
         'medida': ts?['medida'] ?? r['referencia_completa'],
