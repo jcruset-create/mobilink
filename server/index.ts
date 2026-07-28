@@ -22,6 +22,7 @@ import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/inde
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
+import { AI_IMAGE_RULES } from "./core/ai.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -7522,7 +7523,11 @@ app.post(
         return res.status(503).json({ error: "OPENAI_API_KEY no configurada" });
       }
 
-      const systemPrompt = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios. Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
+      const systemPrompt = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios.
+
+${AI_IMAGE_RULES}
+
+Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
 - Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
 - Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
 - Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
@@ -12043,28 +12048,28 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
       lines.push(`[IMAGEN${ts} enviada]`);
     }
     else if (m.message_type === "audio") lines.push(m.transcript ? `[AUDIO${ts} transcrito] ${m.transcript}` : `[AUDIO${ts} sin transcribir]`);
-    else if (m.message_type === "document") lines.push(`[DOCUMENTO${ts}]`);
+    else if (m.message_type === "document") {
+      // Muchas fotos de documentos (DNI, permisos, albaranes) llegan como
+      // "document"; si son imagen, también hay que leerlas.
+      const url = m.media_stored_url || m.media_url;
+      if (url && /\.(jpe?g|png|webp|heic|heif)(\?|$)/i.test(url)) imageUrls.push(url);
+      lines.push(`[DOCUMENTO${ts}]`);
+    }
   }
 
   const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
 Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
 
-INSTRUCCIONES CRÍTICAS para imágenes:
-1. Busca matrículas de vehículos en todas las imágenes (en la placa física, documentos, capturas de pantalla).
-2. Busca coordenadas GPS en cualquier formato: decimal (41.123, 1.456), DMS (41°19'20.4"N 1°15'57.8"E), o en capturas de mapas.
-   - Si encuentras coordenadas DMS, conviértelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
-3. Busca direcciones, nombres de calles, municipios visibles en imágenes de mapas o capturas de pantalla.
+${AI_IMAGE_RULES}
 
 UBICACIONES MÚLTIPLES:
 - Si la sesión contiene varias ubicaciones GPS, usa SIEMPRE la más reciente (la de hora más tardía) para latitude/longitude/address/municipio/provincia. Una ubicación posterior corrige a la anterior: el conductor puede haberse movido o haber enviado primero una ubicación equivocada.
 - Excepción: si un mensaje de texto o audio posterior indica lo contrario (p. ej. "la buena es la primera", "ignora la última ubicación"), obedece al texto.
 - Si las ubicaciones difieren mucho entre sí y no hay texto que lo aclare, usa la última pero baja "confidence" a "medium" y menciónalo en "resumen" (p. ej. "Se recibieron 2 ubicaciones distintas; se usa la última").
 
-MATRÍCULAS (España):
-- Matrícula BLANCA = camión/vehículo tractor → campo "plate".
-- Matrícula ROJA = REMOLQUE → campo "plateRemolque". Formato del remolque: una "R" seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). Devuélvela sin espacios ni guiones, empezando por R.
-- Si en una imagen aparecen la blanca y la roja juntas: la blanca es del camión ("plate") y la roja del remolque ("plateRemolque").
-- No pongas una matrícula roja (que empieza por R con formato R+4 dígitos+3 letras) en "plate"; esa va siempre en "plateRemolque".
+CAMPOS DE MATRÍCULA:
+- La BLANCA va en "plate" y la ROJA del remolque en "plateRemolque", sin espacios ni guiones.
+- Si en una imagen aparecen las dos juntas, la blanca es del camión y la roja del remolque.
 
 Responde SOLO con JSON válido, sin markdown.
 Campos a extraer (null si no disponible):
@@ -12084,11 +12089,21 @@ Campos a extraer (null si no disponible):
   "address": string,
   "municipio": string,
   "provincia": string,
+  "conductorTelefono": string (teléfono del conductor si aparece, aunque sea en una foto),
   "tipoAveria": string,
   "descripcionAveria": string,
+  "datosDetectados": [
+    { "campo": string, "valor": string, "origen": "imagen"|"texto"|"audio" }
+  ],
   "resumen": string (resumen breve de 1-2 frases),
   "confidence": "high"|"medium"|"low"
-}`;
+}
+
+"datosDetectados" es para todo dato relevante que hayas leído y que NO encaje
+en los campos de arriba: nº de póliza, aseguradora, nº de albarán o pedido,
+DNI, empresa de transporte, nº de expediente del cliente, kilómetros, medida
+de neumático, contacto alternativo… Así no se pierde nada de lo que venga en
+una foto. Si no hay nada, devuelve una lista vacía.`;
 
   // Build vision-capable user message content
   type ContentPart =
@@ -12385,6 +12400,23 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       vehicleDescription: '"vehicleDescription"',
       notes: "notes",
     };
+
+    // Añadir a observaciones sin borrar lo que ya hubiera (los datos sueltos
+    // leídos de una foto se acumulan, no se pisan entre ellos)
+    if (field === "notesAppend") {
+      const linea = String(value ?? "").trim();
+      if (!linea) return res.status(400).json({ error: "Texto vacío" });
+      const prev = await db.query(`SELECT notes FROM roadside_assistances WHERE id = $1`, [jobId]);
+      const actuales = String(prev.rows[0]?.notes ?? "");
+      if (!actuales.includes(linea)) {
+        await db.query(
+          `UPDATE roadside_assistances SET notes = $2, "updatedAtMs" = $3 WHERE id = $1`,
+          [jobId, [actuales, linea].filter(Boolean).join("\n"), Date.now()]
+        );
+      }
+      const updated = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [jobId]);
+      return res.json({ ok: true, assistance: updated.rows[0] });
+    }
 
     // Special compound action: apply location (address + lat + lng)
     if (field === "location") {

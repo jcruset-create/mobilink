@@ -24,6 +24,7 @@ import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
+import { extractJson, hasAi, AI_IMAGE_RULES } from "../core/ai.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
@@ -846,6 +847,57 @@ export function createConnectBackofficeRouter(): Router {
       if (e instanceof InvalidTransitionError) return err(res, 409, "invalid_state_transition", e.message);
       throw e;
     }
+  });
+
+  /**
+   * Extracción por IA para el alta de asistencias: se pega la conversación de
+   * WhatsApp (o un correo) y se adjuntan capturas o fotos, y devuelve los
+   * campos del formulario. Mismo servicio que usa Mobilink Assist, con las
+   * claves de Central Pro.
+   */
+  router.post("/ai-extract", ...requireConnectRole("operator"), async (req, res) => {
+    const text = String(req.body?.text ?? "").trim();
+    const images: string[] = Array.isArray(req.body?.images)
+      ? req.body.images.filter((u: any) => typeof u === "string" && u.startsWith("data:image")).slice(0, 6)
+      : [];
+    if (!text && images.length === 0) {
+      return err(res, 422, "validation_failed", "Pega el texto o añade al menos una imagen");
+    }
+    if (!hasAi()) return err(res, 503, "ai_unavailable", "La extracción por IA no está configurada (OPENAI_API_KEY)");
+
+    const tipos = await db.query(`SELECT code, name FROM connect_service_types WHERE active ORDER BY id`);
+    const vehiculos = await db.query(`SELECT code, name FROM connect_vehicle_types WHERE active ORDER BY id`);
+
+    const system = `Eres un operador de una central de asistencia en carretera. A partir del texto y de las imágenes (capturas de WhatsApp, fotos de documentos, tarjetas, hojas de ruta) extrae los datos para dar de alta una asistencia.
+
+${AI_IMAGE_RULES}
+
+Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozcas (no inventes ni rellenes con cadenas vacías). Normaliza los teléfonos españoles a 9 dígitos y las matrículas sin espacios ni guiones. Claves posibles:
+{
+  "expedientNumber": string, "externalReference": string, "clientName": string,
+  "serviceType": string (uno de: ${tipos.rows.map((t: any) => t.code).join(", ") || "other"}),
+  "priority": "normal"|"urgente", "slaMinutes": number,
+  "customerName": string, "customerPhone": string,
+  "requesterName": string, "requesterPhone": string, "requesterEmail": string,
+  "address": string, "latitude": number, "longitude": number,
+  "road": string, "km": string, "direction": string, "placeRef": string,
+  "vehicleType": string (uno de: ${vehiculos.rows.map((v: any) => v.code).join(", ") || "car"}),
+  "make": string, "model": string, "plate": string, "vin": string, "fuel": string,
+  "weight": string, "cargo": string, "trailer": boolean, "dangerous": boolean,
+  "description": string (qué ha ocurrido y qué servicio se pide),
+  "diagnosis": string, "notes": string,
+  "datosDetectados": [{ "campo": string, "valor": string }],
+  "confidence": "high"|"medium"|"low"
+}
+
+"datosDetectados" recoge lo relevante que hayas leído y no encaje arriba (póliza, aseguradora, albarán, DNI, nº de expediente del cliente…); se volcará en las observaciones. Si no hay nada, lista vacía.`;
+
+    const data = await extractJson({ system, text, images, maxTokens: 900 });
+    await auditConnect({
+      req, action: "assistance.ai_extract", resourceType: "assistance",
+      detail: { campos: Object.keys(data).length, imagenes: images.length, conTexto: !!text },
+    });
+    res.json({ data });
   });
 
   // ── Asistencias (lectura Sprint 1; gestión completa en S2/S3) ──

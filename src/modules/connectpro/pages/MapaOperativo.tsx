@@ -140,13 +140,32 @@ function vehicleIcon(zoom: number, stale: boolean, label: string) {
   });
 }
 
-function workshopIcon(zoom: number) {
-  const s = Math.round(26 * zoomFactor(zoom));
+/**
+ * Taller de la red: mismo tratamiento que el punto de la asistencia pero con
+ * el marcador verde de Mobilink Assist y el nombre del taller debajo.
+ */
+function workshopIcon(zoom: number, nombre: string) {
+  const f = zoomFactor(zoom);
+  const s = Math.round(40 * f);
+  const font = Math.max(8, Math.round(10 * f));
+  const badgeH = Math.round(font * 1.9);
+  const w = Math.max(s, 110);
+  const tipY = Math.round(s * 0.9);
+  const texto = nombre.length > 20 ? `${nombre.slice(0, 19)}…` : nombre;
   return L.divIcon({
-    html: `<div style="width:${s}px;height:${s}px;display:flex;align-items:center;justify-content:center;
-             background:#0e7490;border:${Math.max(1, Math.round(2 * zoomFactor(zoom)))}px solid #67e8f9;border-radius:${Math.round(s / 4)}px;
-             font-size:${Math.round(s * 0.55)}px;box-shadow:0 1px 6px rgba(0,0,0,.5)">🔧</div>`,
-    className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+    html: `
+      <div style="text-align:center;width:${w}px">
+        <img src="/marker-taller.png" alt="" width="${s}" height="${s}"
+             style="display:block;margin:0 auto;width:${s}px;height:${s}px;max-width:none;
+             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+        <div style="display:inline-block;background:rgba(15,23,42,.92);color:#22c55e;border:1px solid #22c55e;
+             font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
+             margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${texto}</div>
+      </div>`,
+    className: "",
+    iconSize: [w, s + badgeH],
+    iconAnchor: [w / 2, tipY],
+    popupAnchor: [0, -tipY],
   });
 }
 
@@ -254,7 +273,7 @@ export default function MapaOperativo() {
       )}
       {adjustMode && (
         <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-300">
-          Modo ajuste activo: arrastra el icono 🔧 de un taller hasta su ubicación real y confirma para guardar las coordenadas GPS.
+          Modo ajuste activo: arrastra el marcador verde de un taller hasta su ubicación real y confirma para guardar las coordenadas GPS.
         </div>
       )}
 
@@ -269,7 +288,7 @@ export default function MapaOperativo() {
             <span key={`w${w.id}`}>
               <Marker
                 position={[w.latitude, w.longitude]}
-                icon={workshopIcon(zoom)}
+                icon={workshopIcon(zoom, w.name)}
                 draggable={adjustMode}
                 eventHandlers={adjustMode ? {
                   dragend: (e) => {
