@@ -6243,6 +6243,31 @@ app.delete(
    ROADSIDE PDF REPORT
 ========================================================= */
 
+// Cabecera de marca común a todos los informes PDF de Mobilink Assist:
+// banda azul oscuro + logo a la izquierda, título y subtítulo a la derecha.
+// Se registra en "pageAdded" para que aparezca en todas las páginas.
+function attachBrandedHeader(doc: any, title: string, subtitle?: string) {
+  const M = 40;
+  const draw = () => {
+    doc.rect(0, 0, doc.page.width, 62).fill("#101a33");
+    try {
+      const logoPath = path.join(process.cwd(), "public", "logo_horizontal.png");
+      if (fs.existsSync(logoPath)) doc.image(logoPath, M, 14, { height: 34 });
+    } catch { /* sin logo */ }
+    doc.fillColor("#ffffff").fontSize(12).font("Helvetica-Bold")
+      .text(title, 280, subtitle ? 18 : 24, { width: doc.page.width - 280 - M, align: "right", lineBreak: false });
+    if (subtitle) {
+      doc.fillColor("#cbd5e1").fontSize(9).font("Helvetica")
+        .text(subtitle, 280, 35, { width: doc.page.width - 280 - M, align: "right", lineBreak: false });
+    }
+    doc.fillColor("#000000");
+    doc.x = M;
+    doc.y = 74;
+  };
+  draw();
+  doc.on("pageAdded", draw);
+}
+
 // Builds a 480×260 map image by compositing a 3×3 grid of OSM tiles + red marker
 async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
   const zoom = 15;
@@ -7138,14 +7163,14 @@ async function buildVehicleTrackingPdfBuffer(
   doc.on("data", (c) => chunks.push(c));
   const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Seguimiento de furgoneta", { align: "center" });
-  doc.moveDown(0.3);
-  doc.fontSize(11).font("Helvetica").text(
-    `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`,
-    { align: "center" }
+  attachBrandedHeader(
+    doc,
+    "Seguimiento de furgoneta",
+    `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`
   );
-  doc.fontSize(10).text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, { align: "center" });
-  doc.moveDown(1);
+  doc.fontSize(10).font("Helvetica").fillColor("#64748b")
+    .text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, 40, doc.y, { align: "left" });
+  doc.fillColor("#000000").moveDown(0.8);
 
   function row(label: string, value: string) {
     doc.fontSize(10).font("Helvetica-Bold").text(label, { continued: true, width: 180 });
@@ -12963,10 +12988,11 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     doc.on("data", (c) => chunks.push(c));
     const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-    doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Orden de Trabajo de Flota", { align: "center" });
-    doc.moveDown(0.3);
-    doc.fontSize(11).font("Helvetica").text(`OTF nº ${data.id}   |   ${formatDateEs(data.createdAtMs)}`, { align: "center" });
-    doc.moveDown(1);
+    attachBrandedHeader(
+      doc,
+      `Orden de Trabajo de Flota #${data.id}`,
+      formatDateEs(data.createdAtMs)
+    );
 
     const row = (l: string, v: string) => {
       doc.fontSize(10).font("Helvetica-Bold").text(l, { continued: true, width: 170 });
