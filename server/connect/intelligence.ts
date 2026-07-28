@@ -45,11 +45,11 @@ export async function computeMetrics(from: number, to: number): Promise<KpiMetri
     db.query(
       `SELECT COUNT(*) FILTER (WHERE "createdAtMs" BETWEEN $1 AND $2 AND status <> 'draft')::int AS created,
               COUNT(*) FILTER (WHERE status IN ('pending','searching'))::int AS pending,
-              COUNT(*) FILTER (WHERE status IN ('assigned','technician_assigned','en_route','arrived','in_progress'))::int AS active,
+              COUNT(*) FILTER (WHERE status IN ('assigned','technician_assigned','en_route','arrived','in_progress','returning_to_workshop'))::int AS active,
               COUNT(*) FILTER (WHERE "slaDeadlineAtMs" IS NOT NULL AND "slaDeadlineAtMs" < $2
-                AND status NOT IN ('finished','cancelled','draft','arrived','in_progress'))::int AS delayed,
+                AND status NOT IN ('finished','at_workshop','returning_to_workshop','cancelled','draft','arrived','in_progress'))::int AS delayed,
               COUNT(*) FILTER (WHERE "createdAtMs" BETWEEN $1 AND $2 AND status = 'cancelled')::int AS cancelled,
-              COUNT(*) FILTER (WHERE "createdAtMs" BETWEEN $1 AND $2 AND status IN ('finished','cancelled'))::int AS closed
+              COUNT(*) FILTER (WHERE "createdAtMs" BETWEEN $1 AND $2 AND status IN ('finished','at_workshop','cancelled'))::int AS closed
          FROM connect_assistances`,
       [from, to],
     ),

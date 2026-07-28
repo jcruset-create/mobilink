@@ -115,7 +115,7 @@ export function createConnectBackofficeRouter(): Router {
       db.query(`SELECT status, COUNT(*)::int AS n FROM connect_assistances GROUP BY status`),
       db.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'finished')::int AS finished,
+           COUNT(*) FILTER (WHERE status IN ('finished','at_workshop'))::int AS finished,
            COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
            COUNT(*)::int AS created
          FROM connect_assistances WHERE "createdAtMs" >= $1`,
@@ -293,7 +293,7 @@ export function createConnectBackofficeRouter(): Router {
               (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'accepted') AS accepted,
               (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'rejected') AS rejected,
               (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'expired') AS expired,
-              (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca."createdAtMs" >= $1 AND ca.status = 'finished') AS finished,
+              (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca."createdAtMs" >= $1 AND ca.status IN ('finished','at_workshop')) AS finished,
               (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')) AS active,
               (SELECT COUNT(*)::int FROM connect_incidents i WHERE i."workshopId" = w.id AND i."createdAtMs" >= $1) AS incidents,
               (SELECT AVG((a."respondedAtMs" - a."sentAtMs") / 60000.0)
@@ -324,7 +324,7 @@ export function createConnectBackofficeRouter(): Router {
       db.query(
         `SELECT to_char(to_timestamp("createdAtMs" / 1000), 'YYYY-MM-DD') AS day,
                 COUNT(*)::int AS created,
-                COUNT(*) FILTER (WHERE status = 'finished')::int AS finished,
+                COUNT(*) FILTER (WHERE status IN ('finished','at_workshop'))::int AS finished,
                 COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled
            FROM connect_assistances
           WHERE "createdAtMs" >= $1 AND status <> 'draft'
@@ -362,7 +362,7 @@ export function createConnectBackofficeRouter(): Router {
            SELECT "acceptDeadlineMs" FROM connect_assignments
             WHERE "assistanceId" = ca.id AND status = 'sent' ORDER BY id DESC LIMIT 1
          ) asg ON true
-        WHERE ca.status NOT IN ('finished', 'cancelled')
+        WHERE ca.status NOT IN ('finished', 'at_workshop', 'cancelled')
         ORDER BY ca.priority = 'urgente' DESC, ca."createdAtMs" ASC`,
     );
 
@@ -485,40 +485,275 @@ export function createConnectBackofficeRouter(): Router {
 
   router.patch("/providers/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
     const id = Number(req.params.id);
-    const { name, contactEmail, contactPhone, status, notes } = req.body ?? {};
+    const b = req.body ?? {};
     const r = await db.query(
       `UPDATE connect_provider_companies
           SET name = COALESCE($1, name), "contactEmail" = COALESCE($2, "contactEmail"),
               "contactPhone" = COALESCE($3, "contactPhone"), status = COALESCE($4, status),
-              notes = COALESCE($5, notes), "updatedAtMs" = $6
-        WHERE id = $7 AND "deletedAtMs" IS NULL RETURNING *`,
-      [name ?? null, contactEmail ?? null, contactPhone ?? null, status ?? null, notes ?? null, Date.now(), id],
+              notes = COALESCE($5, notes),
+              "legalName" = COALESCE($6, "legalName"), "taxId" = COALESCE($7, "taxId"),
+              address = COALESCE($8, address), city = COALESCE($9, city),
+              "postalCode" = COALESCE($10, "postalCode"), province = COALESCE($11, province),
+              web = COALESCE($12, web), "billingEmail" = COALESCE($13, "billingEmail"),
+              "updatedAtMs" = $14
+        WHERE id = $15 AND "deletedAtMs" IS NULL RETURNING *`,
+      [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.status ?? null, b.notes ?? null,
+       b.legalName ?? null, b.taxId ?? null, b.address ?? null, b.city ?? null,
+       b.postalCode ?? null, b.province ?? null, b.web ?? null, b.billingEmail ?? null,
+       Date.now(), id],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
     await auditConnect({ req, action: "provider.updated", resourceType: "provider", resourceId: id, detail: req.body });
     res.json(r.rows[0]);
   });
 
-  router.get("/providers/:id/branches", ...requireConnectRole("analyst"), async (req, res) => {
+  /**
+   * Ficha completa de la empresa: datos, autorización vigente, talleres con
+   * su producto, resumen de unidades y operarios, KPIs y facturación del mes.
+   */
+  router.get("/providers/:id", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    const p = await db.query(
+      `SELECT * FROM connect_provider_companies WHERE id = $1 AND "deletedAtMs" IS NULL`, [id],
+    );
+    if (!p.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
+
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const since30 = Date.now() - 30 * 24 * 3600_000;
+    const [auth, workshops, units, stats, billing, incidents] = await Promise.all([
+      db.query(
+        `SELECT a.*, (SELECT COUNT(*)::int FROM connect_tariff_lines tl
+                       WHERE tl."authorizationId" = a.id AND tl.active) AS "tariffLines"
+           FROM connect_provider_authorizations a
+          WHERE a."providerCompanyId" = $1 AND a."branchId" IS NULL
+          ORDER BY a.id DESC LIMIT 1`,
+        [id],
+      ),
+      db.query(
+        `SELECT w.*,
+                (SELECT COUNT(*)::int FROM connect_mobile_units mu WHERE mu."workshopId" = w.id) AS units,
+                (SELECT COUNT(*)::int FROM connect_lite_users lu WHERE lu."workshopId" = w.id AND lu.active) AS "liteUsers",
+                (SELECT COUNT(*)::int FROM connect_assistances ca
+                  WHERE ca."workshopId" = w.id
+                    AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress','returning_to_workshop')) AS "activeAssistances"
+           FROM connect_workshops w WHERE w."providerCompanyId" = $1 ORDER BY w.name`,
+        [id],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status IN ('available','at_base'))::int AS available,
+                COUNT(*) FILTER (WHERE "connectionStatus" = 'offline')::int AS offline
+           FROM connect_mobile_units WHERE "providerCompanyId" = $1`,
+        [id],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS services,
+                COUNT(*) FILTER (WHERE ca.status IN ('finished','at_workshop'))::int AS finished,
+                COUNT(*) FILTER (WHERE ca."slaDeadlineAtMs" IS NOT NULL) ::int AS "withSla"
+           FROM connect_assistances ca
+           JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE w."providerCompanyId" = $1 AND ca."createdAtMs" > $2`,
+        [id, since30],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS services,
+                COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) AS amount,
+                COUNT(*) FILTER (WHERE ca."invoicedAtMs" IS NOT NULL)::int AS invoiced
+           FROM connect_assistances ca
+           JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE w."providerCompanyId" = $1 AND ca.status IN ('finished','at_workshop')
+            AND ca."createdAtMs" >= $2`,
+        [id, monthStart],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS open FROM connect_incidents
+          WHERE "providerCompanyId" = $1 AND status NOT IN ('resolved','closed')`,
+        [id],
+      ),
+    ]);
+
+    const scores = workshops.rows.map((w: any) => Number(w.currentScore)).filter((s: number) => Number.isFinite(s));
+    res.json({
+      provider: p.rows[0],
+      authorization: auth.rows[0] ?? null,
+      workshops: workshops.rows,
+      summary: {
+        units: units.rows[0],
+        last30d: stats.rows[0],
+        billingMonth: billing.rows[0],
+        openIncidents: incidents.rows[0].open,
+        avgScore: scores.length ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length) : null,
+      },
+    });
+  });
+
+  /** Ficha de un taller (cabecera de la página de taller). */
+  router.get("/workshops/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(
-      `SELECT * FROM connect_branches WHERE "providerCompanyId" = $1 AND "deletedAtMs" IS NULL ORDER BY name`,
+      `SELECT w.*, pc.name AS "providerName"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+        WHERE w.id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    res.json(r.rows[0]);
+  });
+
+  /** Unidades móviles de un taller (misma forma que /mobile-units). */
+  router.get("/workshops/:id/mobile-units", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT mu.*, pc.name AS "providerName", ca."expedientNumber"
+         FROM connect_mobile_units mu
+         LEFT JOIN connect_provider_companies pc ON pc.id = mu."providerCompanyId"
+         LEFT JOIN connect_assistances ca ON ca.id = mu."activeAssistanceId"
+        WHERE mu."workshopId" = $1
+        ORDER BY mu.name`,
       [Number(req.params.id)],
     );
     res.json({ data: r.rows });
   });
 
-  router.post("/providers/:id/branches", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const { name, address, latitude, longitude, phone } = req.body ?? {};
-    if (!name?.trim()) return err(res, 422, "validation_failed", "El nombre es obligatorio");
+  /** Mover una unidad a otro taller (o quitarla de uno). */
+  router.patch("/mobile-units/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const workshopId = req.body?.workshopId != null ? Number(req.body.workshopId) : null;
+    if (workshopId != null) {
+      const w = await db.query(`SELECT id FROM connect_workshops WHERE id = $1`, [workshopId]);
+      if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    }
+    const r = await db.query(
+      `UPDATE connect_mobile_units SET "workshopId" = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING *`,
+      [workshopId, Date.now(), id],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
+    await auditConnect({ req, action: "unit.workshop_changed", resourceType: "mobile_unit", resourceId: id, detail: { workshopId } });
+    res.json(r.rows[0]);
+  });
+
+  /**
+   * Operarios del taller, unificados: los `techs` reales de Mobilink Assist
+   * (mismo id y estado en vivo), los usuarios Lite o los contactos manuales.
+   */
+  router.get("/workshops/:id/operators", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const w = await db.query(
+      `SELECT "integrationType", "coreWorkshopId" FROM connect_workshops WHERE id = $1`, [id],
+    );
+    if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    const { integrationType, coreWorkshopId } = w.rows[0];
+
+    const operators: any[] = [];
+
+    if (integrationType === "assist" && coreWorkshopId) {
+      const techs = await db.query(
+        `SELECT t.id, t.name, t.phone, t.status, t.blocked, t."roadsideCapable", t.es_supervisor,
+                t."currentRoadsideAssistanceId", ra."trackingToken",
+                ca.id AS "connectAssistanceId", ca."expedientNumber"
+           FROM techs t
+           LEFT JOIN roadside_assistances ra ON ra.id = t."currentRoadsideAssistanceId"
+           LEFT JOIN connect_assistances ca ON ca."coreAssistanceId" = t."currentRoadsideAssistanceId"
+          WHERE t."workshopId" = $1
+          ORDER BY t.name`,
+        [String(coreWorkshopId)],
+      );
+      for (const t of techs.rows) {
+        operators.push({
+          source: "assist", id: t.id, name: t.name, phone: t.phone,
+          role: t.es_supervisor ? "Supervisor" : t.roadsideCapable ? "Operario de carretera" : "Operario de taller",
+          status: t.blocked ? "blocked" : t.currentRoadsideAssistanceId ? "on_assistance" : t.status,
+          expedientNumber: t.expedientNumber ?? null,
+          connectAssistanceId: t.connectAssistanceId ?? null,
+        });
+      }
+    }
+
+    if (integrationType === "lite") {
+      const lite = await db.query(
+        `SELECT u.id, u.name, u.phone, u.email, u.role, u.active, u."lastLoginAtMs",
+                (SELECT COUNT(*)::int FROM connect_lite_devices d
+                  WHERE d."userId" = u.id AND d."revokedAtMs" IS NULL) AS devices,
+                (SELECT ca."expedientNumber" FROM connect_assistances ca
+                  WHERE ca."liteUserId" = u.id
+                    AND ca.status IN ('technician_assigned','en_route','arrived','in_progress','returning_to_workshop')
+                  ORDER BY ca.id DESC LIMIT 1) AS "expedientNumber"
+           FROM connect_lite_users u WHERE u."workshopId" = $1 ORDER BY u.name`,
+        [id],
+      );
+      for (const u of lite.rows) {
+        operators.push({
+          source: "lite", id: u.id, name: u.name, phone: u.phone, email: u.email,
+          role: u.role === "workshop_admin" ? "Administrador del taller" : "Operario",
+          status: !u.active ? "blocked" : u.expedientNumber ? "on_assistance" : "libre",
+          expedientNumber: u.expedientNumber ?? null,
+          lastLoginAtMs: u.lastLoginAtMs ? Number(u.lastLoginAtMs) : null,
+          devices: u.devices,
+        });
+      }
+    }
+
+    const contacts = await db.query(
+      `SELECT id, name, phone, role, notes FROM connect_workshop_contacts
+        WHERE "workshopId" = $1 AND active ORDER BY name`,
+      [id],
+    );
+    for (const c of contacts.rows) {
+      operators.push({ source: "contact", id: c.id, name: c.name, phone: c.phone, role: c.role ?? "Contacto", notes: c.notes, status: null });
+    }
+
+    res.json({ integrationType, data: operators });
+  });
+
+  /** Contacto manual del taller (encargado, centralita, guardia…). */
+  router.post("/workshops/:id/contacts", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const name = String(req.body?.name || "").trim();
+    if (!name) return err(res, 422, "validation_failed", "El nombre es obligatorio");
     const now = Date.now();
     const r = await db.query(
-      `INSERT INTO connect_branches ("providerCompanyId", name, address, latitude, longitude, phone, "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,
-      [Number(req.params.id), name.trim(), address ?? null, latitude ?? null, longitude ?? null, phone ?? null, now],
+      `INSERT INTO connect_workshop_contacts ("workshopId", name, phone, role, notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
+      [id, name, req.body?.phone ?? null, req.body?.role ?? null, req.body?.notes ?? null, now],
     );
-    await auditConnect({ req, action: "branch.created", resourceType: "branch", resourceId: r.rows[0].id });
+    await auditConnect({ req, action: "workshop.contact_added", resourceType: "workshop", resourceId: id, detail: { name } });
     res.status(201).json(r.rows[0]);
   });
+
+  router.patch("/workshop-contacts/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE connect_workshop_contacts SET
+         name = COALESCE($1, name), phone = COALESCE($2, phone), role = COALESCE($3, role),
+         notes = COALESCE($4, notes), active = COALESCE($5, active), "updatedAtMs" = $6
+       WHERE id = $7 RETURNING *`,
+      [b.name ?? null, b.phone ?? null, b.role ?? null, b.notes ?? null,
+       typeof b.active === "boolean" ? b.active : null, Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Contacto no encontrado");
+    await auditConnect({ req, action: "workshop.contact_updated", resourceType: "workshop", resourceId: r.rows[0].workshopId, detail: b });
+    res.json(r.rows[0]);
+  });
+
+  /** Mover un operario de Assist a otro taller (por coreWorkshopId). */
+  router.patch("/techs/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const workshopId = Number(req.body?.workshopId);
+    const w = await db.query(
+      `SELECT "coreWorkshopId" FROM connect_workshops WHERE id = $1 AND "integrationType" = 'assist'`,
+      [workshopId],
+    );
+    if (!w.rows[0]?.coreWorkshopId) return err(res, 422, "validation_failed", "El taller de destino no está integrado con Mobilink Assist");
+    const r = await db.query(
+      `UPDATE techs SET "workshopId" = $1 WHERE id = $2 RETURNING id, name`,
+      [String(w.rows[0].coreWorkshopId), id],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Operario no encontrado");
+    await auditConnect({ req, action: "tech.workshop_changed", resourceType: "tech", resourceId: id, detail: { workshopId } });
+    res.json({ ok: true });
+  });
+
+  // Las delegaciones (connect_branches) han desaparecido de la interfaz:
+  // solo quedan talleres. La tabla se conserva por los datos históricos.
 
   router.get("/providers/:id/workshops", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(`SELECT * FROM connect_workshops WHERE "providerCompanyId" = $1 ORDER BY name`, [Number(req.params.id)]);
@@ -584,6 +819,7 @@ export function createConnectBackofficeRouter(): Router {
          "networkChangedAtMs" = CASE WHEN $7 IS NOT NULL THEN $9 ELSE "networkChangedAtMs" END,
          "liteSettings" = COALESCE($11, "liteSettings"),
          features = COALESCE($12, features),
+         "coreWorkshopId" = COALESCE($13, "coreWorkshopId"),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -592,7 +828,8 @@ export function createConnectBackofficeRouter(): Router {
        typeof b.networkParticipation === "boolean" ? b.networkParticipation : null,
        u.name, now, Number(req.params.id),
        b.liteSettings ? JSON.stringify(b.liteSettings) : null,
-       b.features ? JSON.stringify(b.features) : null],
+       b.features ? JSON.stringify(b.features) : null,
+       b.coreWorkshopId != null ? String(b.coreWorkshopId) : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -1059,14 +1296,16 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/assistances", ...requireConnectRole("analyst"), async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     const status = req.query.status ? String(req.query.status) : null;
+    const workshopId = req.query.workshopId ? Number(req.query.workshopId) : null;
     const r = await db.query(
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName"
          FROM connect_assistances ca
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
-        WHERE $1::text IS NULL OR ca.status = $1
+        WHERE ($1::text IS NULL OR ca.status = $1)
+          AND ($3::int IS NULL OR ca."workshopId" = $3)
         ORDER BY ca.id DESC LIMIT $2`,
-      [status, limit],
+      [status, limit, workshopId],
     );
     res.json({ data: r.rows });
   });
@@ -1761,9 +2000,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
                 COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2 AND asg.status = 'accepted')::int AS accepted,
                 COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2 AND asg.status IN ('rejected','expired'))::int AS declined,
                 (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id
-                   AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status = 'finished') AS finished,
+                   AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status IN ('finished','at_workshop')) AS finished,
                 (SELECT COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) FROM connect_assistances ca
-                  WHERE ca."workshopId" = w.id AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status = 'finished') AS revenue
+                  WHERE ca."workshopId" = w.id AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status IN ('finished','at_workshop')) AS revenue
            FROM connect_workshops w
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
            LEFT JOIN connect_assignments asg ON asg."workshopId" = w.id
@@ -1795,7 +2034,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
            FROM connect_assistances ca
            LEFT JOIN connect_clients c ON c.id = ca."clientId"
            LEFT JOIN connect_partners p ON p.id = ca."partnerId"
-          WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+          WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
           GROUP BY 1 ORDER BY amount DESC`,
         [from, to],
       ),
@@ -1807,7 +2046,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
            FROM connect_assistances ca
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
-          WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+          WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
           GROUP BY 1 ORDER BY amount DESC`,
         [from, to],
       ),
@@ -1817,7 +2056,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
                 COUNT(*) FILTER (WHERE "finalCost" IS NULL)::int AS without_final,
                 COUNT(*) FILTER (WHERE "invoicedAtMs" IS NULL)::int AS pending_invoice
            FROM connect_assistances
-          WHERE status = 'finished' AND "createdAtMs" BETWEEN $1 AND $2`,
+          WHERE status IN ('finished','at_workshop') AND "createdAtMs" BETWEEN $1 AND $2`,
         [from, to],
       ),
     ]);
@@ -1837,7 +2076,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
-        WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+        WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
         ORDER BY ca.id DESC LIMIT 1000`,
       [from, to],
     );

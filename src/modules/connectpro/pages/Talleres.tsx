@@ -31,7 +31,7 @@ type LiteDevice = {
 const TIERS: WorkshopIntegrationType[] = ["assist", "lite", "external"];
 
 /** Panel de gestión del taller Lite: operarios, dispositivos y código de acceso. */
-function LitePanel({ workshop, canEdit, onError }: {
+export function LitePanel({ workshop, canEdit, onError }: {
   workshop: Workshop; canEdit: boolean; onError: (m: string) => void;
 }) {
   const [users, setUsers] = useState<LiteUser[]>([]);

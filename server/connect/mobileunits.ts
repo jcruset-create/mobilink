@@ -58,6 +58,16 @@ export async function syncMobileUnits(): Promise<number> {
   const providerId = provider.rows[0]?.id ?? null;
   if (!providerId) return 0;
 
+  // Taller al que pertenece cada vehículo del core: por su workshopId
+  // (roadside_vehicles."workshopId" ↔ connect_workshops."coreWorkshopId")
+  const wsByCoreId = new Map<string, number>();
+  try {
+    const ws = await db.query(
+      `SELECT id, "coreWorkshopId" FROM connect_workshops WHERE "coreWorkshopId" IS NOT NULL`,
+    );
+    for (const w of ws.rows) wsByCoreId.set(String(w.coreWorkshopId), w.id);
+  } catch { /* sin mapa de talleres: las unidades quedan sin taller */ }
+
   // Posiciones Webfleet desde Supabase (mejor esfuerzo: si falla, seguimos sin GPS)
   const wfByVehicleId = new Map<string, any>();
   try {
@@ -104,11 +114,12 @@ export async function syncMobileUnits(): Promise<number> {
     if (!existing.rows[0]) {
       const ins = await db.query(
         `INSERT INTO connect_mobile_units
-           ("providerCompanyId", "coreVehicleId", "webfleetVehicleId", name, plate, status,
+           ("providerCompanyId", "workshopId", "coreVehicleId", "webfleetVehicleId", name, plate, status,
             "technicianRef", latitude, longitude, "positionText", "speedKmh", "connectionStatus",
             "activeAssistanceId", "lastReportAtMs", "createdAtMs", "updatedAtMs")
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15) RETURNING id`,
-        [providerId, v.id, v.webfleetVehicleId ?? null, v.name, v.plate ?? null, status,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16) RETURNING id`,
+        [providerId, v.workshopId != null ? wsByCoreId.get(String(v.workshopId)) ?? null : null,
+         v.id, v.webfleetVehicleId ?? null, v.name, v.plate ?? null, status,
          row.tech, row.lat, row.lng, row.posText, row.speed, row.connection,
          row.activeId, row.lastReport, now],
       );
