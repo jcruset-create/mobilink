@@ -332,13 +332,28 @@ export function createConnectBackofficeRouter(): Router {
   router.get("/map", ...requireConnectRole("operator"), async (_req, res) => {
     const [assistances, workshops] = await Promise.all([
       db.query(
+        // La posición de la unidad asignada puede venir de tres sitios, según
+        // el producto del taller: el móvil del operario Lite, el móvil del
+        // técnico de Mobilink Assist (core) o el GPS de la unidad (Webfleet).
         `SELECT ca.id, ca.status, ca.priority, ca."serviceType", ca.address, ca."customerName",
                 ca.latitude, ca.longitude, w.name AS "workshopName", ra."assignedTechName",
-                ra."webfleetVehicleId"
+                ra."webfleetVehicleId",
+                COALESCE(ca."operatorLat", ra."operatorLat", mu.latitude)               AS "vehicleLat",
+                COALESCE(ca."operatorLng", ra."operatorLng", mu.longitude)              AS "vehicleLng",
+                COALESCE(ca."operatorLocationAtMs", ra."operatorLocationAtMs", mu."lastReportAtMs") AS "vehicleAtMs",
+                ca."operatorSpeedKmh"                                                   AS "vehicleSpeedKmh",
+                COALESCE(ca."liteUserName", ra."assignedTechName")                      AS "operatorName",
+                COALESCE(ra."assignedVehicleName", mu.name)                             AS "vehicleName",
+                CASE
+                  WHEN ca."operatorLat" IS NOT NULL THEN 'lite'
+                  WHEN ra."operatorLat" IS NOT NULL THEN 'assist'
+                  WHEN mu.latitude IS NOT NULL THEN 'unit'
+                END                                                                     AS "vehicleSource"
            FROM connect_assistances ca
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-          WHERE ca.status NOT IN ('finished', 'cancelled', 'draft')
+           LEFT JOIN connect_mobile_units mu ON mu."activeAssistanceId" = ca.id
+          WHERE ca.status NOT IN ('finished', 'at_workshop', 'cancelled', 'draft')
             AND ca.latitude IS NOT NULL`,
       ),
       db.query(

@@ -5,18 +5,29 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, ErrorBanner, Badge } from "../components/ui";
-import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES } from "../types";
+import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
+
+/** De dónde sale la posición de la unidad, para saber en qué confiar. */
+const VEHICLE_SOURCE_LABELS: Record<string, string> = {
+  lite: "móvil del operario (Assist Lite)",
+  assist: "móvil del técnico (Mobilink Assist)",
+  unit: "GPS de la unidad",
+};
 
 type MapAssistance = {
   id: number; status: string; priority: string; serviceType: string; address: string;
   customerName: string; latitude: number; longitude: number;
   workshopName: string | null; assignedTechName: string | null;
+  // Unidad asignada: móvil del operario Lite, móvil del técnico de Assist o GPS de la unidad
+  vehicleLat: number | null; vehicleLng: number | null; vehicleAtMs: number | null;
+  vehicleSpeedKmh: number | null; operatorName: string | null; vehicleName: string | null;
+  vehicleSource: "lite" | "assist" | "unit" | null;
 };
 type MapWorkshop = {
   id: number; name: string; latitude: number; longitude: number; radiusKm: number;
@@ -39,8 +50,9 @@ function zoomFactor(zoom: number): number {
 
 /**
  * Punto de la asistencia: se reutiliza el marcador rojo de avería de Mobilink
- * Assist (`public/marker_averia.png`), de modo que el mismo hecho se dibuja
- * igual en todo el ecosistema.
+ * Assist (`public/marker-asistencia.png`, versión con transparencia del
+ * `marker_averia.png` original, que venía sobre fondo blanco opaco), de modo
+ * que el mismo hecho se dibuja igual en todo el ecosistema.
  *
  * El estado sigue siendo legible sin depender del icono: lleva el punto de
  * color de la leyenda en una esquina y el nombre del estado en el popup. Las
@@ -59,8 +71,9 @@ function assistanceIcon(status: string, urgent: boolean, zoom: number) {
       <div style="position:relative;width:${s}px;height:${s}px">
         ${urgent ? `<div style="position:absolute;inset:${Math.round(s * 0.08)}px ${Math.round(s * 0.06)}px ${Math.round(s * 0.22)}px;
              border:${Math.max(2, Math.round(3 * f))}px solid #ef4444;border-radius:50%;opacity:.85"></div>` : ""}
-        <img src="/marker_averia.png" alt="" width="${s}" height="${s}"
-             style="display:block;filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+        <img src="/marker-asistencia.png" alt="" width="${s}" height="${s}"
+             style="display:block;width:${s}px;height:${s}px;max-width:none;
+             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
         <span style="position:absolute;right:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
              background:${color};border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;
              box-shadow:0 1px 3px rgba(0,0,0,.6)"></span>
@@ -73,6 +86,41 @@ function assistanceIcon(status: string, urgent: boolean, zoom: number) {
     iconSize: [s, s],
     iconAnchor: [s / 2, tipY],
     popupAnchor: [0, -tipY],
+  });
+}
+
+/** Antigüedad a partir de la cual la posición deja de considerarse fiable. */
+const POSICION_VIEJA_MS = 5 * 60_000;
+
+/**
+ * Unidad asignada a la asistencia, con el mismo aspecto que en «Localización
+ * de flota»: la furgoneta y, debajo, la matrícula o el nombre de la unidad.
+ *
+ * Si la última posición es antigua se atenúa y la etiqueta lo dice, para no
+ * dar por buena una posición que ya no lo es.
+ */
+function vehicleIcon(zoom: number, stale: boolean, label: string) {
+  const f = zoomFactor(zoom);
+  const w = Math.round(40 * f);
+  const h = Math.round(60 * f);
+  const font = Math.max(8, Math.round(10 * f));
+  const badgeH = Math.round(font * 1.9);
+  const texto = label.length > 14 ? `${label.slice(0, 13)}…` : label;
+  return L.divIcon({
+    html: `
+      <div style="text-align:center;width:${Math.max(w, 70)}px">
+        <img src="/van-icon.png" alt="" width="${w}" height="${h}"
+             style="display:block;margin:0 auto;width:${w}px;height:${h}px;max-width:none;
+             opacity:${stale ? 0.5 : 1};filter:drop-shadow(0 2px 6px rgba(0,0,0,.4))" />
+        <div style="display:inline-block;background:${stale ? "#334155" : "#1e3a5f"};
+             color:${stale ? "#cbd5e1" : "#f0c040"};font:900 ${font}px/1.5 system-ui;padding:1px 5px;
+             border-radius:4px;margin-top:2px;white-space:nowrap;border:1px solid #2d4a6a;
+             letter-spacing:.5px">${stale ? "? " : ""}${texto}</div>
+      </div>`,
+    className: "",
+    iconSize: [Math.max(w, 70), h + badgeH],
+    iconAnchor: [Math.max(w, 70) / 2, h],
+    popupAnchor: [0, -h - 4],
   });
 }
 
@@ -199,18 +247,47 @@ export default function MapaOperativo() {
               )}
             </span>
           ))}
-          {data?.assistances.map((a) => (
-            <Marker key={`a${a.id}`} position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
-              <Popup>
-                <b>#{a.id} — {a.customerName}</b>{a.priority === "urgente" && " · URGENTE"}<br />
-                {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status} · {a.serviceType}<br />
-                {a.address}<br />
-                {a.workshopName && <>Taller: {a.workshopName}<br /></>}
-                {a.assignedTechName && <>Técnico: {a.assignedTechName}<br /></>}
-                <Link to={`/connect/asistencias/${a.id}`}>Abrir ficha</Link>
-              </Popup>
-            </Marker>
-          ))}
+          {data?.assistances.map((a) => {
+            const conUnidad = a.vehicleLat != null && a.vehicleLng != null;
+            const vieja = conUnidad && (!a.vehicleAtMs || Date.now() - Number(a.vehicleAtMs) > POSICION_VIEJA_MS);
+            return (
+              <span key={`a${a.id}`}>
+                <Marker position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
+                  <Popup>
+                    <b>#{a.id} — {a.customerName}</b>{a.priority === "urgente" && " · URGENTE"}<br />
+                    {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status} · {a.serviceType}<br />
+                    {a.address}<br />
+                    {a.workshopName && <>Taller: {a.workshopName}<br /></>}
+                    {a.assignedTechName && <>Técnico: {a.assignedTechName}<br /></>}
+                    <Link to={`/connect/asistencias/${a.id}`}>Abrir ficha</Link>
+                  </Popup>
+                </Marker>
+                {conUnidad && (
+                  <>
+                    {/* Trayecto pendiente hasta el punto: discontinuo, no es la ruta real */}
+                    <Polyline
+                      positions={[[a.vehicleLat!, a.vehicleLng!], [a.latitude, a.longitude]]}
+                      pathOptions={{ color: vieja ? "#64748b" : "#8b5cf6", weight: 2, dashArray: "6 6", opacity: 0.85 }}
+                    />
+                    <Marker
+                      position={[a.vehicleLat!, a.vehicleLng!]}
+                      icon={vehicleIcon(zoom, vieja, a.vehicleName ?? a.operatorName ?? `#${a.id}`)}
+                    >
+                      <Popup>
+                        <b>{a.vehicleName ?? "Unidad asignada"}</b><br />
+                        {a.operatorName && <>Operario: {a.operatorName}<br /></>}
+                        Asistencia #{a.id} · {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status}<br />
+                        {a.vehicleSpeedKmh != null && <>{Math.round(a.vehicleSpeedKmh)} km/h<br /></>}
+                        {vieja ? "⚠ Posición desactualizada" : "Posición actual"}
+                        {a.vehicleAtMs ? ` (${fmtDateTime(Number(a.vehicleAtMs))})` : ""}<br />
+                        <span style={{ color: "#64748b" }}>Origen: {VEHICLE_SOURCE_LABELS[a.vehicleSource ?? ""] ?? "desconocido"}</span>
+                      </Popup>
+                    </Marker>
+                  </>
+                )}
+              </span>
+            );
+          })}
         </MapContainer>
       </div>
 
