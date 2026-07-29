@@ -548,7 +548,7 @@ export async function initConnect(): Promise<void> {
 
     -- Back office de la asistencia (mismos bloques que el de Mobilink Assist).
     -- Solo se usa para asistencias SIN fila en el core: las que sí la tienen
-    -- comparten `roadside_backoffice` con Assist, para no tener dos verdades.
+    -- comparten roadside_backoffice con Assist, para no tener dos verdades.
     CREATE TABLE IF NOT EXISTS connect_assistance_backoffice (
       id SERIAL PRIMARY KEY,
       "assistanceId" INTEGER NOT NULL UNIQUE REFERENCES connect_assistances(id) ON DELETE CASCADE,
