@@ -12,6 +12,7 @@ import { Card, Badge, Button, ErrorBanner } from "../components/ui";
 import AsignacionTab from "../components/AsignacionTab";
 import ComunicacionesTab from "../components/ComunicacionesTab";
 import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
+import BackOfficeTab from "../components/BackOfficeTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 type Detail = {
@@ -43,7 +44,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Asignación", "Seguimiento", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -198,6 +199,9 @@ export default function FichaAsistencia() {
         )}
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
+        )}
+        {tab === "Back office" && (
+          <BackOfficeTab assistanceId={a.id} canOperate={canOperate} />
         )}
         {tab === "Seguimiento" && (
           <SeguimientoLiteTab assistanceId={a.id} canOperate={canOperate} onChanged={load} />

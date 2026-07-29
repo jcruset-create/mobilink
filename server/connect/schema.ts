@@ -546,6 +546,42 @@ export async function initConnect(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_connect_ws_contacts ON connect_workshop_contacts ("workshopId");
 
+    -- Back office de la asistencia (mismos bloques que el de Mobilink Assist).
+    -- Solo se usa para asistencias SIN fila en el core: las que sí la tienen
+    -- comparten `roadside_backoffice` con Assist, para no tener dos verdades.
+    CREATE TABLE IF NOT EXISTS connect_assistance_backoffice (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL UNIQUE REFERENCES connect_assistances(id) ON DELETE CASCADE,
+
+      -- Contactos
+      "solicitanteNombre" TEXT, "solicitanteTelefono" TEXT, "solicitanteWhatsapp" TEXT,
+      "solicitanteEmail" TEXT, "conductorTelefono" TEXT,
+      "responsableNombre" TEXT, "responsableTelefono" TEXT, "responsableCargo" TEXT,
+      "autorizadorNombre" TEXT, "autorizadorTelefono" TEXT, "autorizadorCargo" TEXT,
+
+      -- Empresas
+      "empresaSolicitanteNombre" TEXT, "empresaSolicitanteTelefono" TEXT, "empresaSolicitanteEmail" TEXT,
+      "empresaServicioNombre" TEXT, "empresaServicioCif" TEXT, "empresaServicioTelefono" TEXT,
+      "empresaFacturacionNombre" TEXT, "empresaFacturacionCif" TEXT, "empresaFacturacionEmail" TEXT,
+      "expedienteExterno" TEXT, "referenciaCliente" TEXT, "referenciaAutorizacion" TEXT,
+
+      -- Operativa
+      "tiposAsistencia" TEXT, "tipoVehiculo" TEXT, "estadoVehiculo" TEXT, "ubicacionIncidencia" TEXT,
+
+      -- Vehículo
+      marca TEXT, modelo TEXT, color TEXT, vin TEXT, kilometraje INTEGER,
+      "medidaNeumatico" TEXT, "ejeAfectado" TEXT, "posicionRueda" TEXT,
+      "vehiculoCargado" BOOLEAN, mercancia TEXT, adr BOOLEAN,
+
+      -- Facturación
+      facturable BOOLEAN DEFAULT true, "pendienteAutorizacion" BOOLEAN DEFAULT false,
+      garantia BOOLEAN DEFAULT false, interna BOOLEAN DEFAULT false,
+      "importeAcordado" NUMERIC(10,2), "observacionesFacturacion" TEXT,
+
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
     -- Contadores correlativos (nº de expediente por año, etc.)
     CREATE TABLE IF NOT EXISTS connect_counters (
       scope TEXT PRIMARY KEY,

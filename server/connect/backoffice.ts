@@ -26,7 +26,8 @@ import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
 import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
 import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
-import { extractJson, hasAi, AI_IMAGE_RULES } from "../core/ai.ts";
+import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
+import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
 import {
   activeCaptureSession, captureMessages, saveCaptureAnalysis, normalize as normalizeCapture,
 } from "../core/whatsappCapture.ts";
@@ -1178,6 +1179,47 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     await auditConnect({
       req, action: "assistance.ai_extract", resourceType: "assistance",
       detail: { campos: Object.keys(data).length, imagenes: images.length, conTexto: !!text },
+    });
+    res.json({ data });
+  });
+
+  // ── Back office de la asistencia ─────────────────────────────────────────
+
+  /**
+   * Datos de back office. Si la asistencia está en un taller con Mobilink
+   * Assist, son LOS MISMOS que ve y edita el back office de Assist.
+   */
+  router.get("/assistances/:id/backoffice", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await leerBackoffice(Number(req.params.id));
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada");
+    res.json({ data: r.data, origen: r.origen });
+  });
+
+  router.put("/assistances/:id/backoffice", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const data = await guardarBackoffice(id, req.body ?? {});
+    await auditConnect({
+      req, action: "assistance.backoffice_saved", resourceType: "assistance", resourceId: id,
+      detail: { campos: Object.keys(req.body ?? {}).length },
+    });
+    res.json({ data });
+  });
+
+  /** Extracción por IA con los campos del back office (texto y/o capturas). */
+  router.post("/assistances/:id/backoffice/ai-extract", ...requireConnectRole("operator"), async (req, res) => {
+    const text = String(req.body?.text ?? "").trim();
+    const images: string[] = Array.isArray(req.body?.images)
+      ? req.body.images.filter((u: any) => typeof u === "string" && u.startsWith("data:image")).slice(0, 6)
+      : [];
+    if (!text && images.length === 0) {
+      return err(res, 422, "validation_failed", "Pega el texto o añade al menos una imagen");
+    }
+    if (!hasAi()) return err(res, 503, "ai_unavailable", "La extracción por IA no está configurada (OPENAI_API_KEY)");
+
+    const data = await extractJson({ system: AI_BACKOFFICE_PROMPT, text, images, maxTokens: 900 });
+    await auditConnect({
+      req, action: "assistance.backoffice_ai_extract", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { campos: Object.keys(data).length },
     });
     res.json({ data });
   });
