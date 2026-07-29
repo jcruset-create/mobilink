@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom"
 import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert } from "lucide-react";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import { supabase } from "../administracion/services/supabase";
+import { APP_VERSION } from "../../version";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
 export const MODULO_WORKPLANNER = "workplanner";
@@ -151,6 +152,12 @@ export default function WorkPlannerApp() {
           <div className="flex shrink-0 items-center gap-1.5">
             <CalendarClock className="h-4 w-4 text-sky-400" />
             <span className="text-[13px] font-black">Mobilink WorkPlanner</span>
+            <span
+              className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400"
+              title="Versión desplegada"
+            >
+              {APP_VERSION}
+            </span>
           </div>
           {permitido && (
             <nav className="flex items-center gap-1">
