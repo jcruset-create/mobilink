@@ -426,10 +426,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  void _aviso(String txt, {required bool ok}) {
+  void _aviso(String txt, {required bool ok, bool conDeshacer = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(txt), backgroundColor: ok ? AppColors.success : AppColors.danger, duration: const Duration(seconds: 3),
+      content: Text(txt),
+      backgroundColor: ok ? AppColors.success : AppColors.danger,
+      // Tras un movimiento se ofrece deshacer ahí mismo: es donde el técnico
+      // mira cuando se da cuenta de que se ha equivocado.
+      duration: Duration(seconds: conDeshacer ? 8 : 3),
+      action: conDeshacer
+          ? SnackBarAction(label: 'DESHACER', textColor: Colors.white, onPressed: _deshacer)
+          : null,
     ));
   }
 
@@ -779,7 +786,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       await _cargar();
       if (!mounted) return;
       setState(() { _permutaA = null; _posSeleccionada = null; });
-      _aviso(esMover ? 'Movido correctamente.' : 'Permutadas correctamente.', ok: true);
+      _aviso(esMover ? 'Movido correctamente.' : 'Permutadas correctamente.', ok: true, conDeshacer: true);
     } catch (e) {
       if (mounted) setState(() => _permutaA = null);
       _aviso('No se pudo completar: $e', ok: false);
