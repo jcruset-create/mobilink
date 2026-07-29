@@ -171,6 +171,7 @@ export default function VehiculoDetalle() {
           onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
           onChanged={cargar}
           onTipoChanged={cargar}
+          onOperaciones={() => setModalOps(true)}
         />
       </div>
 
