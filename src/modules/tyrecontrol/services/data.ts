@@ -980,6 +980,7 @@ export async function crearMarca(nombre: string): Promise<void> {
 export async function actualizarMarca(id: string, patch: {
   nombre?: string; logo_url?: string | null; fabricante_id?: string | null;
   pais_origen?: string | null; segmento?: string | null; tipo_principal?: string | null; observaciones?: string | null;
+  es_recauchutado?: boolean;
 }): Promise<void> {
   const payload: Record<string, any> = {};
   if (patch.nombre != null) payload.nombre = patch.nombre.trim();
@@ -989,6 +990,7 @@ export async function actualizarMarca(id: string, patch: {
   if (patch.segmento !== undefined) payload.segmento = patch.segmento;
   if (patch.tipo_principal !== undefined) payload.tipo_principal = patch.tipo_principal;
   if (patch.observaciones !== undefined) payload.observaciones = patch.observaciones;
+  if (patch.es_recauchutado !== undefined) payload.es_recauchutado = patch.es_recauchutado;
   const { error } = await supabase.from("tc_cat_marcas_neumatico").update(payload).eq("id", id);
   if (error) throw new Error(error.message);
 }

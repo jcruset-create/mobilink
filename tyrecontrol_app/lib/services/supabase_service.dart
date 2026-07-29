@@ -829,6 +829,46 @@ class TyreControlApi {
     return '$res';
   }
 
+  /// Marcas que son de recauchutado (p. ej. INSA). El dato vive en la marca,
+  /// no en el neumático: así la ficha lo enseña sin marcar rueda a rueda.
+  static Set<String>? _marcasRecau;
+  static Future<Set<String>> marcasRecauchutadas() async {
+    if (_marcasRecau != null) return _marcasRecau!;
+    try {
+      final data = await _db.from('tc_cat_marcas_neumatico')
+          .select('nombre').eq('es_recauchutado', true).eq('activo', true);
+      _marcasRecau = (data as List)
+          .map((e) => ((e as Map)['nombre'] as String? ?? '').trim().toUpperCase())
+          .where((e) => e.isNotEmpty)
+          .toSet();
+    } catch (_) {
+      _marcasRecau = <String>{}; // sin red o columna aún sin migrar
+    }
+    return _marcasRecau!;
+  }
+
+  static bool esMarcaRecauchutada(String? marca) {
+    if (marca == null || marca.trim().isEmpty) return false;
+    return (_marcasRecau ?? const <String>{}).contains(marca.trim().toUpperCase());
+  }
+
+  /// Aplica un PLAN DE TRABAJO completo (movimientos + reesculturados + giros
+  /// + reparaciones) en una sola transacción.
+  static Future<String> aplicarPlanTrabajo({
+    required String vehiculoId,
+    required List<Map<String, dynamic>> acciones,
+    num? km,
+    String? observaciones,
+  }) async {
+    final res = await _db.rpc('tc_aplicar_plan_trabajo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_acciones': acciones,
+      'p_km': km,
+      'p_obs': observaciones,
+    });
+    return '$res';
+  }
+
   /// Mueve un neumático montado a una posición LIBRE del mismo vehículo
   /// (operación 'cambio_posicion'). Si el destino está ocupado, la función de
   /// BD lo rechaza: en ese caso hay que usar [intercambiarPosiciones].

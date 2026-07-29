@@ -219,6 +219,11 @@ function FilaMarca({ marca, fabricantes, contadores, seleccionada, puedeEditar, 
             <input className={`${inputCls} mt-0.5 text-[11px]`} defaultValue={marca.pais_origen ?? ""} disabled={!puedeEditar}
               onBlur={async (e) => { if (e.target.value !== (marca.pais_origen ?? "")) { await actualizarMarca(marca.id, { pais_origen: e.target.value || null }); onCambio(); } }} />
           </label>
+          <label className="col-span-2 flex items-center gap-2 text-[11px] text-slate-300">
+            <input type="checkbox" checked={!!marca.es_recauchutado} disabled={!puedeEditar}
+              onChange={async (e) => { await actualizarMarca(marca.id, { es_recauchutado: e.target.checked }); onCambio(); }} />
+            Marca de recauchutado (sus neumáticos salen marcados en la ficha del vehículo)
+          </label>
           {contadores && (
             <div className="col-span-2 flex gap-3 text-[10px] text-slate-500">
               <span>{contadores.num_modelos} modelo(s)</span>

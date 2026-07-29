@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
 /// Plano del vehículo con la FOTO real de fondo y una tarjeta por posición,
@@ -271,6 +272,24 @@ class _TarjetaPosicion extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                // Distintivos del propio neumático: recauchutado (lo dice la
+                // marca) y reesculturado (se le han cortado dibujos nuevos).
+                if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca) ||
+                    neumatico!.reesculturado ||
+                    neumatico!.giradoEnLlanta)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 3,
+                      children: [
+                        if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca))
+                          _EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
+                        if (neumatico!.reesculturado) _EtiquetaNeu(txt: 'REESC.', color: cTexto),
+                        if (neumatico!.giradoEnLlanta) _EtiquetaNeu(txt: 'GIRADO', color: cTexto),
+                      ],
+                    ),
+                  ),
               ] else
                 const Text('Sin neumático', style: TextStyle(fontSize: 10, color: AppColors.textHint)),
               const SizedBox(height: 1),
@@ -306,6 +325,26 @@ class _TarjetaPosicion extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Etiqueta pequeña del propio neumático (recauchutado, reesculturado, girado).
+class _EtiquetaNeu extends StatelessWidget {
+  final String txt;
+  final Color color;
+  const _EtiquetaNeu({required this.txt, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+      ),
+      child: Text(txt,
+          style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color, height: 1.1)),
     );
   }
 }

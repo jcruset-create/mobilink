@@ -790,6 +790,9 @@ export interface MarcaNeumatico {
   id: string; nombre: string; activo: boolean; logo_url?: string | null;
   fabricante_id?: string | null; pais_origen?: string | null;
   segmento?: SegmentoMarca | null; tipo_principal?: TipoPrincipalMarca | null; observaciones?: string | null;
+  /// Marca de recauchutado (p. ej. INSA): sus neumáticos salen marcados como
+  /// recauchutados en la ficha del vehículo y en la pantalla de cambios.
+  es_recauchutado?: boolean | null;
 }
 
 export interface MarcaContadores { id: string; num_modelos: number; num_neumaticos: number; num_vehiculos: number; }

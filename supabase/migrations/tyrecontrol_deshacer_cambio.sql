@@ -16,7 +16,7 @@ declare o record; neu record; v_cliente uuid; ma record; mb record; v_pa uuid; v
 begin
   select * into o from operaciones_neumaticos
     where vehiculo_id = p_vehiculo and coalesce(is_anulada, false) = false
-      and tipo_operacion in ('montaje','desmontaje','intercambio','cambio_posicion','permutacion')
+      and tipo_operacion in ('montaje','desmontaje','intercambio','cambio_posicion','permutacion','plan_trabajo')
       and created_at >= p_desde
     order by created_at desc
     limit 1;
@@ -29,9 +29,41 @@ begin
   select * into neu from tc_neumaticos where id = o.neumatico_id;
   select cliente_almacen_id into v_cliente from tc_empresas where id = o.empresa_id;
 
+  -- Plan de trabajo: se revierte el parte ENTERO. Cada movimiento guardo su
+  -- estado previo en estado_anterior ('mm:...' o 'girado:...').
+  if o.tipo_operacion = 'plan_trabajo' then
+    update tc_montajes_actuales set posicion_id = null
+     where vehiculo_id = o.vehiculo_id
+       and neumatico_id in (select mv.neumatico_id from tc_operacion_movimientos mv
+                             where mv.operacion_id = o.id and mv.movimiento_tipo = 'cambio_posicion');
+    update tc_montajes_actuales m set posicion_id = mv.origen_posicion_id
+      from tc_operacion_movimientos mv
+     where mv.operacion_id = o.id and mv.movimiento_tipo = 'cambio_posicion'
+       and m.neumatico_id = mv.neumatico_id and m.vehiculo_id = o.vehiculo_id;
+    update tc_neumaticos n set posicion_id = mv.origen_posicion_id, updated_at = now()
+      from tc_operacion_movimientos mv
+     where mv.operacion_id = o.id and mv.movimiento_tipo = 'cambio_posicion' and n.id = mv.neumatico_id;
+
+    -- Reesculturado: vuelve la profundidad anterior (y se quita la marca).
+    update tc_neumaticos n
+       set profundidad_actual_mm = nullif(replace(mv.estado_anterior, 'mm:', ''), '')::numeric,
+           reesculturado = false, updated_at = now()
+      from tc_operacion_movimientos mv
+     where mv.operacion_id = o.id and mv.movimiento_tipo = 'reescultura' and n.id = mv.neumatico_id;
+
+    -- Giro sobre llanta: vuelve al estado de giro anterior.
+    update tc_neumaticos n
+       set girado_en_llanta = (replace(mv.estado_anterior, 'girado:', '') = 'true'), updated_at = now()
+      from tc_operacion_movimientos mv
+     where mv.operacion_id = o.id and mv.movimiento_tipo = 'giro' and n.id = mv.neumatico_id;
+
+    update operaciones_neumaticos set is_anulada = true, status = 'anulada', updated_at = now() where id = o.id;
+    return 'Deshecho: plan de trabajo de '
+        || (select count(*) from tc_operacion_movimientos where operacion_id = o.id) || ' accion(es)';
+
   -- Permutacion multiple: cada rueda vuelve a su posicion de origen. Se
   -- deshace el plan ENTERO, que es como se aplico.
-  if o.tipo_operacion = 'permutacion' then
+  elsif o.tipo_operacion = 'permutacion' then
     update tc_montajes_actuales set posicion_id = null
      where vehiculo_id = o.vehiculo_id
        and neumatico_id in (select mv.neumatico_id from tc_operacion_movimientos mv where mv.operacion_id = o.id);
