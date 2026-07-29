@@ -288,7 +288,24 @@ export interface WorkshopCandidate {
   explanation: string;
   acceptProbability?: number; // 0..1, histórico de aceptación de ofertas
   activeLoad?: number;        // asistencias activas ahora mismo
+  // Disponibilidad real compartida con Central (null = el taller no comparte
+  // recursos y no se puede saber; se usa el proxy de carga)
+  sharedUnits?: number;
+  availableUnits?: number;
+  sharedTechs?: number;
+  availableTechs?: number;
+  effectiveAvailable?: number | null;
 }
+
+/**
+ * Estados de furgoneta en los que la unidad puede salir a una asistencia.
+ * "En base" cuenta: es el estado normal de una furgoneta parada en el taller,
+ * no un impedimento.
+ */
+const UNIT_DISPATCHABLE = ["available", "at_base"];
+
+/** Único estado de técnico realmente disponible (el resto: ocupado, vacaciones, permiso…). */
+const TECH_AVAILABLE = "disponible";
 
 /** ETA aproximada por carretera: haversine × 1,4 a 60 km/h medios + 5 min de salida. */
 function estimateEtaMinutes(distanceKm: number): number {
@@ -338,7 +355,7 @@ export async function findCandidates(
        ) load ON true
        LEFT JOIN LATERAL (
          SELECT COUNT(*)::int AS shared,
-                COUNT(*) FILTER (WHERE mu.status = 'available')::int AS available
+                COUNT(*) FILTER (WHERE mu.status = ANY($2::text[]))::int AS available
            FROM connect_mobile_units mu
           WHERE mu."workshopId" = w.id AND mu."sharedWithCentral" = true
        ) units ON true
@@ -346,7 +363,7 @@ export async function findCandidates(
          SELECT COUNT(*)::int AS shared,
                 COUNT(*) FILTER (
                   WHERE t.blocked = false AND t."currentRoadsideAssistanceId" IS NULL
-                        AND t.status <> 'ocupado'
+                        AND t.status = $3
                 )::int AS available
            FROM techs t
           WHERE w."coreWorkshopId" IS NOT NULL
@@ -355,7 +372,7 @@ export async function findCandidates(
       WHERE w."connectStatus" = 'active'
         AND w."networkParticipation" = true
         AND (a.id IS NULL OR a.excluded = false)`,
-    [since90],
+    [since90, UNIT_DISPATCHABLE, TECH_AVAILABLE],
   );
   const candidates: WorkshopCandidate[] = [];
   for (const w of r.rows) {
@@ -380,7 +397,6 @@ export async function findCandidates(
     const availableUnits = Number(w.availableUnits ?? 0);
     const sharedTechs = Number(w.sharedTechs ?? 0);
     const availableTechs = Number(w.availableTechs ?? 0);
-    const isAssist = String(w.integrationType ?? "assist") === "assist";
 
     // Capacidad efectiva = lo que realmente puede despachar. Un taller necesita
     // furgoneta Y técnico; si comparte ambos, la capacidad es el mínimo de los
@@ -394,12 +410,10 @@ export async function findCandidates(
       effectiveAvailable = availableTechs;
     }
 
-    // Si el taller ha compartido recursos pero no tiene ninguno libre ahora
-    // mismo, se descarta (no puede atender).
-    if (isAssist && effectiveAvailable === 0) continue;
-
-    // Penalización por carga. Si hay capacidad real compartida, se usa; si no,
-    // se mantiene el proxy de asistencias activas (comportamiento anterior).
+    // Un taller sin recursos libres AHORA no se oculta: el comparador es una
+    // ayuda para el operador, que tiene que ver todas las opciones de la zona
+    // y decidir (puede llamar y confirmar). Se penaliza en el score y se dice
+    // en el motivo; la asignación automática, además, lo deja para el final.
     const activeLoad = Number(w.activeLoad ?? 0);
     const loadFactor = effectiveAvailable != null
       ? Math.min(1, effectiveAvailable / 2) // 2+ libres → capacidad plena
@@ -424,7 +438,8 @@ export async function findCandidates(
             sharedTechs > 0 ? `${availableTechs}/${sharedTechs} técnico(s)` : null,
           ].filter(Boolean).join(" · ") + " libre(s)"
         : activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
-    ];
+      effectiveAvailable === 0 ? "⚠ sin recursos libres ahora mismo" : null,
+    ].filter(Boolean);
     candidates.push({
       workshopId: w.id,
       name: w.name,
@@ -436,10 +451,16 @@ export async function findCandidates(
       score,
       acceptProbability,
       activeLoad,
+      sharedUnits, availableUnits, sharedTechs, availableTechs, effectiveAvailable,
       explanation: `${w.name}: ${parts.join(" · ")}`,
     });
   }
-  return candidates.sort((a, b) => b.score - a.score);
+  // Primero los que pueden salir ahora; dentro de cada grupo, por score
+  return candidates.sort((a, b) => {
+    const dispA = a.effectiveAvailable === 0 ? 1 : 0;
+    const dispB = b.effectiveAvailable === 0 ? 1 : 0;
+    return dispA - dispB || b.score - a.score;
+  });
 }
 
 /** Talleres ya ofertados sin éxito para esta asistencia (no se reofertan). */

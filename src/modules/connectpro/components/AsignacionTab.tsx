@@ -12,6 +12,10 @@ type Candidate = {
   workshopId: number; name: string; providerName: string | null; requiresAcceptance: boolean;
   distanceKm: number; etaMinutes: number; score: number; explanation: string;
   acceptProbability?: number; activeLoad?: number;
+  // Disponibilidad compartida con Central (null = el taller no la comparte)
+  sharedUnits?: number; availableUnits?: number;
+  sharedTechs?: number; availableTechs?: number;
+  effectiveAvailable?: number | null;
 };
 
 type Assignment = {
@@ -115,7 +119,8 @@ export default function AsignacionTab({
           ) : (
             <table className="w-full">
               <thead><tr className="border-b border-slate-700">
-                <Th>#</Th><Th>Taller</Th><Th>Empresa</Th><Th>Distancia</Th><Th>ETA</Th><Th>Acepta</Th><Th>Carga</Th><Th>Score</Th><Th>Motivo</Th><Th></Th>
+                <Th>#</Th><Th>Taller</Th><Th>Empresa</Th><Th>Distancia</Th><Th>ETA</Th><Th>Acepta</Th>
+                <Th>Disponibilidad</Th><Th>Carga</Th><Th>Score</Th><Th>Motivo</Th><Th></Th>
               </tr></thead>
               <tbody>
                 {candidates.map((c, i) => (
@@ -126,6 +131,24 @@ export default function AsignacionTab({
                     <Td>{c.distanceKm} km</Td>
                     <Td>~{c.etaMinutes} min</Td>
                     <Td>{c.acceptProbability != null ? `${Math.round(c.acceptProbability * 100)} %` : "—"}</Td>
+                    <Td>
+                      {c.effectiveAvailable == null ? (
+                        <span className="text-slate-500" title="El taller no comparte sus recursos con Central">
+                          sin datos
+                        </span>
+                      ) : c.effectiveAvailable === 0 ? (
+                        <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-300" title="Ninguna furgoneta o técnico libre ahora mismo">
+                          ⚠ ocupado
+                        </Badge>
+                      ) : (
+                        <span className="text-emerald-300">
+                          {[
+                            c.sharedUnits ? `${c.availableUnits}/${c.sharedUnits} furgo.` : null,
+                            c.sharedTechs ? `${c.availableTechs}/${c.sharedTechs} téc.` : null,
+                          ].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
+                    </Td>
                     <Td>{c.activeLoad != null ? (c.activeLoad === 0 ? "libre" : `${c.activeLoad} activas`) : "—"}</Td>
                     <Td><Badge className={c.score >= 80 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : c.score >= 60 ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-red-500/40 bg-red-500/10 text-red-300"}>{c.score}</Badge></Td>
                     <Td className="max-w-[260px] text-[12px] text-slate-400">{c.explanation}</Td>
