@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "Mobilink TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.28.0+67
+version: 0.28.1+68
 
 environment:
   sdk: ^3.8.1

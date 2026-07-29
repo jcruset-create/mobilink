@@ -808,8 +808,9 @@ class TyreControlApi {
   }
 
   /// Aplica un PLAN de permutación (varias ruedas a la vez) en una sola
-  /// transacción: o entra entero o no entra nada. [destinos] indica dónde debe
-  /// acabar cada rueda: {montajeId: posicionDestinoId}.
+  /// transacción: o entra entero o no entra nada. [destinos] va indexado por
+  /// POSICIÓN de destino: {posicionDestinoId: montajeId}, igual que el plan de
+  /// la pantalla (una posición solo puede recibir una rueda).
   static Future<String> permutarPlan({
     required String vehiculoId,
     required Map<String, String> destinos,
@@ -817,7 +818,7 @@ class TyreControlApi {
     String? observaciones,
   }) async {
     final lista = destinos.entries
-        .map((e) => {'montaje': e.key, 'posicion': e.value})
+        .map((e) => {'montaje': e.value, 'posicion': e.key})
         .toList();
     final res = await _db.rpc('tc_permutar_plan', params: {
       'p_vehiculo': vehiculoId,
