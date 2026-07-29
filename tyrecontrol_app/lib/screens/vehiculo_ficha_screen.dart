@@ -85,6 +85,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
         TyreControlApi.listarTiposLlantaCat(),
         TyreControlApi.ultimasMedicionesPorNeumatico(widget.vehiculoId),
         TyreControlApi.datosCatalogoPorModelo(),
+        TyreControlApi.marcasRecauchutadas(), // para el distintivo RECAUCH.
       ]);
 
       final montajes = results[1] as List<MontajeActual>;

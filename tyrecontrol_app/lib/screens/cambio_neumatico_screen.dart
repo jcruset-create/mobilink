@@ -59,11 +59,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   final Set<String> _posicionesResueltas = {}; // reparaciones en sitio hechas en esta sesión
   final Set<String> _incidenciasResueltas = {}; // ids de incidencias ya resueltas (para no re-resolver al finalizar)
   String? _posSeleccionada; // posición elegida en el plano para operar desde el panel
-  bool _modoPermuta = false; // "tocar y tocar" para planificar permutas
+  // Plan de trabajo: se elige la ACCIÓN en el panel lateral y se marcan las
+  // ruedas afectadas. Nada toca la BD hasta pulsar "Aplicar plan".
+  String? _accionActiva; // 'mover' | 'reescultura' | 'giro' | 'pinchazo' | …
+  bool get _modoPermuta => _accionActiva != null;
   String? _permutaA; // primera posición elegida (origen del movimiento en curso)
-  // Plan de permutación: posiciónDestino → montajeId que acabará ahí. Nada
-  // toca la BD hasta pulsar "Aplicar plan".
+  // Movimientos: posiciónDestino → montajeId que acabará ahí.
   final Map<String, String> _plan = {};
+  // Resto de acciones marcadas: montajeId → tipos de acción.
+  final Map<String, Set<String>> _marcas = {};
+  // Milímetros tras el corte, por montaje reesculturado.
+  final Map<String, double> _mmReescultura = {};
 
   // Incidencia (con problemas abiertos) por posición: para pintar el rojo y
   // ofrecer las operaciones en el panel lateral.
@@ -147,6 +153,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         _empresaId != null ? TyreControlApi.stockAlmacenEmpresa(_empresaId!) : Future.value(<StockAlmacenLinea>[]),
         TyreControlApi.ultimasMedicionesPorNeumatico(widget.vehiculoId),
         TyreControlApi.datosCatalogoPorModelo(),
+        TyreControlApi.marcasRecauchutadas(), // para el distintivo RECAUCH.
       ]);
 
       final medidas = results[2] as Map<String, String>;
@@ -508,20 +515,50 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              paso1
-                  ? 'PLAN DE PERMUTACIÓN · Toca la rueda que quieres mover. Nada se guarda hasta aplicar.'
-                  : 'PLAN · Ahora toca el sitio de destino. (Vuelve a tocar la marcada para soltarla.)',
+              _accionActiva != 'mover'
+                  ? '${_kAcciones[_accionActiva]?.label.toUpperCase() ?? 'PLAN'} · Toca las ruedas afectadas. Nada se guarda hasta aplicar.'
+                  : (paso1
+                      ? 'PERMUTAR / MOVER · Toca la rueda que quieres mover.'
+                      : 'PERMUTAR / MOVER · Ahora toca el sitio de destino. (Vuelve a tocar la marcada para soltarla.)'),
               style: const TextStyle(color: AppColors.info, fontWeight: FontWeight.w700, fontSize: 13),
             ),
           ),
           TextButton(
-            onPressed: () => setState(() { _modoPermuta = false; _permutaA = null; _plan.clear(); }),
+            onPressed: () => setState(() { _accionActiva = null; _permutaA = null; }),
             child: const Text('Salir'),
           ),
         ]),
-        if (movs.isNotEmpty) ...[
+        if (movs.isNotEmpty || _marcas.isNotEmpty) ...[
           const SizedBox(height: 6),
           Wrap(spacing: 6, runSpacing: 6, children: [
+            // Chips de las acciones marcadas (una por rueda y tipo).
+            for (final e in _marcas.entries)
+              for (final tipo in e.value)
+                Container(
+                  padding: const EdgeInsets.only(left: 10, right: 2, top: 2, bottom: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppColors.info.withValues(alpha: 0.6)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(_kAcciones[tipo]?.icono ?? Icons.build, size: 14, color: AppColors.info),
+                    const SizedBox(width: 5),
+                    Text('${_codigo(_posDe(e.key))} · ${_kAcciones[tipo]?.label ?? tipo}',
+                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w700)),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16, color: AppColors.textSecondary),
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                      tooltip: 'Quitar del plan',
+                      onPressed: () => setState(() {
+                        _marcas[e.key]?.remove(tipo);
+                        if (tipo == 'reescultura') _mmReescultura.remove(e.key);
+                        if (_marcas[e.key]?.isEmpty ?? false) _marcas.remove(e.key);
+                      }),
+                    ),
+                  ]),
+                ),
             for (final mv in movs)
               Container(
                 padding: const EdgeInsets.only(left: 10, right: 2, top: 2, bottom: 2),
@@ -543,7 +580,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                 ]),
               ),
             TextButton.icon(
-              onPressed: () => setState(() { _plan.clear(); _permutaA = null; }),
+              onPressed: () => setState(() {
+                _plan.clear(); _marcas.clear(); _mmReescultura.clear(); _permutaA = null;
+              }),
               icon: const Icon(Icons.delete_outline, size: 18),
               label: const Text('Vaciar plan'),
             ),
@@ -551,7 +590,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
               style: FilledButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
               onPressed: _trabajando ? null : _aplicarPlan,
               icon: const Icon(Icons.check_circle),
-              label: Text('Aplicar plan (${movs.length})'),
+              label: Text('Aplicar plan (${movs.length + _totalMarcas})'),
             ),
           ]),
         ],
@@ -705,9 +744,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return m.id;
   }
 
-  /// Modo plan: se tocan origen y destino y el movimiento se APUNTA. Nada se
-  /// guarda hasta "Aplicar plan".
+  /// Modo plan. Con "mover" se tocan origen y destino; con el resto de
+  /// acciones, cada toque marca o desmarca la rueda.
   void _tocarEnPermuta(String posId) {
+    if (_accionActiva != 'mover') {
+      _marcarAccion(posId, _accionActiva!);
+      return;
+    }
     if (_permutaA == null) {
       if (_ocupantePrevisto(posId) == null) {
         _aviso('Empieza por una rueda: toca la que quieras mover.', ok: false);
@@ -740,6 +783,62 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     });
   }
 
+  /// Marca o desmarca una rueda con la acción activa (un toque marca, otro
+  /// desmarca). Se avisa si la acción no aplica a ese neumático.
+  void _marcarAccion(String posId, String tipo) {
+    final m = _montajePorPosicion[posId];
+    if (m == null) {
+      _aviso('Esa posición no tiene neumático.', ok: false);
+      return;
+    }
+    final yaMarcada = _marcas[m.id]?.contains(tipo) ?? false;
+    if (!yaMarcada) {
+      if (tipo == 'giro' && _esDireccional(m.neumatico)) {
+        _aviso('Dibujo direccional: no se puede girar sobre la llanta.', ok: false);
+        return;
+      }
+      if (tipo == 'reescultura') {
+        final cat = _datosCat[TyreControlApi.claveCatalogo(
+            m.neumatico?.marca, m.neumatico?.modelo, m.neumatico?.medida)];
+        final prof = _mediciones[m.neumaticoId]?.profundidadMm ??
+            m.neumatico?.profundidadActualMm?.toDouble() ?? cat?.prof ?? 0;
+        _mmReescultura[m.id] = (prof + 4).clamp(0, 40).toDouble();
+      }
+    } else if (tipo == 'reescultura') {
+      _mmReescultura.remove(m.id);
+    }
+    setState(() {
+      final set = _marcas.putIfAbsent(m.id, () => <String>{});
+      yaMarcada ? set.remove(tipo) : set.add(tipo);
+      if (set.isEmpty) _marcas.remove(m.id);
+    });
+  }
+
+  /// Etiqueta pequena del propio neumatico (recauchutado, reesculturado...).
+  Widget _etiqueta(String txt, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withValues(alpha: 0.55)),
+        ),
+        child: Text(txt,
+            style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color, height: 1.1)),
+      );
+
+  bool _esDireccional(Neumatico? n) {
+    final txt = (n?.modelo ?? '').toUpperCase();
+    return txt.contains('DIREC') || txt.endsWith(' D') || txt.contains(' DH');
+  }
+
+  static const Map<String, ({String label, IconData icono})> _kAcciones = {
+    'mover': (label: 'Permutar / mover', icono: Icons.swap_horiz),
+    'reescultura': (label: 'Reesculturar', icono: Icons.content_cut),
+    'giro': (label: 'Girar sobre llanta', icono: Icons.rotate_left),
+    'pinchazo': (label: 'Reparar pinchazo', icono: Icons.tire_repair),
+    'valvula': (label: 'Cambiar válvula', icono: Icons.air),
+    'equilibrado': (label: 'Equilibrar', icono: Icons.balance),
+  };
+
   /// Movimientos del plan ya resueltos: de qué posición sale cada rueda y a
   /// cuál va (se omiten las que acaban donde estaban).
   List<({String montajeId, String origenId, String destinoId})> get _movimientosPlan {
@@ -757,10 +856,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return p.isEmpty ? '—' : p.first.codigoPosicion;
   }
 
+  /// Posición donde está hoy un montaje (para describirlo en el resumen).
+  String _posDe(String montajeId) {
+    for (final e in _montajePorPosicion.entries) {
+      if (e.value.id == montajeId) return e.key;
+    }
+    return '';
+  }
+
   Future<void> _aplicarPlan() async {
     final movs = _movimientosPlan;
-    if (movs.isEmpty) {
-      _aviso('El plan está vacío: apunta algún cambio primero.', ok: false);
+    if (movs.isEmpty && _marcas.isEmpty) {
+      _aviso('El plan está vacío: marca algo primero.', ok: false);
       return;
     }
     // Avisos agrupados (no bloquean): medidas distintas y cruces de lado.
@@ -774,7 +881,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: Text('Aplicar plan (${movs.length} movimiento${movs.length == 1 ? '' : 's'})'),
+        title: Text('Aplicar plan (${movs.length + _totalMarcas} acción(es))'),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             for (final mv in movs)
@@ -783,6 +890,42 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                 child: Text('${_desc(mv.origenId)}  →  ${_codigo(mv.destinoId)}',
                     style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
               ),
+            // Resumen por tipo de acción: "Reesculturar: E2_IZQ, E2_DER".
+            for (final tipo in _kAcciones.keys.where((t) => t != 'mover'))
+              if (_marcas.values.any((s) => s.contains(tipo)))
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '${_kAcciones[tipo]!.label}: '
+                    '${_marcas.entries.where((e) => e.value.contains(tipo)).map((e) => _codigo(_posDe(e.key))).join(', ')}',
+                    style: const TextStyle(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w700),
+                  ),
+                ),
+            if (_mmReescultura.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Text('Profundidad tras el corte (mm)',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+              for (final e in _mmReescultura.entries)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(children: [
+                    SizedBox(width: 90, child: Text(_codigo(_posDe(e.key)),
+                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 13))),
+                    SizedBox(
+                      width: 90,
+                      child: TextFormField(
+                        initialValue: e.value.toStringAsFixed(1),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(isDense: true, suffixText: 'mm'),
+                        onChanged: (v) {
+                          final d = double.tryParse(v.replaceAll(',', '.'));
+                          if (d != null) _mmReescultura[e.key] = d;
+                        },
+                      ),
+                    ),
+                  ]),
+                ),
+            ],
             for (final a in avisos)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
@@ -804,19 +947,31 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.permutarPlan(vehiculoId: widget.vehiculoId, destinos: Map.of(_plan));
+      final acciones = <Map<String, dynamic>>[
+        for (final e in _plan.entries) {'tipo': 'mover', 'montaje': e.value, 'posicion': e.key},
+        for (final e in _marcas.entries)
+          for (final tipo in e.value)
+            {'tipo': tipo, 'montaje': e.key, if (tipo == 'reescultura') 'valor': _mmReescultura[e.key]},
+      ];
+      await TyreControlApi.aplicarPlanTrabajo(vehiculoId: widget.vehiculoId, acciones: acciones);
       _posicionesMontadas.addAll(_plan.keys);
       HapticFeedback.mediumImpact();
       await _cargar();
       if (!mounted) return;
-      setState(() { _plan.clear(); _permutaA = null; _modoPermuta = false; });
-      _aviso('Plan aplicado: ${movs.length} rueda(s) cambiadas de sitio.', ok: true, conDeshacer: true);
+      final n = movs.length + _totalMarcas;
+      setState(() {
+        _plan.clear(); _marcas.clear(); _mmReescultura.clear();
+        _permutaA = null; _accionActiva = null;
+      });
+      _aviso('Plan aplicado: $n acción(es).', ok: true, conDeshacer: true);
     } catch (e) {
       _aviso('No se pudo aplicar el plan: $e', ok: false);
     } finally {
       if (mounted) setState(() => _trabajando = false);
     }
   }
+
+  int get _totalMarcas => _marcas.values.fold(0, (a, s) => a + s.length);
 
   /// Atajo por arrastre: soltar una rueda montada sobre otra posición del
   /// plano. Pasa por el mismo diálogo de confirmación que el modo permuta.
@@ -1099,6 +1254,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.marca ?? '—', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.medida ?? '', style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
+        if (n != null &&
+            (TyreControlApi.esMarcaRecauchutada(n.marca) || n.reesculturado || n.giradoEnLlanta))
+          Wrap(alignment: WrapAlignment.center, spacing: 3, children: [
+            if (TyreControlApi.esMarcaRecauchutada(n.marca)) _etiqueta('RECAUCH.', cTexto),
+            if (n.reesculturado) _etiqueta('REESC.', cTexto),
+            if (n.giradoEnLlanta) _etiqueta('GIRADO', cTexto),
+          ]),
         Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
       ]),
     );
@@ -1189,31 +1351,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         // Al final y separado del stock a propósito: el botón usado ya decide
         // el comportamiento (no hay checkboxes ni preguntas de inventario).
         const Divider(height: 1, color: AppColors.cardBorder),
-        // Permutar va junto a los montajes: es otra forma de "resolver" una
-        // posición, y aquí cae a mano con el pulgar en la tablet.
+        // Plan de trabajo: se pulsa la acción y luego se marcan las ruedas.
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-          child: OutlinedButton.icon(
-            onPressed: _trabajando
-                ? null
-                : () => setState(() {
-                      _modoPermuta = !_modoPermuta;
-                      _permutaA = null;
-                      if (_modoPermuta) _posSeleccionada = null;
-                    }),
-            icon: Icon(Icons.swap_horiz, color: _modoPermuta ? Colors.white : AppColors.info),
-            label: Text(
-              _modoPermuta ? 'Permutando…' : 'Permutar neumáticos',
-              style: TextStyle(
-                  color: _modoPermuta ? Colors.white : AppColors.info, fontWeight: FontWeight.w700),
-            ),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-              alignment: Alignment.centerLeft,
-              backgroundColor: _modoPermuta ? AppColors.info : null,
-              side: BorderSide(color: AppColors.info.withValues(alpha: 0.9)),
-            ),
-          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('PLAN DE TRABAJO',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+            const SizedBox(height: 6),
+            for (final e in _kAcciones.entries) ...[
+              _btnAccion(e.key, e.value.label, e.value.icono),
+              const SizedBox(height: 6),
+            ],
+          ]),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -1227,6 +1376,35 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           ]),
         ),
       ]),
+    );
+  }
+
+  /// Botón de acción del plan: al pulsarlo queda activo y las ruedas que se
+  /// toquen a continuación se marcan con esa acción.
+  Widget _btnAccion(String tipo, String label, IconData icono) {
+    final activo = _accionActiva == tipo;
+    final n = tipo == 'mover'
+        ? _movimientosPlan.length
+        : _marcas.values.where((s) => s.contains(tipo)).length;
+    return OutlinedButton.icon(
+      onPressed: _trabajando
+          ? null
+          : () => setState(() {
+                _accionActiva = activo ? null : tipo;
+                _permutaA = null;
+                if (_accionActiva != null) _posSeleccionada = null;
+              }),
+      icon: Icon(icono, color: activo ? Colors.white : AppColors.info, size: 20),
+      label: Text('$label${n > 0 ? '  ($n)' : ''}',
+          style: TextStyle(
+              color: activo ? Colors.white : AppColors.info,
+              fontWeight: FontWeight.w700, fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(44),
+        alignment: Alignment.centerLeft,
+        backgroundColor: activo ? AppColors.info : null,
+        side: BorderSide(color: AppColors.info.withValues(alpha: activo ? 1 : 0.55)),
+      ),
     );
   }
 

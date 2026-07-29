@@ -160,6 +160,8 @@ class Neumatico {
   final String estado;
   final num? profundidadActualMm;
   final String? origen; // almacen_generico | almacen_usado | catalogo_sin_stock | …
+  final bool reesculturado; // se le han cortado dibujos nuevos
+  final bool giradoEnLlanta; // montado del reves en la llanta
 
   Neumatico({
     required this.id,
@@ -175,6 +177,8 @@ class Neumatico {
     required this.estado,
     this.profundidadActualMm,
     this.origen,
+    this.reesculturado = false,
+    this.giradoEnLlanta = false,
   });
 
   factory Neumatico.fromJson(Map<String, dynamic> j) => Neumatico(
@@ -191,6 +195,8 @@ class Neumatico {
         estado: j['estado'] ?? 'almacen',
         profundidadActualMm: j['profundidad_actual_mm'],
         origen: j['origen'],
+        reesculturado: j['reesculturado'] == true,
+        giradoEnLlanta: j['girado_en_llanta'] == true,
       );
 
   String get medidaCompleta {
