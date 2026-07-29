@@ -3,14 +3,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
+import { abrirInforme } from "../services/informe";
 import { PageTitle, Card, Th, Td, Badge, Select, ErrorBanner, EmptyState } from "../components/ui";
-import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
+import {
+  ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, ESTADOS_CERRADOS,
+  etiquetaEstadoResumen, fmtDateTime,
+} from "../types";
 
 type Assistance = {
   id: number; uuid: string; partnerName: string | null; workshopName: string | null;
   externalReference: string | null; status: string; priority: string; serviceType: string;
   address: string; customerName: string; assignmentExplanation: string | null;
-  origin: string; createdAtMs: number;
+  origin: string; createdAtMs: number; reportUrl: string | null;
+  assignedTechName: string | null; assignedVehiclePlate: string | null;
 };
 
 const ORIGIN_LABELS: Record<string, string> = {
@@ -54,7 +59,8 @@ export default function Asistencias() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Fecha</Th><Th>Origen</Th><Th>Ref.</Th><Th>Cliente</Th><Th>Dirección</Th><Th>Servicio</Th><Th>Taller</Th><Th>Estado</Th>
+              <Th>Fecha</Th><Th>Origen</Th><Th>Ref.</Th><Th>Cliente</Th><Th>Dirección</Th><Th>Servicio</Th>
+              <Th>Taller y operario</Th><Th>Estado</Th><Th>Informe</Th>
             </tr></thead>
             <tbody>
               {rows.map((a) => (
@@ -73,11 +79,33 @@ export default function Asistencias() {
                     </Td>
                     <Td className="max-w-[220px] truncate">{a.address}</Td>
                     <Td>{a.serviceType}</Td>
-                    <Td>{a.workshopName ?? "-"}</Td>
                     <Td>
-                      <Badge className={ASSISTANCE_STATUS_STYLES[a.status] ?? "border-slate-600 text-slate-400"}>
-                        {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status}
+                      {a.workshopName ?? "-"}
+                      {(a.assignedTechName || a.assignedVehiclePlate) && (
+                        <div className="text-[11px] text-slate-500">
+                          {[a.assignedTechName, a.assignedVehiclePlate].filter(Boolean).join(" · ")}
+                        </div>
+                      )}
+                    </Td>
+                    <Td>
+                      <Badge
+                        className={ASSISTANCE_STATUS_STYLES[a.status] ?? "border-slate-600 text-slate-400"}
+                        title={a.status === "at_workshop" ? "Ciclo cerrado: la unidad ya volvió al taller" : undefined}
+                      >
+                        {etiquetaEstadoResumen(a.status)}
                       </Badge>
+                    </Td>
+                    <Td onClick={(e) => e.stopPropagation()}>
+                      {ESTADOS_CERRADOS.includes(a.status) && a.status !== "cancelled" ? (
+                        <button
+                          className="rounded-lg border border-slate-600 px-2 py-1 text-[12px] text-cyan-300 hover:bg-slate-700"
+                          onClick={() => abrirInforme(a.id, a.reportUrl).catch((err) => setError(err.message))}
+                        >
+                          {a.reportUrl ? "Ver informe" : "Generar informe"}
+                        </button>
+                      ) : (
+                        <span className="text-[12px] text-slate-600">—</span>
+                      )}
                     </Td>
                   </tr>
               ))}

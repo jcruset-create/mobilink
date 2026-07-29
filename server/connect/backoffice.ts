@@ -24,6 +24,7 @@ import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
+import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES } from "../core/ai.ts";
 import {
   activeCaptureSession, captureMessages, saveCaptureAnalysis, normalize as normalizeCapture,
@@ -1187,6 +1188,71 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ data });
   });
 
+  // ── Informe de la asistencia ─────────────────────────────────────────────
+
+  /** Informe PDF de la asistencia (se abre en el navegador). */
+  router.get("/assistances/:id/report.pdf", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    try {
+      const { buffer, assistance } = await buildConnectReportPdf(id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="asistencia_${assistance.expedientNumber ?? id}.pdf"`,
+      );
+      res.send(buffer);
+    } catch (e: any) {
+      console.error("[Connect] informe:", e?.message);
+      err(res, 500, "report_failed", "No se pudo generar el informe");
+    }
+  });
+
+  /** Regenera el informe y lo archiva en la ficha. */
+  router.post("/assistances/:id/report", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const url = await generarYGuardarInforme(id);
+    if (!url) return err(res, 500, "report_failed", "No se pudo generar el informe");
+    await auditConnect({ req, action: "assistance.report_generated", resourceType: "assistance", resourceId: id });
+    res.json({ url });
+  });
+
+  // ── Asistencias activas (ventana operativa a pantalla completa) ──────────
+
+  /**
+   * Todas las asistencias en curso con la información completa: quién la
+   * atiende, con qué furgoneta, tiempos de cada estado y contacto. Ordenadas
+   * cronológicamente (la más antigua primero: es la que más espera lleva).
+   */
+  router.get("/assistances/active", ...requireConnectRole("operator"), async (_req, res) => {
+    const r = await db.query(
+      `SELECT ca.id, ca.uuid, ca.status, ca.priority, ca."serviceType", ca.address,
+              ca."customerName", ca."customerPhone", ca."expedientNumber", ca."externalReference",
+              ca."clientName", ca.description, ca.latitude, ca.longitude, ca.origin,
+              ca."slaMinutes", ca."slaDeadlineAtMs", ca."createdAtMs", ca."updatedAtMs",
+              ca."assignedTechName", ca."assignedVehicleName", ca."assignedVehiclePlate",
+              ca."liteUserName", ca.vehicle, ca."locationDetails", ca."reportUrl",
+              ca."operatorLat", ca."operatorLng", ca."operatorLocationAtMs",
+              w.name AS "workshopName", w.phone AS "workshopPhone", w."integrationType",
+              pc.name AS "providerName", cl.name AS "clientDisplayName", p.name AS "partnerName",
+              ra."assignedTechName" AS "coreTech", ra."assignedVehicleName" AS "coreVehicle",
+              ra.status AS "coreStatus",
+              (SELECT COUNT(*)::int FROM connect_assistance_files f
+                WHERE f."assistanceId" = ca.id AND f."deletedAtMs" IS NULL AND f.category <> 'report') AS "files",
+              (SELECT json_agg(json_build_object('toStatus', h."toStatus", 'occurredAtMs', h."occurredAtMs")
+                        ORDER BY h.id)
+                 FROM connect_status_history h WHERE h."assistanceId" = ca.id) AS timeline
+         FROM connect_assistances ca
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
+         LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+        WHERE ca.status NOT IN ('draft', 'finished', 'at_workshop', 'cancelled')
+        ORDER BY ca."createdAtMs" ASC`,
+    );
+    res.json({ data: r.rows, generatedAtMs: Date.now() });
+  });
+
   // ── Captura de WhatsApp (mismo número de entrada que Mobilink Assist) ────
 
   /**
@@ -1312,9 +1378,13 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   router.get("/assistances/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(
+      // La trazabilidad de connect_assistances manda; el core solo rellena
+      // los huecos de las asistencias antiguas, anteriores a esas columnas.
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName", w.phone AS "workshopPhone",
               pc.name AS "providerName", u.name AS "createdByName",
-              ra."assignedTechName", ra.status AS "coreStatus"
+              COALESCE(ca."assignedTechName", ca."liteUserName", ra."assignedTechName") AS "assignedTechName",
+              COALESCE(ca."assignedVehicleName", ra."assignedVehicleName") AS "assignedVehicleName",
+              ra.status AS "coreStatus"
          FROM connect_assistances ca
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"

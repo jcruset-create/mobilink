@@ -522,6 +522,15 @@ export async function initConnect(): Promise<void> {
     -- Las unidades cuelgan del taller, no solo de la empresa
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "workshopId" INTEGER;
 
+    -- Trazabilidad del servicio: quién lo hizo y con qué. Se copian aquí (no
+    -- se dejan solo en el core) para que el historial y el informe sigan
+    -- diciendo la verdad aunque después cambie el vehículo o el técnico.
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedTechName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedVehicleName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedVehiclePlate" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "reportUrl" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "reportAtMs" BIGINT;
+
     -- Contactos manuales del taller (imprescindible en talleres EXTERNAL,
     -- útil en todos: encargado, centralita, guardia…)
     CREATE TABLE IF NOT EXISTS connect_workshop_contacts (

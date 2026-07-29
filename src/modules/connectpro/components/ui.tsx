@@ -37,12 +37,23 @@ export function Th({ children }: { children?: ReactNode }) {
   return <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400">{children}</th>;
 }
 
-export function Td({ children, className = "", colSpan }: { children?: ReactNode; className?: string; colSpan?: number }) {
-  return <td colSpan={colSpan} className={`px-3 py-2 text-[13px] text-slate-300 ${className}`}>{children}</td>;
+export function Td({ children, className = "", colSpan, onClick }: {
+  children?: ReactNode; className?: string; colSpan?: number;
+  onClick?: React.MouseEventHandler<HTMLTableCellElement>;
+}) {
+  return (
+    <td colSpan={colSpan} onClick={onClick} className={`px-3 py-2 text-[13px] text-slate-300 ${className}`}>
+      {children}
+    </td>
+  );
 }
 
-export function Badge({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] ${className}`}>{children}</span>;
+export function Badge({ children, className = "", title }: { children: ReactNode; className?: string; title?: string }) {
+  return (
+    <span title={title} className={`inline-block rounded-full border px-2 py-0.5 text-[11px] ${className}`}>
+      {children}
+    </span>
+  );
 }
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
