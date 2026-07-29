@@ -59,6 +59,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   final Set<String> _posicionesResueltas = {}; // reparaciones en sitio hechas en esta sesión
   final Set<String> _incidenciasResueltas = {}; // ids de incidencias ya resueltas (para no re-resolver al finalizar)
   String? _posSeleccionada; // posición elegida en el plano para operar desde el panel
+  bool _modoPermuta = false; // "tocar y tocar" para permutar dos ruedas
+  String? _permutaA; // primera posición elegida en el modo permuta
 
   // Incidencia (con problemas abiertos) por posición: para pintar el rojo y
   // ofrecer las operaciones en el panel lateral.
@@ -445,6 +447,26 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
               MaterialPageRoute(builder: (_) => CatalogoScreen(medidasBase: _medidasVehiculo)),
             ),
           ),
+          // Permutar: modo "tocar y tocar" para cambiar dos ruedas de sitio
+          // sin arrastrar (más fiable con guantes).
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _modoPermuta ? AppColors.info : Colors.white24,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _trabajando
+                  ? null
+                  : () => setState(() {
+                        _modoPermuta = !_modoPermuta;
+                        _permutaA = null;
+                        if (_modoPermuta) _posSeleccionada = null;
+                      }),
+              icon: const Icon(Icons.swap_horiz),
+              label: Text(_modoPermuta ? 'Permutando…' : 'Permutar'),
+            ),
+          ),
           TextButton.icon(
             onPressed: _trabajando ? null : _deshacer,
             icon: const Icon(Icons.undo, color: Colors.white),
@@ -466,13 +488,44 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
               : _conPausa(Stack(children: [
-                  Row(children: [
-                    Expanded(child: _zonaPlano()),
-                    _panelStock(),
+                  Column(children: [
+                    if (_modoPermuta) _bandaPermuta(),
+                    Expanded(
+                      child: Row(children: [
+                        Expanded(child: _zonaPlano()),
+                        _panelStock(),
+                      ]),
+                    ),
                   ]),
                   if (_trabajando)
                     const Positioned.fill(child: ColoredBox(color: Color(0x66000000), child: Center(child: CircularProgressIndicator()))),
                 ])),
+    );
+  }
+
+  /// Banda guía del modo permuta: dice en cada momento qué hay que tocar.
+  Widget _bandaPermuta() {
+    final paso1 = _permutaA == null;
+    return Container(
+      width: double.infinity,
+      color: AppColors.info.withValues(alpha: 0.18),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(children: [
+        const Icon(Icons.swap_horiz, color: AppColors.info),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            paso1
+                ? 'PERMUTAR · Paso 1: toca la rueda que quieres mover.'
+                : 'PERMUTAR · Paso 2: toca la rueda (o el hueco) de destino. Vuelve a tocar la marcada para soltarla.',
+            style: const TextStyle(color: AppColors.info, fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+        ),
+        TextButton(
+          onPressed: () => setState(() { _modoPermuta = false; _permutaA = null; }),
+          child: const Text('Salir'),
+        ),
+      ]),
     );
   }
 
@@ -601,7 +654,138 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   }
 
   void _toggleSeleccion(String posId) {
+    if (_modoPermuta) {
+      _tocarEnPermuta(posId);
+      return;
+    }
     setState(() => _posSeleccionada = _posSeleccionada == posId ? null : posId);
+  }
+
+  /// Modo permuta: la primera rueda tocada es el origen (badge "1") y la
+  /// segunda el destino (badge "2"). Volver a tocar la primera la suelta.
+  void _tocarEnPermuta(String posId) {
+    if (_permutaA == null) {
+      if (_montajePorPosicion[posId] == null) {
+        _aviso('Empieza por una rueda montada: toca la que quieras mover.', ok: false);
+        return;
+      }
+      setState(() => _permutaA = posId);
+      return;
+    }
+    if (_permutaA == posId) {
+      setState(() => _permutaA = null); // deseleccionar
+      return;
+    }
+    _confirmarPermuta(_permutaA!, posId);
+  }
+
+  /// Atajo por arrastre: soltar una rueda montada sobre otra posición del
+  /// plano. Pasa por el mismo diálogo de confirmación que el modo permuta.
+  void _soltarMontajeEnPosicion(MontajeActual m, PosicionVehiculo destino) {
+    final origenId = m.posicionId;
+    if (origenId == destino.id) return;
+    _confirmarPermuta(origenId, destino.id);
+  }
+
+  String _desc(String posId) {
+    final p = _posiciones.firstWhere((e) => e.id == posId);
+    final m = _montajePorPosicion[posId];
+    final n = m?.neumatico;
+    if (n == null) return '${p.nombre ?? p.codigoPosicion} · vacía';
+    final med = _mediciones[m!.neumaticoId];
+    final prof = med?.profundidadMm ?? n.profundidadActualMm?.toDouble();
+    final marca = [n.marca, n.modelo].whereType<String>().join(' ');
+    return '${p.nombre ?? p.codigoPosicion} · $marca${prof != null ? ' · ${prof.toStringAsFixed(1)} mm' : ''}';
+  }
+
+  /// Avisos que NO bloquean: medidas distintas o cruce de lado. El técnico
+  /// decide, pero se le enseña antes de tocar nada.
+  List<String> _avisosPermuta(String aId, String bId) {
+    final avisos = <String>[];
+    final na = _montajePorPosicion[aId]?.neumatico;
+    final nb = _montajePorPosicion[bId]?.neumatico;
+    if (na != null && nb != null && na.medida != null && nb.medida != null && na.medida != nb.medida) {
+      avisos.add('Las medidas son distintas: ${na.medida} y ${nb.medida}.');
+    }
+    final pa = _posiciones.firstWhere((e) => e.id == aId);
+    final pb = _posiciones.firstWhere((e) => e.id == bId);
+    final ladoA = pa.codigoPosicion.toUpperCase();
+    final ladoB = pb.codigoPosicion.toUpperCase();
+    bool izq(String c) => c.contains('IZQ');
+    bool der(String c) => c.contains('DER');
+    if ((izq(ladoA) && der(ladoB)) || (der(ladoA) && izq(ladoB))) {
+      avisos.add('Cambian de lado: si el dibujo es direccional, girarían al revés.');
+    }
+    return avisos;
+  }
+
+  Future<void> _confirmarPermuta(String aId, String bId) async {
+    final mA = _montajePorPosicion[aId];
+    if (mA == null) {
+      setState(() => _permutaA = null);
+      return;
+    }
+    final mB = _montajePorPosicion[bId];
+    final esMover = mB == null; // destino vacío → mover, no permutar
+    final avisos = esMover ? const <String>[] : _avisosPermuta(aId, bId);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(esMover ? 'Mover a posición vacía' : 'Permutar neumáticos'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(_desc(aId), style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(children: [
+              Icon(esMover ? Icons.arrow_downward : Icons.swap_vert, color: AppColors.info),
+              const SizedBox(width: 8),
+              Text(esMover ? 'se mueve a' : 'se intercambia con',
+                  style: const TextStyle(color: AppColors.textSecondary)),
+            ]),
+          ),
+          Text(_desc(bId), style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
+          for (final a in avisos)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warning),
+                const SizedBox(width: 6),
+                Expanded(child: Text(a, style: const TextStyle(color: AppColors.warning, fontSize: 13))),
+              ]),
+            ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Confirmar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      setState(() => _permutaA = null);
+      return;
+    }
+
+    setState(() => _trabajando = true);
+    try {
+      if (esMover) {
+        await TyreControlApi.cambiarPosicion(montajeId: mA.id, posicionDestinoId: bId);
+      } else {
+        await TyreControlApi.intercambiarPosiciones(montajeAId: mA.id, montajeBId: mB.id);
+      }
+      _posicionesMontadas.addAll([aId, bId]);
+      HapticFeedback.mediumImpact();
+      await _cargar();
+      if (!mounted) return;
+      setState(() { _permutaA = null; _posSeleccionada = null; });
+      _aviso(esMover ? 'Movido correctamente.' : 'Permutadas correctamente.', ok: true);
+    } catch (e) {
+      if (mounted) setState(() => _permutaA = null);
+      _aviso('No se pudo completar: $e', ok: false);
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
   }
 
   Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih) {
@@ -610,11 +794,12 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final m = _montajePorPosicion[p.id];
     final resaltar = p.id == widget.posicionInicialId;
     final problemas = _problemasVigentes(p.id);
-    final sel = _posSeleccionada == p.id;
+    final esA = _modoPermuta && _permutaA == p.id;
+    final sel = _posSeleccionada == p.id || esA;
     final anilloSel = sel
         ? BoxDecoration(
             borderRadius: BorderRadius.circular(13),
-            border: Border.all(color: AppColors.info, width: 2),
+            border: Border.all(color: AppColors.info, width: esA ? 3 : 2),
           )
         : null;
     return Positioned(
@@ -625,19 +810,34 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         Container(
           decoration: anilloSel,
           padding: sel ? const EdgeInsets.all(2) : EdgeInsets.zero,
+          // Además del stock, las posiciones aceptan otra RUEDA MONTADA: es el
+          // atajo de permuta (soltar rueda sobre rueda = intercambiar; sobre
+          // hueco vacío = mover).
           child: m != null
-              ? Draggable<_DragMontaje>(
-                  data: _DragMontaje(m),
-                  feedback: _cardMontado(p, m, cardW, arrastrando: true),
-                  childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
-                  child: GestureDetector(
-                    onTap: () => _toggleSeleccion(p.id),
-                    child: _cardMontado(p, m, cardW, resaltar: resaltar, conIncidencia: problemas != null),
+              ? DragTarget<_DragMontaje>(
+                  onWillAcceptWithDetails: (d) => d.data.m.id != m.id,
+                  onAcceptWithDetails: (d) => _soltarMontajeEnPosicion(d.data.m, p),
+                  builder: (ctx, cand, rej) => Draggable<_DragMontaje>(
+                    data: _DragMontaje(m),
+                    feedback: _cardMontado(p, m, cardW, arrastrando: true),
+                    childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
+                    child: GestureDetector(
+                      onTap: () => _toggleSeleccion(p.id),
+                      child: _cardMontado(p, m, cardW,
+                          resaltar: resaltar || cand.isNotEmpty, conIncidencia: problemas != null),
+                    ),
                   ),
                 )
-              : DragTarget<_DragStock>(
-                  onWillAcceptWithDetails: (_) => true,
-                  onAcceptWithDetails: (d) => _soltarStockEnPosicion(d.data, p),
+              : DragTarget<Object>(
+                  onWillAcceptWithDetails: (d) => d.data is _DragStock || d.data is _DragMontaje,
+                  onAcceptWithDetails: (d) {
+                    final data = d.data;
+                    if (data is _DragStock) {
+                      _soltarStockEnPosicion(data, p);
+                    } else if (data is _DragMontaje) {
+                      _soltarMontajeEnPosicion(data.m, p);
+                    }
+                  },
                   builder: (ctx, cand, rej) => GestureDetector(
                     onTap: () => _toggleSeleccion(p.id),
                     child: _cardVacia(p, cardW, activo: cand.isNotEmpty, resaltar: problemas != null),
