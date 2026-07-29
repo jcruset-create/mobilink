@@ -76,6 +76,7 @@ export type RoadsideAssistance = {
   plate: string;
   plateRemolque?: string | null;
   esRemolque?: boolean;
+  origen?: "central" | "taller";
   descripcionAveria?: string | null;
   trabajosARealizar?: string | null;
   redirectionLat?: number | null;

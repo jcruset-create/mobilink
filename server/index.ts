@@ -688,6 +688,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
+    origen: row.origen === "central" ? "central" : "taller",
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
