@@ -22,7 +22,7 @@ import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/inde
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
-import { AI_IMAGE_RULES } from "./core/ai.ts";
+import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { saveCaptureAnalysis } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
@@ -7639,18 +7639,9 @@ app.post(
         return res.status(503).json({ error: "OPENAI_API_KEY no configurada" });
       }
 
-      const systemPrompt = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios.
-
-${AI_IMAGE_RULES}
-
-Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
-- Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
-- Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
-- Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
-- Vehículo: plate (matrícula del vehículo/camión), plateRemolque (matrícula roja del remolque: R+4 dígitos+3 letras), marca, modelo, color, vin, kilometraje (número), medidaNeumatico, ejeAfectado (Dirección, Tracción, Remolque), posicionRueda (Interior, Exterior), vehiculoCargado (true/false), mercancia, adr (true/false)
-- Averia: descripcionAveria (texto libre de la avería o trabajos)
-- Facturación: importeAcordado (número), observacionesFacturacion
-Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera del JSON.`;
+      // El prompt vive en core/ai.ts: lo comparten el back office de Assist
+      // y el de Central Pro, que rellenan exactamente los mismos campos.
+      const systemPrompt = AI_BACKOFFICE_PROMPT;
 
       type ContentPart =
         | { type: "text"; text: string }

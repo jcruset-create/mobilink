@@ -80,3 +80,22 @@ export const AI_IMAGE_RULES = `LECTURA DE IMÁGENES (obligatorio):
 MATRÍCULAS (España):
 - Matrícula BLANCA = camión o vehículo tractor.
 - Matrícula ROJA = REMOLQUE, con formato R + 4 dígitos + 3 letras (p. ej. R0000BBB). Nunca la pongas como matrícula del vehículo.`;
+
+/**
+ * Prompt del back office de asistencia (contactos, empresas, operativa,
+ * vehículo y facturación). Lo comparten el back office de Mobilink Assist y
+ * el de Assist Central Pro: los dos rellenan los mismos campos, así que la
+ * extracción tiene que entender exactamente lo mismo.
+ */
+export const AI_BACKOFFICE_PROMPT = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios.
+
+${AI_IMAGE_RULES}
+
+Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
+- Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
+- Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
+- Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
+- Vehículo: plate (matrícula del vehículo/camión), plateRemolque (matrícula roja del remolque: R+4 dígitos+3 letras), marca, modelo, color, vin, kilometraje (número), medidaNeumatico, ejeAfectado (Dirección, Tracción, Remolque), posicionRueda (Interior, Exterior), vehiculoCargado (true/false), mercancia, adr (true/false)
+- Averia: descripcionAveria (texto libre de la avería o trabajos)
+- Facturación: importeAcordado (número), observacionesFacturacion
+Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera del JSON.`;
