@@ -25,6 +25,7 @@ import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
 import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
+import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES } from "../core/ai.ts";
 import {
   activeCaptureSession, captureMessages, saveCaptureAnalysis, normalize as normalizeCapture,
@@ -988,16 +989,9 @@ export function createConnectBackofficeRouter(): Router {
            FROM connect_assistance_tracks WHERE "assistanceId" = $1 ORDER BY "deviceTsMs" LIMIT 2000`,
         [id],
       ),
-      db.query(
-        `SELECT id, category, url, "fileName", "sizeBytes", lat, lng, "createdAtMs"
-           FROM connect_assistance_files WHERE "assistanceId" = $1 AND "deletedAtMs" IS NULL ORDER BY id`,
-        [id],
-      ),
-      db.query(
-        `SELECT id, "signerName", "signerDocument", url, "signedAtMs"
-           FROM connect_assistance_signatures WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 1`,
-        [id],
-      ),
+      // Fotos de la APK Lite y del técnico de Mobilink Assist, unificadas
+      evidenciasDeAsistencia(id),
+      firmaDeAsistencia(id),
       db.query(
         `SELECT d."lastSeenAtMs", d.platform, d."appVersion", d."gpsPermission", d."notifPermission",
                 d."fcmToken" IS NOT NULL AS "pushEnabled"
@@ -1014,8 +1008,8 @@ export function createConnectBackofficeRouter(): Router {
       assistance: a.rows[0],
       tier: WORKSHOP_TIER[a.rows[0].integrationType] ?? null,
       track: track.rows.map((p: any) => ({ ...p, deviceTsMs: Number(p.deviceTsMs) })),
-      files: files.rows,
-      signature: signature.rows[0] ?? null,
+      files,
+      signature,
       device: device.rows[0] ?? null,
       kpis: await assistanceKpis(id),
       // "Ubicación desactualizada" es información operativa, no un color
@@ -1236,8 +1230,11 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
               pc.name AS "providerName", cl.name AS "clientDisplayName", p.name AS "partnerName",
               ra."assignedTechName" AS "coreTech", ra."assignedVehicleName" AS "coreVehicle",
               ra.status AS "coreStatus",
-              (SELECT COUNT(*)::int FROM connect_assistance_files f
-                WHERE f."assistanceId" = ca.id AND f."deletedAtMs" IS NULL AND f.category <> 'report') AS "files",
+              -- Evidencias de los dos orígenes: APK Lite/WhatsApp y core Assist
+              ((SELECT COUNT(*)::int FROM connect_assistance_files f
+                 WHERE f."assistanceId" = ca.id AND f."deletedAtMs" IS NULL AND f.category <> 'report')
+               + COALESCE((SELECT COUNT(*)::int FROM roadside_assistance_files rf
+                            WHERE rf."assistanceId" = ca."coreAssistanceId" AND rf.kind <> 'firma'), 0)) AS "files",
               (SELECT json_agg(json_build_object('toStatus', h."toStatus", 'occurredAtMs', h."occurredAtMs")
                         ORDER BY h.id)
                  FROM connect_status_history h WHERE h."assistanceId" = ca.id) AS timeline

@@ -13,6 +13,7 @@ import fs from "node:fs";
 import db from "../db.ts";
 import { supabase, SUPABASE_ROADSIDE_BUCKET } from "../supabase.ts";
 import { computeLiteKpis, LITE_STATUS_LABELS, SERVICE_RESULT_LABELS } from "./liteRules.ts";
+import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
 
 const M = 40;
 const AZUL = "#101a33";
@@ -59,29 +60,23 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
   const a = r.rows[0];
   if (!a) throw new Error("Asistencia no encontrada");
 
-  const [historia, ficheros, firma, comunicaciones] = await Promise.all([
+  // Las evidencias vienen de los dos orígenes (APK Lite / WhatsApp y las
+  // fotos del técnico de Mobilink Assist en el core), ya unificadas.
+  const [historia, evidencias, firma, comunicaciones] = await Promise.all([
     db.query(
       `SELECT "fromStatus", "toStatus", "actorType", reason, "occurredAtMs"
          FROM connect_status_history WHERE "assistanceId" = $1 ORDER BY id`,
       [assistanceId],
     ),
-    db.query(
-      `SELECT category, url, "createdAtMs" FROM connect_assistance_files
-        WHERE "assistanceId" = $1 AND "deletedAtMs" IS NULL AND category <> 'report'
-        ORDER BY id LIMIT 8`,
-      [assistanceId],
-    ),
-    db.query(
-      `SELECT "signerName", "signerDocument", url, "signedAtMs"
-         FROM connect_assistance_signatures WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 1`,
-      [assistanceId],
-    ),
+    evidenciasDeAsistencia(assistanceId),
+    firmaDeAsistencia(assistanceId),
     db.query(
       `SELECT channel, direction, body, "byName", "createdAtMs"
          FROM connect_communications WHERE "assistanceId" = $1 ORDER BY id LIMIT 20`,
       [assistanceId],
     ),
   ]);
+  const fotos = evidencias.filter((e) => e.esImagen).slice(0, 12);
 
   const vehicle = safeParse(a.vehicle);
   const requester = safeParse(a.requester);
@@ -259,12 +254,13 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
   }
 
   // ── Evidencias ──
-  if (ficheros.rows.length) {
-    titulo(`Evidencias (${ficheros.rows.length})`);
+  if (fotos.length) {
+    titulo(`Evidencias (${fotos.length}${evidencias.length > fotos.length ? ` de ${evidencias.length}` : ""})`);
     let x = M;
     let y = doc.y;
     const lado = 105;
-    for (const f of ficheros.rows) {
+    let dibujadas = 0;
+    for (const f of fotos) {
       const img = await fetchImage(f.url);
       if (!img) continue;
       if (x + lado > M + anchoUtil) { x = M; y += lado + 16; }
@@ -272,29 +268,43 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
       try {
         doc.image(img, x, y, { fit: [lado, lado], align: "center" });
         doc.fillColor(GRIS).fontSize(7.5).font("Helvetica")
-          .text(String(f.category ?? ""), x, y + lado + 2, { width: lado, lineBreak: false });
-      } catch { /* imagen no soportada */ }
+          .text(f.label, x, y + lado + 2, { width: lado, lineBreak: false });
+        dibujadas++;
+      } catch { /* formato no soportado por el PDF */ }
       x += lado + 10;
     }
     doc.y = y + lado + 18;
     doc.x = M;
+
+    // Lo que no es imagen (audios, vídeos, documentos) se lista con su enlace
+    const otras = evidencias.filter((e) => !e.esImagen);
+    if (otras.length) {
+      doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
+        .text(`Otros adjuntos: ${otras.map((o) => o.label).join(", ")}`, M, doc.y, { width: anchoUtil });
+      doc.moveDown(0.4);
+    }
+    if (dibujadas === 0) {
+      doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
+        .text("No se han podido incrustar las imágenes.", M, doc.y, { width: anchoUtil });
+    }
   }
 
   // ── Firma ──
-  if (firma.rows[0]) {
+  if (firma) {
     if (doc.y > doc.page.height - 170) doc.addPage();
     titulo("Conformidad del cliente");
-    const s = firma.rows[0];
+    const s = firma;
     const img = await fetchImage(s.url);
     if (img) {
       try { doc.image(img, M, doc.y, { fit: [170, 70] }); } catch { /* firma no legible */ }
     }
     doc.fillColor(GRIS).fontSize(8).font("Helvetica").text("Firmante", M + 200, doc.y);
-    doc.fillColor("#000000").fontSize(10).font("Helvetica-Bold").text(s.signerName, M + 200, doc.y + 10);
+    doc.fillColor("#000000").fontSize(10).font("Helvetica-Bold")
+      .text(s.signerName ?? a.customerName ?? "-", M + 200, doc.y + 10);
     if (s.signerDocument) {
       doc.fillColor(GRIS).fontSize(8.5).font("Helvetica").text(s.signerDocument, M + 200, doc.y + 4);
     }
-    doc.fillColor(GRIS).fontSize(8.5).font("Helvetica").text(fecha(Number(s.signedAtMs)), M + 200, doc.y + 2);
+    doc.fillColor(GRIS).fontSize(8.5).font("Helvetica").text(fecha(s.signedAtMs), M + 200, doc.y + 2);
     doc.y += 80;
     doc.x = M;
   }
