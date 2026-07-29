@@ -11,7 +11,7 @@
 
 create or replace function tc_deshacer_ultima_operacion(p_vehiculo uuid, p_desde timestamptz)
 returns text
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public as $func$
 declare o record; neu record; v_cliente uuid; ma record; mb record; v_pa uuid; v_pb uuid;
 begin
   select * into o from operaciones_neumaticos
@@ -29,7 +29,7 @@ begin
   select * into neu from tc_neumaticos where id = o.neumatico_id;
   select cliente_almacen_id into v_cliente from tc_empresas where id = o.empresa_id;
 
-  -- ── Permuta de dos ruedas: se vuelven a intercambiar ──
+  -- Permuta de dos ruedas: se vuelven a intercambiar
   if o.tipo_operacion = 'intercambio' then
     select * into ma from tc_montajes_actuales where id = o.montaje_origen_id;
     if not found then return 'No se puede deshacer: el montaje ya no existe'; end if;
@@ -45,7 +45,7 @@ begin
     update operaciones_neumaticos set is_anulada = true, status = 'anulada', updated_at = now() where id = o.id;
     return 'Deshecha: permuta de neumáticos';
 
-  -- ── Movimiento a una posición vacía: vuelve a su posición de origen ──
+  -- Movimiento a una posicion vacia: vuelve a su posicion de origen
   elsif o.tipo_operacion = 'cambio_posicion' then
     select * into ma from tc_montajes_actuales where id = o.montaje_origen_id;
     if not found then return 'No se puede deshacer: el montaje ya no existe'; end if;
@@ -97,4 +97,4 @@ begin
     update operaciones_neumaticos set is_anulada = true, status = 'anulada', updated_at = now() where id = o.id;
     return 'Deshecho: desmontaje de ' || coalesce(neu.marca, '') || ' ' || coalesce(neu.medida, '');
   end if;
-end $$;
+end $func$;
