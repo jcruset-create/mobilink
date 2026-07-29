@@ -116,12 +116,12 @@ export async function syncMobileUnits(): Promise<number> {
         `INSERT INTO connect_mobile_units
            ("providerCompanyId", "workshopId", "coreVehicleId", "webfleetVehicleId", name, plate, status,
             "technicianRef", latitude, longitude, "positionText", "speedKmh", "connectionStatus",
-            "activeAssistanceId", "lastReportAtMs", "createdAtMs", "updatedAtMs")
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16) RETURNING id`,
+            "activeAssistanceId", "lastReportAtMs", "sharedWithCentral", "createdAtMs", "updatedAtMs")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING id`,
         [providerId, v.workshopId != null ? wsByCoreId.get(String(v.workshopId)) ?? null : null,
          v.id, v.webfleetVehicleId ?? null, v.name, v.plate ?? null, status,
          row.tech, row.lat, row.lng, row.posText, row.speed, row.connection,
-         row.activeId, row.lastReport, now],
+         row.activeId, row.lastReport, v.compartidoCentral === true, now],
       );
       await db.query(
         `INSERT INTO connect_mobile_unit_events ("unitId", "fromStatus", "toStatus", reason, "createdAtMs")
@@ -139,10 +139,12 @@ export async function syncMobileUnits(): Promise<number> {
          latitude = COALESCE($5, latitude), longitude = COALESCE($6, longitude),
          "positionText" = COALESCE($7, "positionText"), "speedKmh" = $8,
          "connectionStatus" = $9, "activeAssistanceId" = $10,
-         "lastReportAtMs" = COALESCE($11, "lastReportAtMs"), "updatedAtMs" = $12
-       WHERE id = $13`,
+         "lastReportAtMs" = COALESCE($11, "lastReportAtMs"),
+         "sharedWithCentral" = $12, "updatedAtMs" = $13
+       WHERE id = $14`,
       [v.name, v.plate ?? null, status, row.tech, row.lat, row.lng, row.posText,
-       row.speed, row.connection, row.activeId, row.lastReport, now, prev.id],
+       row.speed, row.connection, row.activeId, row.lastReport,
+       v.compartidoCentral === true, now, prev.id],
     );
     if (prev.status !== status) {
       await db.query(

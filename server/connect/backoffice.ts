@@ -655,7 +655,7 @@ export function createConnectBackofficeRouter(): Router {
            FROM techs t
            LEFT JOIN roadside_assistances ra ON ra.id = t."currentRoadsideAssistanceId"
            LEFT JOIN connect_assistances ca ON ca."coreAssistanceId" = t."currentRoadsideAssistanceId"
-          WHERE t."workshopId" = $1
+          WHERE t."workshopId" = $1 AND t."compartidoCentral" = true
           ORDER BY t.name`,
         [String(coreWorkshopId)],
       );
