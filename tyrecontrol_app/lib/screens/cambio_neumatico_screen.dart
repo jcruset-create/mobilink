@@ -3,7 +3,11 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
 import '../models/umbrales.dart';
+import 'dart:async';
+
 import '../services/pausa_controller.dart';
+import '../services/probe_session.dart';
+import '../services/tlgx_probe_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/pausa_trabajo.dart';
@@ -797,13 +801,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         _aviso('Dibujo direccional: no se puede girar sobre la llanta.', ok: false);
         return;
       }
-      if (tipo == 'reescultura') {
-        final cat = _datosCat[TyreControlApi.claveCatalogo(
-            m.neumatico?.marca, m.neumatico?.modelo, m.neumatico?.medida)];
-        final prof = _mediciones[m.neumaticoId]?.profundidadMm ??
-            m.neumatico?.profundidadActualMm?.toDouble() ?? cat?.prof ?? 0;
-        _mmReescultura[m.id] = (prof + 4).clamp(0, 40).toDouble();
-      }
+      // Tras reesculturar suelen quedar 8 mm: se propone y el técnico lo
+      // acepta, lo corrige a mano o lo lee con la sonda.
+      if (tipo == 'reescultura') _mmReescultura[m.id] = _kMmReesculturaDefecto;
     } else if (tipo == 'reescultura') {
       _mmReescultura.remove(m.id);
     }
@@ -829,6 +829,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final txt = (n?.modelo ?? '').toUpperCase();
     return txt.contains('DIREC') || txt.endsWith(' D') || txt.contains(' DH');
   }
+
+  /// Profundidad que queda habitualmente tras el corte. Es solo la propuesta.
+  static const double _kMmReesculturaDefecto = 8.0;
 
   static const Map<String, ({String label, IconData icono})> _kAcciones = {
     'mover': (label: 'Permutar / mover', icono: Icons.swap_horiz),
@@ -903,27 +906,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                 ),
             if (_mmReescultura.isNotEmpty) ...[
               const SizedBox(height: 8),
-              const Text('Profundidad tras el corte (mm)',
+              const Text('Profundidad que queda tras el corte (mm)',
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
               for (final e in _mmReescultura.entries)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Row(children: [
-                    SizedBox(width: 90, child: Text(_codigo(_posDe(e.key)),
-                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 13))),
-                    SizedBox(
-                      width: 90,
-                      child: TextFormField(
-                        initialValue: e.value.toStringAsFixed(1),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(isDense: true, suffixText: 'mm'),
-                        onChanged: (v) {
-                          final d = double.tryParse(v.replaceAll(',', '.'));
-                          if (d != null) _mmReescultura[e.key] = d;
-                        },
-                      ),
-                    ),
-                  ]),
+                _CampoReescultura(
+                  codigo: _codigo(_posDe(e.key)),
+                  valorInicial: e.value,
+                  onCambio: (v) => _mmReescultura[e.key] = v,
                 ),
             ],
             for (final a in avisos)
@@ -1613,5 +1602,82 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       ]),
     );
     return arrastrando ? Material(color: Colors.transparent, child: card) : card;
+  }
+}
+
+/// Campo de profundidad tras el reesculturado. Sale con el valor propuesto
+/// (8 mm), que se acepta tal cual, se corrige a mano o se lee con la sonda.
+class _CampoReescultura extends StatefulWidget {
+  final String codigo;
+  final double valorInicial;
+  final void Function(double) onCambio;
+  const _CampoReescultura({required this.codigo, required this.valorInicial, required this.onCambio});
+
+  @override
+  State<_CampoReescultura> createState() => _CampoReesculturaState();
+}
+
+class _CampoReesculturaState extends State<_CampoReescultura> {
+  late final TextEditingController _c =
+      TextEditingController(text: widget.valorInicial.toStringAsFixed(1));
+  StreamSubscription<LecturaSonda>? _sub;
+  bool _esperando = false;
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _c.dispose();
+    super.dispose();
+  }
+
+  void _leerConSonda() {
+    if (_esperando) {
+      _sub?.cancel();
+      setState(() => _esperando = false);
+      return;
+    }
+    setState(() => _esperando = true);
+    _sub = ProbeSession.instance.onLectura.listen((l) {
+      if (l.tipo != LecturaTipo.profundidad || l.valor == null) return;
+      _c.text = l.valor!.toStringAsFixed(1);
+      widget.onCambio(l.valor!);
+      _sub?.cancel();
+      if (mounted) setState(() => _esperando = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final conectada = ProbeSession.instance.conectada;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(children: [
+        SizedBox(
+          width: 92,
+          child: Text(widget.codigo,
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
+        ),
+        SizedBox(
+          width: 96,
+          child: TextField(
+            controller: _c,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(isDense: true, suffixText: 'mm'),
+            onChanged: (v) {
+              final d = double.tryParse(v.replaceAll(',', '.'));
+              if (d != null) widget.onCambio(d);
+            },
+          ),
+        ),
+        if (conectada)
+          TextButton.icon(
+            onPressed: _leerConSonda,
+            icon: Icon(_esperando ? Icons.bluetooth_searching : Icons.bluetooth,
+                size: 18, color: _esperando ? AppColors.warning : AppColors.info),
+            label: Text(_esperando ? 'Mide…' : 'Sonda',
+                style: TextStyle(color: _esperando ? AppColors.warning : AppColors.info, fontSize: 12)),
+          ),
+      ]),
+    );
   }
 }
