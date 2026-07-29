@@ -99,6 +99,16 @@ export async function transition(
     });
   }
   publish({ kind: "status", assistanceId, status: toStatus });
+
+  // Informe de cierre: se genera al finalizar y se rehace al cerrar el ciclo
+  // en el taller, para que recoja también la vuelta. En segundo plano: que
+  // un fallo del PDF nunca bloquee el cambio de estado.
+  if (toStatus === "finished" || toStatus === "at_workshop") {
+    void import("./report.ts")
+      .then(({ generarYGuardarInforme }) => generarYGuardarInforme(assistanceId))
+      .catch((err) => console.error("[Connect] informe:", err?.message));
+  }
+
   if (toStatus === "assignment_failed" || toStatus === "no_coverage") {
     await createAlert({
       type: toStatus,
@@ -755,8 +765,8 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
   const r = await db.query(
     `INSERT INTO roadside_assistances
        ("workshopId", status, priority, "customerName", "customerPhone", address, latitude, longitude,
-        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, "createdAtMs", "updatedAtMs")
-     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, origen, "createdAtMs", "updatedAtMs")
+     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'central', $13, $13)
      RETURNING id`,
     [
       w.rows[0]?.coreWorkshopId ?? null,
@@ -796,15 +806,37 @@ export async function syncFromCore(): Promise<number> {
     // 'finished' ya NO es terminal (queda la vuelta al taller), pero se acota a
     // 48 h de actividad para no arrastrar indefinidamente asistencias cerradas.
     `SELECT ca.id, ca.status AS connect_status, ra.status AS core_status,
-            ra."assignedTechName", ra."cancelledAtMs"
+            ra."assignedTechName", ra."assignedVehicleName", ra."cancelledAtMs",
+            ca."assignedTechName" AS "prevTech", ca."assignedVehicleName" AS "prevVehicle",
+            rv.plate AS "vehiclePlate"
        FROM connect_assistances ca
        JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+       LEFT JOIN LATERAL (
+         SELECT v.plate FROM roadside_vehicles v
+          WHERE (ra."webfleetVehicleId" IS NOT NULL AND v."webfleetVehicleId" = ra."webfleetVehicleId")
+             OR (ra."assignedVehicleName" IS NOT NULL AND v.name = ra."assignedVehicleName")
+          LIMIT 1
+       ) rv ON true
       WHERE ca.status NOT IN ('at_workshop', 'cancelled', 'no_coverage')
         AND (ca.status <> 'finished' OR ca."updatedAtMs" > $1)`,
     [Date.now() - 48 * 3600_000],
   );
   let changed = 0;
   for (const row of r.rows) {
+    // Trazabilidad: quién y con qué, copiado del core en cuanto se sabe
+    if (
+      (row.assignedTechName && row.assignedTechName !== row.prevTech) ||
+      (row.assignedVehicleName && row.assignedVehicleName !== row.prevVehicle)
+    ) {
+      await db.query(
+        `UPDATE connect_assistances
+            SET "assignedTechName" = COALESCE($1, "assignedTechName"),
+                "assignedVehicleName" = COALESCE($2, "assignedVehicleName"),
+                "assignedVehiclePlate" = COALESCE($3, "assignedVehiclePlate")
+          WHERE id = $4`,
+        [row.assignedTechName ?? null, row.assignedVehicleName ?? null, row.vehiclePlate ?? null, row.id],
+      ).catch((e: any) => console.error("[Connect] trazabilidad:", e?.message));
+    }
     const target = CORE_STATUS_MAP[row.core_status];
     if (!target || target === row.connect_status) continue;
     // Nunca retroceder (eventos duplicados o fuera de orden)
