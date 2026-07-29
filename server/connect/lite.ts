@@ -640,7 +640,9 @@ export function createConnectLiteRouter(): Router {
       // El operario que acepta se queda el servicio salvo que sea el admin
       if (s.role === "operator") {
         await db.query(
-          `UPDATE connect_assistances SET "liteUserId" = $1, "liteUserName" = $2 WHERE id = $3 AND "liteUserId" IS NULL`,
+          `UPDATE connect_assistances
+              SET "liteUserId" = $1, "liteUserName" = $2, "assignedTechName" = COALESCE("assignedTechName", $2)
+            WHERE id = $3 AND "liteUserId" IS NULL`,
           [s.userId, s.userName, a.id],
         );
         const fresh = await db.query(`SELECT status FROM connect_assistances WHERE id = $1`, [a.id]);
@@ -714,7 +716,9 @@ export function createConnectLiteRouter(): Router {
     if (!u.rows[0]) return err(res, 404, "not_found", "Operario no encontrado en este taller");
 
     await db.query(
-      `UPDATE connect_assistances SET "liteUserId" = $1, "liteUserName" = $2, "updatedAtMs" = $3 WHERE id = $4`,
+      `UPDATE connect_assistances
+          SET "liteUserId" = $1, "liteUserName" = $2, "assignedTechName" = $2, "updatedAtMs" = $3
+        WHERE id = $4`,
       [u.rows[0].id, u.rows[0].name, Date.now(), a.id],
     );
     if (a.status === "assigned") {
