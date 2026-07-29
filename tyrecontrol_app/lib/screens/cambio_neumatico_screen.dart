@@ -59,8 +59,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   final Set<String> _posicionesResueltas = {}; // reparaciones en sitio hechas en esta sesión
   final Set<String> _incidenciasResueltas = {}; // ids de incidencias ya resueltas (para no re-resolver al finalizar)
   String? _posSeleccionada; // posición elegida en el plano para operar desde el panel
-  bool _modoPermuta = false; // "tocar y tocar" para permutar dos ruedas
-  String? _permutaA; // primera posición elegida en el modo permuta
+  bool _modoPermuta = false; // "tocar y tocar" para planificar permutas
+  String? _permutaA; // primera posición elegida (origen del movimiento en curso)
+  // Plan de permutación: posiciónDestino → montajeId que acabará ahí. Nada
+  // toca la BD hasta pulsar "Aplicar plan".
+  final Map<String, String> _plan = {};
 
   // Incidencia (con problemas abiertos) por posición: para pintar el rojo y
   // ofrecer las operaciones en el panel lateral.
@@ -454,26 +457,6 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
               MaterialPageRoute(builder: (_) => CatalogoScreen(medidasBase: _medidasVehiculo)),
             ),
           ),
-          // Permutar: modo "tocar y tocar" para cambiar dos ruedas de sitio
-          // sin arrastrar (más fiable con guantes).
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: _modoPermuta ? AppColors.info : Colors.white24,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: _trabajando
-                  ? null
-                  : () => setState(() {
-                        _modoPermuta = !_modoPermuta;
-                        _permutaA = null;
-                        if (_modoPermuta) _posSeleccionada = null;
-                      }),
-              icon: const Icon(Icons.swap_horiz),
-              label: Text(_modoPermuta ? 'Permutando…' : 'Permutar'),
-            ),
-          ),
           TextButton.icon(
             onPressed: _trabajando ? null : _deshacer,
             icon: const Icon(Icons.undo, color: Colors.white),
@@ -510,28 +493,68 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  /// Banda guía del modo permuta: dice en cada momento qué hay que tocar.
+  /// Panel del plan de permutación: guía paso a paso, lista de movimientos
+  /// apuntados (con X para quitarlos) y los botones de vaciar/aplicar.
   Widget _bandaPermuta() {
+    final movs = _movimientosPlan;
     final paso1 = _permutaA == null;
     return Container(
       width: double.infinity,
       color: AppColors.info.withValues(alpha: 0.18),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      child: Row(children: [
-        const Icon(Icons.swap_horiz, color: AppColors.info),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            paso1
-                ? 'PERMUTAR · Paso 1: toca la rueda que quieres mover.'
-                : 'PERMUTAR · Paso 2: toca la rueda (o el hueco) de destino. Vuelve a tocar la marcada para soltarla.',
-            style: const TextStyle(color: AppColors.info, fontWeight: FontWeight.w700, fontSize: 13),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.swap_horiz, color: AppColors.info),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              paso1
+                  ? 'PLAN DE PERMUTACIÓN · Toca la rueda que quieres mover. Nada se guarda hasta aplicar.'
+                  : 'PLAN · Ahora toca el sitio de destino. (Vuelve a tocar la marcada para soltarla.)',
+              style: const TextStyle(color: AppColors.info, fontWeight: FontWeight.w700, fontSize: 13),
+            ),
           ),
-        ),
-        TextButton(
-          onPressed: () => setState(() { _modoPermuta = false; _permutaA = null; }),
-          child: const Text('Salir'),
-        ),
+          TextButton(
+            onPressed: () => setState(() { _modoPermuta = false; _permutaA = null; _plan.clear(); }),
+            child: const Text('Salir'),
+          ),
+        ]),
+        if (movs.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final mv in movs)
+              Container(
+                padding: const EdgeInsets.only(left: 10, right: 2, top: 2, bottom: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppColors.info.withValues(alpha: 0.6)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('${_codigo(mv.origenId)} → ${_codigo(mv.destinoId)}',
+                      style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w700)),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 16, color: AppColors.textSecondary),
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                    tooltip: 'Quitar del plan',
+                    onPressed: () => setState(() => _plan.remove(mv.destinoId)),
+                  ),
+                ]),
+              ),
+            TextButton.icon(
+              onPressed: () => setState(() { _plan.clear(); _permutaA = null; }),
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('Vaciar plan'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+              onPressed: _trabajando ? null : _aplicarPlan,
+              icon: const Icon(Icons.check_circle),
+              label: Text('Aplicar plan (${movs.length})'),
+            ),
+          ]),
+        ],
       ]),
     );
   }
@@ -668,22 +691,131 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     setState(() => _posSeleccionada = _posSeleccionada == posId ? null : posId);
   }
 
-  /// Modo permuta: la primera rueda tocada es el origen (badge "1") y la
-  /// segunda el destino (badge "2"). Volver a tocar la primera la suelta.
+  /// Montaje por id, para resolver el plan (que trabaja con montajeId).
+  Map<String, MontajeActual> get _montajePorId =>
+      {for (final m in _montajePorPosicion.values) m.id: m};
+
+  /// Qué rueda acabará en esta posición según el plan: lo planificado, o la
+  /// que hay ahora salvo que el plan la lleve a otro sitio (entonces, vacía).
+  String? _ocupantePrevisto(String posId) {
+    if (_plan.containsKey(posId)) return _plan[posId];
+    final m = _montajePorPosicion[posId];
+    if (m == null) return null;
+    if (_plan.containsValue(m.id)) return null; // se marcha a otra posición
+    return m.id;
+  }
+
+  /// Modo plan: se tocan origen y destino y el movimiento se APUNTA. Nada se
+  /// guarda hasta "Aplicar plan".
   void _tocarEnPermuta(String posId) {
     if (_permutaA == null) {
-      if (_montajePorPosicion[posId] == null) {
-        _aviso('Empieza por una rueda montada: toca la que quieras mover.', ok: false);
+      if (_ocupantePrevisto(posId) == null) {
+        _aviso('Empieza por una rueda: toca la que quieras mover.', ok: false);
         return;
       }
       setState(() => _permutaA = posId);
       return;
     }
-    if (_permutaA == posId) {
+    final aId = _permutaA!;
+    if (aId == posId) {
       setState(() => _permutaA = null); // deseleccionar
       return;
     }
-    _confirmarPermuta(_permutaA!, posId);
+    final ocupA = _ocupantePrevisto(aId);
+    final ocupB = _ocupantePrevisto(posId);
+    if (ocupA == null) {
+      setState(() => _permutaA = null);
+      return;
+    }
+    setState(() {
+      _plan[posId] = ocupA;
+      // Si el destino tenía rueda, se va al origen (permuta). Si estaba vacío,
+      // el origen queda libre: basta con que no haya nada apuntado para él.
+      if (ocupB != null) {
+        _plan[aId] = ocupB;
+      } else {
+        _plan.remove(aId);
+      }
+      _permutaA = null;
+    });
+  }
+
+  /// Movimientos del plan ya resueltos: de qué posición sale cada rueda y a
+  /// cuál va (se omiten las que acaban donde estaban).
+  List<({String montajeId, String origenId, String destinoId})> get _movimientosPlan {
+    final out = <({String montajeId, String origenId, String destinoId})>[];
+    _plan.forEach((destinoId, montajeId) {
+      final m = _montajePorId[montajeId];
+      if (m == null || m.posicionId == destinoId) return;
+      out.add((montajeId: montajeId, origenId: m.posicionId, destinoId: destinoId));
+    });
+    return out;
+  }
+
+  String _codigo(String posId) {
+    final p = _posiciones.where((e) => e.id == posId);
+    return p.isEmpty ? '—' : p.first.codigoPosicion;
+  }
+
+  Future<void> _aplicarPlan() async {
+    final movs = _movimientosPlan;
+    if (movs.isEmpty) {
+      _aviso('El plan está vacío: apunta algún cambio primero.', ok: false);
+      return;
+    }
+    // Avisos agrupados (no bloquean): medidas distintas y cruces de lado.
+    final avisos = <String>{};
+    for (final mv in movs) {
+      for (final a in _avisosPermuta(mv.origenId, mv.destinoId)) {
+        avisos.add(a);
+      }
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('Aplicar plan (${movs.length} movimiento${movs.length == 1 ? '' : 's'})'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (final mv in movs)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('${_desc(mv.origenId)}  →  ${_codigo(mv.destinoId)}',
+                    style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
+              ),
+            for (final a in avisos)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.warning),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text(a, style: const TextStyle(color: AppColors.warning, fontSize: 13))),
+                ]),
+              ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Aplicar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _trabajando = true);
+    try {
+      await TyreControlApi.permutarPlan(vehiculoId: widget.vehiculoId, destinos: Map.of(_plan));
+      _posicionesMontadas.addAll(_plan.keys);
+      HapticFeedback.mediumImpact();
+      await _cargar();
+      if (!mounted) return;
+      setState(() { _plan.clear(); _permutaA = null; _modoPermuta = false; });
+      _aviso('Plan aplicado: ${movs.length} rueda(s) cambiadas de sitio.', ok: true, conDeshacer: true);
+    } catch (e) {
+      _aviso('No se pudo aplicar el plan: $e', ok: false);
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
   }
 
   /// Atajo por arrastre: soltar una rueda montada sobre otra posición del
@@ -798,7 +930,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih) {
     final co = _coords(p, i);
     final cardW = (co.w / 100 * iw).clamp(96.0, 200.0);
-    final m = _montajePorPosicion[p.id];
+    // En modo plan el plano enseña CÓMO VA A QUEDAR: cada posición pinta la
+    // rueda que acabará ahí, con una etiqueta de dónde viene.
+    final mReal = _montajePorPosicion[p.id];
+    String? vieneDe;
+    MontajeActual? mPrev = mReal;
+    if (_modoPermuta) {
+      final ocupId = _ocupantePrevisto(p.id);
+      mPrev = ocupId == null ? null : _montajePorId[ocupId];
+      if (mPrev != null && mPrev.posicionId != p.id) vieneDe = _codigo(mPrev.posicionId);
+    }
+    final m = mPrev;
     final resaltar = p.id == widget.posicionInicialId;
     final problemas = _problemasVigentes(p.id);
     final esA = _modoPermuta && _permutaA == p.id;
@@ -822,9 +964,12 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           // hueco vacío = mover).
           child: m != null
               ? DragTarget<_DragMontaje>(
-                  onWillAcceptWithDetails: (d) => d.data.m.id != m.id,
+                  onWillAcceptWithDetails: (d) => !_modoPermuta && d.data.m.id != m.id,
                   onAcceptWithDetails: (d) => _soltarMontajeEnPosicion(d.data.m, p),
                   builder: (ctx, cand, rej) => Draggable<_DragMontaje>(
+                    // Con un plan abierto no se arrastra: el arrastre guarda al
+                    // momento y se mezclaría con lo que hay apuntado sin aplicar.
+                    maxSimultaneousDrags: _modoPermuta ? 0 : 1,
                     data: _DragMontaje(m),
                     feedback: _cardMontado(p, m, cardW, arrastrando: true),
                     childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
@@ -836,7 +981,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                   ),
                 )
               : DragTarget<Object>(
-                  onWillAcceptWithDetails: (d) => d.data is _DragStock || d.data is _DragMontaje,
+                  onWillAcceptWithDetails: (d) =>
+                      !_modoPermuta && (d.data is _DragStock || d.data is _DragMontaje),
                   onAcceptWithDetails: (d) {
                     final data = d.data;
                     if (data is _DragStock) {
@@ -851,6 +997,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                   ),
                 ),
         ),
+        if (vieneDe != null)
+          Container(
+            margin: const EdgeInsets.only(top: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: AppColors.info.withValues(alpha: 0.22),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.info),
+            ),
+            child: Text('viene de $vieneDe',
+                style: const TextStyle(color: AppColors.info, fontSize: 9.5, fontWeight: FontWeight.w800)),
+          ),
         if (problemas != null) _bannerIncidencia(problemas),
       ]),
     );
@@ -1031,6 +1189,32 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         // Al final y separado del stock a propósito: el botón usado ya decide
         // el comportamiento (no hay checkboxes ni preguntas de inventario).
         const Divider(height: 1, color: AppColors.cardBorder),
+        // Permutar va junto a los montajes: es otra forma de "resolver" una
+        // posición, y aquí cae a mano con el pulgar en la tablet.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: OutlinedButton.icon(
+            onPressed: _trabajando
+                ? null
+                : () => setState(() {
+                      _modoPermuta = !_modoPermuta;
+                      _permutaA = null;
+                      if (_modoPermuta) _posSeleccionada = null;
+                    }),
+            icon: Icon(Icons.swap_horiz, color: _modoPermuta ? Colors.white : AppColors.info),
+            label: Text(
+              _modoPermuta ? 'Permutando…' : 'Permutar neumáticos',
+              style: TextStyle(
+                  color: _modoPermuta ? Colors.white : AppColors.info, fontWeight: FontWeight.w700),
+            ),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+              alignment: Alignment.centerLeft,
+              backgroundColor: _modoPermuta ? AppColors.info : null,
+              side: BorderSide(color: AppColors.info.withValues(alpha: 0.9)),
+            ),
+          ),
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
