@@ -551,6 +551,14 @@ const [view, setView] = useState<AppView>(() => {
   return "operativo";
 });
 
+// El módulo anfitrión (Mobilink WorkPlanner) cambia de sección navegando entre
+// rutas que montan ESTE mismo componente. React reutiliza la instancia y
+// conserva su estado, así que `view` se quedaría en la vista anterior: hay que
+// sincronizarla con la prop cada vez que cambia.
+useEffect(() => {
+  if (initialView) setView(initialView);
+}, [initialView]);
+
 const autoSyncPaused =
   formOpen ||
   quickEntryOpen ||
