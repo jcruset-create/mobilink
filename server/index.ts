@@ -1586,16 +1586,65 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
     const resumen = lineas.join("\n");
 
-    // Estado del vehículo DESPUÉS: montajes actuales por posición.
+    // Estado del vehículo DESPUÉS: montajes actuales por posición, más la
+    // última presión medida por neumático (o la objetivo del eje como
+    // respaldo) y los distintivos del propio neumático (reesculturado,
+    // girado, recauchutado por marca).
     const curPorPos = new Map<string, any>();
+    const presPorNeu = new Map<string, number>();
+    const presObjPorEje = new Map<number | null, number>();
+    let marcasRecau = new Set<string>();
     try {
       const { data: md } = await supabase
         .from("tc_montajes_actuales")
-        .select("posicion_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm), " +
+        .select("posicion_id, neumatico_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm, reesculturado, girado_en_llanta), " +
           "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje, pos_x, pos_y, pos_w, pos_h)")
         .eq("vehiculo_id", vehiculoId);
       for (const r of (md ?? []) as any[]) curPorPos.set(r.posicion_id, r);
+
+      const { data: revs } = await supabase
+        .from("revisiones_neumaticos_detalle")
+        .select("neumatico_id, presion_bar, created_at")
+        .eq("vehiculo_id", vehiculoId)
+        .order("created_at", { ascending: false })
+        .limit(400);
+      for (const r of (revs ?? []) as any[]) {
+        if (r.neumatico_id && r.presion_bar != null && !presPorNeu.has(r.neumatico_id)) {
+          presPorNeu.set(r.neumatico_id, Number(r.presion_bar));
+        }
+      }
+
+      const { data: veh } = await supabase.from("tc_vehiculos").select("tipo_vehiculo_id").eq("id", vehiculoId).maybeSingle();
+      if (veh?.tipo_vehiculo_id) {
+        const { data: po } = await supabase
+          .from("tc_presiones_objetivo")
+          .select("eje, presion_objetivo_bar, vehiculo_id, tipo_vehiculo_id")
+          .or(`vehiculo_id.eq.${vehiculoId},tipo_vehiculo_id.eq.${veh.tipo_vehiculo_id}`);
+        // La específica de vehículo pisa a la de tipo; eje null aplica a todos.
+        for (const p of (po ?? []) as any[]) {
+          if (p.vehiculo_id && p.vehiculo_id !== vehiculoId) continue;
+          const clave = p.eje ?? null;
+          if (p.vehiculo_id === vehiculoId || !presObjPorEje.has(clave)) {
+            presObjPorEje.set(clave, Number(p.presion_objetivo_bar));
+          }
+        }
+      }
+
+      const { data: mr } = await supabase
+        .from("tc_cat_marcas_neumatico").select("nombre")
+        .eq("es_recauchutado", true).eq("activo", true);
+      marcasRecau = new Set((mr ?? []).map((m: any) => String(m.nombre ?? "").trim().toUpperCase()));
     } catch (e) { console.error("montaje después falló:", e); }
+
+    const presionDe = (cur: any): number | null => {
+      if (!cur) return null;
+      const medida = cur.neumatico_id ? presPorNeu.get(cur.neumatico_id) : undefined;
+      if (medida != null) return medida;
+      const eje = cur.posicion?.eje ?? null;
+      return presObjPorEje.get(eje) ?? presObjPorEje.get(null) ?? null;
+    };
+    const esRecau = (cur: any): boolean =>
+      marcasRecau.has(String(cur?.neumatico?.marca ?? "").trim().toUpperCase());
 
     // El plano "después" reutiliza el esqueleto del "antes" (mismas posiciones y
     // coordenadas), sustituyendo el neumático por el actual y limpiando averías.
@@ -1609,7 +1658,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
           modelo: cur?.neumatico?.modelo ?? null,
           medida: cur?.neumatico?.medida ?? null,
           mm: cur?.neumatico?.profundidad_actual_mm ?? null,
-          presion: null,
+          presion: presionDe(cur),
+          reesc: cur?.neumatico?.reesculturado === true,
+          girado: cur?.neumatico?.girado_en_llanta === true,
+          recau: esRecau(cur),
           averias: null,
         };
       });
@@ -1624,7 +1676,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         modelo: r.neumatico?.modelo ?? null,
         medida: r.neumatico?.medida ?? null,
         mm: r.neumatico?.profundidad_actual_mm ?? null,
-        presion: null,
+        presion: presionDe(r),
+        reesc: r.neumatico?.reesculturado === true,
+        girado: r.neumatico?.girado_en_llanta === true,
+        recau: esRecau(r),
       }));
     }
 

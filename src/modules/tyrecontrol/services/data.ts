@@ -491,6 +491,29 @@ export async function desmontarNeumatico(params: {
   if (error) throw new Error(error.message);
 }
 
+// Aplica un PLAN DE TRABAJO completo (movimientos + reesculturados + giros +
+// reparaciones en sitio) en una sola transacción — la misma RPC que usa la APK.
+export async function aplicarPlanTrabajo(params: {
+  vehiculoId: string;
+  acciones: Array<{ tipo: string; montaje: string; posicion?: string; valor?: number }>;
+  km?: number | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_aplicar_plan_trabajo", {
+    p_vehiculo: params.vehiculoId, p_acciones: params.acciones,
+    p_km: params.km ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+// Marcas de recauchutado (p. ej. INSA): el distintivo RECAUCH. se hereda de la
+// marca, no del neumático.
+export async function listarMarcasRecauchutadas(): Promise<Set<string>> {
+  const { data } = await supabase.from("tc_cat_marcas_neumatico")
+    .select("nombre").eq("es_recauchutado", true).eq("activo", true);
+  return new Set(((data ?? []) as any[]).map((m) => String(m.nombre ?? "").trim().toUpperCase()).filter(Boolean));
+}
+
 export async function rotarNeumatico(params: { montajeOrigenId: string; posicionDestinoId: string }): Promise<void> {
   const { error } = await supabase.rpc("tc_rotar_neumatico", {
     p_montaje_origen: params.montajeOrigenId, p_posicion_destino: params.posicionDestinoId,
@@ -845,6 +868,9 @@ export interface MontajeSnapshot {
   x?: number | null; y?: number | null; w?: number | null; h?: number | null;
   marca?: string | null; modelo?: string | null; medida?: string | null;
   mm?: number | null; presion?: number | null; averias?: string[] | null;
+  // Distintivos del propio neumático (reesculturado, girado en llanta,
+  // recauchutado por marca) — presentes en snapshots recientes.
+  reesc?: boolean | null; girado?: boolean | null; recau?: boolean | null;
 }
 export interface IncidenciaOrigen {
   posicion_id?: string | null; codigo?: string | null; averias?: string[] | null; gravedad?: string | null;

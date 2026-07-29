@@ -302,6 +302,12 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
     final borde = _borde(s);
     final marca = s['marca'] as String?;
     final mm = s['mm'];
+    final presion = s['presion'];
+    final distintivos = [
+      if (s['recau'] == true) 'RECAUCH.',
+      if (s['reesc'] == true) 'REESC.',
+      if (s['girado'] == true) 'GIRADO',
+    ];
     final averias = s['averias'] is List ? (s['averias'] as List).whereType<String>().toList() : const <String>[];
     return Positioned(
       left: (x / 100 * w).clamp(0.0, w - cardW),
@@ -318,7 +324,12 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
           Text(s['codigo']?.toString() ?? '—', style: TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
           Text(marca ?? 'Libre', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
           if (marca != null)
-            Text(mm != null ? '$mm mm' : '— mm', style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text('${mm != null ? '$mm mm' : '— mm'} · ${presion != null ? '$presion bar' : '— bar'}',
+                style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (marca != null && distintivos.isNotEmpty)
+            Text(distintivos.join(' · '),
+                style: const TextStyle(fontSize: 6.5, fontWeight: FontWeight.w800, color: AppColors.info),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           if (widget.conAveria && averias.isNotEmpty)
             Text('⚠ ${averias.join(' · ')}', style: const TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: AppColors.danger), maxLines: 2, overflow: TextOverflow.ellipsis),
         ]),
@@ -327,19 +338,35 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
   }
 
   Widget _listaFallback() {
+    if (widget.items.isEmpty) {
+      return const Text('No se guardó el estado previo (intervención anterior a esta función).',
+          style: TextStyle(fontSize: 11, color: AppColors.textHint));
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       for (final s in widget.items)
         Padding(
           padding: const EdgeInsets.only(bottom: 2),
-          child: Text(
-            '${s['codigo'] ?? '—'}: ${s['marca'] ?? 'Libre'}${s['medida'] != null ? ' ${s['medida']}' : ''}'
-            '${s['mm'] != null ? ' · ${s['mm']} mm' : ''}'
-            '${widget.conAveria && s['averias'] is List && (s['averias'] as List).isNotEmpty ? '  ⚠ ${(s['averias'] as List).join(' · ')}' : ''}',
-            style: TextStyle(
-              fontSize: 11,
-              color: _borde(s) == AppColors.cardBorder ? AppColors.textSecondary : _borde(s),
-            ),
-          ),
+          child: Builder(builder: (_) {
+            final dist = [
+              if (s['recau'] == true) 'RECAUCH.',
+              if (s['reesc'] == true) 'REESC.',
+              if (s['girado'] == true) 'GIRADO',
+            ].join(' · ');
+            final averias = widget.conAveria && s['averias'] is List
+                ? (s['averias'] as List).join(' · ')
+                : '';
+            return Text(
+              '${s['codigo'] ?? '—'}: ${s['marca'] ?? 'Libre'}${s['medida'] != null ? ' ${s['medida']}' : ''}'
+              '${s['mm'] != null ? ' · ${s['mm']} mm' : ''}'
+              '${s['presion'] != null ? ' · ${s['presion']} bar' : ''}'
+              '${dist.isNotEmpty ? '  $dist' : ''}'
+              '${averias.isNotEmpty ? '  ⚠ $averias' : ''}',
+              style: TextStyle(
+                fontSize: 11,
+                color: _borde(s) == AppColors.cardBorder ? AppColors.textSecondary : _borde(s),
+              ),
+            );
+          }),
         ),
     ]);
   }
@@ -347,6 +374,8 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
   @override
   Widget build(BuildContext context) {
     final url = widget.imagen;
+    // Sin posiciones no tiene sentido pintar el chasis vacío: mejor el aviso.
+    if (widget.items.isEmpty) return _listaFallback();
     if (url == null || url.isEmpty || _aspect == null) return _listaFallback();
     return LayoutBuilder(builder: (ctx, c) {
       final w = c.maxWidth;

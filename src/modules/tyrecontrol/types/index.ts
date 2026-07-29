@@ -487,6 +487,8 @@ export const MOTIVO_DESMONTAJE_LABELS: Record<MotivoDesmontaje, string> = {
 export interface Neumatico {
   id: string;
   empresa_id: string;
+  reesculturado?: boolean | null;
+  girado_en_llanta?: boolean | null;
   numero_interno?: string | null;
   control_individual?: boolean;
   creado_automaticamente?: boolean;

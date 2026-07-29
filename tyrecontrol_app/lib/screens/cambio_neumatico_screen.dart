@@ -245,6 +245,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         'medida': n?.medida,
         'mm': med?.profundidadMm ?? n?.profundidadActualMm?.toDouble(),
         'presion': med?.presionBar,
+        // Distintivos del propio neumático, para que el "antes" de la
+        // intervención los conserve aunque luego cambie la rueda.
+        'reesc': n?.reesculturado == true,
+        'girado': n?.giradoEnLlanta == true,
+        'recau': n != null && TyreControlApi.esMarcaRecauchutada(n.marca),
         'averias': (tipos != null && tipos.isNotEmpty) ? tipos : null,
       });
     }
