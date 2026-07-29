@@ -1898,6 +1898,7 @@ export default function RoadsideAssistanceView({
                           <th className="px-3 py-2 text-left">Matrícula</th>
                           <th className="px-3 py-2 text-left">Cliente</th>
                           <th className="px-3 py-2 text-left">Operario</th>
+                          <th className="px-3 py-2 text-left">Origen</th>
                           <th className="px-3 py-2 text-left">Estado</th>
                           <th className="px-3 py-2 text-left"></th>
                         </tr>
@@ -1912,6 +1913,17 @@ export default function RoadsideAssistanceView({
                             <td className="px-3 py-2 font-bold text-slate-100">{item.plate || "—"}</td>
                             <td className="px-3 py-2 text-slate-300 max-w-[140px] truncate">{item.customerName || "—"}</td>
                             <td className="px-3 py-2 text-slate-400">{item.assignedTechName || "—"}</td>
+                            <td className="px-3 py-2">
+                              {item.origen === "central" ? (
+                                <span className="rounded-md border border-indigo-400/50 bg-indigo-500/20 px-2 py-0.5 text-[10px] font-bold uppercase text-indigo-200">
+                                  Central
+                                </span>
+                              ) : (
+                                <span className="rounded-md border border-teal-400/40 bg-teal-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-teal-200">
+                                  Taller
+                                </span>
+                              )}
+                            </td>
                             <td className="px-3 py-2">
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${STATUS_BADGES[item.status]}`}>
                                 {ROADSIDE_ASSISTANCE_STATUS_LABELS[item.status]}
