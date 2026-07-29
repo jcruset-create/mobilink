@@ -21,6 +21,10 @@
 -- no por el neumatico: asi se ve en la ficha sin tener que marcarlo uno a uno.
 alter table tc_cat_marcas_neumatico add column if not exists es_recauchutado boolean not null default false;
 
+-- INSA (Insa Turbo) es marca de recauchutado. El resto se marcan desde
+-- Configuracion -> ficha de la marca -> "Marca de recauchutado".
+update tc_cat_marcas_neumatico set es_recauchutado = true where upper(nombre) like 'INSA%';
+
 alter table tc_neumaticos add column if not exists reesculturado boolean not null default false;
 alter table tc_neumaticos add column if not exists girado_en_llanta boolean not null default false;
 
