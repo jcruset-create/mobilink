@@ -31,8 +31,15 @@ type LiteData = {
   };
   tier: "FULL" | "LITE" | "EXTERNAL" | null;
   track: TrackPoint[];
-  files: { id: number; category: string; url: string; fileName: string | null; createdAtMs: number }[];
-  signature: { id: number; signerName: string; signerDocument: string | null; url: string; signedAtMs: number } | null;
+  /** Evidencias unificadas: APK Lite, WhatsApp y fotos del técnico de Assist. */
+  files: {
+    id: string; origen: "connect" | "assist"; category: string; label: string;
+    url: string; fileName: string | null; createdAtMs: number; esImagen: boolean;
+  }[];
+  signature: {
+    signerName: string | null; signerDocument: string | null; url: string;
+    signedAtMs: number | null; origen: "connect" | "assist";
+  } | null;
   device: {
     lastSeenAtMs: number | null; platform: string | null; appVersion: string | null;
     gpsPermission: string | null; notifPermission: string | null; pushEnabled: boolean;
@@ -40,12 +47,6 @@ type LiteData = {
   kpis: Record<string, number | boolean | null>;
   locationStale: boolean | null;
   lastLocationAtMs: number | null;
-};
-
-const CATEGORY_LABELS: Record<string, string> = {
-  arrival: "Vehículo al llegar", damage: "Daño o avería", work: "Trabajo realizado",
-  part: "Pieza sustituida", finished: "Vehículo finalizado", document: "Documento",
-  signature: "Firma", other: "Otros",
 };
 
 const KPI_LABELS: Record<string, string> = {
@@ -205,14 +206,28 @@ export default function SeguimientoLiteTab({ assistanceId, canOperate, onChanged
       <div>
         <h4 className="mb-2 text-[13px] font-semibold text-slate-200">Evidencias ({data.files.length})</h4>
         {data.files.length === 0 ? (
-          <p className="text-[13px] text-slate-500">El taller aún no ha subido fotografías.</p>
+          <p className="text-[13px] text-slate-500">Todavía no hay fotografías ni adjuntos.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {data.files.map((f) => (
               <a key={f.id} href={f.url} target="_blank" rel="noreferrer" className="w-36">
-                <img src={f.url} alt={CATEGORY_LABELS[f.category] ?? f.category} className="h-24 w-36 rounded-lg border border-slate-700 object-cover" />
-                <span className="mt-1 block text-[11px] text-slate-400">{CATEGORY_LABELS[f.category] ?? f.category}</span>
-                <span className="block text-[11px] text-slate-500">{fmtDateTime(f.createdAtMs)}</span>
+                {f.esImagen ? (
+                  <img
+                    src={f.url}
+                    alt={f.label}
+                    loading="lazy"
+                    className="h-24 w-36 rounded-lg border border-slate-700 object-cover"
+                  />
+                ) : (
+                  <div className="flex h-24 w-36 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-[12px] text-slate-400">
+                    Abrir adjunto ↗
+                  </div>
+                )}
+                <span className="mt-1 block text-[11px] text-slate-400">{f.label}</span>
+                <span className="block text-[11px] text-slate-500">
+                  {fmtDateTime(f.createdAtMs)}
+                  {f.origen === "assist" && " · Assist"}
+                </span>
               </a>
             ))}
           </div>
@@ -228,9 +243,12 @@ export default function SeguimientoLiteTab({ assistanceId, canOperate, onChanged
           <div className="flex items-start gap-3">
             <img src={data.signature.url} alt="Firma del cliente" className="h-24 rounded-lg border border-slate-700 bg-white p-1" />
             <div className="text-[13px] text-slate-300">
-              <div>{data.signature.signerName}</div>
+              <div>{data.signature.signerName ?? "Cliente"}</div>
               {data.signature.signerDocument && <div className="text-slate-400">{data.signature.signerDocument}</div>}
-              <div className="text-slate-500">{fmtDateTime(data.signature.signedAtMs)}</div>
+              <div className="text-slate-500">
+                {fmtDateTime(data.signature.signedAtMs)}
+                {data.signature.origen === "assist" && " · Mobilink Assist"}
+              </div>
             </div>
           </div>
         )}
