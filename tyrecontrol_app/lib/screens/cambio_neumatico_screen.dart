@@ -1360,7 +1360,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             const SizedBox(height: 6),
             for (final e in _kAcciones.entries) ...[
               _btnAccion(e.key, e.value.label, e.value.icono),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
             ],
           ]),
         ),
@@ -1394,13 +1394,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                 _permutaA = null;
                 if (_accionActiva != null) _posSeleccionada = null;
               }),
-      icon: Icon(icono, color: activo ? Colors.white : AppColors.info, size: 20),
+      icon: Icon(icono, color: activo ? Colors.white : AppColors.info),
       label: Text('$label${n > 0 ? '  ($n)' : ''}',
           style: TextStyle(
-              color: activo ? Colors.white : AppColors.info,
-              fontWeight: FontWeight.w700, fontSize: 13)),
+              color: activo ? Colors.white : AppColors.info, fontWeight: FontWeight.w700)),
       style: OutlinedButton.styleFrom(
-        minimumSize: const Size.fromHeight(44),
+        // Mismo tamaño que los botones de montaje: se pulsan con guantes.
+        minimumSize: const Size.fromHeight(50),
         alignment: Alignment.centerLeft,
         backgroundColor: activo ? AppColors.info : null,
         side: BorderSide(color: AppColors.info.withValues(alpha: activo ? 1 : 0.55)),
