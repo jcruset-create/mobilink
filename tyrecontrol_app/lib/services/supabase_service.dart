@@ -789,6 +789,42 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// Permuta dos neumáticos montados (intercambia sus posiciones). Las ruedas
+  /// no salen del vehículo: se cambian de sitio y queda registrado como
+  /// operación 'intercambio' con sus dos movimientos.
+  static Future<String> intercambiarPosiciones({
+    required String montajeAId,
+    required String montajeBId,
+    num? km,
+    String? observaciones,
+  }) async {
+    final res = await _db.rpc('tc_intercambiar_posiciones', params: {
+      'p_montaje_a': montajeAId,
+      'p_montaje_b': montajeBId,
+      'p_km': km,
+      'p_obs': observaciones ?? 'Permuta en el mismo vehículo (APK)',
+    });
+    return '$res';
+  }
+
+  /// Mueve un neumático montado a una posición LIBRE del mismo vehículo
+  /// (operación 'cambio_posicion'). Si el destino está ocupado, la función de
+  /// BD lo rechaza: en ese caso hay que usar [intercambiarPosiciones].
+  static Future<String> cambiarPosicion({
+    required String montajeId,
+    required String posicionDestinoId,
+    num? km,
+    String? observaciones,
+  }) async {
+    final res = await _db.rpc('tc_cambiar_posicion', params: {
+      'p_montaje': montajeId,
+      'p_posicion_destino': posicionDestinoId,
+      'p_km': km,
+      'p_obs': observaciones ?? 'Cambio de posición en el mismo vehículo (APK)',
+    });
+    return '$res';
+  }
+
   /// TODAS las operaciones de un vehículo (montajes, sustituciones, cambios de
   /// posición…), estén o no agrupadas en una intervención. Los montajes sueltos
   /// (p. ej. montar desde catálogo sin cerrar intervención) no tienen
