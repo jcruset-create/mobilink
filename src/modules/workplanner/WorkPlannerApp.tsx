@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck } from "lucide-react";
+import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import { supabase } from "../administracion/services/supabase";
 import { APP_VERSION } from "../../version";
@@ -16,6 +17,36 @@ const SECCIONES = [
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
+
+// Reclamo del módulo, reconstruido con iconos en vez de una imagen: fondo
+// transparente real y se adapta al alto y al color de la cabecera.
+const RECLAMO = [
+  { label: "Planifica", icon: CalendarCheck, color: "text-sky-400" },
+  { label: "Organiza", icon: Network, color: "text-emerald-400" },
+  { label: "Optimiza", icon: TrendingUp, color: "text-sky-400" },
+  { label: "Asigna", icon: UserCheck, color: "text-emerald-400" },
+] as const;
+
+function ReclamoWorkPlanner() {
+  return (
+    <div className="hidden shrink-0 items-center gap-2 xl:flex" aria-hidden>
+      {RECLAMO.map((r, i) => {
+        const Icon = r.icon;
+        return (
+          <div key={r.label} className="flex items-center gap-2">
+            {i > 0 && <span className="h-4 w-px bg-slate-700" />}
+            <span className="flex items-center gap-1.5">
+              <Icon className={`h-4 w-4 ${r.color}`} />
+              <span className="text-[11px] font-black uppercase italic tracking-wide text-slate-200">
+                {r.label}
+              </span>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Proximamente({ titulo }: { titulo: string }) {
   return (
@@ -152,16 +183,14 @@ export default function WorkPlannerApp() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       <header className="sticky top-0 z-40 border-b border-slate-700 bg-slate-900/95 px-3 py-1.5 backdrop-blur">
         <div className="flex items-center gap-3 overflow-x-auto">
-          <button
-            onClick={() => navigate("/inicio")}
-            className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
-            title="Volver a Inicio"
-          >
-            <Home className="h-4 w-4" /> <span className="hidden sm:inline">Inicio</span>
-          </button>
           <div className="flex shrink-0 items-center gap-1.5">
+            <img
+              src={logoMobilink}
+              alt="Mobilink"
+              className="h-7 w-auto shrink-0"
+            />
             <CalendarClock className="h-4 w-4 text-sky-400" />
-            <span className="text-[13px] font-black">Mobilink WorkPlanner</span>
+            <span className="text-[13px] font-black">WorkPlanner</span>
             <span
               className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400"
               title="Versión desplegada"
@@ -169,6 +198,7 @@ export default function WorkPlannerApp() {
               {APP_VERSION}
             </span>
           </div>
+          <ReclamoWorkPlanner />
           {permitido && (
             <nav className="flex items-center gap-1">
               {SECCIONES.map((s) => {
@@ -199,12 +229,21 @@ export default function WorkPlannerApp() {
               })}
             </nav>
           )}
-          <button
-            onClick={salir}
-            className="ml-auto flex shrink-0 items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
-          >
-            <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Salir</span>
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => navigate("/inicio")}
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
+              title="Volver a Inicio"
+            >
+              <Home className="h-4 w-4" /> <span className="hidden sm:inline">Inicio</span>
+            </button>
+            <button
+              onClick={salir}
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
+            >
+              <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Salir</span>
+            </button>
+          </div>
         </div>
       </header>
 
