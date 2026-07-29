@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
@@ -14,8 +14,13 @@ import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
 import CentralSharingPage from "./pages/CentralSharingPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
-import ConnectProApp from "./modules/connectpro/ConnectProApp";
-import WorkPlannerApp from "./modules/workplanner/WorkPlannerApp";
+/**
+ * Los productos que viven bajo su propia ruta se cargan bajo demanda: son
+ * aplicaciones completas y no tiene sentido descargarlas (ni compilarlas en
+ * el mismo trozo) cuando el usuario entra a otra cosa.
+ */
+const ConnectProApp = lazy(() => import("./modules/connectpro/ConnectProApp"));
+const WorkPlannerApp = lazy(() => import("./modules/workplanner/WorkPlannerApp"));
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -80,8 +85,8 @@ import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
 import CoreCompetencias from "./modules/sea-core/pages/Competencias";
 import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
 
-import TyreControlApp from "./modules/tyrecontrol/TyreControlApp";
-import AdministracionApp from "./modules/administracion/AdministracionApp";
+const TyreControlApp = lazy(() => import("./modules/tyrecontrol/TyreControlApp"));
+const AdministracionApp = lazy(() => import("./modules/administracion/AdministracionApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
 
@@ -112,8 +117,18 @@ function ProtegidaPorRol({
   );
 }
 
+/** Pantalla de espera mientras se descarga el trozo de una sub-aplicación. */
+function Cargando() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-900 text-sm text-slate-400">
+      Cargando…
+    </div>
+  );
+}
+
 export default function App() {
   return (
+    <Suspense fallback={<Cargando />}>
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
       {/* Login clásico del panel (pantallas de TV, supervisor por contraseña…) */}
@@ -354,5 +369,6 @@ export default function App() {
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </Suspense>
   );
 }
