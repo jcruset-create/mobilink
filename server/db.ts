@@ -279,6 +279,13 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "origen" TEXT NOT NULL DEFAULT 'taller';
 
+    -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "descripcionAveria" TEXT;
 

@@ -572,6 +572,7 @@ function normalizeTechRow(t: any) {
     priorities: safeJsonParse(t.priorities, {}),
     avatar: t.avatar ?? null,
     roadsideCapable: t.roadsideCapable === true || t.roadsideCapable === "true",
+    compartidoCentral: t.compartidoCentral === true || t.compartidoCentral === "true",
     currentRoadsideAssistanceId:
       t.currentRoadsideAssistanceId != null ? Number(t.currentRoadsideAssistanceId) : null,
     phone: t.phone ?? null,
@@ -718,6 +719,7 @@ function normalizeRoadsideVehicleRow(row: any) {
     marca: row.marca ?? null,
     modelo: row.modelo ?? null,
     esTaller: row.esTaller === true || row.esTaller === "true",
+    compartidoCentral: row.compartidoCentral === true || row.compartidoCentral === "true",
     notes: row.notes ?? null,
     active: row.active !== false,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
@@ -1863,7 +1865,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "currentRoadsideAssistanceId", phone,
+             "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
              "statusChangedAtMs", "statusTotals"
       FROM techs
       ORDER BY id ASC
@@ -3606,6 +3608,86 @@ app.delete(
     }
   }
 );
+
+/* =========================================================
+   COMPARTIR CON CENTRAL — furgonetas y técnicos visibles para la red
+========================================================= */
+
+// Listado combinado con el flag de compartición
+app.get("/api/central-sharing", requireSupervisorRole, async (_req, res) => {
+  try {
+    const [vehicles, techs] = await Promise.all([
+      db.query(`SELECT * FROM roadside_vehicles WHERE active = true ORDER BY name ASC`),
+      db.query(
+        `SELECT name, status, blocked, "roadsideCapable", "compartidoCentral",
+                "currentRoadsideAssistanceId"
+         FROM techs ORDER BY name ASC`
+      ),
+    ]);
+    res.json({
+      vehicles: vehicles.rows.map(normalizeRoadsideVehicleRow),
+      techs: techs.rows.map(normalizeTechRow),
+    });
+  } catch (error) {
+    console.error("GET /api/central-sharing error:", error);
+    res.status(500).json({ error: "Error obteniendo compartición con Central" });
+  }
+});
+
+// Compartir/ocultar una furgoneta
+app.patch("/api/central-sharing/vehicle/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const compartido = req.body?.compartido === true;
+    const r = await db.query(
+      `UPDATE roadside_vehicles SET "compartidoCentral" = $2, "updatedAtMs" = $3 WHERE id = $1 RETURNING *`,
+      [id, compartido, Date.now()]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Furgoneta no encontrada" });
+    res.json(normalizeRoadsideVehicleRow(r.rows[0]));
+  } catch (error) {
+    console.error("PATCH /api/central-sharing/vehicle/:id error:", error);
+    res.status(500).json({ error: "Error actualizando furgoneta" });
+  }
+});
+
+// Compartir/ocultar un técnico
+app.patch("/api/central-sharing/tech/:name", requireSupervisorRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const compartido = req.body?.compartido === true;
+    const r = await db.query(
+      `UPDATE techs SET "compartidoCentral" = $2 WHERE name = $1
+       RETURNING name, status, blocked, "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId"`,
+      [name, compartido]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json(normalizeTechRow(r.rows[0]));
+  } catch (error) {
+    console.error("PATCH /api/central-sharing/tech/:name error:", error);
+    res.status(500).json({ error: "Error actualizando técnico" });
+  }
+});
+
+// Compartir/ocultar todos de un tipo
+app.post("/api/central-sharing/bulk", requireSupervisorRole, async (req, res) => {
+  try {
+    const tipo = String(req.body?.tipo || "");
+    const compartido = req.body?.compartido === true;
+    if (tipo === "vehicles") {
+      await db.query(`UPDATE roadside_vehicles SET "compartidoCentral" = $1, "updatedAtMs" = $2 WHERE active = true`, [compartido, Date.now()]);
+    } else if (tipo === "techs") {
+      await db.query(`UPDATE techs SET "compartidoCentral" = $1`, [compartido]);
+    } else {
+      return res.status(400).json({ error: "tipo debe ser 'vehicles' o 'techs'" });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/central-sharing/bulk error:", error);
+    res.status(500).json({ error: "Error actualizando" });
+  }
+});
 
 app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
   try {
