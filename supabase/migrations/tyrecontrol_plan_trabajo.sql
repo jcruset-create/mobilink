@@ -75,14 +75,15 @@ begin
     raise exception 'Una posicion del plan la ocupa una rueda que no se mueve: incluyela en el plan';
   end if;
 
-  -- Solo se reescultura lo que el catalogo permite.
+  -- Solo se reescultura lo que el catalogo permite. La marca 'reesculturable'
+  -- vive en el MODELO (tc_cat_modelos_neumatico), no en la referencia. Si el
+  -- modelo no esta en el catalogo o no tiene el dato, se deja pasar.
   if exists (
     select 1 from jsonb_to_recordset(p_acciones) as x(tipo text, montaje uuid, posicion uuid, valor numeric)
       join tc_montajes_actuales m on m.id = x.montaje
       join tc_neumaticos n on n.id = m.neumatico_id
-      left join tc_cat_modelos_neumatico mo on upper(mo.nombre) = upper(n.modelo)
-      left join tc_referencias_neumatico r on r.modelo_id = mo.id
-     where x.tipo = 'reescultura' and coalesce(r.reesculturable, true) = false
+      join tc_cat_modelos_neumatico mo on upper(mo.nombre) = upper(n.modelo)
+     where x.tipo = 'reescultura' and mo.reesculturable = false
   ) then
     raise exception 'Alguna rueda marcada no es reesculturable segun el catalogo';
   end if;
