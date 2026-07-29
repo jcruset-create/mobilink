@@ -309,7 +309,9 @@ export async function findCandidates(
             hist.accepted, hist.declined, hist."etaFactor",
             COALESCE(load.n, 0)::int AS "activeLoad",
             COALESCE(units.shared, 0)::int AS "sharedUnits",
-            COALESCE(units.available, 0)::int AS "availableUnits"
+            COALESCE(units.available, 0)::int AS "availableUnits",
+            COALESCE(opers.shared, 0)::int AS "sharedTechs",
+            COALESCE(opers.available, 0)::int AS "availableTechs"
        FROM connect_workshops w
        LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
        LEFT JOIN connect_provider_authorizations a
@@ -340,6 +342,16 @@ export async function findCandidates(
            FROM connect_mobile_units mu
           WHERE mu."workshopId" = w.id AND mu."sharedWithCentral" = true
        ) units ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS shared,
+                COUNT(*) FILTER (
+                  WHERE t.blocked = false AND t."currentRoadsideAssistanceId" IS NULL
+                        AND t.status <> 'ocupado'
+                )::int AS available
+           FROM techs t
+          WHERE w."coreWorkshopId" IS NOT NULL
+            AND t."workshopId" = w."coreWorkshopId" AND t."compartidoCentral" = true
+       ) opers ON true
       WHERE w."connectStatus" = 'active'
         AND w."networkParticipation" = true
         AND (a.id IS NULL OR a.excluded = false)`,
@@ -363,21 +375,34 @@ export async function findCandidates(
     const offered = (w.accepted ?? 0) + (w.declined ?? 0);
     const acceptProbability = Math.round(((Number(w.accepted ?? 0) + 0.7 * 6) / (offered + 6)) * 100) / 100;
 
-    // Disponibilidad real de furgonetas compartidas con Central.
+    // Disponibilidad real compartida con Central: furgonetas y técnicos.
     const sharedUnits = Number(w.sharedUnits ?? 0);
     const availableUnits = Number(w.availableUnits ?? 0);
+    const sharedTechs = Number(w.sharedTechs ?? 0);
+    const availableTechs = Number(w.availableTechs ?? 0);
     const isAssist = String(w.integrationType ?? "assist") === "assist";
 
-    // Si el taller ha compartido furgonetas con Central pero ninguna está
-    // disponible ahora mismo, se descarta (no tiene capacidad para atender).
-    if (isAssist && sharedUnits > 0 && availableUnits === 0) continue;
+    // Capacidad efectiva = lo que realmente puede despachar. Un taller necesita
+    // furgoneta Y técnico; si comparte ambos, la capacidad es el mínimo de los
+    // dos. Si solo comparte uno, se usa ese. Si no comparte nada → null (proxy).
+    let effectiveAvailable: number | null = null;
+    if (sharedUnits > 0 && sharedTechs > 0) {
+      effectiveAvailable = Math.min(availableUnits, availableTechs);
+    } else if (sharedUnits > 0) {
+      effectiveAvailable = availableUnits;
+    } else if (sharedTechs > 0) {
+      effectiveAvailable = availableTechs;
+    }
 
-    // Penalización por carga. Si hay furgonetas compartidas, la capacidad es
-    // real (nº de furgonetas libres); si no, se usa el proxy de asistencias
-    // activas (comportamiento anterior, para no romper talleres sin compartir).
+    // Si el taller ha compartido recursos pero no tiene ninguno libre ahora
+    // mismo, se descarta (no puede atender).
+    if (isAssist && effectiveAvailable === 0) continue;
+
+    // Penalización por carga. Si hay capacidad real compartida, se usa; si no,
+    // se mantiene el proxy de asistencias activas (comportamiento anterior).
     const activeLoad = Number(w.activeLoad ?? 0);
-    const loadFactor = sharedUnits > 0
-      ? Math.min(1, availableUnits / 2) // 2+ furgonetas libres → capacidad plena
+    const loadFactor = effectiveAvailable != null
+      ? Math.min(1, effectiveAvailable / 2) // 2+ libres → capacidad plena
       : Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
 
     // Score = 45 % ETA + 25 % score de red + 15 % prob. aceptación + 15 % carga
@@ -393,8 +418,11 @@ export async function findCandidates(
       `${Math.round(distanceKm)} km (ETA ~${etaMinutes} min${etaFactor !== 1 ? `, corregida ×${etaFactor.toFixed(1)} por historial` : ""})`,
       `score de red ${Math.round(w.currentScore)}/100`,
       `acepta el ${Math.round(acceptProbability * 100)} %`,
-      sharedUnits > 0
-        ? `${availableUnits}/${sharedUnits} furgoneta(s) libre(s)`
+      effectiveAvailable != null
+        ? [
+            sharedUnits > 0 ? `${availableUnits}/${sharedUnits} furgoneta(s)` : null,
+            sharedTechs > 0 ? `${availableTechs}/${sharedTechs} técnico(s)` : null,
+          ].filter(Boolean).join(" · ") + " libre(s)"
         : activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
     ];
     candidates.push({
