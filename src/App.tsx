@@ -12,6 +12,7 @@ import OtfTvPage from "./pages/OtfTvPage";
 import VehiculoHistorialPage from "./pages/VehiculoHistorialPage";
 import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
+import CentralSharingPage from "./pages/CentralSharingPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
 import ConnectProApp from "./modules/connectpro/ConnectProApp";
 import WorkPlannerApp from "./modules/workplanner/WorkPlannerApp";
@@ -132,6 +133,7 @@ export default function App() {
       <Route path="/vehiculo" element={<VehiculoHistorialPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/licencias" element={<LicensesPage />} />
+      <Route path="/asistencias/central" element={<CentralSharingPage />} />
       <Route path="/admin/empresas" element={<AdminEmpresasPage />} />
       <Route path="/connect/*" element={<ConnectProApp />} />
       <Route path="/operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />
