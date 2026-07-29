@@ -125,6 +125,16 @@ export default function WorkPlannerApp() {
   const navigate = useNavigate();
   const permitido = useAccesoWorkplanner();
 
+  // El body de la app es claro (#f8fafc) porque el panel de taller lo es. En
+  // WorkPlanner todo va en oscuro, así que se tiñe el fondo del documento con
+  // el mismo slate-900 del resto de módulos para que no asome ninguna zona de
+  // otro color por debajo del contenido.
+  useEffect(() => {
+    const anterior = document.body.style.background;
+    document.body.style.background = "#0f172a";
+    return () => { document.body.style.background = anterior; };
+  }, []);
+
   async function salir() {
     // Cierra tanto la sesión de plataforma como el login interno del panel.
     try {
@@ -207,12 +217,13 @@ export default function WorkPlannerApp() {
           <Route index element={<Navigate to="/workplanner/operativo2" replace />} />
           <Route
             path="operativo2"
-            element={<SeaTarragonaV1 initialView="operativo2" embebido />}
+            element={<SeaTarragonaV1 key="wp-operativo2" initialView="operativo2" embebido />}
           />
           <Route
             path="agenda"
             element={
               <SeaTarragonaV1
+                key="wp-agenda2"
                 initialView="agenda2"
                 embebido
                 onVolverModulo={() => navigate("/workplanner/operativo2")}
