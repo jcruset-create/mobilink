@@ -16,7 +16,7 @@ declare o record; neu record; v_cliente uuid; ma record; mb record; v_pa uuid; v
 begin
   select * into o from operaciones_neumaticos
     where vehiculo_id = p_vehiculo and coalesce(is_anulada, false) = false
-      and tipo_operacion in ('montaje','desmontaje','intercambio','cambio_posicion')
+      and tipo_operacion in ('montaje','desmontaje','intercambio','cambio_posicion','permutacion')
       and created_at >= p_desde
     order by created_at desc
     limit 1;
@@ -29,8 +29,24 @@ begin
   select * into neu from tc_neumaticos where id = o.neumatico_id;
   select cliente_almacen_id into v_cliente from tc_empresas where id = o.empresa_id;
 
+  -- Permutacion multiple: cada rueda vuelve a su posicion de origen. Se
+  -- deshace el plan ENTERO, que es como se aplico.
+  if o.tipo_operacion = 'permutacion' then
+    update tc_montajes_actuales set posicion_id = null
+     where vehiculo_id = o.vehiculo_id
+       and neumatico_id in (select mv.neumatico_id from tc_operacion_movimientos mv where mv.operacion_id = o.id);
+    update tc_montajes_actuales m set posicion_id = mv.origen_posicion_id
+      from tc_operacion_movimientos mv
+     where mv.operacion_id = o.id and m.neumatico_id = mv.neumatico_id and m.vehiculo_id = o.vehiculo_id;
+    update tc_neumaticos n set posicion_id = mv.origen_posicion_id, updated_at = now()
+      from tc_operacion_movimientos mv
+     where mv.operacion_id = o.id and n.id = mv.neumatico_id;
+    update operaciones_neumaticos set is_anulada = true, status = 'anulada', updated_at = now() where id = o.id;
+    return 'Deshecha: permutacion de '
+        || (select count(*) from tc_operacion_movimientos where operacion_id = o.id) || ' ruedas';
+
   -- Permuta de dos ruedas: se vuelven a intercambiar
-  if o.tipo_operacion = 'intercambio' then
+  elsif o.tipo_operacion = 'intercambio' then
     select * into ma from tc_montajes_actuales where id = o.montaje_origen_id;
     if not found then return 'No se puede deshacer: el montaje ya no existe'; end if;
     select * into mb from tc_montajes_actuales where id = o.montaje_destino_id;

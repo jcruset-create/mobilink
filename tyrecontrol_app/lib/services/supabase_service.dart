@@ -807,6 +807,27 @@ class TyreControlApi {
     return '$res';
   }
 
+  /// Aplica un PLAN de permutación (varias ruedas a la vez) en una sola
+  /// transacción: o entra entero o no entra nada. [destinos] indica dónde debe
+  /// acabar cada rueda: {montajeId: posicionDestinoId}.
+  static Future<String> permutarPlan({
+    required String vehiculoId,
+    required Map<String, String> destinos,
+    num? km,
+    String? observaciones,
+  }) async {
+    final lista = destinos.entries
+        .map((e) => {'montaje': e.key, 'posicion': e.value})
+        .toList();
+    final res = await _db.rpc('tc_permutar_plan', params: {
+      'p_vehiculo': vehiculoId,
+      'p_destinos': lista,
+      'p_km': km,
+      'p_obs': observaciones,
+    });
+    return '$res';
+  }
+
   /// Mueve un neumático montado a una posición LIBRE del mismo vehículo
   /// (operación 'cambio_posicion'). Si el destino está ocupado, la función de
   /// BD lo rechaza: en ese caso hay que usar [intercambiarPosiciones].
