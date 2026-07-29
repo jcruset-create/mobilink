@@ -307,7 +307,9 @@ export async function findCandidates(
             COALESCE(a."requiresAcceptance", false) AS "requiresAcceptance",
             COALESCE(a."acceptTimeoutMin", 10) AS "acceptTimeoutMin",
             hist.accepted, hist.declined, hist."etaFactor",
-            COALESCE(load.n, 0)::int AS "activeLoad"
+            COALESCE(load.n, 0)::int AS "activeLoad",
+            COALESCE(units.shared, 0)::int AS "sharedUnits",
+            COALESCE(units.available, 0)::int AS "availableUnits"
        FROM connect_workshops w
        LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
        LEFT JOIN connect_provider_authorizations a
@@ -332,6 +334,12 @@ export async function findCandidates(
           WHERE ca."workshopId" = w.id
             AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')
        ) load ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS shared,
+                COUNT(*) FILTER (WHERE mu.status = 'available')::int AS available
+           FROM connect_mobile_units mu
+          WHERE mu."workshopId" = w.id AND mu."sharedWithCentral" = true
+       ) units ON true
       WHERE w."connectStatus" = 'active'
         AND w."networkParticipation" = true
         AND (a.id IS NULL OR a.excluded = false)`,
@@ -355,9 +363,22 @@ export async function findCandidates(
     const offered = (w.accepted ?? 0) + (w.declined ?? 0);
     const acceptProbability = Math.round(((Number(w.accepted ?? 0) + 0.7 * 6) / (offered + 6)) * 100) / 100;
 
-    // Fase 4 — penalización por carga: cada asistencia activa resta capacidad
+    // Disponibilidad real de furgonetas compartidas con Central.
+    const sharedUnits = Number(w.sharedUnits ?? 0);
+    const availableUnits = Number(w.availableUnits ?? 0);
+    const isAssist = String(w.integrationType ?? "assist") === "assist";
+
+    // Si el taller ha compartido furgonetas con Central pero ninguna está
+    // disponible ahora mismo, se descarta (no tiene capacidad para atender).
+    if (isAssist && sharedUnits > 0 && availableUnits === 0) continue;
+
+    // Penalización por carga. Si hay furgonetas compartidas, la capacidad es
+    // real (nº de furgonetas libres); si no, se usa el proxy de asistencias
+    // activas (comportamiento anterior, para no romper talleres sin compartir).
     const activeLoad = Number(w.activeLoad ?? 0);
-    const loadFactor = Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
+    const loadFactor = sharedUnits > 0
+      ? Math.min(1, availableUnits / 2) // 2+ furgonetas libres → capacidad plena
+      : Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
 
     // Score = 45 % ETA + 25 % score de red + 15 % prob. aceptación + 15 % carga
     const fit = Math.max(0, 1 - etaMinutes / 90);
@@ -372,7 +393,9 @@ export async function findCandidates(
       `${Math.round(distanceKm)} km (ETA ~${etaMinutes} min${etaFactor !== 1 ? `, corregida ×${etaFactor.toFixed(1)} por historial` : ""})`,
       `score de red ${Math.round(w.currentScore)}/100`,
       `acepta el ${Math.round(acceptProbability * 100)} %`,
-      activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
+      sharedUnits > 0
+        ? `${availableUnits}/${sharedUnits} furgoneta(s) libre(s)`
+        : activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
     ];
     candidates.push({
       workshopId: w.id,
