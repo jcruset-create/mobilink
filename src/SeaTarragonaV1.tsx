@@ -720,11 +720,13 @@ useEffect(() => {
 
 useEffect(() => {
   if (!userRole) return;
+  // La vista pedida por el módulo anfitrión (initialView) manda: no se rebota.
+  if (initialView && view === initialView) return;
 
   if (!canAccessView(userRole, view)) {
     setView(getDefaultViewForRole(userRole));
   }
-}, [userRole, view]);
+}, [userRole, view, initialView]);
   useEffect(() => {
     async function loadRules() {
       try {
@@ -1197,11 +1199,12 @@ useAutoSync({
 useEffect(() => {
   if (!isAuthenticated) return;
   if (!userRole) return;
+  if (initialView && view === initialView) return;
 
   if (!canAccessView(userRole, view)) {
     setView(getDefaultViewForRole(userRole));
   }
-}, [isAuthenticated, userRole, view]);
+}, [isAuthenticated, userRole, view, initialView]);
 useEffect(() => {
   if (!isAuthenticated) return;
 
