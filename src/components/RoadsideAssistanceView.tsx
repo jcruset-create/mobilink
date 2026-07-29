@@ -1507,7 +1507,7 @@ export default function RoadsideAssistanceView({
                           )}
                           {assistance.origen === "central" ? (
                             <span className="shrink-0 rounded-md border border-indigo-400/50 bg-indigo-500/20 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-indigo-200">
-                              ● Vía Central
+                              ● Vía Central{assistance.expedienteCentral ? ` · Exp. ${assistance.expedienteCentral}` : ""}
                             </span>
                           ) : (
                             <span className="shrink-0 rounded-md border border-teal-400/40 bg-teal-500/15 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-teal-200">

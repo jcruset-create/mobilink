@@ -816,8 +816,9 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
   const r = await db.query(
     `INSERT INTO roadside_assistances
        ("workshopId", status, priority, "customerName", "customerPhone", address, latitude, longitude,
-        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, origen, "createdAtMs", "updatedAtMs")
-     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'central', $13, $13)
+        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, origen,
+        "expedienteCentral", "createdAtMs", "updatedAtMs")
+     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'central', $13, $14, $14)
      RETURNING id`,
     [
       w.rows[0]?.coreWorkshopId ?? null,
@@ -832,6 +833,7 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
       description || null,
       crypto.randomUUID().replace(/-/g, ""),
       `Connect Pro · ${a.uuid}`,
+      a.expedientNumber ?? a.externalReference ?? null,
       now,
     ],
   );
