@@ -64,6 +64,9 @@ function aFormulario(s: Record<string, any>): Record<string, any> {
     longitude: s.longitude,
     description: s.descripcionAveria ?? s.vehicleDescription,
     datosDetectados: extras,
+    // Contexto para la ventana de revisión
+    resumen: s.resumen ?? null,
+    confidence: s.confidence ?? null,
   };
 }
 
@@ -129,7 +132,7 @@ export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion 
       }
       if (sugerencias && Object.keys(sugerencias).length > 0) {
         onSugerencias?.(aFormulario(sugerencias));
-        setAviso("Datos volcados al formulario. Revísalos antes de crear la asistencia.");
+        setAviso("Revisa los datos detectados en la ventana y confirma qué quieres importar.");
       } else {
         setAviso("La IA no ha podido extraer datos de la conversación.");
       }

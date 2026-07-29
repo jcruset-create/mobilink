@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
 import CapturaWhatsApp from "../components/CapturaWhatsApp";
+import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../components/ConfirmarImportacionIA";
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 
@@ -67,6 +68,11 @@ export default function NuevaAsistencia() {
   const [iaMsg, setIaMsg] = useState<string | null>(null);
   // Sesión de captura de WhatsApp, para vincularla a la asistencia al crearla
   const [capturaId, setCapturaId] = useState<number | null>(null);
+  /** Propuesta de la IA pendiente de confirmar (ventana de revisión). */
+  const [revision, setRevision] = useState<{
+    origen: string; propuestas: PropuestaIA[]; extras: ExtraIA[];
+    resumen: string | null; confianza: "high" | "medium" | "low" | null;
+  } | null>(null);
 
   useEffect(() => {
     boFetch<{ service_types: ServiceType[]; vehicle_types?: VehicleType[] }>("/catalogs")
@@ -81,48 +87,74 @@ export default function NuevaAsistencia() {
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value } as Form);
 
-  /** Vuelca al formulario lo que ha entendido la IA, sin pisar lo ya escrito. */
-  const aplicarExtraccion = (d: Record<string, any>): number => {
+  /**
+   * Convierte lo que ha entendido la IA en propuestas revisables. No toca el
+   * formulario: abre la ventana de confirmación para que el operador decida.
+   */
+  const proponerExtraccion = (d: Record<string, any>, origen: string) => {
     const texto = (v: unknown) => (v == null ? "" : String(v));
-    const mapa: Partial<Record<keyof Form, unknown>> = {
-      expedientNumber: d.expedientNumber, externalReference: d.externalReference, clientName: d.clientName,
-      serviceType: d.serviceType, priority: d.priority === "urgente" ? "urgente" : undefined,
-      slaMinutes: d.slaMinutes, customerName: d.customerName, customerPhone: d.customerPhone,
-      requesterName: d.requesterName, requesterPhone: d.requesterPhone, requesterEmail: d.requesterEmail,
-      address: d.address, lat: d.latitude, lng: d.longitude,
-      road: d.road, km: d.km, direction: d.direction, placeRef: d.placeRef,
-      vehicleType: d.vehicleType, make: d.make, model: d.model, plate: d.plate, vin: d.vin,
-      fuel: d.fuel, weight: d.weight, cargo: d.cargo,
-      description: d.description, diagnosis: d.diagnosis,
-    };
-    let aplicados = 0;
-    const siguiente: Form = { ...f };
-    for (const [clave, valor] of Object.entries(mapa) as [keyof Form, unknown][]) {
-      if (valor == null || texto(valor) === "") continue;
-      // Lo que ya haya escrito el operador manda sobre la IA
-      if (texto(siguiente[clave]).trim() !== "" && clave !== "priority" && clave !== "serviceType" && clave !== "vehicleType") continue;
-      (siguiente as any)[clave] = texto(valor);
-      aplicados++;
-    }
-    if (d.trailer === true && !siguiente.trailer) { siguiente.trailer = true; aplicados++; }
-    if (d.dangerous === true && !siguiente.dangerous) { siguiente.dangerous = true; aplicados++; }
+    const mapa: [keyof Form, string, unknown][] = [
+      ["expedientNumber", "Nº expediente", d.expedientNumber],
+      ["externalReference", "Referencia externa", d.externalReference],
+      ["clientName", "Cliente (texto libre)", d.clientName],
+      ["serviceType", "Tipo de asistencia", d.serviceType],
+      ["priority", "Prioridad", d.priority === "urgente" ? "urgente" : undefined],
+      ["slaMinutes", "SLA (min llegada)", d.slaMinutes],
+      ["customerName", "Nombre del cliente", d.customerName],
+      ["customerPhone", "Teléfono del cliente", d.customerPhone],
+      ["requesterName", "Solicitante", d.requesterName],
+      ["requesterPhone", "Tel. solicitante", d.requesterPhone],
+      ["requesterEmail", "Email", d.requesterEmail],
+      ["address", "Dirección", d.address],
+      ["lat", "Latitud", d.latitude],
+      ["lng", "Longitud", d.longitude],
+      ["road", "Carretera", d.road],
+      ["km", "Km", d.km],
+      ["direction", "Sentido", d.direction],
+      ["placeRef", "Referencia del lugar", d.placeRef],
+      ["vehicleType", "Tipo de vehículo", d.vehicleType],
+      ["make", "Marca", d.make],
+      ["model", "Modelo", d.model],
+      ["plate", "Matrícula", d.plate],
+      ["vin", "VIN", d.vin],
+      ["fuel", "Combustible", d.fuel],
+      ["weight", "Peso (t)", d.weight],
+      ["cargo", "Carga", d.cargo],
+      ["description", "Descripción de la incidencia", d.description],
+      ["diagnosis", "Diagnóstico inicial", d.diagnosis],
+    ];
 
-    // Los datos sueltos leídos en fotos se acumulan en observaciones internas
-    const extras: { campo: string; valor: string }[] = Array.isArray(d.datosDetectados) ? d.datosDetectados : [];
-    const lineasExtra = extras
-      .filter((x) => x?.campo && x?.valor)
+    const propuestas: PropuestaIA[] = [];
+    for (const [clave, label, valor] of mapa) {
+      if (valor == null || texto(valor) === "") continue;
+      propuestas.push({ key: clave, label, valor: texto(valor), actual: texto(f[clave]).trim() });
+    }
+    if (d.trailer === true && !f.trailer) propuestas.push({ key: "trailer", label: "Remolque", valor: "sí", actual: "" });
+    if (d.dangerous === true && !f.dangerous) propuestas.push({ key: "dangerous", label: "Mercancía peligrosa", valor: "sí", actual: "" });
+
+    const extras: ExtraIA[] = (Array.isArray(d.datosDetectados) ? d.datosDetectados : [])
+      .filter((x: any) => x?.campo && x?.valor)
+      .map((x: any) => ({ campo: String(x.campo), valor: String(x.valor) }));
+    if (d.notes) extras.push({ campo: "Observaciones", valor: String(d.notes) });
+
+    setRevision({ origen, propuestas, extras, resumen: d.resumen ?? null, confianza: d.confidence ?? null });
+  };
+
+  /** Aplica al formulario solo lo que el operador ha confirmado. */
+  const aplicarConfirmado = (campos: Record<string, string>, extras: ExtraIA[]) => {
+    const siguiente: Form = { ...f };
+    for (const [clave, valor] of Object.entries(campos)) {
+      if (clave === "trailer" || clave === "dangerous") (siguiente as any)[clave] = true;
+      else (siguiente as any)[clave] = valor;
+    }
+    const lineas = extras
       .map((x) => `${x.campo}: ${x.valor}`)
       .filter((l) => !siguiente.notes.includes(l));
-    if (lineasExtra.length) {
-      siguiente.notes = [siguiente.notes, ...lineasExtra].filter(Boolean).join("\n");
-      aplicados += lineasExtra.length;
-    }
-    if (d.notes && !siguiente.notes.includes(String(d.notes))) {
-      siguiente.notes = [siguiente.notes, String(d.notes)].filter(Boolean).join("\n");
-      aplicados++;
-    }
+    if (lineas.length) siguiente.notes = [siguiente.notes, ...lineas].filter(Boolean).join("\n");
     setF(siguiente);
-    return aplicados;
+    const total = Object.keys(campos).length + lineas.length;
+    setRevision(null);
+    setIaMsg(total > 0 ? `Importados ${total} dato${total !== 1 ? "s" : ""}.` : "No se ha importado nada.");
   };
 
   const analizarConIA = async () => {
@@ -137,12 +169,7 @@ export default function NuevaAsistencia() {
         method: "POST",
         body: { text: iaTexto.trim(), images: iaImagenes },
       });
-      const aplicados = aplicarExtraccion(r.data ?? {});
-      setIaMsg(
-        aplicados > 0
-          ? `La IA ha rellenado ${aplicados} campo${aplicados !== 1 ? "s" : ""}. Revísalos antes de crear.`
-          : "La IA no ha encontrado datos aprovechables (o ya estaban rellenos).",
-      );
+      proponerExtraccion(r.data ?? {}, "Texto y capturas pegados");
     } catch (e: any) {
       setIaMsg(e.message);
     } finally {
@@ -213,12 +240,21 @@ export default function NuevaAsistencia() {
 
       {/* Recepción directa de WhatsApp (mismo número que Mobilink Assist) */}
       <CapturaWhatsApp
-        onSugerencias={(datos) => {
-          const n = aplicarExtraccion(datos);
-          setIaMsg(n > 0 ? `WhatsApp: ${n} campo${n !== 1 ? "s" : ""} rellenado${n !== 1 ? "s" : ""}.` : null);
-        }}
+        onSugerencias={(datos) => proponerExtraccion(datos, "Conversación de WhatsApp")}
         onSesion={setCapturaId}
       />
+
+      {revision && (
+        <ConfirmarImportacionIA
+          origen={revision.origen}
+          propuestas={revision.propuestas}
+          extras={revision.extras}
+          resumen={revision.resumen}
+          confianza={revision.confianza}
+          onCancelar={() => { setRevision(null); setIaMsg("Importación cancelada."); }}
+          onConfirmar={aplicarConfirmado}
+        />
+      )}
 
       {/* Importación por IA: la misma que en Mobilink Assist */}
       <Card className="mb-4 border-violet-500/30 p-4">
@@ -266,8 +302,8 @@ export default function NuevaAsistencia() {
               {iaMsg && <span className="text-[12px] text-slate-400">{iaMsg}</span>}
             </div>
             <p className="text-[12px] text-slate-500">
-              Lee también el texto de las fotos (datos del conductor, teléfonos, albaranes…). Nunca
-              sobrescribe lo que ya hayas escrito, y lo que no encaja en un campo va a observaciones internas.
+              Lee también el texto de las fotos (datos del conductor, teléfonos, albaranes…). Al terminar
+              se abre una ventana para revisar y confirmar qué datos se importan: nada se escribe solo.
             </p>
           </div>
         )}
