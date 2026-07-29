@@ -690,6 +690,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
+    expedienteCentral: row.expedienteCentral ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -6892,6 +6893,12 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       const mainPlate = remolquePrincipal ? `Remolque ${a.plateRemolque}` : (a.plate || "");
       if (mainPlate) bx += badge(mainPlate, bx, by0, "#dbeafe", "#1e40af") + 6;
       if (a.priority === "urgente") bx += badge("URGENTE", bx, by0, "#fee2e2", "#991b1b") + 6;
+      if (a.origen === "central") {
+        bx += badge(
+          a.expedienteCentral ? `CENTRAL · EXP. ${a.expedienteCentral}` : "VÍA CENTRAL",
+          bx, by0, "#e0e7ff", "#3730a3"
+        ) + 6;
+      }
       const secondaryBits: string[] = [];
       if (remolquePrincipal && a.plate) secondaryBits.push(`Tractora ${a.plate}`);
       if (!remolquePrincipal && a.plateRemolque) secondaryBits.push(`Remolque ${a.plateRemolque}`);
