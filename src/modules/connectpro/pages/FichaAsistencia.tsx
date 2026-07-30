@@ -147,7 +147,7 @@ export default function FichaAsistencia() {
               {["finished", "returning_to_workshop", "at_workshop"].includes(a.status) && (
                 <Button
                   variant="ghost" disabled={busy}
-                  onClick={() => abrirInforme(a.id, a.reportUrl).catch((e: any) => setError(e.message))}
+                  onClick={() => abrirInforme(a.id).catch((e: any) => setError(e.message))}
                 >
                   {a.reportUrl ? "Ver informe" : "Generar informe"}
                 </Button>

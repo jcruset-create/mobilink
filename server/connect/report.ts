@@ -413,7 +413,9 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
 
 /**
  * Genera el informe y lo guarda en la ficha de la asistencia (evidencia de
- * categoría "report"). Idempotente: regenerarlo sustituye la URL anterior.
+ * categoría "report"). Idempotente de verdad: la copia anterior se retira del
+ * almacenamiento y de la ficha, así que solo queda un informe vigente y nunca
+ * se sirve uno con un formato antiguo.
  */
 export async function generarYGuardarInforme(assistanceId: number): Promise<string | null> {
   try {
@@ -425,6 +427,21 @@ export async function generarYGuardarInforme(assistanceId: number): Promise<stri
     if (error) throw new Error(error.message);
     const { data: pub } = supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(ruta);
     const now = Date.now();
+
+    // Se retiran los informes anteriores antes de dejar el nuevo: primero de la
+    // ficha (lo que ve la central) y luego del almacenamiento. Si el borrado
+    // del fichero falla no se aborta nada: el informe vigente ya es el nuevo.
+    const previos = await db.query(
+      `UPDATE connect_assistance_files SET "deletedAtMs" = $2
+        WHERE "assistanceId" = $1 AND category = 'report' AND "deletedAtMs" IS NULL
+        RETURNING "storagePath"`,
+      [assistanceId, now],
+    );
+    const rutasViejas = previos.rows.map((f: any) => f.storagePath).filter(Boolean);
+    if (rutasViejas.length) {
+      try { await supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).remove(rutasViejas); }
+      catch { /* el fichero huérfano no impide nada */ }
+    }
 
     await db.query(
       `UPDATE connect_assistances SET "reportUrl" = $1, "reportAtMs" = $2 WHERE id = $3`,
