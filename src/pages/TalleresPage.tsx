@@ -21,7 +21,7 @@ type Taller = {
   nTecnicos: number;
   nUnidades: number;
 };
-type Empresa = { id: number; nombre: string; maxUnidadesMoviles: number };
+type Empresa = { id: number; nombre: string; maxUnidadesMoviles: number; unidadesEnUso: number };
 type Tech = { name: string; tallerId: number | null };
 type PanelUser = {
   userId: string;
@@ -190,7 +190,7 @@ export default function TalleresPage() {
             >
               <option value="">— Empresa (licencia) —</option>
               {empresas.map((emp) => (
-                <option key={emp.id} value={emp.id}>{emp.nombre} ({emp.maxUnidadesMoviles} uds.)</option>
+                <option key={emp.id} value={emp.id}>{emp.nombre} ({emp.unidadesEnUso}/{emp.maxUnidadesMoviles} uds.)</option>
               ))}
             </select>
             <input
@@ -214,6 +214,36 @@ export default function TalleresPage() {
             <Plus className="h-4 w-4" /> Crear taller
           </button>
         </section>
+
+        {/* Uso de licencia (unidades móviles) */}
+        {empresas.length > 0 && (
+          <section className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+            <div className="mb-2 flex items-center gap-2 text-sm font-black uppercase tracking-wide text-slate-300">
+              <ShieldCheck className="h-4 w-4" /> Licencia · unidades móviles
+            </div>
+            <div className="space-y-3">
+              {empresas.map((emp) => {
+                const pct = emp.maxUnidadesMoviles > 0
+                  ? Math.min(100, Math.round((emp.unidadesEnUso / emp.maxUnidadesMoviles) * 100))
+                  : 0;
+                const color = pct >= 100 ? "bg-red-500" : pct >= 80 ? "bg-amber-500" : "bg-emerald-500";
+                return (
+                  <div key={emp.id}>
+                    <div className="mb-1 flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-300">{emp.nombre}</span>
+                      <span className={pct >= 100 ? "font-bold text-red-400" : pct >= 80 ? "font-bold text-amber-400" : "text-slate-400"}>
+                        {emp.unidadesEnUso}/{emp.maxUnidadesMoviles} en uso
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-700">
+                      <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Lista de talleres */}
         <section className="rounded-xl border border-slate-700 bg-slate-800/60">
