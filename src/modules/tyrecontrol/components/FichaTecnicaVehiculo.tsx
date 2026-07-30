@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   listarDocumentosVehiculo, subirFichaTecnica, procesarOcrDocumento, aplicarFichaTecnica,
-  type DocumentoVehiculo, type ResultadoFichaTecnica, type CampoFicha, type EjeFicha,
+  listarCatalogoCamposFicha,
+  type DocumentoVehiculo, type ResultadoFichaTecnica, type CampoFicha, type EjeFicha, type CampoCatalogoFicha,
 } from "../services/data";
 import type { Vehiculo } from "../types";
 import { Modal, inputCls } from "./ui";
@@ -36,6 +37,7 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
   const [decisiones, setDecisiones] = useState<Record<string, Decision>>({});
   const [editados, setEditados] = useState<Record<string, string>>({});
   const [aplicando, setAplicando] = useState(false);
+  const [catalogo, setCatalogo] = useState<Map<string, CampoCatalogoFicha>>(new Map());
 
   async function cargar() {
     setCargando(true);
@@ -44,6 +46,11 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
     finally { setCargando(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [vehiculo.id]);
+  useEffect(() => {
+    listarCatalogoCamposFicha()
+      .then((filas) => setCatalogo(new Map(filas.map((f) => [f.clave, f]))))
+      .catch(() => setCatalogo(new Map()));
+  }, []);
 
   async function onArchivos(files: FileList | null) {
     if (!files?.length) return;
@@ -272,9 +279,12 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
                 {filas.map((f) => (
                   <tr key={f.id} className="border-t border-slate-700/60 align-top">
                     <td className="py-1 pr-2 text-slate-200">
-                      {f.conocido?.etiqueta ?? f.campo.etiqueta_origen ?? f.campo.clave ?? "—"}
+                      {f.conocido?.etiqueta ?? (f.campo.clave ? catalogo.get(f.campo.clave)?.descripcion : null)
+                        ?? f.campo.etiqueta_origen ?? f.campo.clave ?? "—"}
                     </td>
-                    <td className="py-1 pr-2 text-slate-500">{f.campo.codigo_origen ?? "—"}</td>
+                    <td className="py-1 pr-2 text-slate-500">
+                      {(f.campo.clave ? catalogo.get(f.campo.clave)?.codigo : null) ?? f.campo.codigo_origen ?? "—"}
+                    </td>
                     <td className="py-1 pr-2 text-slate-400 break-words">{f.actual ?? "—"}</td>
                     <td className="py-1 pr-2">
                       <input className={`${inputCls} text-[12px]`} value={editados[f.id] ?? f.detectado}
