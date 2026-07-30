@@ -40,6 +40,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^0.539.0",
     "multer": "^2.1.1",
+    "mupdf": "^1.28.0",
     "nodemailer": "^9.0.0",
     "openai": "^6.34.0",
     "pdf-parse": "^2.4.5",
