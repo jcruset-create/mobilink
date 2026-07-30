@@ -4474,26 +4474,58 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
     const data = await response.json();
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
-    // Cruzar con matrícula de nuestra BD
-    const dbVehicles = await db.query(
-      `SELECT "webfleetVehicleId", plate FROM roadside_vehicles WHERE "webfleetVehicleId" IS NOT NULL`
+    // Cruzar con nuestra BD: matrícula, taller y estado operativo.
+    // Multi-taller (fase 4): las furgonetas de OTROS talleres de la empresa se
+    // ven con estado + ubicación + técnico, pero sin el detalle de la
+    // asistencia (ni informe de seguimiento).
+    const dbVehicles = await db.query(`
+      SELECT rv."webfleetVehicleId", rv.plate, rv.name, rv."tallerId",
+             at.nombre AS "tallerNombre",
+             ra.id AS "asistenciaActivaId",
+             ra."assignedTechName" AS "techName"
+      FROM roadside_vehicles rv
+      LEFT JOIN assist_talleres at ON at.id = rv."tallerId"
+      LEFT JOIN LATERAL (
+        SELECT id, "assignedTechName"
+        FROM roadside_assistances a
+        WHERE a."assignedVehicleName" = rv.name
+          AND a.status IN ('asignada','en_camino','en_punto','inicio_reparacion','finalizada','en_camino_base')
+        ORDER BY a."createdAtMs" DESC
+        LIMIT 1
+      ) ra ON true
+      WHERE rv."webfleetVehicleId" IS NOT NULL
+    `);
+    const infoByWebfleetId = new Map<string, any>(
+      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r])
     );
-    const plateByWebfleetId = new Map<string, string>(
-      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r.plate])
-    );
+
+    // Taller del usuario del panel (si tiene taller fijo). Admin/superadmin o
+    // sin token → todo se trata como propio (compatibilidad).
+    const panelUser = await getAssistPanelUser(_req);
+    const miTallerId = panelUser && !panelUser.esAdmin ? panelUser.tallerId : null;
 
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     res.json(
-      vehicles.map((v: any) => ({
-        objectno: v.objectno,
-        objectname: v.objectname ?? v.objectno,
-        lat: Number(v.latitude_mdeg) / 1_000_000,
-        lng: Number(v.longitude_mdeg) / 1_000_000,
-        postext: v.postext_short ?? v.postext ?? null,
-        timestamp: v.pos_time ?? null,
-        plate: plateByWebfleetId.get(v.objectno) ?? null,
-        speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
-      }))
+      vehicles.map((v: any) => {
+        const info = infoByWebfleetId.get(v.objectno);
+        const tallerId = info?.tallerId != null ? Number(info.tallerId) : null;
+        const esPropio = miTallerId == null || tallerId == null || tallerId === miTallerId;
+        return {
+          objectno: v.objectno,
+          objectname: v.objectname ?? v.objectno,
+          lat: Number(v.latitude_mdeg) / 1_000_000,
+          lng: Number(v.longitude_mdeg) / 1_000_000,
+          postext: v.postext_short ?? v.postext ?? null,
+          timestamp: v.pos_time ?? null,
+          plate: info?.plate ?? null,
+          speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
+          tallerId,
+          tallerNombre: info?.tallerNombre ?? null,
+          esPropio,
+          estado: info?.asistenciaActivaId != null ? "trabajando" : "en_taller",
+          techName: info?.techName ?? null,
+        };
+      })
     );
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "Error listando vehículos Webfleet" });
