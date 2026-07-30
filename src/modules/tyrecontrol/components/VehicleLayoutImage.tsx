@@ -50,7 +50,7 @@ interface Props {
   montajes: MontajeActual[];
   editable: boolean;         // puede montar/desmontar/rotar
   puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
-  imagenFallback?: string | null; // imagen heredada de la configuración de ejes (si el tipo no tiene propia)
+  imagenConfig?: string | null; // imagen de la configuración de ejes: manda sobre la del tipo
   medidaPorPosicionId?: Record<string, string>; // medida configurada del vehículo por posición (para montar en vacío)
   onFicha?: (neumaticoId: string) => void;
   onChanged?: () => void;
@@ -75,11 +75,12 @@ function esDireccional(modelo?: string | null): boolean {
 }
 
 export default function VehicleLayoutImage({
-  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenFallback, medidaPorPosicionId, onFicha, onChanged, onTipoChanged, onOperaciones,
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, onFicha, onChanged, onTipoChanged, onOperaciones,
 }: Props) {
-  // Imagen efectiva del plano: la del tipo de vehículo si existe; si no,
-  // la heredada de la configuración de ejes del vehículo.
-  const imagenBase = tipo?.imagen_chasis_url ?? imagenFallback ?? null;
+  // Imagen efectiva del plano: manda la de la CONFIGURACIÓN DE EJES (un 2x4
+  // se dibuja igual sea tractora o camión); la del tipo solo si la
+  // configuración no tiene ninguna.
+  const imagenBase = imagenConfig ?? tipo?.imagen_chasis_url ?? null;
   const containerRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<Record<string, Coords>>({});
   const [ordenRev, setOrdenRev] = useState<Record<string, string>>({}); // posId → orden de revisión (texto)
@@ -395,7 +396,8 @@ export default function VehicleLayoutImage({
   if (!imagenBase && !calibrando) {
     return (
       <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-8 text-center text-sm text-slate-500">
-        Este vehículo no tiene imagen de chasis: ni el tipo ({tipo?.nombre ?? "—"}) ni su configuración de ejes tienen una asociada.
+        Este vehículo no tiene imagen de chasis. Súbela en Configuración → Configuración de ejes:
+        la comparten todos los vehículos con la misma configuración. Si no, se usa la del tipo ({tipo?.nombre ?? "—"}).
         {puedeCalibrar ? (
           <div className="mt-3">
             <button onClick={() => setCalibrando(true)} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white">Añadir imagen y calibrar posiciones</button>
