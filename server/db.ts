@@ -398,6 +398,49 @@ export async function initDb() {
       ON roadside_vehicles(active);
   `);
 
+  // ── Multi-taller Assist ──
+  // Una empresa (= licencia) puede tener varios talleres. Cada taller ve solo
+  // sus propias asistencias, pero puede ver el estado + ubicación + técnico de
+  // las unidades móviles de los demás talleres de la MISMA empresa.
+  // `licenseId` es el id de la fila `licenses` (empresa). Sin FK dura para no
+  // acoplar el orden de init entre db.ts y el módulo de licencias; se indexa.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assist_talleres (
+      id SERIAL PRIMARY KEY,
+      "licenseId" INTEGER,
+      nombre TEXT NOT NULL,
+      direccion TEXT,
+      telefono TEXT,
+      "codigoInterno" TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assist_talleres_license_idx
+      ON assist_talleres("licenseId");
+    CREATE INDEX IF NOT EXISTS assist_talleres_activo_idx
+      ON assist_talleres(activo);
+
+    -- El técnico pertenece a un taller (Assist multi-taller).
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    -- Taller real (assist_talleres.id) al que pertenece cada asistencia y cada
+    -- unidad móvil. Convive con el "workshopId" TEXT existente hasta migrar.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    CREATE INDEX IF NOT EXISTS roadside_assistances_taller_idx
+      ON roadside_assistances("tallerId");
+    CREATE INDEX IF NOT EXISTS roadside_vehicles_taller_idx
+      ON roadside_vehicles("tallerId");
+    CREATE INDEX IF NOT EXISTS techs_taller_idx
+      ON techs("tallerId");
+  `);
+
   // ── Órdenes de Trabajo de Flota (OTF) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS otf (
