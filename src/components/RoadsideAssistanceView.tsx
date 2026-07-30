@@ -28,6 +28,7 @@ import {
   Menu,
   Wifi,
   Truck,
+  Store,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
@@ -939,6 +940,12 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <Wifi className="h-4 w-4 shrink-0" /> Central
+          </a>
+          <a
+            href="/asistencias/talleres"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Store className="h-4 w-4 shrink-0" /> Talleres
           </a>
           <button
             type="button"
