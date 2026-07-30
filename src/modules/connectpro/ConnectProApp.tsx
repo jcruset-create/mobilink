@@ -8,7 +8,7 @@ import { ConnectAuthProvider, ConnectAccessGate, useConnectAuth } from "./contex
 import ConnectLayout from "./layouts/ConnectLayout";
 import Dashboard from "./pages/Dashboard";
 import Asistencias from "./pages/Asistencias";
-import AsistenciasActivas from "./pages/AsistenciasActivas";
+import ColasOperativas from "./pages/ColasOperativas";
 import NuevaAsistencia from "./pages/NuevaAsistencia";
 import FichaAsistencia from "./pages/FichaAsistencia";
 import Empresas from "./pages/Empresas";
@@ -50,7 +50,10 @@ export default function ConnectProApp() {
             <Route index element={<Home />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="asistencias" element={<Asistencias />} />
-            <Route path="activas" element={<AsistenciasActivas />} />
+            <Route path="colas" element={<ColasOperativas />} />
+            <Route path="colas/:cola" element={<ColasOperativas />} />
+            {/* La antigua vista de activas es ahora una pestaña más */}
+            <Route path="activas" element={<Navigate to="/connect/colas/activas" replace />} />
             <Route path="asistencias/:id" element={<FichaAsistencia />} />
             <Route path="nueva" element={<NuevaAsistencia />} />
             <Route path="ofertas" element={<Ofertas />} />

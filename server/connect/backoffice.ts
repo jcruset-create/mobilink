@@ -25,6 +25,7 @@ import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
 import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
+import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
 import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
 import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
@@ -369,17 +370,12 @@ export function createConnectBackofficeRouter(): Router {
         ORDER BY ca.priority = 'urgente' DESC, ca."createdAtMs" ASC`,
     );
 
-    const pending: any[] = [], assigning: any[] = [], active: any[] = [], attention: any[] = [];
+    const colas: Record<Cola, any[]> = { pending: [], assigning: [], active: [], attention: [] };
     for (const a of r.rows) {
-      const slaRisk = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) - now < 15 * 60_000;
-      const slaBreached = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) < now;
-      const row = { ...a, slaRisk, slaBreached };
-      if (["assignment_failed", "no_coverage"].includes(a.status) || slaBreached) attention.push(row);
-      else if (["draft", "pending"].includes(a.status)) pending.push(row);
-      else if (["searching", "awaiting_acceptance"].includes(a.status)) assigning.push(row);
-      else active.push(row);
+      const { cola, slaRisk, slaBreached } = clasificarCola(a, now);
+      colas[cola].push({ ...a, cola, slaRisk, slaBreached });
     }
-    res.json({ generated_at: now, pending, assigning, active, attention });
+    res.json({ generated_at: now, ...colas });
   });
 
   // Mapa operativo: asistencias activas + talleres + posición de técnicos
@@ -1252,14 +1248,19 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ url });
   });
 
-  // ── Asistencias activas (ventana operativa a pantalla completa) ──────────
+  // ── Colas operativas (ventanas a pantalla completa) ──────────────────────
 
   /**
-   * Todas las asistencias en curso con la información completa: quién la
-   * atiende, con qué furgoneta, tiempos de cada estado y contacto. Ordenadas
-   * cronológicamente (la más antigua primero: es la que más espera lleva).
+   * Todas las asistencias en juego con la información completa: quién la
+   * atiende, con qué furgoneta, tiempos de cada estado y contacto, más la cola
+   * que le corresponde. Ordenadas cronológicamente (la más antigua primero: es
+   * la que más espera lleva).
+   *
+   * Una sola consulta sirve las cinco pestañas, resumen incluido: filtrar por
+   * cola en el servidor obligaría a repetirla al cambiar de pestaña.
    */
-  router.get("/assistances/active", ...requireConnectRole("operator"), async (_req, res) => {
+  router.get("/assistances/queues", ...requireConnectRole("operator"), async (_req, res) => {
+    const now = Date.now();
     const r = await db.query(
       `SELECT ca.id, ca.uuid, ca.status, ca.priority, ca."serviceType", ca.address,
               ca."customerName", ca."customerPhone", ca."expedientNumber", ca."externalReference",
@@ -1279,17 +1280,24 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
                             WHERE rf."assistanceId" = ca."coreAssistanceId" AND rf.kind <> 'firma'), 0)) AS "files",
               (SELECT json_agg(json_build_object('toStatus', h."toStatus", 'occurredAtMs', h."occurredAtMs")
                         ORDER BY h.id)
-                 FROM connect_status_history h WHERE h."assistanceId" = ca.id) AS timeline
+                 FROM connect_status_history h WHERE h."assistanceId" = ca.id) AS timeline,
+              asg."acceptDeadlineMs"
          FROM connect_assistances ca
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
          LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-        WHERE ca.status NOT IN ('draft', 'finished', 'at_workshop', 'cancelled')
+         LEFT JOIN LATERAL (
+           SELECT "acceptDeadlineMs" FROM connect_assignments
+            WHERE "assistanceId" = ca.id AND status = 'sent' ORDER BY id DESC LIMIT 1
+         ) asg ON true
+        WHERE ca.status <> ALL ($1::text[])
         ORDER BY ca."createdAtMs" ASC`,
+      [ESTADOS_CERRADOS],
     );
-    res.json({ data: r.rows, generatedAtMs: Date.now() });
+    const data = r.rows.map((a: any) => ({ ...a, ...clasificarCola(a, now) }));
+    res.json({ data, generatedAtMs: now });
   });
 
   // ── Captura de WhatsApp (mismo número de entrada que Mobilink Assist) ────
