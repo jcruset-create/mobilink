@@ -22,6 +22,7 @@ import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/inde
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
+import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -13628,26 +13629,41 @@ app.post(
       await supabase.from("tc_vehiculo_documentos")
         .update({ ocr_estado: "procesando", ocr_error: null }).eq("id", docId);
 
-      // Páginas del documento → URLs firmadas para el modelo de visión.
+      // Páginas del documento → entradas para el modelo de visión.
       const { data: lista } = await supabase.storage
         .from(BUCKET_DOCS).list((doc as any).storage_path, { limit: 50, sortBy: { column: "name", order: "asc" } });
       const archivos = (lista ?? []).filter((f) => f.name && !f.name.startsWith("."));
+      if (!archivos.length) throw new Error("No se han podido leer las páginas del documento");
 
-      // El modelo lee imágenes, no PDF. Si se subió un PDF hay que capturar
-      // las páginas desde la tablet (o rasterizar antes de llamar aquí).
+      // El modelo lee imágenes, no PDF: si se subió un PDF se rasteriza aquí
+      // (mupdf, sin dependencias del sistema) y cada página pasa como imagen.
       const esPdf = archivos.some((f) => f.name.toLowerCase().endsWith(".pdf"));
-      if (esPdf) {
-        await supabase.from("tc_vehiculo_documentos")
-          .update({ ocr_estado: "error", ocr_error: "PDF sin rasterizar" }).eq("id", docId);
-        return res.status(422).json({
-          error: "De momento el OCR solo lee imágenes. Fotografía las páginas de la ficha técnica desde la tablet.",
-        });
-      }
-
       const urls: string[] = [];
-      for (const f of archivos) {
-        const u = await urlFirmadaDoc(`${(doc as any).storage_path}/${f.name}`);
-        if (u) urls.push(u);
+      if (esPdf) {
+        const nombrePdf = archivos.find((f) => f.name.toLowerCase().endsWith(".pdf"))!.name;
+        const { data: descarga, error: dlErr } = await supabase.storage
+          .from(BUCKET_DOCS).download(`${(doc as any).storage_path}/${nombrePdf}`);
+        if (dlErr || !descarga) throw new Error(dlErr?.message || "No se pudo descargar el PDF");
+        const buffer = Buffer.from(await descarga.arrayBuffer());
+
+        let paginas;
+        try {
+          paginas = rasterizarPdf(buffer);
+        } catch (e: any) {
+          await supabase.from("tc_vehiculo_documentos")
+            .update({ ocr_estado: "error", ocr_error: `PDF ilegible: ${e?.message}` }).eq("id", docId);
+          return res.status(422).json({
+            error: "No se ha podido leer el PDF (puede estar corrupto o protegido). Prueba a fotografiar las páginas desde la tablet.",
+          });
+        }
+        for (const p of paginas) urls.push(`data:image/png;base64,${p.png.toString("base64")}`);
+        await supabase.from("tc_vehiculo_documentos")
+          .update({ paginas: paginas.length }).eq("id", docId);
+      } else {
+        for (const f of archivos) {
+          const u = await urlFirmadaDoc(`${(doc as any).storage_path}/${f.name}`);
+          if (u) urls.push(u);
+        }
       }
       if (!urls.length) throw new Error("No se han podido leer las páginas del documento");
 
