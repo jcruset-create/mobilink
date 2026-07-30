@@ -93,7 +93,8 @@ function FilaConfigEjes({ config, puedeEditar, onCambio, tipos, marcas }: {
   }
 
   return (
-    <div className="rounded bg-slate-900">
+    // Desplegada ocupa toda la fila: en una columna estrecha las marcas no caben.
+    <div className={`rounded bg-slate-900 ${abierto ? "sm:col-span-2 lg:col-span-3" : ""}`}>
       <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-slate-300">
         {config.imagen_chasis_url ? (
           <img src={config.imagen_chasis_url} alt={config.nombre} className="h-8 w-8 rounded border border-slate-700 object-contain bg-slate-950" />
@@ -738,7 +739,11 @@ export default function Configuracion() {
             <button onClick={guardarConfig} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
           </div>
         )}
-        <div className="mb-2 text-[11px] text-slate-500">La imagen de chasis asociada a cada configuración la heredan todos los vehículos que la usen (si el tipo de vehículo tiene imagen propia, esa tiene prioridad).</div>
+        <div className="mb-2 text-[11px] text-slate-500">
+          La imagen de chasis de cada configuración la heredan todos los vehículos que la usen. Con
+          <b className="text-slate-300"> ▸ marcas</b> puedes poner una imagen distinta por marca (un 2x4 de MAN no
+          se dibuja como uno de Volvo); si la marca no tiene la suya, se usa la genérica de la configuración.
+        </div>
         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
           {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} tipos={tipos} marcas={marcasVeh} />)}
         </div>
