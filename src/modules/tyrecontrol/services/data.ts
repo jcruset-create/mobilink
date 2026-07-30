@@ -1161,6 +1161,21 @@ export async function subirFichaTecnicaNueva(empresaId: string, files: File[]): 
 /** Campo de la ficha técnica con su código oficial y descripción. */
 export interface CampoCatalogoFicha { codigo: string | null; clave: string; descripcion: string; unidad: string | null; }
 
+/** Dato técnico del vehículo sin columna propia (de la ficha técnica), ya validado. */
+export interface AtributoTecnicoVehiculo {
+  codigo_origen: string | null; etiqueta_origen: string | null; clave_normalizada: string | null;
+  valor_bruto: string | null; unidad: string | null;
+}
+
+export async function listarAtributosTecnicos(vehiculoId: string): Promise<AtributoTecnicoVehiculo[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select("codigo_origen, etiqueta_origen, clave_normalizada, valor_bruto, unidad")
+    .eq("vehiculo_id", vehiculoId).eq("estado", "validado")
+    .order("codigo_origen");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as AtributoTecnicoVehiculo[];
+}
+
 export async function listarCatalogoCamposFicha(): Promise<CampoCatalogoFicha[]> {
   const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica")
     .select("codigo, clave, descripcion, unidad").order("orden");
