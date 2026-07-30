@@ -99,7 +99,7 @@ export default function Asistencias() {
                       {ESTADOS_CERRADOS.includes(a.status) && a.status !== "cancelled" ? (
                         <button
                           className="rounded-lg border border-slate-600 px-2 py-1 text-[12px] text-cyan-300 hover:bg-slate-700"
-                          onClick={() => abrirInforme(a.id, a.reportUrl).catch((err) => setError(err.message))}
+                          onClick={() => abrirInforme(a.id).catch((err) => setError(err.message))}
                         >
                           {a.reportUrl ? "Ver informe" : "Generar informe"}
                         </button>

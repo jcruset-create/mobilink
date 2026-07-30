@@ -189,7 +189,7 @@ function TarjetaActiva({ a, onError }: { a: Activa; onError: (m: string) => void
             Llamar al taller
           </a>
         )}
-        <Button variant="ghost" onClick={() => abrirInforme(a.id, a.reportUrl).catch((e) => onError(e.message))}>
+        <Button variant="ghost" onClick={() => abrirInforme(a.id).catch((e) => onError(e.message))}>
           {a.reportUrl ? "Ver informe" : "Informe provisional"}
         </Button>
         {a.files > 0 && <span className="text-[12px] text-slate-500">{a.files} evidencia{a.files !== 1 ? "s" : ""}</span>}
