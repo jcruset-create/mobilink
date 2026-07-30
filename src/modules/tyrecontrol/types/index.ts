@@ -797,6 +797,14 @@ export interface MarcaNeumatico {
   es_recauchutado?: boolean | null;
 }
 
+/// Marca de vehículo (catálogo con logo). `tipo_ids` son los tipos de
+/// vehículo en los que aparece: una misma marca sirve para varios.
+export interface MarcaVehiculo {
+  id: string; nombre: string; activo: boolean;
+  logo_url?: string | null; pais_origen?: string | null; orden?: number;
+  tipo_ids: string[];
+}
+
 export interface MarcaContadores { id: string; num_modelos: number; num_neumaticos: number; num_vehiculos: number; }
 
 export interface TyreSize {

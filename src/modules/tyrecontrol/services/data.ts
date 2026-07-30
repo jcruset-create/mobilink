@@ -5,7 +5,7 @@ import type {
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
-  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
+  MarcaNeumatico, MarcaVehiculo, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   TipoIncidencia, TipoIncidenciaInput, MotivoPendiente, MotivoPendienteInput,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
@@ -1051,6 +1051,73 @@ export async function eliminarFabricante(id: string): Promise<void> {
 }
 
 const BUCKET_MARCAS = "tc-marcas";
+// ── Marcas de VEHÍCULO (catálogo por tipo, con logo) ────────────
+// Una marca puede servir para varios tipos (Mercedes-Benz es tractora,
+// camión, furgoneta y autobús), de ahí la tabla de relación.
+export async function listarMarcasVehiculo(tipoVehiculoId?: string): Promise<MarcaVehiculo[]> {
+  const { data, error } = await supabase.from("tc_cat_marcas_vehiculo")
+    .select("*, tipos:tc_cat_marcas_vehiculo_tipos(tipo_vehiculo_id)")
+    .eq("activo", true).order("orden").order("nombre");
+  if (error) throw new Error(error.message);
+  const marcas = ((data ?? []) as any[]).map((m) => ({
+    ...m, tipo_ids: (m.tipos ?? []).map((t: any) => t.tipo_vehiculo_id as string),
+  })) as MarcaVehiculo[];
+  return tipoVehiculoId ? marcas.filter((m) => m.tipo_ids.includes(tipoVehiculoId)) : marcas;
+}
+
+export async function crearMarcaVehiculo(nombre: string, tipoIds: string[] = []): Promise<string> {
+  const { data, error } = await supabase.from("tc_cat_marcas_vehiculo")
+    .insert({ nombre: nombre.trim() }).select("id").single();
+  if (error) throw new Error(error.message);
+  const id = (data as any).id as string;
+  if (tipoIds.length) await guardarTiposMarcaVehiculo(id, tipoIds);
+  return id;
+}
+
+export async function actualizarMarcaVehiculo(id: string, patch: {
+  nombre?: string; logo_url?: string | null; pais_origen?: string | null; activo?: boolean;
+}): Promise<void> {
+  const payload: Record<string, any> = {};
+  if (patch.nombre != null) payload.nombre = patch.nombre.trim();
+  if (patch.logo_url !== undefined) payload.logo_url = patch.logo_url;
+  if (patch.pais_origen !== undefined) payload.pais_origen = patch.pais_origen;
+  if (patch.activo !== undefined) payload.activo = patch.activo;
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo").update(payload).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/// Marca/desmarca un tipo de vehículo para una marca.
+export async function alternarTipoMarcaVehiculo(marcaId: string, tipoId: string, activar: boolean): Promise<void> {
+  if (activar) {
+    const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+      .upsert({ marca_id: marcaId, tipo_vehiculo_id: tipoId });
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+      .delete().eq("marca_id", marcaId).eq("tipo_vehiculo_id", tipoId);
+    if (error) throw new Error(error.message);
+  }
+}
+
+async function guardarTiposMarcaVehiculo(marcaId: string, tipoIds: string[]): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+    .upsert(tipoIds.map((t) => ({ marca_id: marcaId, tipo_vehiculo_id: t })));
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarMarcaVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function subirLogoMarcaVehiculo(marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `vehiculo/${marcaId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from(BUCKET_MARCAS).upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from(BUCKET_MARCAS).getPublicUrl(ruta).data.publicUrl;
+}
+
 export async function subirLogoMarca(marcaId: string, file: File): Promise<string> {
   const extension = file.name.split(".").pop() || "png";
   const ruta = `${marcaId}/${Date.now()}.${extension}`;

@@ -4,11 +4,12 @@ import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
   listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
+  listarMarcasVehiculo,
 } from "../services/data";
 import ModalNuevaMedida from "../components/ModalNuevaMedida";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
-  ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje,
+  ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje, MarcaVehiculo,
   EstadoWebfleet, VehiculoWebfleetEstado, RevisionEstado,
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
@@ -52,6 +53,10 @@ export default function Vehiculos() {
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [delegaciones, setDelegaciones] = useState<Delegacion[]>([]);
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
+  // Catálogo de marcas de vehículo: el desplegable de MARCA se filtra por el
+  // tipo elegido (tractora → MAN/Scania…, semirremolque → Krone/Schmitz…).
+  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
+  const [marcaLibre, setMarcaLibre] = useState(false);
   const [configEjes, setConfigEjes] = useState<ConfigEjes[]>([]);
   const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
@@ -104,6 +109,7 @@ export default function Vehiculos() {
     await refrescarWebfleet();
   }
   useEffect(() => { void cargar(); }, []);
+  useEffect(() => { listarMarcasVehiculo().then(setMarcasVeh).catch(() => setMarcasVeh([])); }, []);
 
   async function sincronizar() {
     setSincronizando(true); setMsg("");
@@ -367,12 +373,51 @@ export default function Vehiculos() {
             <TextField label="Matrícula *" value={modal.draft.matricula ?? ""} onChange={(v) => set({ matricula: v })} />
             <TextField label="Nº de unidad (flota)" value={modal.draft.numero_unidad ?? ""} onChange={(v) => set({ numero_unidad: v })} />
             <Field label="Tipo de vehículo">
-              <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => set({ tipo_vehiculo_id: e.target.value || null })}>
+              <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => { setMarcaLibre(false); set({ tipo_vehiculo_id: e.target.value || null }); }}>
                 <option value="">—</option>
                 {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
               </select>
             </Field>
-            <TextField label="Marca" value={modal.draft.marca ?? ""} onChange={(v) => set({ marca: v })} />
+            <Field label="Marca">
+              {(() => {
+                const tipoId = modal.draft.tipo_vehiculo_id ?? "";
+                const delTipo = tipoId ? marcasVeh.filter((m) => m.tipo_ids.includes(tipoId)) : [];
+                const actual = modal.draft.marca ?? "";
+                // Sin tipo elegido, o si la marca guardada no está en el
+                // catálogo, se escribe a mano para no bloquear el alta.
+                const enCatalogo = delTipo.some((m) => m.nombre === actual);
+                if (marcaLibre || !tipoId || (actual && !enCatalogo && delTipo.length === 0)) {
+                  return (
+                    <div className="flex gap-2">
+                      <input className={inputCls} value={actual} onChange={(e) => set({ marca: e.target.value })}
+                        placeholder={tipoId ? "Marca…" : "Elige antes el tipo de vehículo"} />
+                      {tipoId && (
+                        <button type="button" onClick={() => setMarcaLibre(false)}
+                          className="rounded border border-slate-600 px-2 text-[11px] text-slate-300">lista</button>
+                      )}
+                    </div>
+                  );
+                }
+                return (
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const logo = delTipo.find((m) => m.nombre === actual)?.logo_url;
+                      return logo ? <img src={logo} alt={actual} className="h-7 w-10 rounded border border-slate-700 bg-slate-950 object-contain" /> : null;
+                    })()}
+                    <select className={inputCls} value={enCatalogo ? actual : ""}
+                      onChange={(e) => {
+                        if (e.target.value === "__otra__") { setMarcaLibre(true); set({ marca: "" }); return; }
+                        set({ marca: e.target.value });
+                      }}>
+                      <option value="">—</option>
+                      {actual && !enCatalogo && <option value={actual}>{actual} (fuera de catálogo)</option>}
+                      {delTipo.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
+                      <option value="__otra__">Otra…</option>
+                    </select>
+                  </div>
+                );
+              })()}
+            </Field>
             <TextField label="Modelo" value={modal.draft.modelo ?? ""} onChange={(v) => set({ modelo: v })} />
             <TextField label="Bastidor" value={modal.draft.bastidor ?? ""} onChange={(v) => set({ bastidor: v })} />
 
