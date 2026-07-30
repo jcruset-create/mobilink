@@ -1502,6 +1502,50 @@ async function getRoadsideOperatorFromRequest(req: express.Request) {
   };
 }
 
+/**
+ * Multi-taller: resuelve el usuario del PANEL WEB (login del hub, Supabase) y
+ * su taller para aislar las asistencias. Best-effort: si no hay token válido
+ * devuelve null (y el llamante decide el comportamiento de compatibilidad).
+ *   - esAdmin: superadmin de plataforma O admin de asistencias (assist_panel_users).
+ *   - tallerId: taller fijo del usuario (si no es admin).
+ */
+type AssistPanelUser = {
+  userId: string;
+  username: string | null;
+  esAdmin: boolean;
+  tallerId: number | null;
+};
+async function getAssistPanelUser(req: express.Request): Promise<AssistPanelUser | null> {
+  const auth = String(req.headers.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return null;
+  let ctx;
+  try {
+    ctx = await resolveAuthContext(token);
+  } catch {
+    return null;
+  }
+  if (!ctx) return null;
+  let tallerId: number | null = null;
+  let esAdminPanel = false;
+  try {
+    const r = await db.query(
+      `SELECT "tallerId", "esAdmin" FROM assist_panel_users WHERE "userId" = $1`,
+      [ctx.userId]
+    );
+    if (r.rows.length) {
+      tallerId = r.rows[0].tallerId != null ? Number(r.rows[0].tallerId) : null;
+      esAdminPanel = r.rows[0].esAdmin === true;
+    }
+  } catch { /* tabla aún no migrada: tratamos como sin config */ }
+  return {
+    userId: ctx.userId,
+    username: ctx.username ?? null,
+    esAdmin: ctx.esSuperadmin === true || esAdminPanel,
+    tallerId,
+  };
+}
+
 function requireRoadsideOperator(
   req: express.Request,
   res: express.Response,
@@ -3864,26 +3908,126 @@ app.patch("/api/assist-talleres/tech/:name", requireSupervisorRole, async (req, 
   }
 });
 
+// Usuarios del panel web (hub) → taller. Superadmins siempre ven todo; aquí se
+// asigna el taller fijo del resto y se marca quién es admin de asistencias.
+app.get("/api/assist-panel-users", requireSupervisorRole, async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT u.id AS "userId", u.username, u.nombre, u.es_superadmin AS "esSuperadmin",
+             p."tallerId", COALESCE(p."esAdmin", false) AS "esAdmin"
+      FROM app_usuarios u
+      LEFT JOIN assist_panel_users p ON p."userId" = u.id
+      WHERE u.activo = true
+      ORDER BY u.nombre ASC NULLS LAST, u.username ASC
+    `);
+    res.json({
+      usuarios: r.rows.map((x: any) => ({
+        userId: x.userId,
+        username: x.username,
+        nombre: x.nombre ?? x.username,
+        esSuperadmin: x.esSuperadmin === true,
+        esAdmin: x.esAdmin === true,
+        tallerId: x.tallerId != null ? Number(x.tallerId) : null,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/assist-panel-users error:", error);
+    res.status(500).json({ error: "Error obteniendo usuarios del panel" });
+  }
+});
+
+// Asignar taller / marcar admin a un usuario del panel (upsert)
+app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, res) => {
+  try {
+    const userId = String(req.params.userId);
+    const tallerId = req.body?.tallerId != null ? Number(req.body.tallerId) : null;
+    const esAdmin = req.body?.esAdmin === true;
+    // Resolver username para dejarlo legible en la tabla de mapeo.
+    const u = await db.query(`SELECT username FROM app_usuarios WHERE id = $1`, [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: "Usuario no encontrado" });
+    await db.query(
+      `INSERT INTO assist_panel_users ("userId", username, "tallerId", "esAdmin", "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT ("userId") DO UPDATE
+         SET username = EXCLUDED.username,
+             "tallerId" = EXCLUDED."tallerId",
+             "esAdmin" = EXCLUDED."esAdmin",
+             "updatedAtMs" = EXCLUDED."updatedAtMs"`,
+      [userId, u.rows[0].username ?? null, tallerId, esAdmin, Date.now()]
+    );
+    res.json({ ok: true, userId, tallerId, esAdmin });
+  } catch (error) {
+    console.error("PATCH /api/assist-panel-users/:userId error:", error);
+    res.status(500).json({ error: "Error asignando taller al usuario" });
+  }
+});
+
 app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
 
-    const result = await db.query(`
-      SELECT *
-      FROM roadside_assistances
-      ${
-        includeClosed
-          ? ""
-          : `WHERE status NOT IN ('llegada_taller', 'cancelada')`
+    // Aislamiento multi-taller. Reglas:
+    //  - Admin (superadmin / admin de asistencias): respeta ?tallerId= del
+    //    selector; sin parámetro ve todos los talleres.
+    //  - Usuario con taller fijo: se fuerza su taller (ignora ?tallerId=).
+    //  - Usuario sin taller y no admin: no ve ninguna asistencia (estricto).
+    //  - Sin token (compatibilidad durante la transición): ve todo.
+    const panelUser = await getAssistPanelUser(req);
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (!includeClosed) {
+      conditions.push(`status NOT IN ('llegada_taller', 'cancelada')`);
+    }
+
+    if (panelUser) {
+      if (panelUser.esAdmin) {
+        const sel = req.query.tallerId != null ? Number(req.query.tallerId) : NaN;
+        if (Number.isFinite(sel)) {
+          conditions.push(`"tallerId" = $${idx++}`);
+          params.push(sel);
+        }
+        // sin selección → todos los talleres
+      } else if (panelUser.tallerId != null) {
+        conditions.push(`"tallerId" = $${idx++}`);
+        params.push(panelUser.tallerId);
+      } else {
+        // Sin taller y sin ser admin: no ve nada.
+        return res.json([]);
       }
-      ORDER BY "createdAtMs" DESC
-      LIMIT 200
-    `);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const result = await db.query(
+      `SELECT * FROM roadside_assistances ${where} ORDER BY "createdAtMs" DESC LIMIT 200`,
+      params
+    );
 
     res.json(result.rows.map(normalizeRoadsideAssistanceRow));
   } catch (error) {
     console.error("GET /api/roadside-assistances error:", error);
     res.status(500).json({ error: "Error obteniendo asistencias" });
+  }
+});
+
+// Contexto del usuario del panel para pintar (o no) el selector de taller.
+app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
+  try {
+    const panelUser = await getAssistPanelUser(req);
+    const talleres = await db.query(
+      `SELECT id, nombre FROM assist_talleres WHERE activo = true ORDER BY nombre ASC`
+    );
+    res.json({
+      esAdmin: panelUser?.esAdmin ?? false,
+      tallerId: panelUser?.tallerId ?? null,
+      // Sin token (transición) tratamos como admin para no romper la vista.
+      sinContexto: panelUser == null,
+      talleres: talleres.rows.map((r: any) => ({ id: Number(r.id), nombre: r.nombre })),
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/mi-contexto error:", error);
+    res.status(500).json({ error: "Error obteniendo contexto" });
   }
 });
 
@@ -14014,10 +14158,27 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
 
     const aplicado: string[] = [];
 
-    // 1) Campos del vehículo aceptados (solo columnas conocidas).
-    const COLUMNAS: Record<string, string> = {
+    // 1) Campos del vehículo aceptados: cada clave del catálogo tiene su
+    //    columna propia y tipada (texto, entero, numérico o fecha) — no se
+    //    guarda como texto libre salvo lo que quede fuera del catálogo.
+    const COLUMNAS_TEXTO: Record<string, string> = {
       marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
-      fecha_primera_matriculacion: "fecha_matriculacion",
+      tipo: "tipo_ficha", variante: "variante", version: "version",
+      denominacion_comercial: "denominacion_comercial", fabricante: "fabricante",
+      categoria: "categoria", clasificacion: "clasificacion", carroceria: "carroceria",
+      num_homologacion: "num_homologacion", combustible: "combustible", norma_emisiones: "norma_emisiones",
+    };
+    const COLUMNAS_ENTERO: Record<string, string> = {
+      num_ejes: "num_ejes", num_ruedas: "num_ruedas", ejes_motrices: "ejes_motrices", num_cilindros: "num_cilindros",
+    };
+    const COLUMNAS_NUMERICO: Record<string, string> = {
+      distancia_ejes: "distancia_ejes", via: "via", mma: "mma", masa_maxima_conjunto: "masa_maxima_conjunto",
+      masa_orden_marcha: "masa_orden_marcha", tara: "tara", masa_remolcable: "masa_remolcable",
+      longitud: "longitud", anchura: "anchura", altura: "altura", cilindrada: "cilindrada",
+      potencia: "potencia", nivel_sonoro: "nivel_sonoro",
+    };
+    const COLUMNAS_FECHA: Record<string, string> = {
+      fecha_primera_matriculacion: "fecha_matriculacion", fecha_emision: "fecha_emision",
     };
     // "25/10/2017" → "2017-10-25". Una fecha en formato no ISO rompe el
     // guardado (columna date de Postgres): mejor no aplicarla que romperlo.
@@ -14027,16 +14188,20 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
       const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
       return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
     };
+    // De un valor como "315/70R22.5" o "18.500 kg" se queda solo con el
+    // primer número: si no hay un número reconocible, no se aplica.
+    const numero = (v: string): number | null => {
+      const m = String(v).replace(",", ".").match(/-?\d+(\.\d+)?/);
+      return m ? Number(m[0]) : null;
+    };
     const patch: Record<string, any> = {};
     for (const [clave, valor] of Object.entries(campos ?? {})) {
-      const col = COLUMNAS[clave];
-      if (!col || valor == null || String(valor).trim() === "") continue;
-      if (col === "fecha_matriculacion") {
-        const iso = fechaIso(String(valor));
-        if (iso) patch[col] = iso;
-      } else {
-        patch[col] = String(valor).trim();
-      }
+      if (valor == null || String(valor).trim() === "") continue;
+      const texto = String(valor).trim();
+      if (COLUMNAS_TEXTO[clave]) patch[COLUMNAS_TEXTO[clave]] = texto;
+      else if (COLUMNAS_ENTERO[clave]) { const n = numero(texto); if (n != null) patch[COLUMNAS_ENTERO[clave]] = Math.round(n); }
+      else if (COLUMNAS_NUMERICO[clave]) { const n = numero(texto); if (n != null) patch[COLUMNAS_NUMERICO[clave]] = n; }
+      else if (COLUMNAS_FECHA[clave]) { const iso = fechaIso(texto); if (iso) patch[COLUMNAS_FECHA[clave]] = iso; }
     }
     if (configuracionConvencional) {
       patch.config_convencional = String(configuracionConvencional).trim();

@@ -439,6 +439,19 @@ export async function initDb() {
       ON roadside_vehicles("tallerId");
     CREATE INDEX IF NOT EXISTS techs_taller_idx
       ON techs("tallerId");
+
+    -- Aislamiento del panel web por taller: mapea el usuario del hub (Supabase
+    -- auth user id) a su taller. "esAdmin" = ve todos los talleres (selector).
+    -- Se combina con app_usuarios.es_superadmin (que también da acceso total).
+    CREATE TABLE IF NOT EXISTS assist_panel_users (
+      "userId" TEXT PRIMARY KEY,
+      username TEXT,
+      "tallerId" INTEGER,
+      "esAdmin" BOOLEAN NOT NULL DEFAULT false,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assist_panel_users_taller_idx
+      ON assist_panel_users("tallerId");
   `);
 
   // ── Órdenes de Trabajo de Flota (OTF) ──

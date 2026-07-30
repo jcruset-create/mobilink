@@ -5,6 +5,7 @@ import type { Intervencion, AtributoTecnicoVehiculo, CampoCatalogoFicha } from "
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
+import { columnaDe } from "../services/fichaTecnicaCampos";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -119,7 +120,9 @@ export default function VehiculoDetalle() {
           {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
         </div>
         {/* Todos los campos de la ficha técnica, siempre visibles: el OCR los
-            va rellenando, no hace falta que ya tengan dato para aparecer. */}
+            va rellenando, no hace falta que ya tengan dato para aparecer.
+            El valor sale de la columna propia del vehículo; solo lo que quede
+            fuera del catálogo vive en tc_vehiculo_atributos_tecnicos. */}
         {catalogoFicha.length > 0 && (() => {
           // Ya cubiertos arriba con columna propia: no se repiten aquí.
           const CUBIERTOS = new Set(["matricula", "marca", "modelo", "vin", "bastidor", "fecha_primera_matriculacion"]);
@@ -130,12 +133,19 @@ export default function VehiculoDetalle() {
               <div className="mb-2 mt-3 text-[11px] font-bold uppercase text-slate-400">Datos de la ficha técnica</div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {filas.map((c) => {
-                  const a = porClave.get(c.clave);
+                  const col = columnaDe(c.clave);
+                  const propio = col ? (v as any)[col] : null;
+                  const val = propio ?? porClave.get(c.clave)?.valor_bruto ?? null;
+                  const texto = val == null || val === "" ? null : String(val);
+                  // P.2 potencia: la ficha la da en kW, pero se trabaja en CV.
+                  const cv = c.clave === "potencia" && typeof propio === "number"
+                    ? Math.round(propio * 1.35962) : null;
                   return (
                     <div key={c.clave}>
                       <div className="text-[10px] text-slate-400">{c.codigo ? `${c.codigo} · ` : ""}{c.descripcion}</div>
                       <div className="text-sm text-slate-200">
-                        {a?.valor_bruto || "—"}{a?.valor_bruto && c.unidad ? ` ${c.unidad}` : ""}
+                        {texto ?? "—"}{texto && c.unidad ? ` ${c.unidad}` : ""}
+                        {cv != null && <span className="text-slate-400"> · {cv} CV</span>}
                       </div>
                     </div>
                   );
