@@ -1131,6 +1131,7 @@ export async function aplicarFichaTecnica(documentoId: string, cambios: {
   configuracion?: string | null;
   configuracionConvencional?: string | null;
   atributos?: CampoFicha[];
+  vehiculoId?: string;
 }): Promise<{ aplicado: string[] }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/aplicar`, {
     method: "POST",
@@ -1140,6 +1141,31 @@ export async function aplicarFichaTecnica(documentoId: string, cambios: {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as any)?.error || "Error aplicando los cambios");
   return j as any;
+}
+
+/** Sube una ficha técnica SIN vehículo: para crear el vehículo directamente a partir del documento. */
+export async function subirFichaTecnicaNueva(empresaId: string, files: File[]): Promise<{ documento: { id: string } }> {
+  const fd = new FormData();
+  fd.append("empresaId", empresaId);
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/nueva-ficha`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error subiendo la ficha técnica");
+  return j as any;
+}
+
+/** Campo de la ficha técnica con su código oficial y descripción. */
+export interface CampoCatalogoFicha { codigo: string | null; clave: string; descripcion: string; unidad: string | null; }
+
+export async function listarCatalogoCamposFicha(): Promise<CampoCatalogoFicha[]> {
+  const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica")
+    .select("codigo, clave, descripcion, unidad").order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CampoCatalogoFicha[];
 }
 
 // ── Marcas de VEHÍCULO (catálogo por tipo, con logo) ────────────

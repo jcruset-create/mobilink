@@ -4,9 +4,10 @@ import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
   listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
-  listarMarcasVehiculo,
+  listarMarcasVehiculo, aplicarFichaTecnica,
 } from "../services/data";
 import ModalNuevaMedida from "../components/ModalNuevaMedida";
+import CrearVehiculoDesdeFicha, { type PendienteFicha } from "../components/CrearVehiculoDesdeFicha";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
   ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje, MarcaVehiculo,
@@ -72,6 +73,8 @@ export default function Vehiculos() {
 
   const [modal, setModal] = useState<null | ModalState>(null);
   const [saving, setSaving] = useState(false);
+  const [crearDesdeFicha, setCrearDesdeFicha] = useState(false);
+  const [pendienteFicha, setPendienteFicha] = useState<PendienteFicha | null>(null);
 
   // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
@@ -213,12 +216,26 @@ export default function Vehiculos() {
     setSaving(true);
     try {
       let vehiculoId = modal.id;
+      const esNuevo = !vehiculoId;
       if (vehiculoId) await actualizarVehiculo(vehiculoId, d);
       else vehiculoId = await crearVehiculo(d);
       if (d.medidas_por_eje && vehiculoId) {
         await guardarEjesVehiculo(vehiculoId, modal.ejes);
       }
-      setModal(null); setMsg("✔ Guardado"); await cargar();
+      let avisoFicha = "";
+      if (esNuevo && vehiculoId && pendienteFicha) {
+        try {
+          await aplicarFichaTecnica(pendienteFicha.docId, {
+            ejes: pendienteFicha.ejes,
+            configuracion: pendienteFicha.configuracion,
+            atributos: pendienteFicha.atributos,
+            vehiculoId,
+          });
+        } catch (e: any) {
+          avisoFicha = ` (el vehículo se creó, pero no se pudieron guardar todos los datos de la ficha: ${e?.message || "error"})`;
+        }
+      }
+      setModal(null); setPendienteFicha(null); setMsg(`✔ Guardado${avisoFicha}`); await cargar();
     } catch (e: any) {
       setMsg(/duplicate|unique/i.test(e?.message || "") ? "Ya existe un vehículo con esa matrícula en la empresa." : (e?.message || "Error"));
     } finally { setSaving(false); }
@@ -247,7 +264,7 @@ export default function Vehiculos() {
           <button onClick={sincronizar} disabled={sincronizando} className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
             {sincronizando ? "Sincronizando…" : "↻ Sincronizar Webfleet"}
           </button>
-          <button onClick={() => setModal({ id: null, draft: { ...VACIO }, ejes: [] })} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
+          <button onClick={() => { setPendienteFicha(null); setModal({ id: null, draft: { ...VACIO }, ejes: [] }); }} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
         </div>
       </div>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
@@ -352,11 +369,22 @@ export default function Vehiculos() {
       </TableWrap>
 
       {modal && (
-        <Modal title={modal.id ? "Editar vehículo" : "Nuevo vehículo"} onClose={() => setModal(null)}
+        <Modal title={modal.id ? "Editar vehículo" : "Nuevo vehículo"} onClose={() => { setModal(null); setPendienteFicha(null); }}
           footer={<div className="flex justify-end gap-2">
-            <button onClick={() => setModal(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={() => { setModal(null); setPendienteFicha(null); }} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
             <button onClick={guardar} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Guardando…" : "Guardar"}</button>
           </div>}>
+          {!modal.id && (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-sky-700/50 bg-sky-950/30 p-2">
+              <button type="button" onClick={() => setCrearDesdeFicha(true)} disabled={!modal.draft.empresa_id}
+                className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
+                📎 Crear desde ficha técnica (PDF/foto)
+              </button>
+              <span className="text-[11px] text-slate-400">
+                {modal.draft.empresa_id ? (pendienteFicha ? "Datos de la ficha listos para guardar." : "Rellena el resto a mano o adjunta la ficha.") : "Elige antes la empresa."}
+              </span>
+            </div>
+          )}
           <div className="grid gap-2 sm:grid-cols-2">
             <Field label="Empresa *">
               <select className={inputCls} value={modal.draft.empresa_id} onChange={(e) => set({ empresa_id: e.target.value, delegacion_id: null })}>
@@ -512,6 +540,21 @@ export default function Vehiculos() {
 
       {modalMedida && (
         <ModalNuevaMedida onClose={() => setModalMedida(null)} onCreated={medidaCreada} />
+      )}
+
+      {crearDesdeFicha && modal && (
+        <CrearVehiculoDesdeFicha
+          empresaId={modal.draft.empresa_id}
+          tipos={tipos}
+          configEjes={configEjes}
+          matriculasExistentes={new Set(items.map((v) => v.matricula.toUpperCase()))}
+          onClose={() => setCrearDesdeFicha(false)}
+          onListo={(draft, pendiente) => {
+            setModal({ ...modal, draft: { ...modal.draft, ...draft } });
+            setPendienteFicha(pendiente);
+            setCrearDesdeFicha(false);
+          }}
+        />
       )}
 
       {/* Popup de detalle del estado Webfleet */}
