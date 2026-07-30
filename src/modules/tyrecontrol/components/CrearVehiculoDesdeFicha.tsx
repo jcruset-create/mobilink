@@ -4,17 +4,8 @@ import {
   type ResultadoFichaTecnica, type CampoFicha, type EjeFicha, type CampoCatalogoFicha,
 } from "../services/data";
 import type { TipoVehiculo, ConfigEjes, VehiculoInput } from "../types";
+import { COLUMNAS_TEXTO, COLUMNAS_ENTERO, COLUMNAS_NUMERICO, COLUMNAS_FECHA, numeroDe, fechaIso } from "../services/fichaTecnicaCampos";
 import { Modal, inputCls } from "./ui";
-
-/** "25/10/2017" o "25-10-2017" → "2017-10-25". Si no se reconoce, null
- *  (mejor no aplicar la fecha que romper el guardado con un formato inválido). */
-function fechaIso(v: string): string | null {
-  const s = v.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
-  if (!m) return null;
-  return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-}
 
 export interface PendienteFicha {
   docId: string;
@@ -101,17 +92,13 @@ export default function CrearVehiculoDesdeFicha({ empresaId, tipos, configEjes, 
     const atributos: CampoFicha[] = [];
     resultado.campos.forEach((c, i) => {
       const v = valor(c, i);
-      if (!incluido(c, i) || !v?.trim()) return;
-      if (c.clave === "marca") draft.marca = v;
-      else if (c.clave === "modelo") draft.modelo = v;
-      else if (c.clave === "vin" || c.clave === "bastidor") draft.bastidor = v;
-      else if (c.clave === "fecha_primera_matriculacion") {
-        const iso = fechaIso(v);
-        if (iso) draft.fecha_matriculacion = iso;
-        else atributos.push({ ...c, valor: v }); // formato no reconocido: no se pierde, queda como dato técnico
-      }
-      else if (c.clave === "matricula") { /* ya asignada arriba */ }
-      else atributos.push({ ...c, valor: v });
+      if (!incluido(c, i) || !v?.trim() || c.clave === "matricula") return;
+      const clave = c.clave ?? "";
+      if (COLUMNAS_TEXTO[clave]) (draft as any)[COLUMNAS_TEXTO[clave]] = v;
+      else if (COLUMNAS_ENTERO[clave]) { const n = numeroDe(v); if (n != null) (draft as any)[COLUMNAS_ENTERO[clave]] = Math.round(n); else atributos.push({ ...c, valor: v }); }
+      else if (COLUMNAS_NUMERICO[clave]) { const n = numeroDe(v); if (n != null) (draft as any)[COLUMNAS_NUMERICO[clave]] = n; else atributos.push({ ...c, valor: v }); }
+      else if (COLUMNAS_FECHA[clave]) { const iso = fechaIso(v); if (iso) (draft as any)[COLUMNAS_FECHA[clave]] = iso; else atributos.push({ ...c, valor: v }); }
+      else atributos.push({ ...c, valor: v }); // fuera del catálogo: no se pierde, queda como dato técnico
     });
 
     // La config de ejes se resuelve por nombre en el catálogo ya cargado (si
