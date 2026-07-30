@@ -13215,6 +13215,39 @@ function requireTyreControlUser(
   });
 }
 
+// Igual que requireTyreControlUser pero para el DASHBOARD WEB (acceso_panel),
+// no la APK (acceso_apk) — la ficha técnica se sube desde la web, y un
+// administrador que solo usa el panel no tiene por qué tener acceso_apk.
+function requireTyreControlPanelUser(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const authHeader = String(req.headers["authorization"] ?? "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "No autenticado" });
+
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("id, acceso_panel, es_superadmin, activo")
+      .eq("id", data.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.activo || (!perfil.acceso_panel && !perfil.es_superadmin)) {
+      return res.status(403).json({ error: "Sin acceso al panel" });
+    }
+
+    (req as any).tyreControlUserId = data.user.id;
+    next();
+  })().catch((error) => {
+    console.error("requireTyreControlPanelUser error:", error);
+    res.status(500).json({ error: "Error de autenticación" });
+  });
+}
+
 // Login unificado: el técnico usa el MISMO nombre + PIN que en la app
 // de asistencias (tabla techs / roadsideOperatorCode). Este endpoint
 // valida ese PIN y crea/sincroniza por detrás el usuario de Supabase
@@ -13533,7 +13566,7 @@ async function vehiculoDeUsuario(vehiculoId: string): Promise<{ id: string; empr
 // una misma subida = un solo documento.
 app.post(
   "/api/tyrecontrol/vehiculos/:id/ficha-tecnica",
-  requireTyreControlUser,
+  requireTyreControlPanelUser,
   upload.array("files", 12),
   async (req, res) => {
     try {
@@ -13612,7 +13645,7 @@ app.post(
 // Procesa el OCR del documento y devuelve los datos detectados SIN aplicarlos.
 app.post(
   "/api/tyrecontrol/documentos/:id/ocr",
-  requireTyreControlUser,
+  requireTyreControlPanelUser,
   async (req, res) => {
     const docId = String(req.params.id);
     try {
@@ -13728,7 +13761,7 @@ app.post(
 
 // Aplica los cambios YA REVISADOS por el técnico. Nunca se aplica nada que
 // no haya pasado por la pantalla de revisión: aquí solo llega lo aceptado.
-app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlUser, async (req, res) => {
+app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser, async (req, res) => {
   try {
     const docId = String(req.params.id);
     const userId = (req as any).tyreControlUserId as string;
@@ -13831,7 +13864,7 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlUser, asyn
 });
 
 // Documentos de un vehículo (con URL firmada de la primera página).
-app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlUser, async (req, res) => {
+app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlPanelUser, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("tc_vehiculo_documentos")
