@@ -3553,6 +3553,71 @@ app.get("/api/roadside-vehicles", protectWhenStrict(authenticate), async (req, r
   }
 });
 
+/**
+ * Fase 5 multi-taller: la licencia (= empresa) limita el nº de unidades
+ * móviles ACTIVAS entre todos sus talleres (licenses.maxUnidadesMoviles).
+ *
+ * Resuelve el taller de la furgoneta (tallerId explícito o por nombre de la
+ * base) y comprueba el cupo de su licencia. `excludeVehicleId` evita contarse
+ * a sí misma al editar. Sin taller/licencia resoluble no se limita (compat).
+ */
+async function resolveVehicleTallerId(body: any): Promise<number | null> {
+  if (body?.tallerId != null && Number.isFinite(Number(body.tallerId))) {
+    return Number(body.tallerId);
+  }
+  const base = body?.base ? String(body.base).trim() : "";
+  if (!base) return null;
+  const r = await db.query(
+    `SELECT id FROM assist_talleres WHERE activo = true AND LOWER(nombre) = LOWER($1) LIMIT 1`,
+    [base]
+  );
+  return r.rows.length ? Number(r.rows[0].id) : null;
+}
+
+async function checkUnidadesMovilesLicense(
+  tallerId: number | null,
+  excludeVehicleId?: number
+): Promise<{ allowed: boolean; error?: string; aviso?: string }> {
+  if (tallerId == null) return { allowed: true };
+  const lic = await db.query(
+    `SELECT l.id, l."maxUnidadesMoviles",
+            COALESCE(NULLIF(l."companyName", ''), l."customerName") AS empresa
+     FROM assist_talleres t
+     JOIN licenses l ON l.id = t."licenseId"
+     WHERE t.id = $1`,
+    [tallerId]
+  );
+  if (!lic.rows.length) return { allowed: true };
+  const max = Number(lic.rows[0].maxUnidadesMoviles ?? 0);
+  if (!Number.isFinite(max) || max <= 0) return { allowed: true };
+
+  const cnt = await db.query(
+    `SELECT COUNT(*)::int AS n
+     FROM roadside_vehicles v
+     JOIN assist_talleres t ON t.id = v."tallerId"
+     WHERE t."licenseId" = $1 AND v.active = true
+       AND ($2::int IS NULL OR v.id <> $2)`,
+    [lic.rows[0].id, excludeVehicleId ?? null]
+  );
+  const enUso = Number(cnt.rows[0].n);
+  const empresa = lic.rows[0].empresa;
+
+  if (enUso >= max) {
+    return {
+      allowed: false,
+      error: `Límite de licencia alcanzado: ${empresa} tiene ${enUso}/${max} unidades móviles activas. Amplía la licencia o desactiva otra unidad.`,
+    };
+  }
+  const tras = enUso + 1;
+  if (tras >= max * 0.8) {
+    return {
+      allowed: true,
+      aviso: `Licencia de ${empresa}: ${tras}/${max} unidades móviles en uso.`,
+    };
+  }
+  return { allowed: true };
+}
+
 app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
   try {
     const body = req.body ?? {};
@@ -3561,6 +3626,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
 
     if (!name) {
       return res.status(400).json({ error: "El nombre es obligatorio" });
+    }
+
+    const tallerId = await resolveVehicleTallerId(body);
+    const activa = body.active !== false;
+    let avisoLicencia: string | undefined;
+    if (activa) {
+      const check = await checkUnidadesMovilesLicense(tallerId);
+      if (!check.allowed) return res.status(409).json({ error: check.error, code: "LICENSE_UNITS_LIMIT" });
+      avisoLicencia = check.aviso;
     }
 
     const result = await db.query(
@@ -3576,10 +3650,11 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
           "esTaller",
           notes,
           active,
+          "tallerId",
           "createdAtMs",
           "updatedAtMs"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
         RETURNING *
       `,
       [
@@ -3592,12 +3667,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
         body.modelo ? String(body.modelo).trim() : null,
         body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
-        body.active !== false,
+        activa,
+        tallerId,
         now,
       ]
     );
 
-    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    const payload: any = normalizeRoadsideVehicleRow(result.rows[0]);
+    if (avisoLicencia) payload.avisoLicencia = avisoLicencia;
+    res.json(payload);
   } catch (error) {
     console.error("POST /api/roadside-vehicles error:", error);
     res.status(500).json({ error: "Error creando furgoneta" });
@@ -3619,6 +3697,16 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
       return res.status(400).json({ error: "El nombre es obligatorio" });
     }
 
+    const tallerId = await resolveVehicleTallerId(body);
+    const activa = body.active !== false;
+    let avisoLicencia: string | undefined;
+    if (activa) {
+      // Al editar, la propia furgoneta no cuenta contra el cupo.
+      const check = await checkUnidadesMovilesLicense(tallerId, id);
+      if (!check.allowed) return res.status(409).json({ error: check.error, code: "LICENSE_UNITS_LIMIT" });
+      avisoLicencia = check.aviso;
+    }
+
     const result = await db.query(
       `
         UPDATE roadside_vehicles
@@ -3633,7 +3721,8 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
           "esTaller" = $9,
           notes = $10,
           active = $11,
-          "updatedAtMs" = $12
+          "tallerId" = $12,
+          "updatedAtMs" = $13
         WHERE id = $1
         RETURNING *
       `,
@@ -3648,7 +3737,8 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
         body.modelo ? String(body.modelo).trim() : null,
         body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
-        body.active !== false,
+        activa,
+        tallerId,
         now,
       ]
     );
@@ -3657,7 +3747,9 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
       return res.status(404).json({ error: "Furgoneta no encontrada" });
     }
 
-    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    const payload: any = normalizeRoadsideVehicleRow(result.rows[0]);
+    if (avisoLicencia) payload.avisoLicencia = avisoLicencia;
+    res.json(payload);
   } catch (error) {
     console.error("PUT /api/roadside-vehicles/:id error:", error);
     res.status(500).json({ error: "Error actualizando furgoneta" });
@@ -3800,10 +3892,13 @@ app.get("/api/assist-talleres", requireSupervisorRole, async (_req, res) => {
         ORDER BY t.activo DESC, t.nombre ASC
       `),
       db.query(`
-        SELECT id,
-               COALESCE(NULLIF("companyName", ''), "customerName") AS nombre,
-               "maxUnidadesMoviles"
-        FROM licenses
+        SELECT l.id,
+               COALESCE(NULLIF(l."companyName", ''), l."customerName") AS nombre,
+               l."maxUnidadesMoviles",
+               (SELECT COUNT(*) FROM roadside_vehicles v
+                JOIN assist_talleres t ON t.id = v."tallerId"
+                WHERE t."licenseId" = l.id AND v.active = true) AS "unidadesEnUso"
+        FROM licenses l
         ORDER BY nombre ASC
       `),
       db.query(`SELECT name, "tallerId" FROM techs ORDER BY name ASC`),
@@ -3825,6 +3920,7 @@ app.get("/api/assist-talleres", requireSupervisorRole, async (_req, res) => {
         id: Number(r.id),
         nombre: r.nombre,
         maxUnidadesMoviles: Number(r.maxUnidadesMoviles ?? 0),
+        unidadesEnUso: Number(r.unidadesEnUso ?? 0),
       })),
       techs: techs.rows.map((r) => ({
         name: r.name,
