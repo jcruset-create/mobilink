@@ -8,6 +8,7 @@
  */
 
 import PDFDocument from "pdfkit";
+import sharp from "sharp";
 import path from "node:path";
 import fs from "node:fs";
 import db from "../db.ts";
@@ -32,12 +33,48 @@ function safeParse(v: unknown): any {
   try { return typeof v === "string" ? JSON.parse(v) : (v ?? {}); } catch { return {}; }
 }
 
-/** Descarga una imagen para incrustarla; si falla, se omite sin romper el PDF. */
-async function fetchImage(url: string): Promise<Buffer | null> {
+const EQUIVALENCIAS: Record<string, string> = {
+  "→": ">", "←": "<", "↔": "-", "⇒": ">", "•": "·", "✓": "OK", "✗": "X",
+  "⚠": "!", "≈": "~", "≤": "<=", "≥": ">=", "×": "x",
+};
+
+/**
+ * Las fuentes estándar del PDF usan WinAnsi: cualquier carácter fuera de ese
+ * juego (flechas, símbolos, emojis) sale como basura tipo "!'". Se sustituyen
+ * los habituales y se descarta el resto en vez de imprimir ruido.
+ */
+function txt(v: unknown): string {
+  return String(v ?? "")
+    .replace(/[→←↔⇒•✓✗⚠≈≤≥×]/g, (c) => EQUIVALENCIAS[c] ?? "")
+    .replace(/[^\t\n\r\x20-\x7E\u00A0-\u00FF–—‘’“”…€]/g, "");
+}
+
+/**
+ * Descarga una imagen y la normaliza para incrustarla; si falla, se omite sin
+ * romper el PDF.
+ *
+ * Igual que en el informe de Mobilink Assist: los JPEG que llegan del móvil
+ * traen perfiles de color y submuestreo que PDFKit no interpreta bien y las
+ * fotos salían con bandas y como superpuestas. Al reencodearlas con sharp se
+ * corrige la orientación EXIF, se limpian los metadatos y se garantiza un
+ * JPEG base sin submuestreo de color. Se reducen antes a 1200 px porque en el
+ * papel no ocupan más de 150 pt y así el informe no se va a decenas de MB.
+ */
+async function fetchImage(url: string, lado = 1200): Promise<Buffer | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    const raw = Buffer.from(await res.arrayBuffer());
+    try {
+      return await sharp(raw)
+        .rotate()
+        .resize({ width: lado, height: lado, fit: "inside", withoutEnlargement: true })
+        .flatten({ background: "#ffffff" })
+        .jpeg({ quality: 82, chromaSubsampling: "4:4:4", progressive: false })
+        .toBuffer();
+    } catch {
+      return raw;
+    }
   } catch {
     return null;
   }
@@ -116,7 +153,7 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
   function titulo(t: string) {
     if (doc.y > doc.page.height - 120) doc.addPage();
     doc.moveDown(0.6);
-    doc.fillColor(AZUL).fontSize(11).font("Helvetica-Bold").text(t, M, doc.y);
+    doc.fillColor(AZUL).fontSize(11).font("Helvetica-Bold").text(txt(t), M, doc.y);
     doc.moveTo(M, doc.y + 2).lineTo(M + anchoUtil, doc.y + 2).lineWidth(0.8).stroke(LINEA);
     doc.moveDown(0.5);
     doc.fillColor("#000000").fontSize(9.5).font("Helvetica");
@@ -133,9 +170,9 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
       const x = M + col * (colW + 12);
       if (col === 0 && i > 0) y += 16;
       if (y > doc.page.height - 90) { doc.addPage(); y = doc.y; }
-      doc.fillColor(GRIS).fontSize(8).font("Helvetica").text(k, x, y, { width: colW, lineBreak: false });
+      doc.fillColor(GRIS).fontSize(8).font("Helvetica").text(txt(k), x, y, { width: colW, lineBreak: false });
       doc.fillColor("#000000").fontSize(9.5).font("Helvetica-Bold")
-        .text(v, x, y + 8, { width: colW, height: 12, ellipsis: true, lineBreak: false });
+        .text(txt(v), x, y + 8, { width: colW, height: 12, ellipsis: true, lineBreak: false });
     });
     doc.y = y + 22;
     doc.x = M;
@@ -200,34 +237,53 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
   if (a.description) {
     titulo("Incidencia");
     doc.fillColor("#000000").fontSize(9.5).font("Helvetica")
-      .text(String(a.description), M, doc.y, { width: anchoUtil });
+      .text(txt(a.description), M, doc.y, { width: anchoUtil });
     doc.moveDown(0.4);
   }
 
   // ── Línea temporal ──
+  // Una fila por evento, todas alineadas en las mismas tres columnas. Ojo:
+  // cada doc.text() avanza doc.y por su cuenta, así que la y de la fila se
+  // fija antes de pintar y se restaura después (era lo que descolocaba y
+  // estiraba la tabla).
   titulo("Línea temporal");
+  const COL_FECHA = 100;
+  const COL_ESTADO = 130;
+  const ALTO_FILA = 13;
+  doc.fillColor(GRIS).fontSize(7.5).font("Helvetica-Bold");
+  const yEnc = doc.y;
+  doc.text("FECHA Y HORA", M, yEnc, { width: COL_FECHA, lineBreak: false });
+  doc.text("ESTADO", M + COL_FECHA + 8, yEnc, { width: COL_ESTADO, lineBreak: false });
+  doc.text("DETALLE", M + COL_FECHA + COL_ESTADO + 16, yEnc,
+    { width: anchoUtil - COL_FECHA - COL_ESTADO - 16, lineBreak: false });
+  let yFila = yEnc + 11;
   for (const h of historia.rows) {
-    if (doc.y > doc.page.height - 80) doc.addPage();
+    if (yFila > doc.page.height - 70) { doc.addPage(); yFila = doc.y; }
     const etiqueta = (LITE_STATUS_LABELS as Record<string, string>)[h.toStatus] ?? h.toStatus;
-    doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
-      .text(fecha(Number(h.occurredAtMs)), M, doc.y, { width: 105, lineBreak: false });
-    doc.fillColor("#000000").fontSize(9.5).font("Helvetica-Bold")
-      .text(etiqueta, M + 110, doc.y, { width: 130, lineBreak: false });
-    doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
-      .text(h.reason ? String(h.reason).slice(0, 90) : `(${h.actorType})`, M + 245, doc.y,
-        { width: anchoUtil - 245, lineBreak: false });
-    doc.y += 14;
+    const detalle = h.reason ? String(h.reason) : `(${h.actorType})`;
+    doc.fillColor(GRIS).fontSize(8).font("Helvetica")
+      .text(fecha(Number(h.occurredAtMs)), M, yFila, { width: COL_FECHA, lineBreak: false });
+    doc.fillColor("#0f172a").fontSize(8.5).font("Helvetica-Bold")
+      .text(txt(etiqueta), M + COL_FECHA + 8, yFila, { width: COL_ESTADO, lineBreak: false, ellipsis: true });
+    doc.fillColor(GRIS).fontSize(8).font("Helvetica")
+      .text(txt(detalle), M + COL_FECHA + COL_ESTADO + 16, yFila,
+        { width: anchoUtil - COL_FECHA - COL_ESTADO - 16, height: 10, lineBreak: false, ellipsis: true });
+    doc.moveTo(M, yFila + ALTO_FILA - 3).lineTo(M + anchoUtil, yFila + ALTO_FILA - 3)
+      .lineWidth(0.4).stroke(LINEA);
+    yFila += ALTO_FILA;
   }
   doc.x = M;
+  doc.y = yFila + 4;
+  doc.fillColor("#000000");
 
   // ── Tiempos ──
   titulo("Tiempos del servicio");
   const min = (v: number | null) => (typeof v === "number" ? `${v} min` : "-");
   datos([
-    ["Asignación → aceptación", min(kpis.acceptMin)],
-    ["Aceptación → en camino", min(kpis.acceptToEnRouteMin)],
+    ["Tiempo hasta la aceptación", min(kpis.acceptMin)],
+    ["De la aceptación a la salida", min(kpis.acceptToEnRouteMin)],
     ["Desplazamiento", min(kpis.travelMin)],
-    ["Asignación → llegada", min(kpis.assignToArrivalMin)],
+    ["De la asignación a la llegada", min(kpis.assignToArrivalMin)],
     ["Tiempo de trabajo", min(kpis.workMin)],
     ["Tiempo total", min(kpis.totalMin)],
     ["Vuelta al taller", min(kpis.returnMin)],
@@ -248,7 +304,7 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
     ]);
     if (a.resolutionNotes) {
       doc.fillColor("#000000").fontSize(9.5).font("Helvetica")
-        .text(String(a.resolutionNotes), M, doc.y, { width: anchoUtil });
+        .text(txt(a.resolutionNotes), M, doc.y, { width: anchoUtil });
       doc.moveDown(0.4);
     }
   }
@@ -256,31 +312,42 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
   // ── Evidencias ──
   if (fotos.length) {
     titulo(`Evidencias (${fotos.length}${evidencias.length > fotos.length ? ` de ${evidencias.length}` : ""})`);
-    let x = M;
-    let y = doc.y;
-    const lado = 105;
+    // Cuadrícula de 3 columnas: cada foto entera, con su proporción original,
+    // centrada dentro de un marco uniforme y con la etiqueta encima.
+    const hueco = 8;
+    const columnas = 3;
+    const anchoCelda = (anchoUtil - hueco * (columnas - 1)) / columnas;
+    const altoFoto = 150;
+    const altoCelda = altoFoto + 22;
+    let col = 0;
+    let filaY = doc.y;
     let dibujadas = 0;
     for (const f of fotos) {
       const img = await fetchImage(f.url);
       if (!img) continue;
-      if (x + lado > M + anchoUtil) { x = M; y += lado + 16; }
-      if (y + lado > doc.page.height - 70) { doc.addPage(); x = M; y = doc.y; }
+      if (col === 0 && filaY + altoCelda > doc.page.height - 60) { doc.addPage(); filaY = doc.y; }
+      const x0 = M + col * (anchoCelda + hueco);
+      doc.fillColor(GRIS).fontSize(6.5).font("Helvetica-Bold")
+        .text(txt(f.label).toUpperCase(), x0, filaY, { width: anchoCelda, lineBreak: false, ellipsis: true });
+      doc.roundedRect(x0, filaY + 10, anchoCelda, altoFoto, 3).lineWidth(0.8).stroke(LINEA);
       try {
-        doc.image(img, x, y, { fit: [lado, lado], align: "center" });
-        doc.fillColor(GRIS).fontSize(7.5).font("Helvetica")
-          .text(f.label, x, y + lado + 2, { width: lado, lineBreak: false });
+        doc.image(img, x0 + 3, filaY + 13, {
+          fit: [anchoCelda - 6, altoFoto - 6], align: "center", valign: "center",
+        });
         dibujadas++;
       } catch { /* formato no soportado por el PDF */ }
-      x += lado + 10;
+      col = (col + 1) % columnas;
+      if (col === 0) filaY += altoCelda;
     }
-    doc.y = y + lado + 18;
     doc.x = M;
+    doc.y = (col === 0 ? filaY : filaY + altoCelda) + 4;
+    doc.fillColor("#000000");
 
     // Lo que no es imagen (audios, vídeos, documentos) se lista con su enlace
     const otras = evidencias.filter((e) => !e.esImagen);
     if (otras.length) {
       doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
-        .text(`Otros adjuntos: ${otras.map((o) => o.label).join(", ")}`, M, doc.y, { width: anchoUtil });
+        .text(txt(`Otros adjuntos: ${otras.map((o) => o.label).join(", ")}`), M, doc.y, { width: anchoUtil });
       doc.moveDown(0.4);
     }
     if (dibujadas === 0) {
@@ -294,19 +361,31 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
     if (doc.y > doc.page.height - 170) doc.addPage();
     titulo("Conformidad del cliente");
     const s = firma;
-    const img = await fetchImage(s.url);
+    // Igual que en la línea temporal: la y del bloque se fija antes de pintar,
+    // porque cada doc.text() la va empujando hacia abajo.
+    const yFirma = doc.y;
+    const img = await fetchImage(s.url, 700);
     if (img) {
-      try { doc.image(img, M, doc.y, { fit: [170, 70] }); } catch { /* firma no legible */ }
+      try { doc.image(img, M, yFirma, { fit: [170, 70] }); } catch { /* firma no legible */ }
     }
-    doc.fillColor(GRIS).fontSize(8).font("Helvetica").text("Firmante", M + 200, doc.y);
+    let yDatos = yFirma + 6;
+    doc.fillColor(GRIS).fontSize(8).font("Helvetica")
+      .text("Firmante", M + 200, yDatos, { lineBreak: false });
+    yDatos += 11;
     doc.fillColor("#000000").fontSize(10).font("Helvetica-Bold")
-      .text(s.signerName ?? a.customerName ?? "-", M + 200, doc.y + 10);
+      .text(txt(s.signerName ?? a.customerName ?? "-"), M + 200, yDatos,
+        { width: anchoUtil - 200, lineBreak: false, ellipsis: true });
+    yDatos += 14;
     if (s.signerDocument) {
-      doc.fillColor(GRIS).fontSize(8.5).font("Helvetica").text(s.signerDocument, M + 200, doc.y + 4);
+      doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
+        .text(txt(s.signerDocument), M + 200, yDatos, { lineBreak: false });
+      yDatos += 12;
     }
-    doc.fillColor(GRIS).fontSize(8.5).font("Helvetica").text(fecha(s.signedAtMs), M + 200, doc.y + 2);
-    doc.y += 80;
+    doc.fillColor(GRIS).fontSize(8.5).font("Helvetica")
+      .text(fecha(s.signedAtMs), M + 200, yDatos, { lineBreak: false });
     doc.x = M;
+    doc.y = yFirma + 84;
+    doc.fillColor("#000000");
   }
 
   // ── Comunicaciones ──
@@ -315,9 +394,9 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
     for (const c of comunicaciones.rows) {
       if (doc.y > doc.page.height - 70) doc.addPage();
       doc.fillColor(GRIS).fontSize(8).font("Helvetica")
-        .text(`${fecha(Number(c.createdAtMs))} · ${c.byName ?? c.channel}`, M, doc.y, { width: anchoUtil });
+        .text(txt(`${fecha(Number(c.createdAtMs))} · ${c.byName ?? c.channel}`), M, doc.y, { width: anchoUtil });
       doc.fillColor("#000000").fontSize(9).font("Helvetica")
-        .text(String(c.body).slice(0, 300), M, doc.y, { width: anchoUtil });
+        .text(txt(String(c.body).slice(0, 300)), M, doc.y, { width: anchoUtil });
       doc.moveDown(0.3);
     }
   }
