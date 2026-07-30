@@ -14,11 +14,18 @@ export interface PendienteFicha {
   atributos: CampoFicha[];
 }
 
+/** Ejes de una configuración de TyreControl: "2x4" → 2, "2x2x4" → 3. */
+export function ejesDeConfig(config: string | null | undefined): number {
+  return config ? config.split(/x/i).filter((s) => s.trim() !== "").length : 0;
+}
+
 /** Sugiere un tipo de vehículo por lo que diga el documento (categoría/carrocería)
- *  y, si hay varios candidatos, por el número de ejes leído. Siempre editable. */
+ *  y, entre los candidatos, por el número de ejes. Siempre editable.
+ *  El número de ejes manda: de él dependen las posiciones de neumáticos, así
+ *  que un tipo de 3 ejes nunca se sugiere para una configuración de 2. */
 function sugerirTipo(resultado: ResultadoFichaTecnica, tipos: TipoVehiculo[]): string | null {
   const texto = resultado.campos.map((c) => `${c.clave ?? ""} ${c.valor ?? ""}`).join(" ").toLowerCase();
-  const numEjes = resultado.ejes.length;
+  const numEjes = ejesDeConfig(resultado.configuracion) || resultado.ejes.length;
   const candidatos = tipos.filter((t) => {
     if (/semirremolque/.test(texto)) return t.nombre === "semirremolque";
     if (/tractora/.test(texto)) return t.nombre.includes("tractora");
@@ -31,9 +38,14 @@ function sugerirTipo(resultado: ResultadoFichaTecnica, tipos: TipoVehiculo[]): s
     return false;
   });
   if (!candidatos.length) return null;
-  if (candidatos.length === 1) return candidatos[0].id;
-  const porEjes = numEjes > 0 ? candidatos.find((t) => t.numero_ejes === numEjes) : undefined;
-  return (porEjes ?? candidatos[0]).id;
+  // Sin saber los ejes no se elige a ciegas entre varios: mejor que lo diga
+  // el usuario que asignar un tipo con las posiciones equivocadas.
+  if (numEjes > 0) {
+    const porEjes = candidatos.find((t) => t.numero_ejes === numEjes);
+    if (porEjes) return porEjes.id;
+    return null;
+  }
+  return candidatos.length === 1 ? candidatos[0].id : null;
 }
 
 export default function CrearVehiculoDesdeFicha({ empresaId, tipos, configEjes, matriculasExistentes, onClose, onListo }: {
@@ -83,6 +95,8 @@ export default function CrearVehiculoDesdeFicha({ empresaId, tipos, configEjes, 
   const yaExiste = matricula.length > 0 && matriculasExistentes.has(matricula);
 
   const tipoElegido = tipos.find((t) => t.id === tipoVehiculoId);
+  const ejesConfig = ejesDeConfig(resultado?.configuracion);
+  const ejesNoCuadran = !!tipoElegido && ejesConfig > 0 && tipoElegido.numero_ejes !== ejesConfig;
 
   function usar() {
     if (!resultado || !docId) return;
@@ -117,7 +131,9 @@ export default function CrearVehiculoDesdeFicha({ empresaId, tipos, configEjes, 
         <>
           <button onClick={onClose} className="rounded border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
           {resultado && (
-            <button onClick={usar} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white">
+            <button onClick={usar} disabled={ejesNoCuadran}
+              title={ejesNoCuadran ? "El tipo elegido no tiene los mismos ejes que la configuración leída" : undefined}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
               Usar estos datos
             </button>
           )}
@@ -157,11 +173,16 @@ export default function CrearVehiculoDesdeFicha({ empresaId, tipos, configEjes, 
                 <option value="">—</option>
                 {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
               </select>
-              {!tipoElegido && (
+              {!tipoElegido ? (
                 <div className="mt-1 text-[11px] text-amber-300">
                   Elige el tipo: de él depende el plano y las posiciones de neumáticos del vehículo.
                 </div>
-              )}
+              ) : ejesConfig > 0 && tipoElegido.numero_ejes !== ejesConfig ? (
+                <div className="mt-1 text-[11px] font-semibold text-rose-300">
+                  Este tipo tiene {tipoElegido.numero_ejes} ejes y la configuración leída ({resultado.configuracion}) son {ejesConfig}.
+                  Saldrían las posiciones de neumáticos equivocadas: elige un tipo de {ejesConfig} ejes.
+                </div>
+              ) : null}
             </div>
           </div>
 

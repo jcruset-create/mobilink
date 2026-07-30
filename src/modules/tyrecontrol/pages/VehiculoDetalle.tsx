@@ -138,8 +138,9 @@ export default function VehiculoDetalle() {
                   const val = propio ?? porClave.get(c.clave)?.valor_bruto ?? null;
                   const texto = val == null || val === "" ? null : String(val);
                   // P.2 potencia: la ficha la da en kW, pero se trabaja en CV.
-                  const cv = c.clave === "potencia" && typeof propio === "number"
-                    ? Math.round(propio * 1.35962) : null;
+                  // Las columnas numeric pueden llegar como texto, de ahí el Number().
+                  const kw = c.clave === "potencia" && texto ? Number(texto) : NaN;
+                  const cv = Number.isFinite(kw) ? Math.round(kw * 1.35962) : null;
                   return (
                     <div key={c.clave}>
                       <div className="text-[10px] text-slate-400">{c.codigo ? `${c.codigo} · ` : ""}{c.descripcion}</div>
@@ -217,6 +218,20 @@ export default function VehiculoDetalle() {
       {/* Estructura de posiciones */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Estructura de posiciones ({posiciones.length})</div>
+        {/* Las posiciones salen del TIPO de vehículo: si no tiene los mismos
+            ejes que la configuración, aparecen ruedas que no existen. */}
+        {(() => {
+          const ejesConfig = v.config_ejes?.nombre ? v.config_ejes.nombre.split(/x/i).filter((s) => s.trim() !== "").length : 0;
+          const ejesTipo = v.tipo?.numero_ejes ?? 0;
+          if (!ejesConfig || !ejesTipo || ejesConfig === ejesTipo) return null;
+          return (
+            <div className="mb-2 rounded border border-rose-500/50 bg-rose-950/40 p-2 text-[12px] text-rose-200">
+              El tipo «{v.tipo?.descripcion ?? v.tipo?.nombre}» tiene {ejesTipo} ejes, pero la configuración
+              {" "}{v.config_ejes?.nombre} son {ejesConfig}: por eso salen {posiciones.length} posiciones.
+              Cambia el tipo del vehículo por uno de {ejesConfig} ejes.
+            </div>
+          );
+        })()}
         {posiciones.length === 0 ? (
           <div className="text-sm text-slate-500">
             {v.tipo_vehiculo_id ? "Este tipo de vehículo no tiene posiciones definidas." : "Asigna un tipo de vehículo para ver sus posiciones."}
