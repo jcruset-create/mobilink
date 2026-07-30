@@ -13,8 +13,10 @@ import {
   listarConfigEjes, crearConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
   listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
+  listarMarcasVehiculo, crearMarcaVehiculo, actualizarMarcaVehiculo, eliminarMarcaVehiculo,
+  alternarTipoMarcaVehiculo, subirLogoMarcaVehiculo,
 } from "../services/data";
-import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
+import type { MarcaVehiculo, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
@@ -136,6 +138,82 @@ function FilaFabricante({ fabricante, puedeEditar, onCambio }: { fabricante: Fab
           <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Marca de vehículo: logo + nombre + casillas de los tipos en los que aparece.
+// Una misma marca sirve para varios tipos (Mercedes-Benz es tractora, camión,
+// furgoneta y autobús), por eso son casillas y no un desplegable.
+function FilaMarcaVehiculo({ marca, tipos, puedeEditar, onCambio }: {
+  marca: MarcaVehiculo; tipos: TipoVehiculo[]; puedeEditar: boolean; onCambio: () => void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(marca.nombre);
+  const [subiendo, setSubiendo] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function guardarNombre() {
+    if (!nombre.trim() || nombre === marca.nombre) { setEditando(false); return; }
+    try { await actualizarMarcaVehiculo(marca.id, { nombre }); setEditando(false); onCambio(); }
+    catch (e: any) { setErr(e?.message || "Error"); }
+  }
+  async function onArchivo(file: File | undefined) {
+    if (!file) return;
+    setSubiendo(true); setErr("");
+    try {
+      const url = await subirLogoMarcaVehiculo(marca.id, file);
+      await actualizarMarcaVehiculo(marca.id, { logo_url: url });
+      onCambio();
+    } catch (e: any) { setErr(e?.message || "Error al subir el logo"); } finally { setSubiendo(false); }
+  }
+  async function borrar() {
+    if (!window.confirm(`¿Eliminar la marca "${marca.nombre}"? Los vehículos que la usen conservarán el texto.`)) return;
+    await eliminarMarcaVehiculo(marca.id); onCambio();
+  }
+
+  return (
+    <div className="rounded bg-slate-900 px-2 py-1.5 text-[12px] text-slate-300">
+      <div className="flex items-center gap-2">
+        {marca.logo_url ? (
+          <img src={marca.logo_url} alt={marca.nombre} className="h-8 w-12 rounded border border-slate-700 bg-slate-950 object-contain" />
+        ) : (
+          <div className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin logo</div>
+        )}
+        {editando ? (
+          <input autoFocus className="flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[12px] text-slate-100"
+            value={nombre} onChange={(e) => setNombre(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && guardarNombre()} onBlur={guardarNombre} />
+        ) : (
+          <span className="flex-1 font-semibold text-slate-100">{marca.nombre}
+            {marca.pais_origen ? <span className="ml-1 font-normal text-slate-500">· {marca.pais_origen}</span> : null}
+          </span>
+        )}
+        {puedeEditar && !editando && (
+          <div className="flex gap-2">
+            <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+              {subiendo ? "subiendo…" : marca.logo_url ? "cambiar logo" : "logo"}
+              <input type="file" accept="image/*" className="hidden" disabled={subiendo}
+                onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+            <button onClick={() => setEditando(true)} className="text-[10px] text-slate-400 hover:underline">editar</button>
+            <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+          </div>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 pl-14">
+        {tipos.map((t) => (
+          <label key={t.id} className="flex items-center gap-1 text-[10px] text-slate-400">
+            <input type="checkbox" checked={marca.tipo_ids.includes(t.id)} disabled={!puedeEditar}
+              onChange={async (e) => {
+                try { await alternarTipoMarcaVehiculo(marca.id, t.id, e.target.checked); onCambio(); }
+                catch (err2: any) { setErr(err2?.message || "Error"); }
+              }} />
+            {t.descripcion ?? t.nombre}
+          </label>
+        ))}
+      </div>
+      {err && <div className="mt-1 text-[10px] text-rose-400">{err}</div>}
     </div>
   );
 }
@@ -452,16 +530,26 @@ export default function Configuracion() {
   const [nuevoModelo, setNuevoModelo] = useState("");
   const [nuevaMedida, setNuevaMedida] = useState("");
   const [nuevoFabricante, setNuevoFabricante] = useState("");
+  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
+  const [nuevaMarcaVeh, setNuevaMarcaVeh] = useState("");
   const [msg, setMsg] = useState("");
 
   async function cargar() {
-    const [m, med, ic, iv, t, f, c, mf, ce, tl, po] = await Promise.all([
+    const [m, med, ic, iv, t, f, c, mf, ce, tl, po, mv] = await Promise.all([
       listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
       listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
       listarConfigEjes(), listarTiposLlanta(), listarPresionesObjetivo().catch(() => []),
+      listarMarcasVehiculo().catch(() => []),
     ]);
     setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
-    setConfigEjes(ce); setTiposLlanta(tl); setPresiones(po);
+    setConfigEjes(ce); setTiposLlanta(tl); setPresiones(po); setMarcasVeh(mv);
+  }
+
+  async function guardarMarcaVeh() {
+    if (!nuevaMarcaVeh.trim()) return;
+    setMsg("");
+    try { await crearMarcaVehiculo(nuevaMarcaVeh); setNuevaMarcaVeh(""); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error al crear la marca"); }
   }
 
   async function guardarPresion() {
@@ -655,6 +743,33 @@ export default function Configuracion() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Marcas de vehículo: alimentan el desplegable MARCA del alta de
+          vehículos, filtrado por el tipo elegido. */}
+      <div className="mb-4 rounded-lg bg-slate-800 p-3">
+        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Marcas de vehículo ({marcasVeh.length})</div>
+        <div className="mb-3 text-[11px] text-slate-500">
+          Alimentan el desplegable <b>Marca</b> del alta de vehículos, filtrado por el tipo elegido: en una cabeza tractora salen MAN, Scania…; en un semirremolque, Krone, Schmitz Cargobull… Marca las casillas de los tipos en los que debe aparecer cada una y sube su logo.
+          {!puedeEditar && " Solo un administrador Mobilink puede editarlas."}
+        </div>
+        {puedeEditar && (
+          <div className="mb-2 flex gap-2">
+            <input className={`${inputCls} max-w-xs`} placeholder="Nueva marca de vehículo…" value={nuevaMarcaVeh}
+              onChange={(e) => setNuevaMarcaVeh(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && guardarMarcaVeh()} />
+            <button onClick={guardarMarcaVeh} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+ Añadir</button>
+          </div>
+        )}
+        {marcasVeh.length === 0 ? (
+          <div className="text-[12px] text-slate-500">Sin marcas de vehículo. Ejecuta la migración del catálogo o añade la primera.</div>
+        ) : (
+          <div className="max-h-96 space-y-1 overflow-y-auto">
+            {marcasVeh.map((m) => (
+              <FilaMarcaVehiculo key={m.id} marca={m} tipos={tipos} puedeEditar={puedeEditar} onCambio={cargar} />
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="rounded-lg bg-slate-800 p-3">
