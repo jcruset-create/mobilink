@@ -5,6 +5,7 @@ import {
   type DocumentoVehiculo, type ResultadoFichaTecnica, type CampoFicha, type EjeFicha, type CampoCatalogoFicha,
 } from "../services/data";
 import type { Vehiculo } from "../types";
+import { columnaDe } from "../services/fichaTecnicaCampos";
 import { Modal, inputCls } from "./ui";
 
 /** Campos de la ficha que tienen columna propia en el vehículo. */
@@ -112,7 +113,10 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
       for (const f of filas) {
         const valor = editados[f.id] ?? f.detectado;
         if (decisionDe(f) !== "aceptar" || !valor.trim()) continue;
-        if (f.conocido && f.campo.clave) campos[f.campo.clave] = valor;
+        // Todo lo que tenga columna propia en el vehículo va a `campos` (el
+        // servidor lo escribe en su columna tipada); solo lo que quede fuera
+        // del catálogo se guarda como atributo técnico.
+        if (f.campo.clave && columnaDe(f.campo.clave)) campos[f.campo.clave] = valor;
         else atributos.push({ ...f.campo, valor });
       }
       const r = await aplicarFichaTecnica(revision.docId, {
