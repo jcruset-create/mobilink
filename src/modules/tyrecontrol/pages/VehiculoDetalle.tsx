@@ -8,6 +8,7 @@ import { resumenOperaciones } from "../services/resumenOperaciones";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
+import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -174,6 +175,9 @@ export default function VehiculoDetalle() {
           onOperaciones={() => setModalOps(true)}
         />
       </div>
+
+      {/* Ficha técnica (documento + OCR) */}
+      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={cargar} />
 
       {/* Estructura de posiciones */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">

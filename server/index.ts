@@ -13710,6 +13710,110 @@ app.post(
   }
 );
 
+// Aplica los cambios YA REVISADOS por el técnico. Nunca se aplica nada que
+// no haya pasado por la pantalla de revisión: aquí solo llega lo aceptado.
+app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlUser, async (req, res) => {
+  try {
+    const docId = String(req.params.id);
+    const userId = (req as any).tyreControlUserId as string;
+    const { campos, ejes, configuracion, configuracionConvencional, atributos } = req.body ?? {};
+
+    const { data: doc } = await supabase
+      .from("tc_vehiculo_documentos").select("id, vehiculo_id").eq("id", docId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+    const vehiculoId = (doc as any).vehiculo_id as string;
+
+    const veh = await vehiculoDeUsuario(vehiculoId);
+    if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+    const aplicado: string[] = [];
+
+    // 1) Campos del vehículo aceptados (solo columnas conocidas).
+    const COLUMNAS: Record<string, string> = {
+      marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
+      fecha_primera_matriculacion: "fecha_matriculacion",
+    };
+    const patch: Record<string, any> = {};
+    for (const [clave, valor] of Object.entries(campos ?? {})) {
+      const col = COLUMNAS[clave];
+      if (col && valor != null && String(valor).trim() !== "") patch[col] = String(valor).trim();
+    }
+    if (configuracionConvencional) {
+      patch.config_convencional = String(configuracionConvencional).trim();
+      patch.config_convencional_origen = "documento";
+    }
+
+    // 2) Configuración de ejes: se busca en el catálogo; si no existe, se crea
+    //    con la nomenclatura de TyreControl (neumáticos por eje).
+    if (configuracion) {
+      const nombre = String(configuracion).trim();
+      let { data: cfg } = await supabase
+        .from("tc_config_ejes").select("id").eq("nombre", nombre).maybeSingle();
+      if (!cfg) {
+        const { data: creada, error } = await supabase.from("tc_config_ejes")
+          .insert({ nombre, descripcion: `Detectada de ficha técnica (${nombre})` })
+          .select("id").single();
+        if (error) throw new Error(error.message);
+        cfg = creada as any;
+        aplicado.push(`configuración ${nombre} creada en el catálogo`);
+      }
+      patch.config_ejes_id = (cfg as any).id;
+      aplicado.push(`configuración ${nombre}`);
+    }
+
+    if (Object.keys(patch).length) {
+      const { error } = await supabase.from("tc_vehiculos").update(patch).eq("id", vehiculoId);
+      if (error) throw new Error(error.message);
+      aplicado.push(`${Object.keys(patch).length} campo(s) del vehículo`);
+    }
+
+    // 3) Ejes: un registro por eje, con sus neumáticos y atributos.
+    if (Array.isArray(ejes) && ejes.length) {
+      for (const e of ejes) {
+        const fila = {
+          vehiculo_id: vehiculoId,
+          eje: Number(e.posicion),
+          ruedas: e.ruedas != null ? Number(e.ruedas) : null,
+          directriz: e.directriz === true,
+          motriz: e.motriz === true,
+          elevable: e.elevable === true,
+        };
+        const { error } = await supabase
+          .from("tc_vehiculo_ejes").upsert(fila, { onConflict: "vehiculo_id,eje" });
+        if (error) throw new Error(error.message);
+      }
+      aplicado.push(`${ejes.length} eje(s)`);
+    }
+
+    // 4) Atributos técnicos sin columna propia, ya validados.
+    if (Array.isArray(atributos) && atributos.length) {
+      const filas = atributos.map((a: any) => ({
+        vehiculo_id: vehiculoId,
+        documento_id: docId,
+        codigo_origen: a.codigo_origen ?? null,
+        etiqueta_origen: a.etiqueta_origen ?? null,
+        clave_normalizada: a.clave ?? null,
+        valor_bruto: a.valor ?? null,
+        valor_normalizado: a.valor ?? null,
+        unidad: a.unidad ?? null,
+        confianza: a.confianza ?? null,
+        estado: "validado",
+        pagina: a.pagina ?? null,
+        validado_por: userId,
+        validado_at: new Date().toISOString(),
+      }));
+      const { error } = await supabase.from("tc_vehiculo_atributos_tecnicos").insert(filas);
+      if (error) throw new Error(error.message);
+      aplicado.push(`${filas.length} dato(s) técnico(s)`);
+    }
+
+    res.json({ ok: true, aplicado });
+  } catch (e: any) {
+    console.error("POST documentos/:id/aplicar error:", e);
+    res.status(500).json({ error: e?.message || "Error aplicando los cambios" });
+  }
+});
+
 // Documentos de un vehículo (con URL firmada de la primera página).
 app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlUser, async (req, res) => {
   try {
