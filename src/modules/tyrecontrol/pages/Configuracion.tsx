@@ -11,6 +11,7 @@ import {
   listarContadoresMarcas,
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
   listarConfigEjes, crearConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
+  listarImagenesConfigMarca, subirImagenConfigMarca, guardarImagenConfigMarca,
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
   listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
   listarMarcasVehiculo, crearMarcaVehiculo, actualizarMarcaVehiculo, eliminarMarcaVehiculo,
@@ -25,9 +26,49 @@ import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fila de configuración de ejes con su imagen de chasis asociada: la imagen
 // se sube una vez aquí y la heredan todos los vehículos con esa configuración.
-function FilaConfigEjes({ config, puedeEditar, onCambio }: { config: ConfigEjes; puedeEditar: boolean; onCambio: () => void }) {
+function FilaConfigEjes({ config, puedeEditar, onCambio, tipos, marcas }: {
+  config: ConfigEjes; puedeEditar: boolean; onCambio: () => void;
+  tipos: TipoVehiculo[]; marcas: MarcaVehiculo[];
+}) {
   const [subiendo, setSubiendo] = useState(false);
   const [err, setErr] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [porMarca, setPorMarca] = useState<Record<string, string | null>>({});
+  const [verTodas, setVerTodas] = useState(false);
+
+  // Marcas que pueden llevar esta configuración: las asociadas a los tipos de
+  // vehículo cuya configuración es esta (un 2x4 lo montan camiones y
+  // tractoras, no un turismo).
+  const tipoIds = tipos.filter((t) => t.configuracion_ejes === config.nombre).map((t) => t.id);
+  const marcasDelTipo = marcas.filter((m) => m.tipo_ids.some((id) => tipoIds.includes(id)));
+  const marcasVisibles = verTodas || marcasDelTipo.length === 0 ? marcas : marcasDelTipo;
+
+  async function cargarMarcas() {
+    try {
+      const filas = await listarImagenesConfigMarca(config.id);
+      setPorMarca(Object.fromEntries(filas.map((f) => [f.marca_id, f.imagen_chasis_url])));
+    } catch (e: any) { setErr(e?.message || "Error cargando las imágenes por marca"); }
+  }
+  async function abrir() {
+    const nuevo = !abierto;
+    setAbierto(nuevo);
+    if (nuevo) await cargarMarcas();
+  }
+
+  async function subirDeMarca(marcaId: string, file: File | undefined) {
+    if (!file) return;
+    setSubiendo(true); setErr("");
+    try {
+      const url = await subirImagenConfigMarca(config.id, marcaId, file);
+      await guardarImagenConfigMarca(config.id, marcaId, url);
+      await cargarMarcas();
+    } catch (e: any) { setErr(e?.message || "Error al subir la imagen"); } finally { setSubiendo(false); }
+  }
+  async function quitarDeMarca(marcaId: string, nombre: string) {
+    if (!window.confirm(`¿Quitar la imagen de ${nombre} para ${config.nombre}? Volverá a usarse la genérica.`)) return;
+    try { await guardarImagenConfigMarca(config.id, marcaId, null); await cargarMarcas(); }
+    catch (e: any) { setErr(e?.message || "Error"); }
+  }
 
   async function onArchivo(file: File | undefined) {
     if (!file) return;
@@ -52,25 +93,76 @@ function FilaConfigEjes({ config, puedeEditar, onCambio }: { config: ConfigEjes;
   }
 
   return (
-    <div className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
-      {config.imagen_chasis_url ? (
-        <img src={config.imagen_chasis_url} alt={config.nombre} className="h-8 w-8 rounded border border-slate-700 object-contain bg-slate-950" />
-      ) : (
-        <div className="flex h-8 w-8 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin img</div>
-      )}
-      <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
-      {err && <span className="text-[10px] text-rose-400">{err}</span>}
-      {puedeEditar && (
-        <>
-          <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
-            {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
-            <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
-          </label>
-          {config.imagen_chasis_url && (
-            <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+    <div className="rounded bg-slate-900">
+      <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-slate-300">
+        {config.imagen_chasis_url ? (
+          <img src={config.imagen_chasis_url} alt={config.nombre} className="h-8 w-8 rounded border border-slate-700 object-contain bg-slate-950" />
+        ) : (
+          <div className="flex h-8 w-8 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin img</div>
+        )}
+        <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
+        {err && <span className="text-[10px] text-rose-400">{err}</span>}
+        <button onClick={abrir} className="text-[10px] text-slate-300 hover:underline">
+          {abierto ? "▾ marcas" : "▸ marcas"}
+        </button>
+        {puedeEditar && (
+          <>
+            <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+              {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
+              <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+            {config.imagen_chasis_url && (
+              <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+            )}
+            <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+          </>
+        )}
+      </div>
+
+      {/* Imagen por marca: si la marca del vehículo tiene una aquí, manda
+          sobre la genérica de la configuración. */}
+      {abierto && (
+        <div className="border-t border-slate-800 px-2 py-2">
+          <div className="mb-1 flex items-center gap-2 text-[10px] text-slate-500">
+            <span>Imagen propia por marca (si no tiene, se usa la genérica de {config.nombre})</span>
+            {marcasDelTipo.length > 0 && (
+              <button onClick={() => setVerTodas(!verTodas)} className="text-sky-300 hover:underline">
+                {verTodas ? "solo las del tipo" : "ver todas"}
+              </button>
+            )}
+          </div>
+          {marcasVisibles.length === 0 ? (
+            <div className="text-[11px] text-slate-500">No hay marcas en el catálogo.</div>
+          ) : (
+            <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+              {marcasVisibles.map((m) => {
+                const img = porMarca[m.id] ?? null;
+                return (
+                  <div key={m.id} className={`flex items-center gap-2 rounded px-2 py-1 text-[11px] ${img ? "bg-slate-800" : "bg-slate-950/60"}`}>
+                    {img ? (
+                      <img src={img} alt={m.nombre} className="h-7 w-10 rounded border border-slate-700 object-contain bg-slate-950" />
+                    ) : (
+                      <div className="flex h-7 w-10 items-center justify-center rounded border border-dashed border-slate-700 text-[8px] text-slate-600">sin img</div>
+                    )}
+                    <span className={`flex-1 ${img ? "text-slate-200" : "text-slate-500"}`}>{m.nombre}</span>
+                    {puedeEditar && (
+                      <>
+                        <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+                          {img ? "cambiar" : "subir"}
+                          <input type="file" accept="image/*" className="hidden" disabled={subiendo}
+                            onChange={(e) => { void subirDeMarca(m.id, e.target.files?.[0]); e.target.value = ""; }} />
+                        </label>
+                        {img && (
+                          <button onClick={() => quitarDeMarca(m.id, m.nombre)} className="text-[10px] text-amber-300 hover:underline">quitar</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
-          <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
-        </>
+        </div>
       )}
     </div>
   );
@@ -648,7 +740,7 @@ export default function Configuracion() {
         )}
         <div className="mb-2 text-[11px] text-slate-500">La imagen de chasis asociada a cada configuración la heredan todos los vehículos que la usen (si el tipo de vehículo tiene imagen propia, esa tiene prioridad).</div>
         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
-          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} />)}
+          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} tipos={tipos} marcas={marcasVeh} />)}
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarAtributosTecnicos, listarCatalogoCamposFicha } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarAtributosTecnicos, listarCatalogoCamposFicha, imagenChasisDeMarca } from "../services/data";
 import type { Intervencion, AtributoTecnicoVehiculo, CampoCatalogoFicha } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -43,6 +43,9 @@ export default function VehiculoDetalle() {
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
   const [atributos, setAtributos] = useState<AtributoTecnicoVehiculo[]>([]);
   const [catalogoFicha, setCatalogoFicha] = useState<CampoCatalogoFicha[]>([]);
+  // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
+  // MAN no se dibuja como uno de Volvo). Si no hay, manda la de la config.
+  const [imagenMarca, setImagenMarca] = useState<string | null>(null);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
@@ -60,6 +63,9 @@ export default function VehiculoDetalle() {
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
     setAtributos(await listarAtributosTecnicos(id).catch(() => []));
+    setImagenMarca(
+      await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
+    );
   }
 
   async function abrirIntervencion(interv: Intervencion) {
@@ -201,7 +207,7 @@ export default function VehiculoDetalle() {
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
         <VehicleLayoutImage
           tipo={v.tipo}
-          imagenConfig={v.config_ejes?.imagen_chasis_url ?? null}
+          imagenConfig={imagenMarca ?? v.config_ejes?.imagen_chasis_url ?? null}
           posiciones={posiciones}
           vehiculoId={v.id}
           empresaId={v.empresa_id}
