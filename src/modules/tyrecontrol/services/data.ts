@@ -1774,6 +1774,66 @@ export async function actualizarImagenConfigEjes(configId: string, url: string |
   if (error) throw new Error(error.message);
 }
 
+// ── Imagen de chasis por configuración + MARCA ───────────────
+// Un 2x4 de MAN no se dibuja igual que uno de Volvo. Si la marca no tiene
+// imagen propia se hereda la genérica de la configuración.
+export interface ImagenConfigMarca {
+  config_ejes_id: string; marca_id: string; imagen_chasis_url: string | null;
+}
+
+export async function listarImagenesConfigMarca(configId?: string): Promise<ImagenConfigMarca[]> {
+  let q = supabase.from("tc_config_ejes_marca").select("config_ejes_id, marca_id, imagen_chasis_url");
+  if (configId) q = q.eq("config_ejes_id", configId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ImagenConfigMarca[];
+}
+
+export async function subirImagenConfigMarca(configId: string, marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `config-ejes/${configId}/marca-${marcaId}-${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from("tc-chasis").upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
+}
+
+/** Normaliza para comparar marcas: sin acentos, sin mayúsculas ni espacios de más. */
+const normMarca = (s: string) =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+/**
+ * Imagen de chasis específica de la marca de un vehículo para su
+ * configuración. Devuelve null si esa marca no tiene una propia: entonces
+ * el plano usa la genérica de la configuración.
+ *
+ * La mayoría de vehículos guardan la marca como texto suelto y no enlazada
+ * al catálogo, así que se empareja por nombre normalizado si no hay marca_id.
+ */
+export async function imagenChasisDeMarca(
+  configId?: string | null, marcaId?: string | null, marcaNombre?: string | null,
+): Promise<string | null> {
+  if (!configId) return null;
+
+  let id = marcaId ?? null;
+  if (!id && marcaNombre?.trim()) {
+    const { data } = await supabase.from("tc_cat_marcas_vehiculo").select("id, nombre").eq("activo", true);
+    const objetivo = normMarca(marcaNombre);
+    id = ((data ?? []) as any[]).find((m) => normMarca(m.nombre) === objetivo)?.id ?? null;
+  }
+  if (!id) return null;
+
+  const { data } = await supabase.from("tc_config_ejes_marca")
+    .select("imagen_chasis_url").eq("config_ejes_id", configId).eq("marca_id", id).limit(1);
+  return ((data ?? []) as any[])[0]?.imagen_chasis_url ?? null;
+}
+
+export async function guardarImagenConfigMarca(configId: string, marcaId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_config_ejes_marca")
+    .upsert({ config_ejes_id: configId, marca_id: marcaId, imagen_chasis_url: url, updated_at: new Date().toISOString() },
+            { onConflict: "config_ejes_id,marca_id" });
+  if (error) throw new Error(error.message);
+}
+
 // ── Tipos de llanta (catálogo editable: material + medida) ───
 export async function listarTiposLlanta(): Promise<TipoLlanta[]> {
   const { data, error } = await supabase.from("tc_tipos_llanta").select("*").eq("activo", true).order("orden");
