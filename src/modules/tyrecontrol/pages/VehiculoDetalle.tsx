@@ -157,6 +157,10 @@ export default function VehiculoDetalle() {
         })()}
       </div>
 
+      {/* Ficha técnica (documento + OCR): justo debajo de los datos generales,
+          que es de donde salen esos datos. */}
+      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={cargar} />
+
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
       {!esCliente && (
         <div className="mt-3">
@@ -211,9 +215,6 @@ export default function VehiculoDetalle() {
           onOperaciones={() => setModalOps(true)}
         />
       </div>
-
-      {/* Ficha técnica (documento + OCR) */}
-      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={cargar} />
 
       {/* Estructura de posiciones */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
