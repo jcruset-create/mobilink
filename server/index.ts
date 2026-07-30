@@ -19,6 +19,8 @@ import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
+import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
+import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -13555,6 +13557,241 @@ app.post(
     }
   }
 );
+
+/* =========================================================
+   TYRECONTROL · FICHA TÉCNICA DEL VEHÍCULO
+   Subida del documento (PDF o fotos de las páginas), OCR y
+   cálculo de la configuración de ejes. La ficha del vehículo NO
+   se toca aquí: esto solo deja los datos listos para revisar.
+========================================================= */
+
+const BUCKET_DOCS = "tc-documentos";
+const fichaOcr = new OpenAiFichaTecnicaOcr(openai);
+
+/// URL firmada (el bucket es privado: la ficha lleva VIN y titular).
+async function urlFirmadaDoc(storagePath: string, segundos = 3600): Promise<string | null> {
+  const { data } = await supabase.storage.from(BUCKET_DOCS).createSignedUrl(storagePath, segundos);
+  return data?.signedUrl ?? null;
+}
+
+/// Comprueba que el usuario puede tocar este vehículo y devuelve su empresa.
+async function vehiculoDeUsuario(vehiculoId: string): Promise<{ id: string; empresa_id: string; matricula: string; bastidor: string | null; tipo_vehiculo_id: string | null } | null> {
+  const { data } = await supabase
+    .from("tc_vehiculos")
+    .select("id, empresa_id, matricula, bastidor, tipo_vehiculo_id")
+    .eq("id", vehiculoId)
+    .maybeSingle();
+  return (data as any) ?? null;
+}
+
+// Sube la ficha técnica (PDF o imágenes de las páginas). Varias páginas en
+// una misma subida = un solo documento.
+app.post(
+  "/api/tyrecontrol/vehiculos/:id/ficha-tecnica",
+  requireTyreControlUser,
+  upload.array("files", 12),
+  async (req, res) => {
+    try {
+      const vehiculoId = String(req.params.id);
+      const userId = (req as any).tyreControlUserId as string;
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
+
+      const veh = await vehiculoDeUsuario(vehiculoId);
+      if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      // Un mismo archivo subido dos veces no crea documentos duplicados.
+      const hash = crypto.createHash("sha256");
+      for (const f of files) hash.update(f.buffer);
+      const sha = hash.digest("hex");
+
+      const { data: yaExiste } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id")
+        .eq("vehiculo_id", vehiculoId)
+        .eq("hash_sha256", sha)
+        .maybeSingle();
+      if (yaExiste) {
+        return res.status(409).json({ error: "Este documento ya está subido", id: (yaExiste as any).id });
+      }
+
+      // Las páginas van juntas bajo una carpeta por documento.
+      const carpeta = `${veh.empresa_id}/${vehiculoId}/${Date.now()}`;
+      const rutas: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = (f.originalname.split(".").pop() || "bin").toLowerCase();
+        const ruta = `${carpeta}/p${String(i + 1).padStart(2, "0")}.${ext}`;
+        const { error } = await supabase.storage
+          .from(BUCKET_DOCS)
+          .upload(ruta, f.buffer, { contentType: f.mimetype, upsert: false });
+        if (error) throw new Error(error.message);
+        rutas.push(ruta);
+      }
+
+      // El nuevo documento pasa a ser el vigente; el anterior se archiva.
+      await supabase
+        .from("tc_vehiculo_documentos")
+        .update({ vigente: false })
+        .eq("vehiculo_id", vehiculoId)
+        .eq("tipo", "ficha_tecnica")
+        .eq("vigente", true);
+
+      const { data: doc, error: insErr } = await supabase
+        .from("tc_vehiculo_documentos")
+        .insert({
+          vehiculo_id: vehiculoId,
+          empresa_id: veh.empresa_id,
+          tipo: "ficha_tecnica",
+          storage_path: carpeta,
+          nombre_original: files[0].originalname,
+          mime_type: files[0].mimetype,
+          paginas: files.length,
+          tamano_bytes: files.reduce((s, f) => s + f.size, 0),
+          hash_sha256: sha,
+          ocr_estado: "pendiente",
+          subido_por: userId,
+        })
+        .select("id, paginas, created_at")
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      res.json({ ok: true, documento: doc, paginas: rutas.length });
+    } catch (e: any) {
+      console.error("POST ficha-tecnica error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo la ficha técnica" });
+    }
+  }
+);
+
+// Procesa el OCR del documento y devuelve los datos detectados SIN aplicarlos.
+app.post(
+  "/api/tyrecontrol/documentos/:id/ocr",
+  requireTyreControlUser,
+  async (req, res) => {
+    const docId = String(req.params.id);
+    try {
+      const { data: doc } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id, vehiculo_id, storage_path, mime_type, paginas")
+        .eq("id", docId)
+        .maybeSingle();
+      if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+
+      const veh = await vehiculoDeUsuario((doc as any).vehiculo_id);
+      if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ ocr_estado: "procesando", ocr_error: null }).eq("id", docId);
+
+      // Páginas del documento → URLs firmadas para el modelo de visión.
+      const { data: lista } = await supabase.storage
+        .from(BUCKET_DOCS).list((doc as any).storage_path, { limit: 50, sortBy: { column: "name", order: "asc" } });
+      const archivos = (lista ?? []).filter((f) => f.name && !f.name.startsWith("."));
+
+      // El modelo lee imágenes, no PDF. Si se subió un PDF hay que capturar
+      // las páginas desde la tablet (o rasterizar antes de llamar aquí).
+      const esPdf = archivos.some((f) => f.name.toLowerCase().endsWith(".pdf"));
+      if (esPdf) {
+        await supabase.from("tc_vehiculo_documentos")
+          .update({ ocr_estado: "error", ocr_error: "PDF sin rasterizar" }).eq("id", docId);
+        return res.status(422).json({
+          error: "De momento el OCR solo lee imágenes. Fotografía las páginas de la ficha técnica desde la tablet.",
+        });
+      }
+
+      const urls: string[] = [];
+      for (const f of archivos) {
+        const u = await urlFirmadaDoc(`${(doc as any).storage_path}/${f.name}`);
+        if (u) urls.push(u);
+      }
+      if (!urls.length) throw new Error("No se han podido leer las páginas del documento");
+
+      const resultado = await fichaOcr.extraer(urls);
+
+      // Configuración de ejes: se CALCULA contando neumáticos por eje, nunca
+      // se copia la nomenclatura del fabricante.
+      const { data: tipo } = (doc as any) && veh.tipo_vehiculo_id
+        ? await supabase.from("tc_tipos_vehiculo").select("nombre").eq("id", veh.tipo_vehiculo_id).maybeSingle()
+        : { data: null as any };
+      const calc = calcularConfiguracion(resultado, (tipo as any)?.nombre ?? null);
+      const avisos = avisosCoherencia(calc);
+
+      // Aviso bloqueante si el documento no es de este vehículo.
+      const campo = (clave: string) =>
+        resultado.campos.find((c) => (c.clave ?? "").toLowerCase() === clave)?.valor?.trim() ?? null;
+      const norm = (s: string | null) => (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const vinDoc = campo("vin"), matriculaDoc = campo("matricula");
+      const bloqueos: string[] = [];
+      if (vinDoc && veh.bastidor && norm(vinDoc) !== norm(veh.bastidor)) {
+        bloqueos.push(`El bastidor de la ficha (${vinDoc}) no coincide con el del vehículo (${veh.bastidor}).`);
+      }
+      if (matriculaDoc && norm(matriculaDoc) !== norm(veh.matricula)) {
+        bloqueos.push(`La matrícula de la ficha (${matriculaDoc}) no coincide con la del vehículo (${veh.matricula}).`);
+      }
+
+      // ¿Existe ya esa configuración en el catálogo?
+      let configExiste = false;
+      if (calc.configuracion) {
+        const { data: cfg } = await supabase.from("tc_config_ejes")
+          .select("id").eq("nombre", calc.configuracion).maybeSingle();
+        configExiste = !!cfg;
+      }
+
+      await supabase.from("tc_vehiculo_documentos").update({
+        ocr_estado: "ok",
+        ocr_confianza: resultado.confianza,
+        ocr_datos: { ...resultado, configuracion: calc },
+      }).eq("id", docId);
+
+      res.json({
+        ok: true,
+        campos: resultado.campos,
+        ejes: calc.ejes,
+        configuracion: calc.configuracion,
+        configuracionPendiente: calc.motivoPendiente ?? null,
+        configuracionExisteEnCatalogo: configExiste,
+        configuracionConvencional: calc.configuracionConvencional,
+        observaciones: resultado.observaciones,
+        confianza: resultado.confianza,
+        avisos,
+        bloqueos,
+      });
+    } catch (e: any) {
+      console.error("POST documentos/:id/ocr error:", e);
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ ocr_estado: "error", ocr_error: String(e?.message ?? e) }).eq("id", docId);
+      res.status(500).json({ error: e?.message || "Error procesando el documento" });
+    }
+  }
+);
+
+// Documentos de un vehículo (con URL firmada de la primera página).
+app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlUser, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("tc_vehiculo_documentos")
+      .select("id, tipo, nombre_original, paginas, tamano_bytes, fecha_emision, ocr_estado, ocr_confianza, version, vigente, created_at, storage_path")
+      .eq("vehiculo_id", String(req.params.id))
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+
+    const docs = [];
+    for (const d of (data ?? []) as any[]) {
+      const { data: lista } = await supabase.storage
+        .from(BUCKET_DOCS).list(d.storage_path, { limit: 1, sortBy: { column: "name", order: "asc" } });
+      const primera = (lista ?? [])[0]?.name;
+      docs.push({
+        ...d,
+        url: primera ? await urlFirmadaDoc(`${d.storage_path}/${primera}`) : null,
+      });
+    }
+    res.json(docs);
+  } catch (e: any) {
+    console.error("GET vehiculos/:id/documentos error:", e);
+    res.status(500).json({ error: e?.message || "Error listando documentos" });
+  }
+});
 
 // KPIs / Dashboard de dirección
 app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
