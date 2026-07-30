@@ -83,8 +83,12 @@ export class OpenAiFichaTecnicaOcr implements FichaTecnicaOcr {
       proposito: "documento",
       prompt: INSTRUCCIONES,
       imagenes: imagenes.map((url) => ({ url })),
-      maxTokens: 8000,
+      maxTokens: 16000,
       esquema: { nombre: "ficha_tecnica", schema: ESQUEMA_FICHA },
+      // Imagen + esquema estructurado grande tarda bastante más que un texto
+      // suelto; con el timeout por defecto (60 s) el proveedor no siempre
+      // llega a tiempo y se agotan los 3 intentos sin motivo real.
+      timeoutMs: 120_000,
     });
     if (!r.ok) throw new Error(r.error || "El OCR no devolvió resultado");
 
