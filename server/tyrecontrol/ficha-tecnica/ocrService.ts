@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { pedirIA } from "../../core/openaiService.ts";
 
 /**
  * OCR de fichas técnicas de vehículo.
@@ -70,36 +70,25 @@ Reglas estrictas:
 - "confianza" refleja lo legible que estaba el documento. Sé honesto: si algo no se lee bien, baja la confianza de ese campo.
 - No añadas texto fuera del JSON.`;
 
-/** Implementación con el modelo de visión de OpenAI (gpt-4o-mini). */
+/**
+ * Implementación sobre la capa central de IA (Responses API + Structured
+ * Outputs). El modelo NO se escribe aquí: lo decide OPENAI_DOCUMENT_MODEL.
+ */
 export class OpenAiFichaTecnicaOcr implements FichaTecnicaOcr {
-  constructor(private readonly openai: OpenAI, private readonly model = "gpt-4o-mini") {}
-
   async extraer(imagenes: string[]): Promise<ResultadoOcr> {
     if (!imagenes.length) throw new Error("No hay páginas que procesar");
 
-    const respuesta = await this.openai.chat.completions.create({
-      model: this.model,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: INSTRUCCIONES },
-            ...imagenes.map((url) => ({ type: "image_url", image_url: { url } })),
-          ] as any,
-        },
-      ],
-      max_tokens: 4000,
+    const r = await pedirIA<any>({
+      operacion: "tyrecontrol.ficha-tecnica.ocr",
+      proposito: "documento",
+      prompt: INSTRUCCIONES,
+      imagenes: imagenes.map((url) => ({ url })),
+      maxTokens: 8000,
+      esquema: { nombre: "ficha_tecnica", schema: ESQUEMA_FICHA },
     });
+    if (!r.ok) throw new Error(r.error || "El OCR no devolvió resultado");
 
-    const texto = respuesta.choices[0]?.message?.content?.trim() ?? "";
-    let json: any;
-    try {
-      json = JSON.parse(texto);
-    } catch {
-      throw new Error("El OCR no devolvió un JSON válido");
-    }
-
+    const json = r.datos ?? {};
     return {
       campos: Array.isArray(json.campos) ? json.campos : [],
       ejes: Array.isArray(json.ejes) ? json.ejes : [],
@@ -110,3 +99,54 @@ export class OpenAiFichaTecnicaOcr implements FichaTecnicaOcr {
     };
   }
 }
+
+/**
+ * Esquema estricto: el modelo no puede devolver campos de más ni omitir los
+ * obligatorios, así que lo que llega a la revisión siempre tiene la forma
+ * esperada. Los valores que el documento no aclare vienen a null.
+ */
+const ESQUEMA_FICHA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["campos", "ejes", "config_convencional", "observaciones", "confianza"],
+  properties: {
+    campos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["codigo_origen", "etiqueta_origen", "clave", "valor", "unidad", "confianza", "pagina"],
+        properties: {
+          codigo_origen: { type: ["string", "null"] },
+          etiqueta_origen: { type: ["string", "null"] },
+          clave: { type: ["string", "null"] },
+          valor: { type: "string" },
+          unidad: { type: ["string", "null"] },
+          confianza: { type: ["number", "null"] },
+          pagina: { type: ["integer", "null"] },
+        },
+      },
+    },
+    ejes: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["posicion", "ruedas", "directriz", "motriz", "elevable", "medida", "indice_carga", "codigo_velocidad"],
+        properties: {
+          posicion: { type: "integer" },
+          ruedas: { type: ["integer", "null"] },
+          directriz: { type: ["boolean", "null"] },
+          motriz: { type: ["boolean", "null"] },
+          elevable: { type: ["boolean", "null"] },
+          medida: { type: ["string", "null"] },
+          indice_carga: { type: ["string", "null"] },
+          codigo_velocidad: { type: ["string", "null"] },
+        },
+      },
+    },
+    config_convencional: { type: ["string", "null"] },
+    observaciones: { type: ["string", "null"] },
+    confianza: { type: ["number", "null"] },
+  },
+};

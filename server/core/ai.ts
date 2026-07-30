@@ -6,16 +6,14 @@
  * de errores: los llamantes solo aportan el prompt de sistema y el material.
  */
 
-import OpenAI from "openai";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { pedirIA, hayIA } from "./openaiService.ts";
 
 export type AiContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail: "auto" } };
 
 export function hasAi(): boolean {
-  return !!process.env.OPENAI_API_KEY;
+  return hayIA();
 }
 
 /**
@@ -36,27 +34,25 @@ export async function extractJson(opts: {
   const text = (opts.text ?? "").trim();
   if (!text && images.length === 0) return {};
 
-  const userContent: AiContentPart[] = [
-    { type: "text", text: text || "(sin texto: analiza las imágenes)" },
-    ...images.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "auto" as const } })),
-  ];
+  // Toda la comunicación con OpenAI pasa por la capa central (Responses API).
+  const r = await pedirIA({
+    operacion: "core.extractJson",
+    proposito: "asistente",
+    prompt: `${opts.system}
+
+${text || "(sin texto: analiza las imágenes)"}`,
+    imagenes: images.map((url) => ({ url })),
+    temperatura: 0.1,
+    maxTokens: opts.maxTokens ?? 800,
+  });
+  if (!r.ok || !r.texto) return {};
 
   try {
-    const response = await openai.chat.completions.create({
-      model: opts.model ?? "gpt-4o",
-      messages: [
-        { role: "system", content: opts.system },
-        { role: "user", content: userContent as any },
-      ],
-      temperature: 0.1,
-      max_tokens: opts.maxTokens ?? 800,
-    });
-    const raw = response.choices[0]?.message?.content ?? "{}";
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const cleaned = r.texto.replace(/```json\r?\n?/g, "").replace(/```\r?\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch (err: any) {
-    console.error("[IA] extractJson:", err?.message);
+    console.error("[IA] extractJson: respuesta no JSON");
     return {};
   }
 }

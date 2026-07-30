@@ -6101,28 +6101,19 @@ async function detectPlateFromImage(
         : "En España, la matrícula BLANCA es la del CAMIÓN/vehículo tractor y la matrícula ROJA es la del REMOLQUE. " +
           "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula BLANCA (la del camión), ignorando la roja. ";
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Esta es una foto de la matrícula de un vehículo español. " +
-                colorInstruction +
-                "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
-                "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ] as any,
-        },
-      ],
-      max_tokens: 20,
+    const r = await pedirIA({
+      operacion: "assist.detectPlate",
+      proposito: "documento",
+      prompt:
+        "Esta es una foto de la matrícula de un vehículo español. " +
+        colorInstruction +
+        "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
+        "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
     });
 
-    const text = response.choices[0]?.message?.content?.trim() ?? "";
+    const text = r.texto.trim();
     const plate = normalizePlateText(text);
     return plate && plate !== "NONE" && plate.length >= 5 ? plate : null;
   } catch (error) {
@@ -13566,7 +13557,7 @@ app.post(
 ========================================================= */
 
 const BUCKET_DOCS = "tc-documentos";
-const fichaOcr = new OpenAiFichaTecnicaOcr(openai);
+const fichaOcr = new OpenAiFichaTecnicaOcr();
 
 /// URL firmada (el bucket es privado: la ficha lleva VIN y titular).
 async function urlFirmadaDoc(storagePath: string, segundos = 3600): Promise<string | null> {
