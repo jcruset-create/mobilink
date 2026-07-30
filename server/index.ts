@@ -14019,10 +14019,24 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
       marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
       fecha_primera_matriculacion: "fecha_matriculacion",
     };
+    // "25/10/2017" → "2017-10-25". Una fecha en formato no ISO rompe el
+    // guardado (columna date de Postgres): mejor no aplicarla que romperlo.
+    const fechaIso = (v: string): string | null => {
+      const s = v.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+      return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
+    };
     const patch: Record<string, any> = {};
     for (const [clave, valor] of Object.entries(campos ?? {})) {
       const col = COLUMNAS[clave];
-      if (col && valor != null && String(valor).trim() !== "") patch[col] = String(valor).trim();
+      if (!col || valor == null || String(valor).trim() === "") continue;
+      if (col === "fecha_matriculacion") {
+        const iso = fechaIso(String(valor));
+        if (iso) patch[col] = iso;
+      } else {
+        patch[col] = String(valor).trim();
+      }
     }
     if (configuracionConvencional) {
       patch.config_convencional = String(configuracionConvencional).trim();

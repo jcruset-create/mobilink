@@ -66,6 +66,7 @@ Reglas estrictas:
 - Para cualquier otro dato del documento, deja "clave" a null pero CONSERVA "codigo_origen", "etiqueta_origen" y "valor". No descartes nada.
 - "ruedas" es el número de NEUMÁTICOS de ese eje (2 rueda simple, 4 rueda gemela). Si el documento no lo dice con claridad, pon null: NO lo inventes.
 - Los ejes van SIEMPRE ordenados de delante hacia atrás, empezando por posicion 1.
+- Cualquier fecha (fecha_primera_matriculacion, fecha_emision...) se devuelve SIEMPRE en formato ISO "aaaa-mm-dd", aunque el documento la muestre como dd/mm/aaaa.
 - "config_convencional" es la nomenclatura del fabricante tal cual (4x2, 6x2…). Si no aparece, null. No la calcules.
 - "confianza" refleja lo legible que estaba el documento. Sé honesto: si algo no se lee bien, baja la confianza de ese campo.
 - No añadas texto fuera del JSON.`;

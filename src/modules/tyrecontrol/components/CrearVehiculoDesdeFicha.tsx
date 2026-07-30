@@ -6,6 +6,16 @@ import {
 import type { TipoVehiculo, ConfigEjes, VehiculoInput } from "../types";
 import { Modal, inputCls } from "./ui";
 
+/** "25/10/2017" o "25-10-2017" → "2017-10-25". Si no se reconoce, null
+ *  (mejor no aplicar la fecha que romper el guardado con un formato inválido). */
+function fechaIso(v: string): string | null {
+  const s = v.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+  if (!m) return null;
+  return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+}
+
 export interface PendienteFicha {
   docId: string;
   ejes: EjeFicha[];
@@ -95,7 +105,11 @@ export default function CrearVehiculoDesdeFicha({ empresaId, tipos, configEjes, 
       if (c.clave === "marca") draft.marca = v;
       else if (c.clave === "modelo") draft.modelo = v;
       else if (c.clave === "vin" || c.clave === "bastidor") draft.bastidor = v;
-      else if (c.clave === "fecha_primera_matriculacion") draft.fecha_matriculacion = v;
+      else if (c.clave === "fecha_primera_matriculacion") {
+        const iso = fechaIso(v);
+        if (iso) draft.fecha_matriculacion = iso;
+        else atributos.push({ ...c, valor: v }); // formato no reconocido: no se pierde, queda como dato técnico
+      }
       else if (c.clave === "matricula") { /* ya asignada arriba */ }
       else atributos.push({ ...c, valor: v });
     });
