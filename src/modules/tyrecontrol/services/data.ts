@@ -1051,6 +1051,97 @@ export async function eliminarFabricante(id: string): Promise<void> {
 }
 
 const BUCKET_MARCAS = "tc-marcas";
+// ── Ficha técnica del vehículo (documento + OCR) ────────────────
+export interface DocumentoVehiculo {
+  id: string; tipo: string; nombre_original?: string | null; paginas?: number | null;
+  tamano_bytes?: number | null; fecha_emision?: string | null;
+  ocr_estado: "pendiente" | "procesando" | "ok" | "error";
+  ocr_confianza?: number | null; version: number; vigente: boolean;
+  created_at: string; url?: string | null;
+}
+
+export interface CampoFicha {
+  codigo_origen?: string | null; etiqueta_origen?: string | null; clave?: string | null;
+  valor: string; unidad?: string | null; confianza?: number | null; pagina?: number | null;
+}
+
+export interface EjeFicha {
+  posicion: number; ruedas: number; directriz: boolean; motriz: boolean; elevable: boolean;
+  medida?: string | null; indice_carga?: string | null; codigo_velocidad?: string | null;
+}
+
+export interface ResultadoFichaTecnica {
+  campos: CampoFicha[];
+  ejes: EjeFicha[];
+  configuracion: string | null;
+  configuracionPendiente: string | null;
+  configuracionExisteEnCatalogo: boolean;
+  configuracionConvencional: string | null;
+  observaciones: string | null;
+  confianza: number | null;
+  avisos: string[];
+  /** Si tiene contenido, el documento NO es de este vehículo: no aplicar. */
+  bloqueos: string[];
+}
+
+async function tokenSesion(): Promise<string> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  return token;
+}
+
+export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/documentos`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => []);
+  if (!r.ok) throw new Error((j as any)?.error || "Error listando documentos");
+  return j as DocumentoVehiculo[];
+}
+
+/** Sube la ficha técnica: un PDF o varias imágenes de las páginas. */
+export async function subirFichaTecnica(vehiculoId: string, files: File[]): Promise<{ documento: { id: string } }> {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/ficha-tecnica`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error subiendo el documento");
+  return j as any;
+}
+
+export async function procesarOcrDocumento(documentoId: string): Promise<ResultadoFichaTecnica> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/ocr`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error procesando el documento");
+  return j as ResultadoFichaTecnica;
+}
+
+/** Aplica SOLO lo que el técnico ha aceptado en la pantalla de revisión. */
+export async function aplicarFichaTecnica(documentoId: string, cambios: {
+  campos?: Record<string, string>;
+  ejes?: EjeFicha[];
+  configuracion?: string | null;
+  configuracionConvencional?: string | null;
+  atributos?: CampoFicha[];
+}): Promise<{ aplicado: string[] }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/aplicar`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
+    body: JSON.stringify(cambios),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error aplicando los cambios");
+  return j as any;
+}
+
 // ── Marcas de VEHÍCULO (catálogo por tipo, con logo) ────────────
 // Una marca puede servir para varios tipos (Mercedes-Benz es tractora,
 // camión, furgoneta y autobús), de ahí la tabla de relación.
