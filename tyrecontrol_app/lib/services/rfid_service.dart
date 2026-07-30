@@ -120,9 +120,24 @@ class RfidService {
   /// Tiempo de espera del lector en segundos (GA). 0 = nunca expira.
   Future<void> fijarTimeoutLector(int segundos) => _enviar('GA$segundos');
 
+  /// Potencia máxima admitida por el protocolo: 27 dBm.
+  static const int potenciaMaxima = 2700;
+
   /// Potencia de emisión en centésimas de dBm (RFIDPWR2700 = 27 dBm).
   /// Es temporal: vuelve al valor por defecto al reiniciar la sonda.
-  Future<void> fijarPotencia(int centesimasDbm) => _enviar('RFIDPWR$centesimasDbm');
+  Future<void> fijarPotencia(int centesimasDbm) =>
+      _enviar('RFIDPWR${_potenciaValida(centesimasDbm)}');
+
+  /// Igual que [fijarPotencia] pero PERSISTENTE: la sonda mantiene el valor
+  /// aunque se apague y se vuelva a encender.
+  Future<void> fijarPotenciaPersistente(int centesimasDbm) =>
+      _enviar('PERRFIDPWR${_potenciaValida(centesimasDbm)}');
+
+  /// Pide la potencia configurada. La respuesta llega como línea normal
+  /// ("RFIDPWR n") y la reconoce [parsearLinea] con clave 'rfid_pwr'.
+  Future<void> leerPotencia() => _enviar('RFIDPWR');
+
+  int _potenciaValida(int v) => v.clamp(0, potenciaMaxima);
 
   void dispose() {
     _ctrl.close();

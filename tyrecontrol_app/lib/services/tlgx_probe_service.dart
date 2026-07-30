@@ -244,6 +244,13 @@ LecturaSonda parsearLinea(String line) {
     return LecturaSonda(LecturaTipo.presion, valor: double.tryParse(p.group(1)!), raw: l);
   }
 
+  // Potencia RFID: la sonda responde "RFIDPWR n" (o PERRFIDPWR n), en
+  // centésimas de dBm (2700 = 27 dBm).
+  final pwr = RegExp(r'^(?:PER)?RFIDPWR\s*(\d+)$', caseSensitive: false).firstMatch(l);
+  if (pwr != null) {
+    return LecturaSonda(LecturaTipo.info, clave: 'rfid_pwr', texto: pwr.group(1), raw: l);
+  }
+
   final bv = RegExp(r'^BV(\d+(?:\.\d+)?)', caseSensitive: false).firstMatch(l);
   if (bv != null) {
     return LecturaSonda(LecturaTipo.info, clave: 'bateria', texto: bv.group(1), raw: l);
