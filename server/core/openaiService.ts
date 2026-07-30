@@ -31,10 +31,18 @@ export type Proposito = "porDefecto" | "documento" | "informe" | "asistente";
 /** Una imagen para el modelo: URL pública/firmada o data-URI. */
 export interface EntradaImagen { url: string; }
 
+/**
+ * Un fichero adjunto (p. ej. el PDF de un albarán). Se puede pasar por
+ * data-URI (`data:application/pdf;base64,...`) o por id de la Files API.
+ */
+export interface EntradaArchivo { nombre?: string; dataUri?: string; fileId?: string; }
+
 export interface PeticionIA {
   /** Instrucciones + contenido. Texto suelto o mensajes con imágenes. */
   prompt: string;
   imagenes?: EntradaImagen[];
+  /** PDFs u otros ficheros subidos previamente con la Files API. */
+  archivos?: EntradaArchivo[];
   /** Para qué es: decide el modelo sin que el llamante lo escriba. */
   proposito?: Proposito;
   /** Esquema JSON estricto. Si se indica, la respuesta viene validada. */
@@ -94,12 +102,16 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
   const cuerpo: Record<string, any> = {
     model: modelo,
     max_output_tokens: req.maxTokens ?? 4000,
-    input: req.imagenes?.length
+    input: (req.imagenes?.length || req.archivos?.length)
       ? [{
           role: "user",
           content: [
             { type: "input_text", text: req.prompt },
-            ...req.imagenes.map((i) => ({ type: "input_image", image_url: i.url })),
+            ...(req.imagenes ?? []).map((i) => ({ type: "input_image", image_url: i.url })),
+            ...(req.archivos ?? []).map((a) =>
+              a.fileId
+                ? { type: "input_file", file_id: a.fileId }
+                : { type: "input_file", filename: a.nombre ?? "documento.pdf", file_data: a.dataUri }),
           ],
         }]
       : req.prompt,
@@ -152,6 +164,37 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
   };
   registrar(req.operacion, fallo);
   return fallo;
+}
+
+/**
+ * Transcripción de audio (notas de voz de WhatsApp).
+ *
+ * Vive aquí para que TODA la comunicación con OpenAI pase por esta capa,
+ * aunque use otra API: la transcripción no tiene equivalente en Responses.
+ * El modelo se puede cambiar con OPENAI_AUDIO_MODEL.
+ */
+export async function transcribirAudio(
+  archivo: any,
+  opts: { prompt?: string; operacion?: string } = {},
+): Promise<string> {
+  const inicio = Date.now();
+  const modelo = process.env.OPENAI_AUDIO_MODEL || "whisper-1";
+  const operacion = opts.operacion ?? "core.transcribirAudio";
+  try {
+    const tr: any = await getCliente().audio.transcriptions.create({
+      file: archivo,
+      model: modelo,
+      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+    });
+    const texto = String(tr?.text ?? "").trim();
+    registrar(operacion, { ok: true, texto: "", modelo, duracionMs: Date.now() - inicio });
+    return texto;
+  } catch (e: any) {
+    registrar(operacion, {
+      ok: false, texto: "", modelo, duracionMs: Date.now() - inicio, error: String(e?.message ?? e),
+    });
+    throw e;
+  }
 }
 
 /** La Responses API devuelve el texto en output[].content[].text. */

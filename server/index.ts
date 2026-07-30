@@ -13,12 +13,13 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
-import OpenAI, { toFile } from "openai";
+import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
+import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
@@ -500,10 +501,9 @@ app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRol
 const PORT = process.env.PORT || 4000;
 
 const RESET_PASSWORD = "sea123";
+// El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
+// Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2026-04-22.dahlia",
 });
@@ -1699,14 +1699,15 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         origen.length ? `Averías de origen:\n${origen.join("\n")}` : "",
         `Acciones realizadas:\n${resumen}`,
       ].filter(Boolean).join("\n\n");
-      const r = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. No inventes datos ni cifras que no aparezcan." },
-          { role: "user", content: partes },
-        ],
+      const r = await pedirIA({
+        operacion: "tyrecontrol.informe-intervencion",
+        proposito: "informe",
+        prompt:
+          "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) " +
+          "de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. " +
+          "No inventes datos ni cifras que no aparezcan.\n\n" + partes,
       });
-      resumenIa = r.choices[0]?.message?.content?.trim() || resumen;
+      resumenIa = r.texto.trim() || resumen;
     } catch (e) { console.error("IA intervención falló, se guarda solo el resumen:", e); }
 
     const empresaId = (activas[0] as any).empresa_id;
@@ -1760,17 +1761,12 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
 
 app.get("/api/ai-test", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Eres un asistente técnico." },
-        { role: "user", content: "Dime una recomendación de tecnología para un mecánico" }
-      ],
+    const r = await pedirIA({
+      operacion: "diagnostico.ai-test",
+      prompt: "Eres un asistente técnico. Dime una recomendación de tecnología para un mecánico",
     });
 
-    res.json({
-      result: response.choices[0].message.content,
-    });
+    res.json({ result: r.texto, model: r.modelo });
 
   } catch (error) {
     console.error(error);
@@ -1902,14 +1898,13 @@ No propongas saltarte reglas.
 Si no hay técnico válido, responsable debe ser null.
 `;
 
-    const response = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: prompt,
+    const rIa = await pedirIA({
+      operacion: "taller.asignacion",
+      proposito: "asistente",
+      prompt,
     });
 
-    res.json({
-      text: response.output_text,
-    });
+    res.json({ text: rIa.texto });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error IA" });
@@ -3432,35 +3427,27 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
       return res.status(400).json({ error: "Indica la ciudad" });
     }
 
-    const response = await openai.chat.completions.create({
-      model: process.env.FESTIVOS_IA_MODEL || "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
-            "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
-            "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
-            "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
-            'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.',
-        },
-        {
-          role: "user",
-          content:
-            `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
-            "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
-            'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
-            '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
-            '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
-            "(por ejemplo Viernes Santo o Lunes de Pascua). " +
-            `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
-            "(23 de septiembre). Ordena por fecha.",
-        },
-      ],
+    const rIa = await pedirIA({
+      operacion: "agenda.festivos",
+      prompt:
+      "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
+      "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
+      "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
+      "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
+      'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.' +
+      "\n\n" +
+      `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
+      "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
+      'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
+      '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
+      '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
+      "(por ejemplo Viernes Santo o Lunes de Pascua). " +
+      `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
+      "(23 de septiembre). Ordena por fecha.",
+      maxTokens: 4000,
     });
 
-    const raw = safeJsonParse<any>(response.choices[0]?.message?.content ?? "", null);
+    const raw = safeJsonParse<any>(rIa.texto, null);
     const items = Array.isArray(raw?.festivos) ? raw.festivos : [];
 
     const seen = new Set<string>();
@@ -6128,34 +6115,29 @@ async function detectBothPlatesFromImage(
   imageUrl: string
 ): Promise<{ white: string | null; red: string | null }> {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
-                "y la matrícula ROJA es del REMOLQUE. " +
-                "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
-                "Identifica las matrículas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
-                '{"blanca":"XXXX","roja":"RYYYYZZZ"}. ' +
-                "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
-                "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ] as any,
+    const r = await pedirIA<{ blanca: string | null; roja: string | null }>({
+      operacion: "assist.detectBothPlates",
+      proposito: "documento",
+      prompt:
+        "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
+        "y la matrícula ROJA es del REMOLQUE. " +
+        "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
+        "Identifica las matrículas que aparezcan. " +
+        "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
+        "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
+      esquema: {
+        nombre: "matriculas",
+        schema: {
+          type: "object", additionalProperties: false,
+          required: ["blanca", "roja"],
+          properties: { blanca: { type: ["string", "null"] }, roja: { type: ["string", "null"] } },
         },
-      ],
-      max_tokens: 60,
-      response_format: { type: "json_object" } as any,
+      },
     });
 
-    const raw = response.choices[0]?.message?.content?.trim() ?? "{}";
-    let parsed: any = {};
-    try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+    const parsed: any = r.datos ?? {};
 
     const normOrNull = (v: unknown) => {
       const p = normalizePlateText(v);
@@ -7702,16 +7684,15 @@ app.post(
         })),
       ];
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.1,
-        max_tokens: 800,
+      const rIa = await pedirIA({
+        operacion: "assist.backoffice-extract",
+        proposito: "asistente",
+        prompt: `${systemPrompt}\n\n${text || "(sin texto: analiza las imágenes)"}`,
+        imagenes: images.map((url: string) => ({ url })),
+        temperatura: 0.1,
+        maxTokens: 4000,
       });
-      const rawOut = response.choices[0]?.message?.content ?? "{}";
+      const rawOut = rIa.texto || "{}";
       const cleaned = rawOut.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       let parsed: Record<string, any> = {};
       try { parsed = JSON.parse(cleaned); } catch { parsed = {}; }
@@ -11053,27 +11034,15 @@ Reglas obligatorias:
 - Si una página no parece un albarán, no la incluyas.
 `;
 
-      const response = await (openai.responses.create as any)({
-        model: "gpt-4o-mini",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_file",
-                filename: req.file.originalname || "albaranes.pdf",
-                file_data: `data:application/pdf;base64,${base64Pdf}`,
-              },
-            ],
-          },
-        ],
+      const rIa = await pedirIA({
+        operacion: "almacen.leer-pdf",
+        proposito: "documento",
+        prompt,
+        archivos: [{ nombre: req.file.originalname || "albaranes.pdf", dataUri: `data:application/pdf;base64,${base64Pdf}` }],
+        maxTokens: 8000,
       });
 
-      const textoRespuesta = String(response.output_text || "");
+      const textoRespuesta = rIa.texto;
       const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
 
       let datosRaw: any;
@@ -11234,27 +11203,15 @@ Reglas obligatorias:
 - Si una página no parece un albarán de entrada de cliente, no la incluyas.
 `;
 
-      const response = await (openai.responses.create as any)({
-        model: "gpt-4o-mini",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_file",
-                filename: req.file.originalname || "entrada.pdf",
-                file_data: `data:application/pdf;base64,${base64Pdf}`,
-              },
-            ],
-          },
-        ],
+      const rIa = await pedirIA({
+        operacion: "almacen.leer-pdf",
+        proposito: "documento",
+        prompt,
+        archivos: [{ nombre: req.file.originalname || "entrada.pdf", dataUri: `data:application/pdf;base64,${base64Pdf}` }],
+        maxTokens: 8000,
       });
 
-      const textoRespuesta = String(response.output_text || "");
+      const textoRespuesta = rIa.texto;
       const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
 
       let datosRaw: any;
@@ -11633,17 +11590,15 @@ Devuelve SOLO el JSON sin texto adicional:
 }`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: `Mensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}` },
-      ],
-      temperature: 0.1,
-      max_tokens: 800,
+    const rIa = await pedirIA({
+      operacion: "assist.whatsapp-extract",
+      proposito: "asistente",
+      prompt: `${systemPrompt}\n\nMensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}`,
+      temperatura: 0.1,
+      maxTokens: 4000,
     });
 
-    const raw = response.choices[0]?.message?.content ?? "{}";
+    const raw = rIa.texto || "{}";
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     const confidence = parsed.confidence ?? "medium";
@@ -12122,12 +12077,10 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
     const buffer = Buffer.from(await resp.arrayBuffer());
 
     const file = await toFile(buffer, `audio.${ext}`, { type: contentType });
-    const tr = await openai.audio.transcriptions.create({
-      file,
-      model: "whisper-1",
+    const transcript = await transcribirAudio(file, {
+      operacion: "assist.whatsapp-transcripcion",
       prompt: "Asistencia en carretera: matrícula, avería, ubicación, chofer, autorización.",
     });
-    const transcript = (tr.text || "").trim();
 
     // Guardamos la transcripción y la usamos como text_content para que el análisis IA la incluya
     const upd = await db.query(
@@ -13973,23 +13926,16 @@ Reglas:
 - Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Extrae los datos del impagado de esta imagen:" },
-              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 400,
+      const rIa = await pedirIA({
+        operacion: "administracion.analizar-impagado",
+        proposito: "documento",
+        prompt: `${systemPrompt}\n\nExtrae los datos del impagado de esta imagen:`,
+        imagenes: [{ url: dataUrl }],
+        temperatura: 0,
+        maxTokens: 4000,
       });
 
-      const raw = response.choices[0]?.message?.content ?? "{}";
+      const raw = rIa.texto || "{}";
       const jsonTexto = limpiarJsonOpenAI(raw);
 
       let datos: any;
@@ -14053,23 +13999,16 @@ Reglas:
 - Si un dato aparece en varias capturas con valores distintos, prioriza el de "Datos Generales".
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `Extrae los datos del cliente combinando estas ${dataUrls.length} captura(s):` },
-              ...dataUrls.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "high" as const } })),
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 400,
+      const rIa = await pedirIA({
+        operacion: "administracion.analizar-cliente",
+        proposito: "documento",
+        prompt: `${systemPrompt}\n\nExtrae los datos del cliente combinando estas ${dataUrls.length} captura(s):`,
+        imagenes: dataUrls.map((url: string) => ({ url })),
+        temperatura: 0,
+        maxTokens: 4000,
       });
 
-      const raw = response.choices[0]?.message?.content ?? "{}";
+      const raw = rIa.texto || "{}";
       const jsonTexto = limpiarJsonOpenAI(raw);
 
       let datos: any;
