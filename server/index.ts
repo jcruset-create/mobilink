@@ -3735,6 +3735,135 @@ app.post("/api/central-sharing/bulk", requireSupervisorRole, async (req, res) =>
   }
 });
 
+// ─────────────────────────────────────────────────────────────
+// Multi-taller Assist: gestión de talleres (una empresa = una licencia
+// puede tener varios talleres) y asignación de técnicos a cada taller.
+// ─────────────────────────────────────────────────────────────
+
+// Listado: talleres + empresas (licencias) para el desplegable + técnicos
+app.get("/api/assist-talleres", requireSupervisorRole, async (_req, res) => {
+  try {
+    const [talleres, empresas, techs] = await Promise.all([
+      db.query(`
+        SELECT
+          t.id, t.nombre, t.direccion, t.telefono, t."codigoInterno",
+          t.activo, t."licenseId",
+          COALESCE(NULLIF(l."companyName", ''), l."customerName") AS "empresaNombre",
+          (SELECT COUNT(*) FROM techs th WHERE th."tallerId" = t.id) AS "nTecnicos",
+          (SELECT COUNT(*) FROM roadside_vehicles v WHERE v."tallerId" = t.id AND v.active = true) AS "nUnidades"
+        FROM assist_talleres t
+        LEFT JOIN licenses l ON l.id = t."licenseId"
+        ORDER BY t.activo DESC, t.nombre ASC
+      `),
+      db.query(`
+        SELECT id,
+               COALESCE(NULLIF("companyName", ''), "customerName") AS nombre,
+               "maxUnidadesMoviles"
+        FROM licenses
+        ORDER BY nombre ASC
+      `),
+      db.query(`SELECT name, "tallerId" FROM techs ORDER BY name ASC`),
+    ]);
+    res.json({
+      talleres: talleres.rows.map((r) => ({
+        id: Number(r.id),
+        nombre: r.nombre,
+        direccion: r.direccion ?? null,
+        telefono: r.telefono ?? null,
+        codigoInterno: r.codigoInterno ?? null,
+        activo: r.activo === true,
+        licenseId: r.licenseId != null ? Number(r.licenseId) : null,
+        empresaNombre: r.empresaNombre ?? null,
+        nTecnicos: Number(r.nTecnicos ?? 0),
+        nUnidades: Number(r.nUnidades ?? 0),
+      })),
+      empresas: empresas.rows.map((r) => ({
+        id: Number(r.id),
+        nombre: r.nombre,
+        maxUnidadesMoviles: Number(r.maxUnidadesMoviles ?? 0),
+      })),
+      techs: techs.rows.map((r) => ({
+        name: r.name,
+        tallerId: r.tallerId != null ? Number(r.tallerId) : null,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/assist-talleres error:", error);
+    res.status(500).json({ error: "Error obteniendo talleres" });
+  }
+});
+
+// Crear taller
+app.post("/api/assist-talleres", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre || "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+    const licenseId = req.body?.licenseId != null ? Number(req.body.licenseId) : null;
+    const direccion = req.body?.direccion ? String(req.body.direccion).trim() : null;
+    const telefono = req.body?.telefono ? String(req.body.telefono).trim() : null;
+    const codigoInterno = req.body?.codigoInterno ? String(req.body.codigoInterno).trim() : null;
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO assist_talleres
+         ("licenseId", nombre, direccion, telefono, "codigoInterno", activo, "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5, true, $6, $6)
+       RETURNING id`,
+      [licenseId, nombre, direccion, telefono, codigoInterno, now]
+    );
+    res.json({ ok: true, id: Number(r.rows[0].id) });
+  } catch (error) {
+    console.error("POST /api/assist-talleres error:", error);
+    res.status(500).json({ error: "Error creando taller" });
+  }
+});
+
+// Editar taller (nombre, empresa, contacto, activo)
+app.patch("/api/assist-talleres/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const fields: string[] = [];
+    const values: any[] = [];
+    let i = 1;
+    const set = (col: string, val: any) => { fields.push(`"${col}" = $${i++}`); values.push(val); };
+    if (typeof req.body?.nombre === "string") set("nombre", req.body.nombre.trim());
+    if ("licenseId" in (req.body || {})) set("licenseId", req.body.licenseId != null ? Number(req.body.licenseId) : null);
+    if ("direccion" in (req.body || {})) set("direccion", req.body.direccion ? String(req.body.direccion).trim() : null);
+    if ("telefono" in (req.body || {})) set("telefono", req.body.telefono ? String(req.body.telefono).trim() : null);
+    if ("codigoInterno" in (req.body || {})) set("codigoInterno", req.body.codigoInterno ? String(req.body.codigoInterno).trim() : null);
+    if (typeof req.body?.activo === "boolean") set("activo", req.body.activo);
+    if (!fields.length) return res.status(400).json({ error: "Nada que actualizar" });
+    set("updatedAtMs", Date.now());
+    values.push(id);
+    const r = await db.query(
+      `UPDATE assist_talleres SET ${fields.join(", ")} WHERE id = $${i} RETURNING id`,
+      values
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Taller no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("PATCH /api/assist-talleres/:id error:", error);
+    res.status(500).json({ error: "Error actualizando taller" });
+  }
+});
+
+// Asignar (o quitar) el taller de un técnico
+app.patch("/api/assist-talleres/tech/:name", requireSupervisorRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const tallerId = req.body?.tallerId != null ? Number(req.body.tallerId) : null;
+    const r = await db.query(
+      `UPDATE techs SET "tallerId" = $2 WHERE name = $1 RETURNING name, "tallerId"`,
+      [name, tallerId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json({ ok: true, name, tallerId });
+  } catch (error) {
+    console.error("PATCH /api/assist-talleres/tech/:name error:", error);
+    res.status(500).json({ error: "Error asignando taller al técnico" });
+  }
+});
+
 app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
