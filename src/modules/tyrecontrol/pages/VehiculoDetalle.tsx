@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones } from "../services/data";
-import type { Intervencion } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarAtributosTecnicos, listarCatalogoCamposFicha } from "../services/data";
+import type { Intervencion, AtributoTecnicoVehiculo, CampoCatalogoFicha } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
@@ -40,6 +40,8 @@ export default function VehiculoDetalle() {
   const [modalOps, setModalOps] = useState(false);
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
+  const [atributos, setAtributos] = useState<AtributoTecnicoVehiculo[]>([]);
+  const [catalogoFicha, setCatalogoFicha] = useState<CampoCatalogoFicha[]>([]);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
@@ -56,6 +58,7 @@ export default function VehiculoDetalle() {
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
+    setAtributos(await listarAtributosTecnicos(id).catch(() => []));
   }
 
   async function abrirIntervencion(interv: Intervencion) {
@@ -68,6 +71,7 @@ export default function VehiculoDetalle() {
     try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
+  useEffect(() => { listarCatalogoCamposFicha().then(setCatalogoFicha).catch(() => setCatalogoFicha([])); }, []);
 
   const dato = (l: string, val?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{val || "—"}</div></div>
@@ -94,31 +98,52 @@ export default function VehiculoDetalle() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <button onClick={() => navigate("/tyrecontrol/vehiculos")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Vehículos</button>
         <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
+        <span className="ml-2 text-lg font-black text-slate-100">
+          {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
+        </span>
+        <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        {/* Datos generales */}
-        <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
-            {dato("Nº de unidad", v.numero_unidad)}
-            {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
-            {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
-            {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
-          </div>
+      {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
+      <div className="rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
+          {dato("Nº de unidad", v.numero_unidad)}
+          {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
+          {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
+          {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
         </div>
-
-        {/* Kilometraje */}
-        <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Kilometraje</div>
-          <div className="text-3xl font-black">{Number(v.km_actual).toLocaleString("es-ES")} <span className="text-sm font-normal text-slate-400">km</span></div>
-          <div className="mt-1 text-xs text-slate-500">Origen: {ORIGEN_KM_LABELS[v.origen_km]}</div>
-        </div>
+        {/* Todos los campos de la ficha técnica, siempre visibles: el OCR los
+            va rellenando, no hace falta que ya tengan dato para aparecer. */}
+        {catalogoFicha.length > 0 && (() => {
+          // Ya cubiertos arriba con columna propia: no se repiten aquí.
+          const CUBIERTOS = new Set(["matricula", "marca", "modelo", "vin", "bastidor", "fecha_primera_matriculacion"]);
+          const porClave = new Map(atributos.map((a) => [a.clave_normalizada, a]));
+          const filas = catalogoFicha.filter((c) => !CUBIERTOS.has(c.clave));
+          return (
+            <>
+              <div className="mb-2 mt-3 text-[11px] font-bold uppercase text-slate-400">Datos de la ficha técnica</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {filas.map((c) => {
+                  const a = porClave.get(c.clave);
+                  return (
+                    <div key={c.clave}>
+                      <div className="text-[10px] text-slate-400">{c.codigo ? `${c.codigo} · ` : ""}{c.descripcion}</div>
+                      <div className="text-sm text-slate-200">
+                        {a?.valor_bruto || "—"}{a?.valor_bruto && c.unidad ? ` ${c.unidad}` : ""}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
