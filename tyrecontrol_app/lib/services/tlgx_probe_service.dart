@@ -227,6 +227,13 @@ LecturaSonda parsearLinea(String line) {
     return LecturaSonda(LecturaTipo.rfid, texto: rfid.group(1)!.toUpperCase(), raw: l);
   }
 
+  // Área TID (GI): también es RFID, pero se marca con clave 'tid' para que no
+  // se confunda con el EPC.
+  final tid = RegExp(r'^GI([0-9A-Fa-f]{4,})$').firstMatch(l);
+  if (tid != null) {
+    return LecturaSonda(LecturaTipo.rfid, clave: 'tid', texto: tid.group(1)!.toUpperCase(), raw: l);
+  }
+
   final t = RegExp(r'^T(\d+(?:\.\d+)?)$', caseSensitive: false).firstMatch(l);
   if (t != null) {
     return LecturaSonda(LecturaTipo.profundidad, valor: double.tryParse(t.group(1)!), raw: l);
@@ -249,4 +256,76 @@ LecturaSonda parsearLinea(String line) {
   }
 
   return LecturaSonda(LecturaTipo.otro, raw: l);
+}
+
+// ── RFID (ISO18000-6C / EPCglobal gen-2) ─────────────────────
+// Protocolo G 13632 Q, sección 7. Se parsea aparte de [parsearLinea] para no
+// tocar el flujo de profundidad/presión: quien reciba la línea puede pasarla
+// por aquí además de por el parser general.
+
+enum RfidStatus {
+  /// `GR<data>` / `GC<data>`: etiqueta leída, [RfidMessage.epc] informado.
+  epc,
+  /// `GI<data>`: área TID leída.
+  tid,
+  /// GST: no se ha encontrado etiqueta dentro del tiempo de espera.
+  timeout,
+  /// GO: lectura cancelada y lector apagado.
+  cancelado,
+  /// `GW<status>`: resultado de una escritura (GWOK si fue bien).
+  escritura,
+  /// `GSU<codigo>`: error devuelto por el módulo RFID.
+  error,
+}
+
+class RfidMessage {
+  final RfidStatus status;
+  final String? epc;
+  final String? tid;
+  final String? error;
+  final String raw;
+
+  const RfidMessage({required this.status, required this.raw, this.epc, this.tid, this.error});
+
+  bool get hayEtiqueta => status == RfidStatus.epc || status == RfidStatus.tid;
+}
+
+/// Reconoce una respuesta RFID (GR, GC, GI, GO, GST, GW, GSU) o devuelve null
+/// si la línea no es de RFID (profundidad, presión, info…).
+RfidMessage? parsearRfid(String line) {
+  final l = line.trim();
+  if (l.isEmpty) return null;
+  final up = l.toUpperCase();
+
+  // Timeout: sin etiqueta en el campo dentro del tiempo configurado (GA).
+  if (up == 'GST') return RfidMessage(status: RfidStatus.timeout, raw: l);
+
+  // Error del módulo RFID: GSU seguido del código.
+  if (up.startsWith('GSU')) {
+    final cod = l.substring(3).trim();
+    return RfidMessage(status: RfidStatus.error, error: cod.isEmpty ? null : cod, raw: l);
+  }
+
+  // Confirmación de cancelado/apagado del lector.
+  if (up == 'GO' || up.startsWith('GO ')) {
+    return RfidMessage(status: RfidStatus.cancelado, raw: l);
+  }
+
+  // Escritura: GWOK si fue bien, o GW<status>.
+  final gw = RegExp(r'^GW(.*)$', caseSensitive: false).firstMatch(l);
+  if (gw != null) {
+    return RfidMessage(status: RfidStatus.escritura, error: gw.group(1)!.trim(), raw: l);
+  }
+
+  // Lectura de EPC (GR puntual o GC continuo) y de TID (GI).
+  final epc = RegExp(r'^G[CR]([0-9A-Fa-f]{4,})$').firstMatch(l);
+  if (epc != null) {
+    return RfidMessage(status: RfidStatus.epc, epc: epc.group(1)!.toUpperCase(), raw: l);
+  }
+  final tid = RegExp(r'^GI([0-9A-Fa-f]{4,})$').firstMatch(l);
+  if (tid != null) {
+    return RfidMessage(status: RfidStatus.tid, tid: tid.group(1)!.toUpperCase(), raw: l);
+  }
+
+  return null;
 }
