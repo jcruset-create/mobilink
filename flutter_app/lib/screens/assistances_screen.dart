@@ -31,6 +31,8 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   bool _loading = true;
   String? _error;
   String _techName = '';
+  String _empresaNombre = '';
+  String _tallerNombre = '';
   String _appVersion = '';
   StreamSubscription<List<ConnectivityResult>>? _connSub;
 
@@ -57,7 +59,13 @@ class _AssistancesScreenState extends State<AssistancesScreen>
 
   Future<void> _loadTechName() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) setState(() => _techName = prefs.getString('techName') ?? '');
+    if (mounted) {
+      setState(() {
+        _techName = prefs.getString('techName') ?? '';
+        _empresaNombre = prefs.getString('empresaNombre') ?? '';
+        _tallerNombre = prefs.getString('tallerNombre') ?? '';
+      });
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -95,6 +103,9 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');
+    await prefs.remove('empresaNombre');
+    await prefs.remove('tallerNombre');
+    await prefs.remove('tallerId');
     if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
   }
@@ -178,6 +189,30 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                                 child: Text(
                                   _techName,
                                   style: tt.labelSmall?.copyWith(color: AppColors.textSecondary),
+                                ),
+                              ),
+                            if (_tallerNombre.isNotEmpty || _empresaNombre.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 2, top: 1),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.store_mall_directory_outlined,
+                                        size: 12, color: AppColors.primary),
+                                    const SizedBox(width: 3),
+                                    Flexible(
+                                      child: Text(
+                                        [_empresaNombre, _tallerNombre]
+                                            .where((s) => s.isNotEmpty)
+                                            .join(' · '),
+                                        overflow: TextOverflow.ellipsis,
+                                        style: tt.labelSmall?.copyWith(
+                                          color: AppColors.primary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             if (_appVersion.isNotEmpty)

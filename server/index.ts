@@ -4438,7 +4438,7 @@ app.post("/api/roadside-operator/login", async (req, res) => {
 
     const techResult = await db.query(
       `
-        SELECT name
+        SELECT name, "tallerId"
         FROM techs
         WHERE name = $1
         LIMIT 1
@@ -4450,6 +4450,36 @@ app.post("/api/roadside-operator/login", async (req, res) => {
       return res.status(404).json({
         error: "Operario no encontrado",
       });
+    }
+
+    // Multi-taller: resolver el taller del operario y su empresa (= licencia).
+    // Si el técnico aún no tiene taller asignado, ambos van a null y la app
+    // sigue funcionando (compatibilidad hacia atrás).
+    let taller: { id: number; nombre: string } | null = null;
+    let empresa: { id: number; nombre: string } | null = null;
+    const tallerId = techResult.rows[0].tallerId;
+    if (tallerId != null) {
+      const tallerRes = await db.query(
+        `
+          SELECT
+            t.id AS "tallerId",
+            t.nombre AS "tallerNombre",
+            l.id AS "empresaId",
+            COALESCE(NULLIF(l."companyName", ''), l."customerName") AS "empresaNombre"
+          FROM assist_talleres t
+          LEFT JOIN licenses l ON l.id = t."licenseId"
+          WHERE t.id = $1 AND t.activo = true
+          LIMIT 1
+        `,
+        [tallerId]
+      );
+      if (tallerRes.rows.length > 0) {
+        const r = tallerRes.rows[0];
+        taller = { id: Number(r.tallerId), nombre: r.tallerNombre };
+        if (r.empresaId != null) {
+          empresa = { id: Number(r.empresaId), nombre: r.empresaNombre || "" };
+        }
+      }
     }
 
     // Sesión unificada (fase 1 SaaS): garantizar usuario de Supabase Auth
@@ -4504,6 +4534,8 @@ app.post("/api/roadside-operator/login", async (req, res) => {
     res.json({
       ok: true,
       techName,
+      empresa,
+      taller,
       session,
     });
   } catch (error) {
@@ -13642,6 +13674,64 @@ app.post(
   }
 );
 
+// Sube una ficha técnica SIN vehículo todavía: sirve para crear el vehículo
+// directamente desde el documento (alta rápida). El documento queda "huérfano"
+// (vehiculo_id null) hasta que /documentos/:id/aplicar lo enlaza al vehículo
+// recién creado.
+app.post(
+  "/api/tyrecontrol/documentos/nueva-ficha",
+  requireTyreControlPanelUser,
+  upload.array("files", 12),
+  async (req, res) => {
+    try {
+      const empresaId = String(req.body.empresaId || "");
+      if (!empresaId) return res.status(400).json({ error: "Falta la empresa" });
+      const userId = (req as any).tyreControlUserId as string;
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
+
+      const hash = crypto.createHash("sha256");
+      for (const f of files) hash.update(f.buffer);
+      const sha = hash.digest("hex");
+
+      const carpeta = `${empresaId}/nuevo/${Date.now()}`;
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = (f.originalname.split(".").pop() || "bin").toLowerCase();
+        const ruta = `${carpeta}/p${String(i + 1).padStart(2, "0")}.${ext}`;
+        const { error } = await supabase.storage
+          .from(BUCKET_DOCS)
+          .upload(ruta, f.buffer, { contentType: f.mimetype, upsert: false });
+        if (error) throw new Error(error.message);
+      }
+
+      const { data: doc, error: insErr } = await supabase
+        .from("tc_vehiculo_documentos")
+        .insert({
+          vehiculo_id: null,
+          empresa_id: empresaId,
+          tipo: "ficha_tecnica",
+          storage_path: carpeta,
+          nombre_original: files[0].originalname,
+          mime_type: files[0].mimetype,
+          paginas: files.length,
+          tamano_bytes: files.reduce((s, f) => s + f.size, 0),
+          hash_sha256: sha,
+          ocr_estado: "pendiente",
+          subido_por: userId,
+        })
+        .select("id, paginas, created_at")
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      res.json({ ok: true, documento: doc });
+    } catch (e: any) {
+      console.error("POST documentos/nueva-ficha error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo la ficha técnica" });
+    }
+  }
+);
+
 // Procesa el OCR del documento y devuelve los datos detectados SIN aplicarlos.
 app.post(
   "/api/tyrecontrol/documentos/:id/ocr",
@@ -13656,8 +13746,12 @@ app.post(
         .maybeSingle();
       if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
 
-      const veh = await vehiculoDeUsuario((doc as any).vehiculo_id);
-      if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+      // Documento "huérfano" (subido para crear el vehículo directamente):
+      // aún no hay vehículo con el que comparar ni tipo que sugiera la
+      // configuración, se sigue igual pero sin esas comprobaciones.
+      const vehiculoIdDoc = (doc as any).vehiculo_id as string | null;
+      const veh = vehiculoIdDoc ? await vehiculoDeUsuario(vehiculoIdDoc) : null;
+      if (vehiculoIdDoc && !veh) return res.status(404).json({ error: "Vehículo no encontrado" });
 
       await supabase.from("tc_vehiculo_documentos")
         .update({ ocr_estado: "procesando", ocr_error: null }).eq("id", docId);
@@ -13704,23 +13798,26 @@ app.post(
 
       // Configuración de ejes: se CALCULA contando neumáticos por eje, nunca
       // se copia la nomenclatura del fabricante.
-      const { data: tipo } = (doc as any) && veh.tipo_vehiculo_id
+      const { data: tipo } = veh?.tipo_vehiculo_id
         ? await supabase.from("tc_tipos_vehiculo").select("nombre").eq("id", veh.tipo_vehiculo_id).maybeSingle()
         : { data: null as any };
       const calc = calcularConfiguracion(resultado, (tipo as any)?.nombre ?? null);
       const avisos = avisosCoherencia(calc);
 
-      // Aviso bloqueante si el documento no es de este vehículo.
+      // Aviso bloqueante si el documento no es de este vehículo (no aplica
+      // si aún no hay vehículo: se está creando uno nuevo a partir de esto).
       const campo = (clave: string) =>
         resultado.campos.find((c) => (c.clave ?? "").toLowerCase() === clave)?.valor?.trim() ?? null;
       const norm = (s: string | null) => (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
       const vinDoc = campo("vin"), matriculaDoc = campo("matricula");
       const bloqueos: string[] = [];
-      if (vinDoc && veh.bastidor && norm(vinDoc) !== norm(veh.bastidor)) {
-        bloqueos.push(`El bastidor de la ficha (${vinDoc}) no coincide con el del vehículo (${veh.bastidor}).`);
-      }
-      if (matriculaDoc && norm(matriculaDoc) !== norm(veh.matricula)) {
-        bloqueos.push(`La matrícula de la ficha (${matriculaDoc}) no coincide con la del vehículo (${veh.matricula}).`);
+      if (veh) {
+        if (vinDoc && veh.bastidor && norm(vinDoc) !== norm(veh.bastidor)) {
+          bloqueos.push(`El bastidor de la ficha (${vinDoc}) no coincide con el del vehículo (${veh.bastidor}).`);
+        }
+        if (matriculaDoc && norm(matriculaDoc) !== norm(veh.matricula)) {
+          bloqueos.push(`La matrícula de la ficha (${matriculaDoc}) no coincide con la del vehículo (${veh.matricula}).`);
+        }
       }
 
       // ¿Existe ya esa configuración en el catálogo?
@@ -13765,15 +13862,26 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
   try {
     const docId = String(req.params.id);
     const userId = (req as any).tyreControlUserId as string;
-    const { campos, ejes, configuracion, configuracionConvencional, atributos } = req.body ?? {};
+    const { campos, ejes, configuracion, configuracionConvencional, atributos, vehiculoId: vehiculoIdNuevo } = req.body ?? {};
 
     const { data: doc } = await supabase
-      .from("tc_vehiculo_documentos").select("id, vehiculo_id").eq("id", docId).maybeSingle();
+      .from("tc_vehiculo_documentos").select("id, vehiculo_id, empresa_id").eq("id", docId).maybeSingle();
     if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
-    const vehiculoId = (doc as any).vehiculo_id as string;
+
+    // Documento huérfano (alta directa desde ficha): el vehículo se acaba de
+    // crear y llega en el cuerpo de la petición; aquí se enlaza documento↔vehículo.
+    let vehiculoId = (doc as any).vehiculo_id as string | null;
+    const eraHuerfano = !vehiculoId;
+    if (!vehiculoId) {
+      if (!vehiculoIdNuevo) return res.status(400).json({ error: "Falta el vehículo al que aplicar la ficha" });
+      vehiculoId = String(vehiculoIdNuevo);
+    }
 
     const veh = await vehiculoDeUsuario(vehiculoId);
     if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+    if (veh.empresa_id !== (doc as any).empresa_id) {
+      return res.status(403).json({ error: "El vehículo no pertenece a la empresa del documento" });
+    }
 
     const aplicado: string[] = [];
 
@@ -13834,26 +13942,41 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
       aplicado.push(`${ejes.length} eje(s)`);
     }
 
-    // 4) Atributos técnicos sin columna propia, ya validados.
+    // 4) Atributos técnicos sin columna propia, ya validados. El código y la
+    //    descripción, si la clave está en el catálogo, son los oficiales
+    //    (no el texto suelto que trajera el documento).
     if (Array.isArray(atributos) && atributos.length) {
-      const filas = atributos.map((a: any) => ({
-        vehiculo_id: vehiculoId,
-        documento_id: docId,
-        codigo_origen: a.codigo_origen ?? null,
-        etiqueta_origen: a.etiqueta_origen ?? null,
-        clave_normalizada: a.clave ?? null,
-        valor_bruto: a.valor ?? null,
-        valor_normalizado: a.valor ?? null,
-        unidad: a.unidad ?? null,
-        confianza: a.confianza ?? null,
-        estado: "validado",
-        pagina: a.pagina ?? null,
-        validado_por: userId,
-        validado_at: new Date().toISOString(),
-      }));
+      const { data: catalogoRows } = await supabase
+        .from("tc_cat_campos_ficha_tecnica").select("clave, codigo, descripcion, unidad");
+      const catalogo = new Map((catalogoRows ?? []).map((c: any) => [c.clave, c]));
+
+      const filas = atributos.map((a: any) => {
+        const cat = a.clave ? catalogo.get(a.clave) : undefined;
+        return {
+          vehiculo_id: vehiculoId,
+          documento_id: docId,
+          codigo_origen: cat?.codigo ?? a.codigo_origen ?? null,
+          etiqueta_origen: cat?.descripcion ?? a.etiqueta_origen ?? null,
+          clave_normalizada: a.clave ?? null,
+          valor_bruto: a.valor ?? null,
+          valor_normalizado: a.valor ?? null,
+          unidad: cat?.unidad ?? a.unidad ?? null,
+          confianza: a.confianza ?? null,
+          estado: "validado",
+          pagina: a.pagina ?? null,
+          validado_por: userId,
+          validado_at: new Date().toISOString(),
+        };
+      });
       const { error } = await supabase.from("tc_vehiculo_atributos_tecnicos").insert(filas);
       if (error) throw new Error(error.message);
       aplicado.push(`${filas.length} dato(s) técnico(s)`);
+    }
+
+    // Enlaza el documento huérfano con el vehículo recién creado.
+    if (eraHuerfano) {
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ vehiculo_id: vehiculoId, vigente: true }).eq("id", docId);
     }
 
     res.json({ ok: true, aplicado });
