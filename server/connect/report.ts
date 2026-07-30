@@ -53,12 +53,15 @@ function txt(v: unknown): string {
  * Descarga una imagen y la normaliza para incrustarla; si falla, se omite sin
  * romper el PDF.
  *
- * Igual que en el informe de Mobilink Assist: los JPEG que llegan del móvil
- * traen perfiles de color y submuestreo que PDFKit no interpreta bien y las
- * fotos salían con bandas y como superpuestas. Al reencodearlas con sharp se
- * corrige la orientación EXIF, se limpian los metadatos y se garantiza un
- * JPEG base sin submuestreo de color. Se reducen antes a 1200 px porque en el
- * papel no ocupan más de 150 pt y así el informe no se va a decenas de MB.
+ * Se reencodean con sharp: corrige la orientación EXIF, limpia metadatos y
+ * deja un JPEG base sin submuestreo de color. Se reducen a 1200 px porque en
+ * el papel no pasan de 150 pt y así el informe no se va a decenas de MB.
+ *
+ * OJO con la versión de PDFKit: la 0.19.0 leía mal la cabecera SOF del JPEG
+ * (tomaba el identificador del primer componente en lugar del número de
+ * componentes) y declaraba cualquier foto a color como /DeviceGray, así que
+ * el visor la pintaba en gris y con bandas. Está corregido a partir de la
+ * 0.19.1, que es la que fija el package.json.
  */
 async function fetchImage(url: string, lado = 1200): Promise<Buffer | null> {
   try {
