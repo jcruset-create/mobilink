@@ -59,32 +59,21 @@ function QueueCard({ item, onSelect, selected }: { item: Item; onSelect: (i: Ite
 
 function Column({ title, tone, items, onSelect, selectedId, verTodas }: {
   title: string; tone: string; items: Item[]; onSelect: (i: Item) => void; selectedId: number | null;
-  /** Ruta a la vista completa de la cola, si la tiene. */
-  verTodas?: string;
+  /** Pestaña de la cola a pantalla completa. */
+  verTodas: string;
 }) {
-  const cabecera = (
-    <>
-      <span className="text-[12px] font-bold uppercase tracking-wide">
-        {title}{verTodas && <span className="ml-1 text-[10px] font-normal opacity-70">· ver todas ↗</span>}
-      </span>
-      <span className="rounded-full bg-slate-900/50 px-2 py-0.5 text-[11px] font-black">{items.length}</span>
-    </>
-  );
   return (
     <div className="flex min-w-0 flex-1 flex-col rounded-xl border border-slate-700 bg-slate-900/60">
-      {verTodas ? (
-        <Link
-          to={verTodas}
-          title="Abrir todas las asistencias activas con su información completa"
-          className={`flex items-center justify-between rounded-t-xl border-b border-slate-700 px-3 py-2 hover:brightness-125 ${tone}`}
-        >
-          {cabecera}
-        </Link>
-      ) : (
-        <div className={`flex items-center justify-between rounded-t-xl border-b border-slate-700 px-3 py-2 ${tone}`}>
-          {cabecera}
-        </div>
-      )}
+      <Link
+        to={verTodas}
+        title={`Abrir ${title.toLowerCase()} a pantalla completa con la información completa de cada asistencia`}
+        className={`flex items-center justify-between rounded-t-xl border-b border-slate-700 px-3 py-2 hover:brightness-125 ${tone}`}
+      >
+        <span className="text-[12px] font-bold uppercase tracking-wide">
+          {title}<span className="ml-1 text-[10px] font-normal opacity-70">· ver todas ↗</span>
+        </span>
+        <span className="rounded-full bg-slate-900/50 px-2 py-0.5 text-[11px] font-black">{items.length}</span>
+      </Link>
       <div className="flex max-h-[calc(100vh-240px)] flex-col gap-1.5 overflow-y-auto p-2">
         {items.length === 0 ? (
           <p className="p-3 text-center text-[11px] text-slate-600">Vacío</p>
@@ -131,7 +120,11 @@ export default function CentroControl() {
 
   return (
     <div>
-      <PageTitle title="Centro de control" subtitle="Colas de trabajo en tiempo real. Selecciona una asistencia para operar sin salir de la pantalla." />
+      <PageTitle
+        title="Centro de control"
+        subtitle="Colas de trabajo en tiempo real. Selecciona una asistencia para operar sin salir de la pantalla, o abre una cola a pantalla completa desde su cabecera."
+        actions={<Link to="/connect/colas/resumen" className="text-[13px] text-cyan-300 hover:underline">Resumen de todas las colas ↗</Link>}
+      />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
       {!board ? (
@@ -139,10 +132,10 @@ export default function CentroControl() {
       ) : (
         <div className="flex gap-3">
           <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 xl:grid-cols-4">
-            <Column title="Pendientes" tone="text-amber-300" items={board.pending} onSelect={setSelected} selectedId={selected?.id ?? null} />
-            <Column title="En asignación" tone="text-fuchsia-300" items={board.assigning} onSelect={setSelected} selectedId={selected?.id ?? null} />
-            <Column title="Activas" tone="text-emerald-300" items={board.active} onSelect={setSelected} selectedId={selected?.id ?? null} verTodas="/connect/activas" />
-            <Column title="Atención" tone="text-red-300" items={board.attention} onSelect={setSelected} selectedId={selected?.id ?? null} />
+            <Column title="Pendientes" tone="text-amber-300" items={board.pending} onSelect={setSelected} selectedId={selected?.id ?? null} verTodas="/connect/colas/pendientes" />
+            <Column title="En asignación" tone="text-fuchsia-300" items={board.assigning} onSelect={setSelected} selectedId={selected?.id ?? null} verTodas="/connect/colas/asignacion" />
+            <Column title="Activas" tone="text-emerald-300" items={board.active} onSelect={setSelected} selectedId={selected?.id ?? null} verTodas="/connect/colas/activas" />
+            <Column title="Atención" tone="text-red-300" items={board.attention} onSelect={setSelected} selectedId={selected?.id ?? null} verTodas="/connect/colas/atencion" />
           </div>
 
           {/* Ficha lateral */}
