@@ -30,6 +30,13 @@ interface Coords { x: number; y: number; w: number; h: number; }
 const DEFAULT_W = 15;
 const DEFAULT_H = 14;
 
+// Suelo en píxeles para que la ficha del neumático (marca, modelo, medida,
+// profundidad y presión) quepa aunque el plano se vea pequeño. Se aplica
+// SIEMPRE —libre, ocupado o calibrando— para que el recuadro que se arrastra
+// sea exactamente el que luego se ve.
+const MIN_W_PX = "108px";
+const MIN_H_PX = "84px";
+
 // Posición de partida en cascada para posiciones aún sin calibrar,
 // para que sean visibles y arrastrables aunque no tengan pos_x/y en BD.
 function defaultCoords(index: number): Coords {
@@ -553,8 +560,12 @@ export default function VehicleLayoutImage({
                 key={p.id}
                 className="absolute flex flex-col items-center justify-center rounded-lg border-2 pointer-events-auto"
                 style={{
-                  left: `${c.x}%`, top: `${c.y}%`, width: `${c.w}%`, height: `${c.h}%`,
-                  minWidth: ocupado && !calibrando ? "108px" : undefined, minHeight: ocupado && !calibrando ? "84px" : undefined,
+                  // El ancla es el CENTRO del recuadro, no su esquina: así el
+                  // punto donde se suelta al calibrar es el mismo que se ve
+                  // después, crezca o no el recuadro por su contenido.
+                  left: `${c.x + c.w / 2}%`, top: `${c.y + c.h / 2}%`, transform: "translate(-50%, -50%)",
+                  width: `${c.w}%`, height: `${c.h}%`,
+                  minWidth: MIN_W_PX, minHeight: MIN_H_PX,
                   borderColor: esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : ocupado ? "#22c55e" : "#64748b",
                   borderWidth: esOrigenPermuta ? 3 : 2,
                   borderStyle: ocupado || calibrando ? "solid" : "dashed",
@@ -576,7 +587,12 @@ export default function VehicleLayoutImage({
                 }}
               >
                 {calibrando ? (
-                  <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">{p.codigo_posicion}</span>
+                  <>
+                    <span className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold text-amber-300">
+                      {p.nombre ?? p.codigo_posicion}
+                    </span>
+                    <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">{p.codigo_posicion}</span>
+                  </>
                 ) : ocupado ? (() => {
                   const neu = m!.neumatico!;
                   const medicion = medicionesActuales[neu.id];
@@ -623,7 +639,7 @@ export default function VehicleLayoutImage({
         {calibrando ? (
           <div className="space-y-3">
             <div className="text-sm text-slate-400">
-              Arrastra cada recuadro sobre la rueda correspondiente en la imagen. El tamaño por defecto es aproximado; ajusta la imagen para que encaje o pide una imagen recortada al chasis.
+              Arrastra cada recuadro sobre la rueda correspondiente en la imagen. El recuadro se ve con su tamaño real y se ancla por el centro, así que queda donde lo sueltas. Encima de cada uno aparece la posición (eje y lado).
             </div>
             <div>
               <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Orden de revisión (tablet)</div>
