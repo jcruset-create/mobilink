@@ -15,18 +15,20 @@ class AnaliticaScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Analítica de Productividad'),
-          bottom: const TabBar(tabs: [
+          bottom: const TabBar(isScrollable: true, tabs: [
             Tab(icon: Icon(Icons.fact_check_outlined), text: 'Revisiones'),
             Tab(icon: Icon(Icons.build_outlined), text: 'Operaciones'),
+            Tab(icon: Icon(Icons.eco_outlined), text: 'Conducción'),
           ]),
         ),
         body: const TabBarView(children: [
           _TabProductividad(tab: 'revisiones'),
           _TabProductividad(tab: 'operaciones'),
+          _TabConduccion(),
         ]),
       ),
     );
@@ -628,6 +630,272 @@ class _TabProductividadState extends State<_TabProductividad>
 }
 
 // ── Gráficos (CustomPainter, mismo estilo Material 3 de la app) ──
+
+// ── Conducción eficiente (Webfleet) ────────────────────────────
+/// Datos de los equipos Webfleet de la flota: OptiDrive (puntuación de
+/// conducción de TomTom), ralentí, km y excesos de velocidad.
+///
+/// NO hay consumo de combustible: los equipos no llevan enlace CAN/FMS y
+/// Webfleet devuelve fuel_usage y co2 a 0. Se avisa en pantalla para que
+/// nadie lo interprete como "consumo 0".
+class _TabConduccion extends StatefulWidget {
+  const _TabConduccion();
+
+  @override
+  State<_TabConduccion> createState() => _TabConduccionState();
+}
+
+class _TabConduccionState extends State<_TabConduccion> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  bool _cargando = true;
+  String? _error;
+  Map<String, dynamic> _datos = {};
+  int _dias = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    final empresa = TyreControlApi.empresaActivaId;
+    setState(() {
+      _cargando = true;
+      _error = null;
+    });
+    if (empresa == null) {
+      // En modo "Admin (todos)" no hay una empresa concreta con la que pedir
+      // credenciales de Webfleet: hay que elegir cliente.
+      setState(() {
+        _cargando = false;
+        _error = 'Selecciona un cliente concreto para ver su flota Webfleet.';
+      });
+      return;
+    }
+    try {
+      final d = await TyreControlApi.conduccionWebfleet(empresa, dias: _dias);
+      if (!mounted) return;
+      setState(() => _datos = d ?? {});
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e'.replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _cargando = false);
+    }
+  }
+
+  List<Map<String, dynamic>> _lista(String clave) => _datos[clave] is List
+      ? (_datos[clave] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+      : [];
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final k = _datos['kpis'] is Map ? Map<String, dynamic>.from(_datos['kpis'] as Map) : <String, dynamic>{};
+    return RefreshIndicator(
+      onRefresh: _cargar,
+      child: ListView(
+        padding: const EdgeInsets.all(14),
+        children: [
+          Wrap(spacing: 8, children: [
+            for (final d in [7, 30, 90])
+              ChoiceChip(
+                label: Text('$d días'),
+                selected: _dias == d,
+                onSelected: (_) {
+                  setState(() => _dias = d);
+                  _cargar();
+                },
+              ),
+          ]),
+          const SizedBox(height: 12),
+          if (_cargando)
+            const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
+          else if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.danger)),
+            )
+          else ...[
+            _seccion('Indicadores de la flota', Wrap(spacing: 10, runSpacing: 10, children: [
+              _kpi('Vehículos', '${k['vehiculos'] ?? 0}', Icons.local_shipping),
+              _kpi('Viajes', '${k['viajes'] ?? 0}', Icons.route),
+              _kpi('Kilómetros', '${k['km'] ?? 0} km', Icons.straighten),
+              _kpi('Horas en marcha', '${k['horas'] ?? 0} h', Icons.schedule),
+              _kpi('Ralentí', '${k['ralenti_horas'] ?? 0} h', Icons.hourglass_bottom,
+                  color: _colorRalenti((k['pct_ralenti'] as num?)?.toDouble() ?? 0)),
+              _kpi('% ralentí', '${k['pct_ralenti'] ?? 0} %', Icons.local_gas_station,
+                  color: _colorRalenti((k['pct_ralenti'] as num?)?.toDouble() ?? 0)),
+              if (k['optidrive'] != null)
+                _kpi('OptiDrive medio', '${k['optidrive']} / 100', Icons.eco,
+                    color: _colorOpti((k['optidrive'] as num).toDouble())),
+            ])),
+            _avisoCombustible(),
+            _porVehiculo(),
+            _porConductor(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Color _colorRalenti(double pct) =>
+      pct > 30 ? AppColors.danger : (pct > 15 ? AppColors.warning : AppColors.success);
+  Color _colorOpti(double v) =>
+      v >= 80 ? AppColors.success : (v >= 60 ? AppColors.warning : AppColors.danger);
+
+  Widget _avisoCombustible() {
+    if (_datos['combustible_disponible'] == true) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: const Row(children: [
+        Icon(Icons.info_outline, size: 18, color: AppColors.textHint),
+        SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Sin consumo de combustible: los equipos de la flota no tienen enlace '
+            'CAN/FMS con el vehículo, así que Webfleet no puede leerlo.',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _porVehiculo() {
+    final filas = _lista('por_vehiculo');
+    if (filas.isEmpty) {
+      return _seccion('Por vehículo',
+          const Text('Sin viajes en el periodo.', style: TextStyle(color: AppColors.textHint)));
+    }
+    return _seccion(
+      'Por vehículo',
+      Column(children: [
+        for (final f in filas)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.cardBorder),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(f['enlazado'] == true ? Icons.link : Icons.link_off,
+                    size: 16, color: f['enlazado'] == true ? AppColors.info : AppColors.textHint),
+                const SizedBox(width: 6),
+                Expanded(
+                    child: Text('${f['vehiculo']}',
+                        style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textPrimary))),
+                if (f['optidrive'] != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _colorOpti((f['optidrive'] as num).toDouble()).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text('OptiDrive ${f['optidrive']}',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _colorOpti((f['optidrive'] as num).toDouble()))),
+                  ),
+              ]),
+              const SizedBox(height: 6),
+              Wrap(spacing: 14, runSpacing: 4, children: [
+                _mini('Km', '${f['km']}'),
+                _mini('Viajes', '${f['viajes']}'),
+                _mini('En marcha', '${f['horas']} h'),
+                _mini('Ralentí', '${f['ralenti_min']} min'),
+                _mini('% ralentí', '${f['pct_ralenti']} %'),
+                _mini('V. máx', '${f['vmax']} km/h'),
+                if (f['excesos'] != null) _mini('Excesos', '${f['excesos']}'),
+              ]),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _porConductor() {
+    final filas = _lista('por_conductor');
+    if (filas.isEmpty) return const SizedBox.shrink();
+    return _seccion(
+      'Por conductor',
+      Column(children: [
+        for (final f in filas)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              Expanded(
+                  flex: 3,
+                  child: Text('${f['conductor']}',
+                      style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis)),
+              Expanded(flex: 2, child: Text('${f['km']} km', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12))),
+              Expanded(flex: 2, child: Text('ralentí ${f['pct_ralenti']} %', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12))),
+              if (f['optidrive'] != null)
+                Text('${f['optidrive']}',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: _colorOpti((f['optidrive'] as num).toDouble()))),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  // Mismas piezas visuales que las otras pestañas.
+  Widget _seccion(String titulo, Widget child) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(14)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(titulo, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          const SizedBox(height: 10),
+          child,
+        ]),
+      );
+
+  Widget _kpi(String titulo, String valor, IconData icon, {Color? color}) => Container(
+        width: 190,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.cardBorder),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(icon, size: 16, color: color ?? AppColors.info),
+            const SizedBox(width: 6),
+            Expanded(
+                child: Text(titulo,
+                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+          ]),
+          const SizedBox(height: 6),
+          Text(valor,
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: color ?? AppColors.textPrimary),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+        ]),
+      );
+
+  Widget _mini(String t, String v) => Text.rich(TextSpan(children: [
+        TextSpan(text: '$t: ', style: const TextStyle(color: AppColors.textHint, fontSize: 12)),
+        TextSpan(text: v, style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w600)),
+      ]));
+}
 
 class _GraficoBarras extends StatelessWidget {
   final List<({String etiqueta, double valor, String detalle})> datos;

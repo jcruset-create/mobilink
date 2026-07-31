@@ -4785,6 +4785,160 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 
+// ── Conducción eficiente (Webfleet) ─────────────────────────────────────────
+// Los equipos de la flota no tienen enlace CAN/FMS, así que Webfleet devuelve
+// fuel_usage y co2 SIEMPRE a 0. Lo que sí trae, y es aprovechable, son los
+// indicadores de conducción de TomTom (OptiDrive), el ralentí y los excesos de
+// velocidad. Este endpoint los agrega para la pestaña "Conducción" de la
+// Analítica de Productividad.
+//
+// Una sola llamada por informe para TODA la flota (sin objectno), no una por
+// vehículo: es lo que hace que esto sea rápido con flotas grandes.
+//   /api/tyrecontrol/webfleet/conduccion?empresa=<uuid>&dias=30
+app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyrecontrol"), async (req, res) => {
+  try {
+    const empresa = String(req.query.empresa || "");
+    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
+    const creds = await resolveWebfleetCreds(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
+
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+
+    const pedir = async (action: string) => {
+      const { url, headers } = buildWebfleetRequest(action, rango, creds);
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
+      if (!r.ok) throw new Error(`Webfleet ${action} HTTP ${r.status}`);
+      const data = await r.json();
+      if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
+      return (Array.isArray(data) ? data : data?.data ?? []) as any[];
+    };
+
+    const [viajes, resumen] = await Promise.all([
+      pedir("showTripReportExtern"),
+      pedir("showTripSummaryReportExtern"),
+    ]);
+
+    // Matrícula de nuestros vehículos por objectno de Webfleet.
+    const { data: vehs } = await supabase
+      .from("tc_vehiculos")
+      .select("matricula, webfleet_vehicle_id")
+      .eq("empresa_id", empresa)
+      .not("webfleet_vehicle_id", "is", null);
+    const matriculaPorObj = new Map<string, string>(
+      (vehs ?? []).map((v: any) => [String(v.webfleet_vehicle_id), v.matricula])
+    );
+
+    const num = (x: any) => (Number.isFinite(Number(x)) ? Number(x) : 0);
+    type Acc = {
+      objectno: string; objectname: string; matricula: string | null;
+      viajes: number; distancia_m: number; duracion_s: number; ralenti_s: number;
+      optidriveSuma: number; optidriveN: number;
+      excesos: number; eventos: number; vmax: number;
+    };
+    const porVehiculo = new Map<string, Acc>();
+    const porConductor = new Map<string, { conductor: string; viajes: number; distancia_m: number; ralenti_s: number; duracion_s: number; optidriveSuma: number; optidriveN: number }>();
+
+    for (const t of viajes) {
+      const key = String(t.objectno ?? "");
+      if (!key) continue;
+      const a = porVehiculo.get(key) ?? {
+        objectno: key, objectname: t.objectname ?? key,
+        matricula: matriculaPorObj.get(key) ?? null,
+        viajes: 0, distancia_m: 0, duracion_s: 0, ralenti_s: 0,
+        optidriveSuma: 0, optidriveN: 0, excesos: 0, eventos: 0, vmax: 0,
+      };
+      a.viajes += 1;
+      a.distancia_m += num(t.distance);
+      a.duracion_s += num(t.duration);
+      a.ralenti_s += num(t.idle_time);
+      // Los indicadores de OptiDrive son 0..1; solo cuentan si vienen informados.
+      if (t.optidrive_indicator != null) { a.optidriveSuma += num(t.optidrive_indicator); a.optidriveN += 1; }
+      a.excesos += num(t.speeding_indicator);
+      a.eventos += num(t.drivingevents_indicator);
+      a.vmax = Math.max(a.vmax, num(t.max_speed));
+      porVehiculo.set(key, a);
+
+      const cond = (t.drivername ?? "").toString().trim();
+      if (cond) {
+        const c = porConductor.get(cond) ?? { conductor: cond, viajes: 0, distancia_m: 0, ralenti_s: 0, duracion_s: 0, optidriveSuma: 0, optidriveN: 0 };
+        c.viajes += 1; c.distancia_m += num(t.distance); c.ralenti_s += num(t.idle_time); c.duracion_s += num(t.duration);
+        if (t.optidrive_indicator != null) { c.optidriveSuma += num(t.optidrive_indicator); c.optidriveN += 1; }
+        porConductor.set(cond, c);
+      }
+    }
+
+    // El resumen diario aporta el tiempo con motor en marcha (operatingtime) y
+    // las paradas, que el informe de viajes no da.
+    const standstillPorObj = new Map<string, { standstill_s: number; operating_s: number; tours: number }>();
+    for (const s of resumen) {
+      const key = String(s.objectno ?? "");
+      if (!key) continue;
+      const cur = standstillPorObj.get(key) ?? { standstill_s: 0, operating_s: 0, tours: 0 };
+      cur.standstill_s += num(s.standstill);
+      cur.operating_s += num(s.operatingtime);
+      cur.tours += num(s.tours);
+      standstillPorObj.set(key, cur);
+    }
+
+    const pct = (parte: number, total: number) => (total > 0 ? Math.round((1000 * parte) / total) / 10 : 0);
+    const filas = [...porVehiculo.values()].map((a) => {
+      const extra = standstillPorObj.get(a.objectno);
+      return {
+        objectno: a.objectno,
+        vehiculo: a.matricula ?? a.objectname,
+        enlazado: a.matricula != null,
+        viajes: a.viajes,
+        km: Math.round(a.distancia_m / 1000),
+        horas: Math.round((a.duracion_s / 3600) * 10) / 10,
+        ralenti_min: Math.round(a.ralenti_s / 60),
+        pct_ralenti: pct(a.ralenti_s, a.duracion_s),
+        optidrive: a.optidriveN ? Math.round((100 * a.optidriveSuma) / a.optidriveN) : null,
+        excesos: Math.round(a.excesos * 10) / 10,
+        vmax: a.vmax,
+        paradas_min: extra ? Math.round(extra.standstill_s / 60) : null,
+        tours: extra?.tours ?? null,
+      };
+    }).sort((x, y) => y.km - x.km);
+
+    const totDur = [...porVehiculo.values()].reduce((s, a) => s + a.duracion_s, 0);
+    const totRal = [...porVehiculo.values()].reduce((s, a) => s + a.ralenti_s, 0);
+    const totKm = filas.reduce((s, f) => s + f.km, 0);
+    const conOpti = filas.filter((f) => f.optidrive != null);
+
+    res.json({
+      dias,
+      // Se deja explícito para que la app pueda avisar: sin CAN no hay consumo.
+      combustible_disponible: false,
+      kpis: {
+        vehiculos: filas.length,
+        viajes: filas.reduce((s, f) => s + f.viajes, 0),
+        km: totKm,
+        horas: Math.round((totDur / 3600) * 10) / 10,
+        ralenti_horas: Math.round((totRal / 3600) * 10) / 10,
+        pct_ralenti: pct(totRal, totDur),
+        optidrive: conOpti.length
+          ? Math.round(conOpti.reduce((s, f) => s + (f.optidrive ?? 0), 0) / conOpti.length)
+          : null,
+      },
+      por_vehiculo: filas,
+      por_conductor: [...porConductor.values()]
+        .map((c) => ({
+          conductor: c.conductor,
+          viajes: c.viajes,
+          km: Math.round(c.distancia_m / 1000),
+          pct_ralenti: pct(c.ralenti_s, c.duracion_s),
+          optidrive: c.optidriveN ? Math.round((100 * c.optidriveSuma) / c.optidriveN) : null,
+        }))
+        .sort((a, b) => b.km - a.km),
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || "Error consultando Webfleet" });
+  }
+});
+
 app.post("/api/asistencias/:id/en-camino", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);

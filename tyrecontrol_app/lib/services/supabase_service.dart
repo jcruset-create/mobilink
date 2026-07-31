@@ -227,6 +227,36 @@ class TyreControlApi {
 
   /// Km actuales del vehículo según Webfleet (odómetro real). Devuelve null si
   /// no está enlazado o no hay cobertura; no bloquea la revisión.
+  /// Conducción eficiente de la flota (Webfleet): OptiDrive, ralentí, km y
+  /// excesos de velocidad, agregados en el backend.
+  ///
+  /// Combustible NO: los equipos no llevan enlace CAN/FMS, así que Webfleet
+  /// devuelve fuel_usage y co2 siempre a 0 (el backend lo indica con
+  /// combustible_disponible=false).
+  static Future<Map<String, dynamic>?> conduccionWebfleet(String empresaId, {int dias = 30}) async {
+    try {
+      final uri = Uri.parse('$kBackendUrl/api/tyrecontrol/webfleet/conduccion?empresa=$empresaId&dias=$dias');
+      final r = await http.get(uri, headers: {
+        if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
+      }).timeout(const Duration(seconds: 35));
+      if (r.statusCode != 200) {
+        final msg = () {
+          try {
+            return (jsonDecode(r.body) as Map<String, dynamic>)['error']?.toString();
+          } catch (_) {
+            return null;
+          }
+        }();
+        throw Exception(msg ?? 'Webfleet no disponible (HTTP ${r.statusCode})');
+      }
+      return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+    } on Exception {
+      rethrow;
+    } catch (e) {
+      throw Exception('$e');
+    }
+  }
+
   static Future<int?> obtenerKmWebfleet(String empresaId, String objectno) async {
     try {
       final uri = Uri.parse('$kBackendUrl/api/tyrecontrol/webfleet/odometer?empresa=$empresaId&objectno=${Uri.encodeComponent(objectno)}');
