@@ -35,7 +35,13 @@ create policy cat_campos_ficha_write on tc_cat_campos_ficha_tecnica
 
 -- ── Catalogo completo ──────────────────────────────────────────────
 -- Las claves que ya existian se conservan tal cual (tienen datos y las
--- usa el codigo); solo se les corrige codigo, descripcion y metadatos.
+-- usa el codigo); el "on conflict" de abajo les corrige codigo,
+-- descripcion, bloque, orden, tipo y unidad. Ojo con los codigos que
+-- cambian respecto a lo que habia: clasificacion pasa a C.L (es la
+-- clasificacion DGT, no la tara), carroceria a J.1, distancia_ejes a
+-- F.4, longitud a F.1.5, anchura a F.5, altura a F.6, via a F.8,
+-- masa_maxima_conjunto a F.3, masa_remolcable a O.1, ejes_motrices a
+-- L.0, num_ruedas a L.2, modelo a D.5 y tara se queda sin codigo.
 insert into tc_cat_campos_ficha_tecnica
   (codigo, clave, descripcion, categoria, orden_seccion, orden, tipo_dato, unidad, es_multiple, activo) values
 
