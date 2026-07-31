@@ -26,7 +26,12 @@ export interface ReporteImport {
   configsNuevas: string[];
 }
 
-const normN = (s: any) => String(s ?? "").trim().toLowerCase();               // nombres
+// Nombres: sin tildes, sin distinguir mayúsculas y tratando "_" y "-" como
+// espacios. En el Excel se escribe "Autobús" o "Camión 2 ejes" y en el
+// catálogo están como "autobus" y "camion_2_ejes": es el mismo tipo.
+const sinTildes = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const normN = (s: any) => sinTildes(String(s ?? "")).trim().toLowerCase()
+  .replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 const normM = (s: any) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, ""); // medidas
 const normL = (s: any) => String(s ?? "").trim().toLowerCase().replace(/[\s·.]+/g, ""); // llantas
 
@@ -81,7 +86,13 @@ export async function importVehiculos(rows: any[], ejecutar: boolean): Promise<R
   }
 
   const mapDeleg = new Map(delegaciones.map((d) => [normN(d.nombre), d.id]));
-  const mapTipo = new Map(tipos.map((t) => [normN(t.nombre), t.id]));
+  // Un tipo se reconoce por su nombre interno ("autobus") o por su
+  // descripción ("Autobús urbano"), que es lo que se suele escribir en el Excel.
+  const mapTipo = new Map<string, string>();
+  for (const t of tipos) {
+    if (t.descripcion) mapTipo.set(normN(t.descripcion), t.id);
+    mapTipo.set(normN(t.nombre), t.id); // el nombre manda si hay empate
+  }
   const mapConfig = new Map(configs.map((c) => [normN(c.nombre), c.id]));
   const mapMedida = new Map(medidas.map((m) => [normM(m.valor), m.id]));
   const mapLlanta = new Map(llantas.map((l) => [normL(tipoLlantaLabel(l)), l.id]));

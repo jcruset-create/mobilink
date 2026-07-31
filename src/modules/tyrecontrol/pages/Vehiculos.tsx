@@ -71,6 +71,33 @@ export default function Vehiculos() {
   const [fTipo, setFTipo] = useState("");
   const [fEstado, setFEstado] = useState<"todos" | "activos" | "inactivos">("todos");
 
+  // Filtro fijado: para trabajar un rato con un solo cliente sin que se pierda
+  // el filtro al ir y volver de una ficha. Se guarda en el navegador, así que
+  // aguanta también un F5.
+  const CLAVE_FIJADO = "tc.vehiculos.filtroFijado";
+  const [fijado, setFijado] = useState(false);
+  useEffect(() => {
+    try {
+      const g = localStorage.getItem(CLAVE_FIJADO);
+      if (!g) return;
+      const f = JSON.parse(g) as { empresa?: string; dele?: string; tipo?: string; estado?: string };
+      setFEmpresa(f.empresa ?? ""); setFDele(f.dele ?? ""); setFTipo(f.tipo ?? "");
+      setFEstado((f.estado as any) ?? "todos");
+      setFijado(true);
+    } catch { /* si el guardado está corrupto, se empieza sin filtro */ }
+  }, []);
+  // Mientras está fijado, cualquier cambio de filtro se guarda: el candado
+  // conserva el cliente, no impide cambiarlo.
+  useEffect(() => {
+    if (!fijado) return;
+    localStorage.setItem(CLAVE_FIJADO, JSON.stringify({ empresa: fEmpresa, dele: fDele, tipo: fTipo, estado: fEstado }));
+  }, [fijado, fEmpresa, fDele, fTipo, fEstado]);
+
+  function alternarFijado() {
+    if (fijado) { localStorage.removeItem(CLAVE_FIJADO); setFijado(false); return; }
+    setFijado(true);
+  }
+
   const [modal, setModal] = useState<null | ModalState>(null);
   const [saving, setSaving] = useState(false);
   const [crearDesdeFicha, setCrearDesdeFicha] = useState(false);
@@ -289,6 +316,15 @@ export default function Vehiculos() {
       {/* Filtros */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input className={`${inputCls} max-w-[200px]`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button
+          onClick={alternarFijado}
+          title={fijado
+            ? "El filtro se mantiene al cambiar de pantalla y al recargar. Pulsa para soltarlo."
+            : "Fija el filtro actual para trabajar solo con este cliente sin que se pierda al ir y volver."}
+          className={`rounded-lg border px-2 py-1.5 text-[12px] font-bold ${
+            fijado ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-slate-600 text-slate-300 hover:bg-slate-700"}`}>
+          {fijado ? "🔒 Fijado" : "🔓 Fijar"}
+        </button>
         <select className={`${inputCls} w-auto`} value={fEmpresa} onChange={(e) => { setFEmpresa(e.target.value); setFDele(""); }}>
           <option value="">Todas las empresas</option>
           {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
@@ -305,6 +341,11 @@ export default function Vehiculos() {
           <option value="todos">Todos</option><option value="activos">Activos</option><option value="inactivos">Inactivos</option>
         </select>
         <span className="text-xs text-slate-500">{visibles.length} vehículo(s)</span>
+        {fijado && (
+          <span className="text-[11px] text-amber-300">
+            Filtro fijado{fEmpresa ? `: ${empresas.find((e) => e.id === fEmpresa)?.nombre ?? ""}` : ""} · se mantiene al salir y volver
+          </span>
+        )}
       </div>
 
       <TableWrap>
