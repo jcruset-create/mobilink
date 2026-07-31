@@ -248,18 +248,57 @@ class TyreControlApi {
     } catch (_) {}
   }
 
-  /// Imagen del plano del vehículo: la del tipo si la tiene; si no, la
-  /// heredada de la configuración de ejes del vehículo. null si no hay.
+  /// Imagen del plano del vehículo, con el mismo orden que el panel web:
+  /// la de su configuración de ejes PARA SU MARCA (un 2x4 de MAN no se dibuja
+  /// como uno de Volvo), si no la genérica de la configuración, y si tampoco
+  /// la del tipo de vehículo. null si no hay ninguna.
   static Future<String?> obtenerImagenChasis(Vehiculo v) async {
     final delTipo = v.tipo?.imagenChasisUrl;
-    if (delTipo != null && delTipo.isNotEmpty) return delTipo;
     try {
-      final veh = await _db.from('tc_vehiculos').select('config_ejes_id').eq('id', v.id).maybeSingle();
+      final veh = await _db
+          .from('tc_vehiculos')
+          .select('config_ejes_id, marca, marca_id')
+          .eq('id', v.id)
+          .maybeSingle();
       final cid = veh?['config_ejes_id'];
-      if (cid == null) return null;
-      final ce = await _db.from('tc_config_ejes').select('imagen_chasis_url').eq('id', cid).maybeSingle();
-      final url = ce?['imagen_chasis_url'] as String?;
-      return (url != null && url.isNotEmpty) ? url : null;
+      if (cid != null) {
+        final url = await _imagenDeMarca(cid as String, veh?['marca_id'] as String?, veh?['marca'] as String?);
+        if (url != null && url.isNotEmpty) return url;
+
+        final ce = await _db.from('tc_config_ejes').select('imagen_chasis_url').eq('id', cid).maybeSingle();
+        final generica = ce?['imagen_chasis_url'] as String?;
+        if (generica != null && generica.isNotEmpty) return generica;
+      }
+    } catch (_) {
+      // Si falla la consulta se cae al tipo, que es lo que había antes.
+    }
+    return (delTipo != null && delTipo.isNotEmpty) ? delTipo : null;
+  }
+
+  /// Imagen propia de la marca para esa configuración. La mayoría de
+  /// vehículos guardan la marca como texto suelto y no enlazada al catálogo,
+  /// así que si no hay marca_id se busca por nombre ignorando mayúsculas.
+  static Future<String?> _imagenDeMarca(String configId, String? marcaId, String? marcaNombre) async {
+    try {
+      var id = marcaId;
+      if (id == null && marcaNombre != null && marcaNombre.trim().isNotEmpty) {
+        final m = await _db
+            .from('tc_cat_marcas_vehiculo')
+            .select('id')
+            .ilike('nombre', marcaNombre.trim())
+            .limit(1);
+        final lista = m as List;
+        if (lista.isNotEmpty) id = (lista.first as Map)['id'] as String?;
+      }
+      if (id == null) return null;
+      final r = await _db
+          .from('tc_config_ejes_marca')
+          .select('imagen_chasis_url')
+          .eq('config_ejes_id', configId)
+          .eq('marca_id', id)
+          .limit(1);
+      final lista = r as List;
+      return lista.isEmpty ? null : (lista.first as Map)['imagen_chasis_url'] as String?;
     } catch (_) {
       return null;
     }
@@ -1148,7 +1187,7 @@ class TyreControlApi {
     var q = _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)');
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)');
     if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
     final data = await q.order('matricula');
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -1159,7 +1198,7 @@ class TyreControlApi {
     final data = await _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)')
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)')
         .eq('id', id)
         .maybeSingle();
     return data == null ? null : Map<String, dynamic>.from(data);

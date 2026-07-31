@@ -180,8 +180,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       // se remapean las tarjetas (ver _remapCambioY); si no, imagen normal.
       final imgCambio = tipo is Map ? tipo['imagen_chasis_cambio_url'] as String? : null;
       final usarCambio = imgCambio != null && imgCambio.isNotEmpty;
-      String? img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
-      if (img == null || img.isEmpty) img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
+      // Manda la imagen de la configuración de ejes; la del tipo es el respaldo.
+      String? img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
+      if (img == null || img.isEmpty) img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
       if (usarCambio) img = imgCambio;
 
       final posiciones = results[0] as List<PosicionVehiculo>;
