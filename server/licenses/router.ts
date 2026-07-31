@@ -136,6 +136,49 @@ export function createLicensesRouter(requireAdmin: RequestHandler): Router {
     }
   });
 
+  // ── Editar datos de la licencia (no toca estado ni fechas) ──
+  router.patch("/:id", requireAdmin, async (req, res) => {
+    try {
+      const row = await getLicenseOr404(Number(req.params.id), res);
+      if (!row) return;
+      const b = req.body ?? {};
+
+      const sets: string[] = [];
+      const params: any[] = [row.id];
+      const changes: string[] = [];
+      const push = (col: string, value: any, label: string) => {
+        params.push(value);
+        sets.push(`"${col}" = $${params.length}`);
+        changes.push(label);
+      };
+
+      if (b.customerName !== undefined) {
+        const v = String(b.customerName).trim();
+        if (!v) return res.status(400).json({ error: "customerName no puede quedar vacío" });
+        push("customerName", v, `cliente → ${v}`);
+      }
+      if (b.companyName !== undefined) push("companyName", String(b.companyName).trim(), "empresa");
+      if (b.plan !== undefined) push("plan", String(b.plan).trim() || "standard", `plan → ${String(b.plan).trim()}`);
+      if (b.graceDays !== undefined && Number.isFinite(Number(b.graceDays))) push("graceDays", Number(b.graceDays), `gracia → ${Number(b.graceDays)}d`);
+      if (b.maxUsers !== undefined && Number.isFinite(Number(b.maxUsers))) push("maxUsers", Number(b.maxUsers), `usuarios → ${Number(b.maxUsers)}`);
+      if (b.maxDevices !== undefined && Number.isFinite(Number(b.maxDevices))) push("maxDevices", Number(b.maxDevices), `dispositivos → ${Number(b.maxDevices)}`);
+      if (b.aiMonthlyLimit !== undefined && Number.isFinite(Number(b.aiMonthlyLimit))) push("aiMonthlyLimit", Number(b.aiMonthlyLimit), `IA/mes → ${Number(b.aiMonthlyLimit)}`);
+      if (b.modules !== undefined && Array.isArray(b.modules)) push("modules", JSON.stringify(b.modules.map(String)), `módulos → ${b.modules.join(",")}`);
+      if (b.notes !== undefined) push("notes", b.notes ? String(b.notes).trim() : null, "notas");
+
+      if (!sets.length) return res.status(400).json({ error: "Nada que actualizar" });
+
+      params.push(Date.now());
+      sets.push(`"updatedAtMs" = $${params.length}`);
+      const r = await db.query(`UPDATE licenses SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+      await logLicenseAction(row.id, "edited", changes.join(" · "), performedBy(req));
+      return res.json(await refreshLicenseStatus(r.rows[0]));
+    } catch (error) {
+      console.error("PATCH /api/licenses/:id error:", error);
+      return res.status(500).json({ error: "Error editando licencia" });
+    }
+  });
+
   // ── Detalle + verificación de caducidad ──
   router.get("/:id", requireAdmin, async (req, res) => {
     try {
