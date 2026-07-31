@@ -10,7 +10,7 @@ import {
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
-  listarConfigEjes, crearConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
+  listarConfigEjes, crearConfigEjes, actualizarConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
   listarImagenesConfigMarca, subirImagenConfigMarca, guardarImagenConfigMarca,
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
   listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
@@ -36,6 +36,9 @@ function FilaConfigEjes({ config, puedeEditar, onCambio, tipos, marcas }: {
   const [abierto, setAbierto] = useState(false);
   const [porMarca, setPorMarca] = useState<Record<string, string | null>>({});
   const [verTodas, setVerTodas] = useState(false);
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(config.nombre);
+  const [descripcion, setDescripcion] = useState(config.descripcion ?? "");
 
   // Marcas que pueden llevar esta configuración: las asociadas a los tipos de
   // vehículo cuya configuración es esta (un 2x4 lo montan camiones y
@@ -93,6 +96,17 @@ function FilaConfigEjes({ config, puedeEditar, onCambio, tipos, marcas }: {
     await desactivarConfigEjes(config.id); onCambio();
   }
 
+  async function guardarEdicion() {
+    const n = nombre.trim();
+    if (!n) { setErr("El nombre no puede quedar vacío"); return; }
+    setErr("");
+    try {
+      await actualizarConfigEjes(config.id, { nombre: n, descripcion });
+      setEditando(false);
+      onCambio();
+    } catch (e: any) { setErr(e?.message || "Error al guardar"); }
+  }
+
   return (
     // Desplegada ocupa toda la fila: en una columna estrecha las marcas no caben.
     <div className={`rounded bg-slate-900 ${abierto ? "sm:col-span-2 lg:col-span-3" : ""}`}>
@@ -102,21 +116,43 @@ function FilaConfigEjes({ config, puedeEditar, onCambio, tipos, marcas }: {
         ) : (
           <div className="flex h-8 w-8 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin img</div>
         )}
-        <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
+        {editando ? (
+          <div className="flex flex-1 flex-wrap items-center gap-1">
+            <input className={`${inputCls} w-24 text-[12px]`} value={nombre} autoFocus
+              onChange={(e) => setNombre(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void guardarEdicion(); if (e.key === "Escape") setEditando(false); }} />
+            <input className={`${inputCls} min-w-0 flex-1 text-[12px]`} placeholder="Descripción" value={descripcion}
+              onChange={(e) => setDescripcion(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void guardarEdicion(); if (e.key === "Escape") setEditando(false); }} />
+          </div>
+        ) : (
+          <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
+        )}
         {err && <span className="text-[10px] text-rose-400">{err}</span>}
-        <button onClick={abrir} className="text-[10px] text-slate-300 hover:underline">
-          {abierto ? "▾ marcas" : "▸ marcas"}
-        </button>
-        {puedeEditar && (
+        {editando ? (
           <>
-            <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
-              {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
-              <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
-            </label>
-            {config.imagen_chasis_url && (
-              <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+            <button onClick={() => void guardarEdicion()} className="text-[10px] font-bold text-emerald-300 hover:underline">guardar</button>
+            <button onClick={() => { setEditando(false); setNombre(config.nombre); setDescripcion(config.descripcion ?? ""); setErr(""); }}
+              className="text-[10px] text-slate-400 hover:underline">cancelar</button>
+          </>
+        ) : (
+          <>
+            <button onClick={abrir} className="text-[10px] text-slate-300 hover:underline">
+              {abierto ? "▾ marcas" : "▸ marcas"}
+            </button>
+            {puedeEditar && (
+              <>
+                <button onClick={() => setEditando(true)} className="text-[10px] text-sky-300 hover:underline">editar</button>
+                <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+                  {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
+                  <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
+                </label>
+                {config.imagen_chasis_url && (
+                  <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+                )}
+                <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+              </>
             )}
-            <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
           </>
         )}
       </div>
