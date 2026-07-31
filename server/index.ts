@@ -29,6 +29,7 @@ import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tec
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
+import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
@@ -15587,6 +15588,10 @@ app.get("/apps/:app", (req, res) => {
 ========================================================= */
 
 mountConnect(app, requireLicensesAdmin);
+
+// Asistente virtual de TyreControl (function calling sobre herramientas de
+// solo lectura). Ver server/tyrecontrol/asistente.ts.
+mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)

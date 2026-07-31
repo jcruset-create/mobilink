@@ -80,6 +80,16 @@ export function hayIA(): boolean {
   return !!process.env.OPENAI_API_KEY;
 }
 
+/**
+ * Cliente compartido, para los casos que `pedirIA` no cubre (hoy: el bucle de
+ * *function calling* del asistente, que necesita varias vueltas con
+ * herramientas). Se expone AQUÍ para que nadie cree su propio cliente ni
+ * elija modelo por su cuenta, que es la regla de este módulo.
+ */
+export function getClienteIA(): OpenAI {
+  return getCliente();
+}
+
 /** Errores del proveedor que justifican reintentar o caer al respaldo. */
 function esErrorTecnico(e: any): boolean {
   const status = Number(e?.status ?? e?.response?.status ?? 0);
