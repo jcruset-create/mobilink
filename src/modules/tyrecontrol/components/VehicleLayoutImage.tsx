@@ -25,8 +25,10 @@ async function subirImagenChasis(tipoId: string, file: File): Promise<string> {
 
 interface Coords { x: number; y: number; w: number; h: number; }
 
-const DEFAULT_W = 9;
-const DEFAULT_H = 13;
+// Todos los recuadros miden lo mismo y son lo bastante grandes para que
+// quepa dentro marca, modelo, medida, profundidad y presión.
+const DEFAULT_W = 15;
+const DEFAULT_H = 14;
 
 // Posición de partida en cascada para posiciones aún sin calibrar,
 // para que sean visibles y arrastrables aunque no tengan pos_x/y en BD.

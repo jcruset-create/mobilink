@@ -43,6 +43,7 @@ export default function VehiculoDetalle() {
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
   const [atributos, setAtributos] = useState<AtributoTecnicoVehiculo[]>([]);
   const [catalogoFicha, setCatalogoFicha] = useState<CampoCatalogoFicha[]>([]);
+  const [verFicha, setVerFicha] = useState(false); // los ~30 campos van plegados
   // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
   // MAN no se dibuja como uno de Volvo). Si no hay, manda la de la config.
   const [imagenMarca, setImagenMarca] = useState<string | null>(null);
@@ -146,10 +147,24 @@ export default function VehiculoDetalle() {
           const CUBIERTOS = new Set(["matricula", "marca", "modelo", "vin", "bastidor", "fecha_primera_matriculacion"]);
           const porClave = new Map(atributos.map((a) => [a.clave_normalizada, a]));
           const filas = catalogoFicha.filter((c) => !CUBIERTOS.has(c.clave));
+          const conDato = filas.filter((c) => {
+            const col = columnaDe(c.clave);
+            const val = (col ? (v as any)[col] : null) ?? porClave.get(c.clave)?.valor_bruto ?? null;
+            return val != null && val !== "";
+          }).length;
           return (
             <>
-              <div className="mb-2 mt-3 text-[11px] font-bold uppercase text-slate-400">Datos de la ficha técnica</div>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {/* Son ~30 campos: plegados por defecto para no tapar el resto
+                  de la ficha, que es lo que se mira a diario. */}
+              <button
+                onClick={() => setVerFicha(!verFicha)}
+                className="mt-3 flex w-full items-center gap-2 rounded bg-slate-900/60 px-2 py-1.5 text-left hover:bg-slate-900"
+              >
+                <span className="text-[11px] text-slate-400">{verFicha ? "▾" : "▸"}</span>
+                <span className="flex-1 text-[11px] font-bold uppercase text-slate-400">Datos de la ficha técnica</span>
+                <span className="text-[11px] text-slate-500">{conDato} de {filas.length} con dato</span>
+              </button>
+              <div className={`mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 ${verFicha ? "" : "hidden"}`}>
                 {filas.map((c) => {
                   const col = columnaDe(c.clave);
                   const propio = col ? (v as any)[col] : null;
