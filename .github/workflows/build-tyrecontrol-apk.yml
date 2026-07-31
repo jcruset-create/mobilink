@@ -61,6 +61,21 @@ jobs:
           MOBILINK_KEYSTORE_PASSWORD: ${{ env.KS_PASS }}
           MOBILINK_KEY_ALIAS: mobilink
 
+      # Sin esto, un secret mal pegado produce un build VERDE con un APK que no
+      # se puede instalar encima del anterior — el fallo aparecería en la tablet,
+      # no aquí. Se comprueba el certificado real del APK ya construido.
+      - name: Comprobar que la APK va firmada con la clave de Mobilink
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          CERTS=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$CERTS"
+          if echo "$CERTS" | grep -q "CN=Android Debug"; then
+            echo "::error::La APK está firmada con la clave de DEBUG pese a existir el secret." \
+                 "Revisa MOBILINK_KEYSTORE_BASE64 y MOBILINK_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
       - name: Renombrar APK
         run: cp build/app/outputs/flutter-apk/app-release.apk
           "build/app/outputs/flutter-apk/mobilink-tyrecontrol-${{ steps.ver.outputs.version }}.apk"
@@ -70,7 +85,11 @@ jobs:
           name: mobilink-tyrecontrol-${{ steps.ver.outputs.version }}
           path: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
 
+      # Solo se publica release si la APK va firmada con la clave estable. Una
+      # release que no se puede instalar encima de la anterior es peor que no
+      # tener release: el artifact del run sigue disponible para depurar.
       - name: Publicar release con la APK
+        if: ${{ env.KS_B64 != '' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: tyrecontrol-v${{ steps.ver.outputs.version }}
