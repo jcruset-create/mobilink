@@ -11,6 +11,7 @@ import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
+import ModalCopiarNeumatico from "./ModalCopiarNeumatico";
 import { supabase } from "../services/supabase";
 
 const BUCKET_CHASIS = "tc-chasis";
@@ -158,6 +159,32 @@ export default function VehicleLayoutImage({
   const [modalFueraAlmacen, setModalFueraAlmacen] = useState(false);
   const [arrastrando, setArrastrando] = useState<string | null>(null);
   const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
+
+  // ── Copiar un neumático ya montado a varias posiciones libres ──
+  // Primero se toca el neumático origen, después las posiciones destino.
+  const [copiando, setCopiando] = useState(false);
+  const [copiaOrigen, setCopiaOrigen] = useState<string | null>(null);   // código de posición
+  const [copiaDestinos, setCopiaDestinos] = useState<string[]>([]);      // códigos de posición
+  const [modalCopiar, setModalCopiar] = useState(false);
+
+  function cerrarCopia() {
+    setCopiando(false); setCopiaOrigen(null); setCopiaDestinos([]); setModalCopiar(false);
+  }
+
+  function tapCopia(p: PosicionVehiculo) {
+    const ocupado = !!montajePorPosicionId.get(p.id)?.neumatico;
+    if (!copiaOrigen) {
+      if (!ocupado) { setMsg("Primero toca el neumático que quieres copiar (uno ya montado)."); return; }
+      setMsg(""); setCopiaOrigen(p.codigo_posicion);
+      return;
+    }
+    if (p.codigo_posicion === copiaOrigen) { setCopiaOrigen(null); setCopiaDestinos([]); return; }
+    if (ocupado) { setMsg("Esa posición ya tiene neumático; solo se copia sobre posiciones libres."); return; }
+    setMsg("");
+    setCopiaDestinos((prev) => prev.includes(p.codigo_posicion)
+      ? prev.filter((c) => c !== p.codigo_posicion)
+      : [...prev, p.codigo_posicion]);
+  }
 
   // ── Plan de trabajo (misma mecánica que la APK): se elige la acción y se
   // marcan las ruedas; nada toca la BD hasta "Aplicar plan". ──
@@ -312,8 +339,8 @@ export default function VehicleLayoutImage({
       return;
     }
     // Con un plan abierto no se arrastra: el arrastre guarda al momento y se
-    // mezclaría con lo apuntado sin aplicar.
-    if (planAbierto) return;
+    // mezclaría con lo apuntado sin aplicar. En modo copia solo se toca.
+    if (planAbierto || copiando) return;
     if (!editable) return;
     const p = posicionPorCodigo.get(codigo);
     if (!p || !montajePorPosicionId.get(p.id)) return; // solo se arrastran posiciones ocupadas
@@ -443,19 +470,42 @@ export default function VehicleLayoutImage({
             </>
           ) : (
             <>
-              {editable && !planAbierto && (
+              {editable && !planAbierto && !copiando && (
                 <button onClick={() => { setPlanAbierto(true); setAccionActiva("mover"); setSeleccion(null); }}
                   className="rounded-lg bg-sky-600 px-5 py-1.5 text-[13px] font-bold text-white hover:bg-sky-500">⇄ Cambiar</button>
+              )}
+              {editable && !planAbierto && !copiando && montajes.length > 0 && posicionesLibres.length > 0 && (
+                <button onClick={() => { setCopiando(true); setSeleccion(null); setMsg(""); }}
+                  className="rounded-lg border border-violet-600 px-3 py-1.5 text-[12px] font-bold text-violet-300 hover:bg-violet-900/40">⧉ Copiar</button>
               )}
               {onOperaciones && (
                 <button onClick={onOperaciones} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200 hover:bg-slate-700">🕐 Operaciones</button>
               )}
-              {puedeCalibrar && !planAbierto && (
+              {puedeCalibrar && !planAbierto && !copiando && (
                 <button onClick={() => setCalibrando(true)} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">✎ Editar posiciones / imagen</button>
               )}
             </>
           )}
         </div>
+
+        {copiando && (
+          <div className="mb-2 rounded-lg border border-violet-700/60 bg-violet-950/40 p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex-1 text-[12px] font-bold text-violet-300">
+                {!copiaOrigen
+                  ? "COPIAR · Toca el neumático que quieres copiar."
+                  : copiaDestinos.length === 0
+                    ? `COPIAR ${posicionPorCodigo.get(copiaOrigen)?.nombre ?? copiaOrigen} · Ahora toca las posiciones libres donde quieres la copia.`
+                    : `COPIAR ${posicionPorCodigo.get(copiaOrigen)?.nombre ?? copiaOrigen} · ${copiaDestinos.length} destino(s). Vuelve a tocar una para quitarla.`}
+              </span>
+              <button onClick={() => setModalCopiar(true)} disabled={!copiaOrigen || copiaDestinos.length === 0}
+                className="rounded-lg bg-violet-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-40">
+                ⧉ Confirmar copia ({copiaDestinos.length})
+              </button>
+              <button onClick={cerrarCopia} className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300">Salir</button>
+            </div>
+          </div>
+        )}
 
         {planAbierto && (
           <div className="mb-2 rounded-lg border border-sky-700/60 bg-sky-950/40 p-2">
@@ -555,6 +605,9 @@ export default function VehicleLayoutImage({
             const esOrigenPermuta = planAbierto && permutaA === p.id;
             const esArrastre = arrastrando === p.codigo_posicion;
             const esDestino = zonaSobrevolada === p.codigo_posicion;
+            const esCopiaOrigen = copiando && copiaOrigen === p.codigo_posicion;
+            const nCopia = copiando ? copiaDestinos.indexOf(p.codigo_posicion) + 1 : 0;
+            const esCopiaDestino = nCopia > 0;
             return (
               <div
                 key={p.id}
@@ -566,16 +619,17 @@ export default function VehicleLayoutImage({
                   left: `${c.x + c.w / 2}%`, top: `${c.y + c.h / 2}%`, transform: "translate(-50%, -50%)",
                   width: `${c.w}%`, height: `${c.h}%`,
                   minWidth: MIN_W_PX, minHeight: MIN_H_PX,
-                  borderColor: esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : ocupado ? "#22c55e" : "#64748b",
-                  borderWidth: esOrigenPermuta ? 3 : 2,
-                  borderStyle: ocupado || calibrando ? "solid" : "dashed",
-                  background: esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
+                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : ocupado ? "#22c55e" : "#64748b",
+                  borderWidth: esCopiaOrigen || esOrigenPermuta ? 3 : 2,
+                  borderStyle: ocupado || calibrando || esCopiaDestino ? "solid" : "dashed",
+                  background: esCopiaDestino ? "rgba(168,85,247,0.25)" : esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
                   opacity: esArrastre && !calibrando ? 0.35 : 1,
-                  cursor: calibrando ? "move" : (editable && ocupado && !planAbierto) ? "grab" : "pointer",
+                  cursor: calibrando ? "move" : copiando ? "pointer" : (editable && ocupado && !planAbierto) ? "grab" : "pointer",
                 }}
                 onPointerDown={(e) => onPointerDownZona(e, p.codigo_posicion)}
                 onClick={() => {
                   if (arrastrando || calibrando) return;
+                  if (copiando) { tapCopia(p); return; }
                   if (planAbierto) { tapPlan(p); return; }
                   setSeleccion(seleccion === p.codigo_posicion ? null : p.codigo_posicion);
                 }}
@@ -586,6 +640,9 @@ export default function VehicleLayoutImage({
                   setMenuContextual({ codigo: p.codigo_posicion, x: e.clientX, y: e.clientY });
                 }}
               >
+                {esCopiaOrigen && (
+                  <span className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-violet-600 px-1 py-0.5 text-[10px] font-bold text-white">ORIGEN</span>
+                )}
                 {calibrando ? (
                   <>
                     <span className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold text-amber-300">
@@ -627,7 +684,9 @@ export default function VehicleLayoutImage({
                     </span>
                   );
                 })() : (
-                  <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">Libre</span>
+                  <span className={`pointer-events-none px-1 text-center text-[10px] font-bold leading-tight ${esCopiaDestino ? "text-violet-200" : "text-slate-100"}`}>
+                    {esCopiaDestino ? `COPIA ${nCopia}` : "Libre"}
+                  </span>
                 )}
               </div>
             );
@@ -662,6 +721,14 @@ export default function VehicleLayoutImage({
                     </div>
                   ))}
               </div>
+            </div>
+          </div>
+        ) : copiando ? (
+          <div>
+            <div className="text-[11px] font-bold uppercase text-violet-300">Modo copia</div>
+            <div className="mt-1 text-xs text-slate-400">
+              Toca primero el neumático que quieres copiar y después las posiciones libres donde quieres la copia.
+              Se copian marca, modelo, medida e índices; no se descuenta stock.
             </div>
           </div>
         ) : !posSeleccionada ? (
@@ -806,6 +873,25 @@ export default function VehicleLayoutImage({
           onDone={() => { setModalFueraAlmacen(false); setSeleccion(null); onChanged?.(); }}
         />
       )}
+
+      {modalCopiar && (() => {
+        const pOrigen = copiaOrigen ? posicionPorCodigo.get(copiaOrigen) : null;
+        const neu = pOrigen ? montajePorPosicionId.get(pOrigen.id)?.neumatico : null;
+        if (!pOrigen || !neu) return null;
+        return (
+          <ModalCopiarNeumatico
+            vehiculoId={vehiculoId}
+            origen={neu}
+            nombreOrigen={pOrigen.nombre ?? pOrigen.codigo_posicion}
+            destinos={copiaDestinos.map((c) => {
+              const p = posicionPorCodigo.get(c)!;
+              return { id: p.id, nombre: p.nombre ?? p.codigo_posicion };
+            })}
+            onClose={() => setModalCopiar(false)}
+            onDone={() => { cerrarCopia(); onChanged?.(); }}
+          />
+        );
+      })()}
 
       {modalAplicar && (
         <Modal title={`Aplicar plan (${totalPlan} acción${totalPlan === 1 ? "" : "es"})`} onClose={() => setModalAplicar(false)}
