@@ -5,7 +5,7 @@ import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico,
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
   actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
-  listarFotosCatalogoPorModelo, claveModeloCatalogo,
+  listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
 } from "../services/data";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
@@ -28,14 +28,14 @@ interface Coords { x: number; y: number; w: number; h: number; }
 
 // Todos los recuadros miden lo mismo y son lo bastante grandes para que
 // quepa dentro marca, modelo, medida, profundidad y presión.
-const DEFAULT_W = 15;
+const DEFAULT_W = 19;
 const DEFAULT_H = 14;
 
-// Suelo en píxeles para que la ficha del neumático (marca, modelo, medida,
-// profundidad y presión) quepa aunque el plano se vea pequeño. Se aplica
-// SIEMPRE —libre, ocupado o calibrando— para que el recuadro que se arrastra
-// sea exactamente el que luego se ve.
-const MIN_W_PX = "108px";
+// El ANCHO no lleva suelo en píxeles a propósito: el recuadro mide
+// exactamente su porcentaje, que es lo único que garantiza que dos recuadros
+// del mismo eje no se pisen entre ellos ni se metan encima del chasis por
+// estrecha que sea la pantalla. El alto sí, porque crecer hacia abajo no
+// invade a nadie: los ejes van bien separados.
 const MIN_H_PX = "84px";
 
 // Posición de partida en cascada para posiciones aún sin calibrar,
@@ -118,8 +118,10 @@ export default function VehicleLayoutImage({
     listarUltimasMedicionesVehiculo(vehiculoId).then(setMedicionesActuales).catch(() => setMedicionesActuales({}));
   }, [vehiculoId, montajes]);
 
+  const [profundidadesCatalogo, setProfundidadesCatalogo] = useState<Record<string, number>>({});
   useEffect(() => {
     listarPresionesCatalogoPorModelo().then(setPresionesCatalogo).catch(() => setPresionesCatalogo({}));
+    listarProfundidadesCatalogoPorModelo().then(setProfundidadesCatalogo).catch(() => setProfundidadesCatalogo({}));
   }, []);
 
   // Fotos de modelo del catálogo (heredadas por marca+modelo).
@@ -623,8 +625,7 @@ export default function VehicleLayoutImage({
                   // punto donde se suelta al calibrar es el mismo que se ve
                   // después, crezca o no el recuadro por su contenido.
                   left: `${c.x + c.w / 2}%`, top: `${c.y + c.h / 2}%`, transform: "translate(-50%, -50%)",
-                  width: `${c.w}%`, height: `${c.h}%`,
-                  minWidth: MIN_W_PX, minHeight: MIN_H_PX,
+                  width: `${c.w}%`, height: `${c.h}%`, minHeight: MIN_H_PX,
                   borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : ocupado ? "#22c55e" : "#64748b",
                   borderWidth: esCopiaOrigen || esOrigenPermuta ? 3 : 2,
                   borderStyle: ocupado || calibrando || esCopiaDestino ? "solid" : "dashed",
@@ -656,8 +657,11 @@ export default function VehicleLayoutImage({
                 ) : ocupado ? (() => {
                   const neu = m!.neumatico!;
                   const medicion = medicionesActuales[neu.id];
-                  const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
                   const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
+                  // Sin medición propia se enseña la de fábrica del catálogo,
+                  // igual que hace la tablet: una rueda recién montada no está
+                  // "sin datos", está nueva.
+                  const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? profundidadesCatalogo[claveCatalogo] ?? null;
                   const presion = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
                   const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("");
                   const distintivos = [
@@ -754,7 +758,7 @@ export default function VehicleLayoutImage({
               const neu = montajeSeleccionado.neumatico;
               const medicion = medicionesActuales[neu.id];
               const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
-              const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
+              const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? profundidadesCatalogo[claveCatalogo] ?? null;
               const presionMedida = medicion?.presion_bar ?? null;
               const presionRecom = neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
               const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("/");

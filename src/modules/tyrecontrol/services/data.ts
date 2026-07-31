@@ -469,6 +469,27 @@ export async function listarPresionesCatalogoPorModelo(): Promise<Record<string,
   return mapa;
 }
 
+/**
+ * Profundidad de dibujo (de fábrica) del catálogo por marca|modelo|medida.
+ * Es la que enseña la tablet cuando el neumático aún no tiene ninguna
+ * medición propia; el panel hacía lo mismo con la presión pero no con la
+ * profundidad, y por eso una rueda recién montada salía con "— mm".
+ */
+export async function listarProfundidadesCatalogoPorModelo(): Promise<Record<string, number>> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico")
+    .select("profundidad_dibujo_mm, modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)")
+    .eq("activo", true).not("profundidad_dibujo_mm", "is", null);
+  if (error) throw new Error(error.message);
+  const mapa: Record<string, number> = {};
+  for (const r of ((data ?? []) as any[])) {
+    const marca = r.modelo?.marca?.nombre; const modelo = r.modelo?.nombre; const medida = r.tyre_size?.medida;
+    if (!marca || !modelo || !medida || r.profundidad_dibujo_mm == null) continue;
+    const clave = `${marca}|${modelo}|${medida}`.toLowerCase().replace(/\s+/g, "");
+    if (mapa[clave] == null) mapa[clave] = r.profundidad_dibujo_mm;
+  }
+  return mapa;
+}
+
 export async function montarNeumatico(params: {
   vehiculoId: string; neumaticoId: string; posicionId: string; km?: number | null; fecha?: string | null; observaciones?: string | null;
   forzarMedida?: boolean;
