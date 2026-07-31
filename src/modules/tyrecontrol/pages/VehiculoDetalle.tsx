@@ -10,7 +10,6 @@ import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
 import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
-import FichasNeumaticos from "../components/FichasNeumaticos";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -214,23 +213,6 @@ export default function VehiculoDetalle() {
           </div>
         )}
       </div>
-
-      {/* Estado de los neumáticos: el plano con una ficha por rueda a cada
-          lado, que es como se mira en el taller. */}
-      {posiciones.length > 0 && (
-        <div className="mt-3 rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Estado de los neumáticos</div>
-          <FichasNeumaticos
-            vehiculoId={v.id}
-            empresaId={v.empresa_id}
-            tipo={v.tipo}
-            imagen={imagenMarca ?? v.config_ejes?.imagen_chasis_url ?? v.tipo?.imagen_chasis_url ?? null}
-            posiciones={posiciones}
-            montajes={montajes}
-            onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
-          />
-        </div>
-      )}
 
       {/* Plano gráfico del vehículo */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">

@@ -89,12 +89,10 @@ export default function VehicleLayoutImage({
   const [saving, setSaving] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [msg, setMsg] = useState("");
-  // Recuadro fijo para TODOS los modelos (3:2, el del plano del
-  // semirremolque, que es el que está bien calibrado). Antes se adaptaba a
-  // cada imagen y por eso cada vehículo se veía de un tamaño en la tablet.
-  // Las coordenadas de las ruedas van en % de este recuadro, así que
-  // mantenerlo constante es lo que hace que encajen en todos los modelos.
-  const aspecto = 3 / 2;
+  // El recuadro se ajusta a la proporción real de cada imagen: así el plano
+  // se ve completo, sin franjas negras, y las ruedas caen donde se
+  // calibraron (las coordenadas van en % de este recuadro).
+  const [aspecto, setAspecto] = useState(16 / 9);
   const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
@@ -518,6 +516,10 @@ export default function VehicleLayoutImage({
               alt={tipo?.nombre}
               className="absolute inset-0 h-full w-full object-contain"
               draggable={false}
+              onLoad={(e) => {
+                const { naturalWidth, naturalHeight } = e.currentTarget;
+                if (naturalWidth && naturalHeight) setAspecto(naturalWidth / naturalHeight);
+              }}
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-600">Sube o pega la URL de la imagen arriba…</div>
