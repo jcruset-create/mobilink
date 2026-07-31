@@ -1533,6 +1533,14 @@ export async function crearConfigEjes(nombre: string, descripcion?: string): Pro
   const { error } = await supabase.from("tc_config_ejes").insert({ nombre: nombre.trim(), descripcion: descripcion?.trim() || null });
   if (error) throw new Error(error.message);
 }
+export async function actualizarConfigEjes(id: string, patch: { nombre?: string; descripcion?: string | null }): Promise<void> {
+  const next: Record<string, unknown> = {};
+  if (patch.nombre != null) next.nombre = patch.nombre.trim();
+  if (patch.descripcion !== undefined) next.descripcion = patch.descripcion?.trim() || null;
+  if (!Object.keys(next).length) return;
+  const { error } = await supabase.from("tc_config_ejes").update(next).eq("id", id);
+  if (error) throw new Error(error.message);
+}
 export async function desactivarConfigEjes(id: string): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").update({ activo: false }).eq("id", id);
   if (error) throw new Error(error.message);
