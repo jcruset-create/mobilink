@@ -1769,6 +1769,22 @@ export async function subirImagenConfigEjes(configId: string, file: File): Promi
   return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
 }
 
+/**
+ * Crea las posiciones de neumático que le falten a un tipo, calculadas a
+ * partir de su configuración de ejes. Va por el servidor porque escribir en
+ * el catálogo de posiciones exige super-admin, y así funciona para cualquier
+ * usuario del panel. Idempotente: no duplica ni borra nada.
+ */
+export async function generarPosicionesDeTipo(tipoId: string): Promise<{ creadas: number; total: number }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tipos/${tipoId}/generar-posiciones`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error generando las posiciones");
+  return j as any;
+}
+
 export async function actualizarImagenConfigEjes(configId: string, url: string | null): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").update({ imagen_chasis_url: url }).eq("id", configId);
   if (error) throw new Error(error.message);
