@@ -19,6 +19,7 @@ export function useInformesFiltros(): Ctx {
 }
 
 const TABS = [
+  { to: "/tyrecontrol/informes/ejecutivo", label: "Ejecutivo" },
   { to: "/tyrecontrol/informes/alertas", label: "Alertas" },
   { to: "/tyrecontrol/informes/estado-flota", label: "Estado de flota" },
   { to: "/tyrecontrol/informes/inventario", label: "Neumáticos controlados" },
