@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   listarDocumentosVehiculo, subirFichaTecnica, procesarOcrDocumento, aplicarFichaTecnica,
-  listarCatalogoCamposFicha,
+  listarCatalogoCamposFicha, listarValoresItv,
   type DocumentoVehiculo, type ResultadoFichaTecnica, type CampoFicha, type EjeFicha, type CampoCatalogoFicha,
 } from "../services/data";
 import type { Vehiculo } from "../types";
 import { columnaDe } from "../services/fichaTecnicaCampos";
+import { hasRealValue, nivelConfianza, seleccionarPorDefecto } from "../services/itvValores";
 import { Modal, inputCls } from "./ui";
 
 /** Campos de la ficha que tienen columna propia en el vehículo. */
@@ -39,6 +40,10 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
   const [editados, setEditados] = useState<Record<string, string>>({});
   const [aplicando, setAplicando] = useState(false);
   const [catalogo, setCatalogo] = useState<Map<string, CampoCatalogoFicha>>(new Map());
+  // Lo que el vehículo ya tiene guardado de fichas anteriores, para poder
+  // comparar código a código y no pisar nada sin preguntar.
+  const [yaGuardado, setYaGuardado] = useState<Map<string, string>>(new Map());
+  const [zoom, setZoom] = useState(1);
 
   async function cargar() {
     setCargando(true);
@@ -69,7 +74,11 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
     setProcesando(docId); setError(""); setMsg("Interpretando campos…");
     try {
       const datos = await procesarOcrDocumento(docId);
-      setDecisiones({}); setEditados({});
+      const previos = await listarValoresItv(vehiculo.id).catch(() => []);
+      setYaGuardado(new Map(previos
+        .filter((p) => p.clave_normalizada)
+        .map((p) => [p.clave_normalizada as string, p.valor_bruto ?? ""])));
+      setDecisiones({}); setEditados({}); setZoom(1);
       setRevision({ docId, datos });
       setMsg("");
     } catch (e: any) { setError(e?.message ?? "Error procesando"); setMsg(""); }
@@ -77,24 +86,38 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
   }
 
   // ── Revisión: comparación campo a campo ──────────────────────
-  const filas = (revision?.datos.campos ?? []).map((c, i) => {
-    const conocido = c.clave ? CAMPOS_VEHICULO[c.clave] : undefined;
-    const actual = conocido ? conocido.actual(vehiculo) : null;
-    const detectado = c.valor ?? "";
-    const id = `${c.clave ?? c.codigo_origen ?? "x"}-${i}`;
-    let estado: "nuevo" | "coincide" | "vacio" | "conflicto";
-    if (!conocido) estado = "nuevo";
-    else if (!actual) estado = "vacio";
-    else if (norm(actual) === norm(detectado)) estado = "coincide";
-    else estado = "conflicto";
-    return { id, campo: c, conocido, actual, detectado, estado };
-  });
+  // Un código sin valor no es un dato: no se enseña ni se guarda.
+  const filas = (revision?.datos.campos ?? [])
+    .filter((c) => hasRealValue(c.valor))
+    .map((c, i) => {
+      const conocido = c.clave ? CAMPOS_VEHICULO[c.clave] : undefined;
+      // Valor actual: la columna del vehículo si el campo la tiene, y si no
+      // lo que ya hubiera guardado de una ficha anterior.
+      const actual = conocido ? conocido.actual(vehiculo)
+        : (c.clave ? yaGuardado.get(c.clave) ?? null : null);
+      const detectado = c.valor ?? "";
+      const id = `${c.clave ?? c.codigo_origen ?? "x"}-${i}`;
+      let estado: "nuevo" | "coincide" | "vacio" | "conflicto";
+      if (!actual) estado = conocido ? "vacio" : "nuevo";
+      else if (norm(actual) === norm(detectado)) estado = "coincide";
+      else estado = "conflicto";
+      return { id, campo: c, conocido, actual, detectado, estado, confianza: c.confianza ?? null };
+    });
 
-  const decisionDe = (f: typeof filas[number]): Decision =>
-    decisiones[f.id] ?? (f.estado === "conflicto" ? "mantener" : "aceptar");
+  // Se marca solo lo fiable: confianza alta y sin conflicto con lo que ya
+  // hay. Lo dudoso queda a la vista pero sin marcar.
+  const decisionDe = (f: typeof filas[number]): Decision => {
+    const guardada = decisiones[f.id];
+    if (guardada) return guardada;
+    if (f.estado === "conflicto") return "mantener";
+    return seleccionarPorDefecto(f.confianza) ? "aceptar" : "mantener";
+  };
 
   const conflictos = filas.filter((f) => f.estado === "conflicto").length;
+  const dudosos = filas.filter((f) => nivelConfianza(f.confianza) !== "alta").length;
+  const marcados = filas.filter((f) => decisionDe(f) === "aceptar").length;
   const bloqueado = (revision?.datos.bloqueos.length ?? 0) > 0;
+  const docActual = revision ? docs.find((d) => d.id === revision.docId) : null;
 
   const COLOR: Record<string, string> = {
     coincide: "text-emerald-300", vacio: "text-emerald-300",
@@ -112,12 +135,12 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
       const atributos: CampoFicha[] = [];
       for (const f of filas) {
         const valor = editados[f.id] ?? f.detectado;
-        if (decisionDe(f) !== "aceptar" || !valor.trim()) continue;
-        // Todo lo que tenga columna propia en el vehículo va a `campos` (el
-        // servidor lo escribe en su columna tipada); solo lo que quede fuera
-        // del catálogo se guarda como atributo técnico.
+        if (decisionDe(f) !== "aceptar" || !hasRealValue(valor)) continue;
+        // La tabla de valores ITV es la fuente de la verdad, así que TODO lo
+        // aceptado va ahí. Además, lo que tenga columna propia en el vehículo
+        // se proyecta también en ella: es lo que leen listas, informes y APK.
         if (f.campo.clave && columnaDe(f.campo.clave)) campos[f.campo.clave] = valor;
-        else atributos.push({ ...f.campo, valor });
+        atributos.push({ ...f.campo, valor });
       }
       const r = await aplicarFichaTecnica(revision.docId, {
         campos,
@@ -126,7 +149,12 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
         configuracionConvencional: revision.datos.configuracionConvencional,
         atributos,
       });
-      setMsg(`Aplicado: ${r.aplicado.join(", ")}`);
+      // Los códigos que no están en el maestro no se guardan solos: se avisa
+      // para que alguien decida si merecen una definición.
+      const aviso = r.ignorados?.length
+        ? ` · sin guardar por no estar en el catálogo: ${[...new Set(r.ignorados)].join(", ")}`
+        : "";
+      setMsg(`Aplicado: ${r.aplicado.join(", ")}${aviso}`);
       setRevision(null);
       onAplicado();
       await cargar();
@@ -255,64 +283,95 @@ export default function FichaTecnicaVehiculo({ vehiculo, puedeEditar, onAplicado
 
           <div className="mb-2 flex flex-wrap items-center gap-3 text-[12px]">
             <span className="text-slate-400">
-              {filas.length} campo(s) · {conflictos} conflicto(s)
-              {revision.datos.confianza != null ? ` · confianza ${Math.round(revision.datos.confianza * 100)}%` : ""}
+              {marcados} de {filas.length} marcado(s) · {conflictos} conflicto(s) · {dudosos} con confianza baja
+              {revision.datos.confianza != null ? ` · confianza global ${Math.round(revision.datos.confianza * 100)}%` : ""}
             </span>
             <button onClick={() => {
               const d: Record<string, Decision> = {};
-              for (const f of filas) if (f.estado !== "conflicto") d[f.id] = "aceptar";
+              for (const f of filas) d[f.id] = f.estado === "conflicto" ? "mantener" : "aceptar";
               setDecisiones((prev) => ({ ...prev, ...d }));
             }} className="rounded border border-slate-600 px-2 py-1 text-slate-300">
-              Aceptar todo lo que no tiene conflicto
+              Marcar todo lo que no tiene conflicto
+            </button>
+            <button onClick={() => {
+              const d: Record<string, Decision> = {};
+              for (const f of filas) d[f.id] = "mantener";
+              setDecisiones((prev) => ({ ...prev, ...d }));
+            }} className="rounded border border-slate-600 px-2 py-1 text-slate-300">
+              Desmarcar todo
             </button>
           </div>
 
-          <div className="max-h-80 overflow-y-auto">
-            <table className="w-full text-[12px]" style={{ tableLayout: "fixed" }}>
-              <thead className="sticky top-0 bg-slate-800">
-                <tr className="text-left text-slate-400">
-                  <th className="w-1/5 py-1">Campo</th>
-                  <th className="w-1/12 py-1">Código</th>
-                  <th className="w-1/5 py-1">Actual</th>
-                  <th className="w-1/4 py-1">Detectado</th>
-                  <th className="w-1/6 py-1">Estado</th>
-                  <th className="w-1/6 py-1">Acción</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filas.map((f) => (
-                  <tr key={f.id} className="border-t border-slate-700/60 align-top">
-                    <td className="py-1 pr-2 text-slate-200">
-                      {f.conocido?.etiqueta ?? (f.campo.clave ? catalogo.get(f.campo.clave)?.descripcion : null)
-                        ?? f.campo.etiqueta_origen ?? f.campo.clave ?? "—"}
-                    </td>
-                    <td className="py-1 pr-2 text-slate-500">
-                      {(f.campo.clave ? catalogo.get(f.campo.clave)?.codigo : null) ?? f.campo.codigo_origen ?? "—"}
-                    </td>
-                    <td className="py-1 pr-2 text-slate-400 break-words">{f.actual ?? "—"}</td>
-                    <td className="py-1 pr-2">
-                      <input className={`${inputCls} text-[12px]`} value={editados[f.id] ?? f.detectado}
-                        onChange={(e) => setEditados((p) => ({ ...p, [f.id]: e.target.value }))} />
-                    </td>
-                    <td className={`py-1 pr-2 font-semibold ${COLOR[f.estado]}`}>
-                      {ETIQUETA[f.estado]}
-                      {f.campo.confianza != null && f.campo.confianza < 0.8 && (
-                        <div className="text-[10px] font-normal text-amber-300">
-                          confianza {Math.round(f.campo.confianza * 100)}%
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-1">
-                      <select className={`${inputCls} text-[11px]`} value={decisionDe(f)}
-                        onChange={(e) => setDecisiones((p) => ({ ...p, [f.id]: e.target.value as Decision }))}>
-                        <option value="aceptar">Aceptar</option>
-                        <option value="mantener">{f.conocido ? "Mantener actual" : "Descartar"}</option>
-                      </select>
-                    </td>
+          <div className={docActual?.url ? "grid gap-3 lg:grid-cols-[1fr_320px]" : ""}>
+            <div className="max-h-96 overflow-y-auto">
+              <table className="w-full text-[12px]" style={{ tableLayout: "fixed" }}>
+                <thead className="sticky top-0 bg-slate-800">
+                  <tr className="text-left text-slate-400">
+                    <th className="w-10 py-1">Incl.</th>
+                    <th className="w-14 py-1">Código</th>
+                    <th className="w-1/5 py-1">Descripción</th>
+                    <th className="w-1/5 py-1">Actual</th>
+                    <th className="w-1/4 py-1">Detectado</th>
+                    <th className="w-1/6 py-1">Estado</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filas.map((f) => {
+                    const nivel = nivelConfianza(f.confianza);
+                    const incluir = decisionDe(f) === "aceptar";
+                    return (
+                      <tr key={f.id}
+                        className={`border-t border-slate-700/60 align-top ${
+                          f.estado === "conflicto" ? "bg-rose-950/20" : nivel === "baja" ? "bg-amber-950/20" : ""}`}>
+                        <td className="py-1">
+                          <input type="checkbox" checked={incluir}
+                            onChange={(e) => setDecisiones((p) => ({ ...p, [f.id]: e.target.checked ? "aceptar" : "mantener" }))} />
+                        </td>
+                        <td className="py-1 pr-2 font-mono font-bold text-sky-300">
+                          {(f.campo.clave ? catalogo.get(f.campo.clave)?.codigo : null) ?? f.campo.codigo_origen ?? "—"}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-200">
+                          {f.conocido?.etiqueta ?? (f.campo.clave ? catalogo.get(f.campo.clave)?.descripcion : null)
+                            ?? f.campo.etiqueta_origen ?? f.campo.clave ?? "—"}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-400 break-words">{f.actual ?? "—"}</td>
+                        <td className="py-1 pr-2">
+                          <input className={`${inputCls} text-[12px]`} value={editados[f.id] ?? f.detectado}
+                            onChange={(e) => setEditados((p) => ({ ...p, [f.id]: e.target.value }))} />
+                        </td>
+                        <td className={`py-1 pr-2 font-semibold ${COLOR[f.estado]}`}>
+                          {ETIQUETA[f.estado]}
+                          {f.confianza != null && (
+                            <div className={`text-[10px] font-normal ${
+                              nivel === "alta" ? "text-emerald-400" : nivel === "media" ? "text-amber-300" : "text-rose-300"}`}>
+                              {Math.round(f.confianza * 100)}%
+                              {nivel === "baja" ? " · revísalo" : nivel === "media" ? " · comprueba" : ""}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* El documento al lado, para comparar sin cambiar de ventana. */}
+            {docActual?.url && (
+              <div className="rounded-lg bg-slate-900 p-2">
+                <div className="mb-1 flex items-center gap-2 text-[11px] text-slate-400">
+                  <span className="flex-1">Documento</span>
+                  <button onClick={() => setZoom((z) => Math.max(1, z - 0.5))} className="rounded border border-slate-600 px-1.5">−</button>
+                  <span>{Math.round(zoom * 100)}%</span>
+                  <button onClick={() => setZoom((z) => Math.min(4, z + 0.5))} className="rounded border border-slate-600 px-1.5">+</button>
+                  <a href={docActual.url} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">Abrir</a>
+                </div>
+                <div className="max-h-96 overflow-auto rounded bg-slate-950">
+                  <img src={docActual.url} alt="Ficha técnica"
+                    style={{ width: `${zoom * 100}%`, maxWidth: "none" }} />
+                </div>
+              </div>
+            )}
           </div>
 
           {revision.datos.observaciones && (

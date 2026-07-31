@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
@@ -39,14 +40,6 @@ const COLS_VEHICULO = [
   "carroceria", "num_homologacion", "num_ejes", "num_ruedas", "ejes_motrices", "distancia_ejes", "via", "mma",
   "masa_maxima_conjunto", "masa_orden_marcha", "tara", "masa_remolcable", "longitud", "anchura", "altura",
   "combustible", "cilindrada", "potencia", "num_cilindros", "norma_emisiones", "nivel_sonoro", "fecha_emision",
-  // Resto de codigos de la tarjeta ITV (C.I, C.V, A.2, D.6, R, J.2, J.3, Z, F.1.1, F.2,
-  // F.2.1, O.1..O.1.4, F.7, F.7.1, M.1, M.4, L.1, P.5, P.5.1, P.1.1, P.2.1, S.1, S.2, U.2, V.7).
-  "campo_ci", "campo_cv", "direccion_fabricante", "procedencia", "color", "campo_j2", "campo_j3",
-  "observaciones_ficha", "mma_por_eje", "mma_autorizada", "mma_autorizada_por_eje",
-  "masa_remolque_con_freno", "campo_o11", "carga_vertical_maxima", "campo_o13", "campo_o14",
-  "campo_f7", "campo_f71", "voladizo", "anchura_vias", "configuracion_ejes_ficha",
-  "fabricante_motor", "tipo_motor", "alimentacion", "relacion_potencia", "num_plazas",
-  "plazas_pie", "regimen_motor", "co2",
 ] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
@@ -1149,7 +1142,7 @@ export async function aplicarFichaTecnica(documentoId: string, cambios: {
   configuracionConvencional?: string | null;
   atributos?: CampoFicha[];
   vehiculoId?: string;
-}): Promise<{ aplicado: string[] }> {
+}): Promise<{ aplicado: string[]; ignorados?: string[] }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/aplicar`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
@@ -1198,6 +1191,180 @@ export async function listarCatalogoCamposFicha(): Promise<CampoCatalogoFicha[]>
     .select("codigo, clave, descripcion, unidad").order("orden");
   if (error) throw new Error(error.message);
   return (data ?? []) as CampoCatalogoFicha[];
+}
+
+// ── Ficha técnica ITV: maestro de campos + valores por vehículo ─────
+// El maestro guarda TODOS los códigos posibles; el vehículo, solo los que
+// tienen dato real. Ver supabase/migrations/tyrecontrol_itv_*.sql.
+
+export interface CampoItv {
+  id: string; codigo: string | null; clave: string; descripcion: string;
+  categoria: string | null; orden_seccion: number; orden: number;
+  tipo_dato: TipoDatoItv; unidad: string | null; es_multiple: boolean;
+  ayuda: string | null; activo: boolean;
+}
+
+export interface ValorItv {
+  id: string; vehiculo_id: string; campo_ficha_id: string | null;
+  codigo_origen: string | null; etiqueta_origen: string | null; clave_normalizada: string | null;
+  valor_bruto: string | null; valor_normalizado: string | null; valor_json: unknown | null;
+  valor_numero: number | null; valor_fecha: string | null; valor_booleano: boolean | null;
+  unidad: string | null; confianza: number | null; estado: string;
+  origen: string; verificado_manualmente: boolean; documento_id: string | null;
+  campo?: CampoItv | null;
+}
+
+export interface CambioItv {
+  id: string; campo_ficha_id: string; valor_anterior: unknown | null; valor_nuevo: unknown | null;
+  motivo_cambio: string; cambiado_por: string | null; documento_id: string | null; created_at: string;
+  campo?: Pick<CampoItv, "codigo" | "descripcion"> | null;
+}
+
+const CAMPO_ITV_SELECT = "id, codigo, clave, descripcion, categoria, orden_seccion, orden, tipo_dato, unidad, es_multiple, ayuda, activo";
+
+/** Maestro completo. `soloActivos` deja fuera los códigos desactivados (p. ej. titular). */
+export async function listarCamposItv(soloActivos = true): Promise<CampoItv[]> {
+  let q = supabase.from("tc_cat_campos_ficha_tecnica").select(CAMPO_ITV_SELECT);
+  if (soloActivos) q = q.eq("activo", true);
+  const { data, error } = await q.order("orden_seccion").order("orden").order("codigo");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CampoItv[];
+}
+
+export async function actualizarCampoItv(id: string, patch: Partial<CampoItv>): Promise<void> {
+  const cols = ["codigo", "descripcion", "categoria", "orden_seccion", "orden", "tipo_dato", "unidad", "es_multiple", "ayuda", "activo"] as const;
+  const next: any = { updated_at: new Date().toISOString() };
+  for (const c of cols) if (patch[c] !== undefined) next[c] = patch[c];
+  const { error } = await supabase.from("tc_cat_campos_ficha_tecnica").update(next).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function crearCampoItv(campo: Omit<CampoItv, "id">): Promise<string> {
+  const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica").insert(campo).select("id").single();
+  if (error) throw new Error(error.message);
+  return (data as { id: string }).id;
+}
+
+/** ¿Se puede borrar un código del maestro? Solo si ningún vehículo lo usa. */
+export async function campoItvEnUso(id: string): Promise<number> {
+  const { count, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select("id", { count: "exact", head: true }).eq("campo_ficha_id", id);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+/**
+ * Valores de un vehículo. Solo devuelve los que tienen dato real: un
+ * código sin valor no debe existir como fila, pero si alguno se coló
+ * (datos antiguos), aquí se filtra igualmente.
+ */
+export async function listarValoresItv(vehiculoId: string): Promise<ValorItv[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select(`id, vehiculo_id, campo_ficha_id, codigo_origen, etiqueta_origen, clave_normalizada,
+             valor_bruto, valor_normalizado, valor_json, valor_numero, valor_fecha, valor_booleano,
+             unidad, confianza, estado, origen, verificado_manualmente, documento_id,
+             campo:tc_cat_campos_ficha_tecnica(${CAMPO_ITV_SELECT})`)
+    .eq("vehiculo_id", vehiculoId)
+    .neq("estado", "rechazado");
+  if (error) throw new Error(error.message);
+  const filas = (data ?? []) as unknown as ValorItv[];
+  return filas
+    .filter((v) => v.campo?.activo !== false)
+    .filter((v) => hasRealValue(v.valor_bruto) || v.valor_numero != null || v.valor_fecha != null
+      || v.valor_booleano != null || hasRealValue(v.valor_json))
+    .sort((a, b) => (a.campo?.orden_seccion ?? 99) - (b.campo?.orden_seccion ?? 99)
+      || (a.campo?.orden ?? 99) - (b.campo?.orden ?? 99)
+      || (a.campo?.codigo ?? "").localeCompare(b.campo?.codigo ?? ""));
+}
+
+export interface ValorItvEntrada {
+  campoFichaId: string;
+  valorBruto: string;
+  confianza?: number | null;
+  documentoId?: string | null;
+  origen?: "manual" | "ocr" | "importacion" | "api";
+}
+
+/**
+ * Guarda (crea o actualiza) valores de ficha, dejando rastro en el
+ * historial de lo que había antes. Los valores sin dato real se ignoran:
+ * nunca se crea una fila vacía.
+ */
+export async function guardarValoresItv(vehiculoId: string, entradas: ValorItvEntrada[]): Promise<number> {
+  const campos = await listarCamposItv(false);
+  const porId = new Map(campos.map((c) => [c.id, c]));
+  const previos = await listarValoresItv(vehiculoId);
+  const previoPorCampo = new Map(previos.map((v) => [v.campo_ficha_id ?? "", v]));
+  const usuario = (await supabase.auth.getUser()).data.user?.id ?? null;
+
+  let guardados = 0;
+  for (const e of entradas) {
+    const campo = porId.get(e.campoFichaId);
+    if (!campo) continue;
+    if (!hasRealValue(e.valorBruto)) continue; // regla dura: nada vacío
+
+    const n = normalizarValor(e.valorBruto, campo.tipo_dato, campo.unidad);
+    const anterior = previoPorCampo.get(e.campoFichaId) ?? null;
+    const fila = {
+      vehiculo_id: vehiculoId,
+      campo_ficha_id: campo.id,
+      codigo_origen: campo.codigo,
+      etiqueta_origen: campo.descripcion,
+      clave_normalizada: campo.clave,
+      valor_bruto: String(e.valorBruto).trim(),
+      valor_normalizado: n.texto,
+      valor_json: n.json,
+      valor_numero: n.numero,
+      valor_fecha: n.fecha,
+      valor_booleano: n.booleano,
+      tipo_valor: campo.tipo_dato,
+      unidad: campo.unidad,
+      confianza: e.confianza ?? null,
+      estado: "validado",
+      origen: e.origen ?? "manual",
+      verificado_manualmente: (e.origen ?? "manual") === "manual",
+      documento_id: e.documentoId ?? null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = anterior
+      ? await supabase.from("tc_vehiculo_atributos_tecnicos").update(fila).eq("id", anterior.id)
+      : await supabase.from("tc_vehiculo_atributos_tecnicos").insert(fila);
+    if (error) throw new Error(error.message);
+
+    await supabase.from("tc_vehiculo_ficha_historial").insert({
+      atributo_id: anterior?.id ?? null,
+      vehiculo_id: vehiculoId,
+      campo_ficha_id: campo.id,
+      valor_anterior: anterior ? { valor: anterior.valor_bruto, unidad: anterior.unidad } : null,
+      valor_nuevo: { valor: fila.valor_bruto, unidad: fila.unidad },
+      motivo_cambio: e.origen ?? "manual",
+      cambiado_por: usuario,
+      documento_id: e.documentoId ?? null,
+    });
+    guardados++;
+  }
+  return guardados;
+}
+
+export async function borrarValorItv(valor: ValorItv): Promise<void> {
+  const usuario = (await supabase.auth.getUser()).data.user?.id ?? null;
+  const { error } = await supabase.from("tc_vehiculo_atributos_tecnicos").delete().eq("id", valor.id);
+  if (error) throw new Error(error.message);
+  if (!valor.campo_ficha_id) return;
+  await supabase.from("tc_vehiculo_ficha_historial").insert({
+    atributo_id: null, vehiculo_id: valor.vehiculo_id, campo_ficha_id: valor.campo_ficha_id,
+    valor_anterior: { valor: valor.valor_bruto, unidad: valor.unidad }, valor_nuevo: null,
+    motivo_cambio: "borrado", cambiado_por: usuario, documento_id: valor.documento_id ?? null,
+  });
+}
+
+export async function listarHistorialItv(vehiculoId: string): Promise<CambioItv[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_ficha_historial")
+    .select("id, campo_ficha_id, valor_anterior, valor_nuevo, motivo_cambio, cambiado_por, documento_id, created_at, campo:tc_cat_campos_ficha_tecnica(codigo, descripcion)")
+    .eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false }).limit(200);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as CambioItv[];
 }
 
 // ── Marcas de VEHÍCULO (catálogo por tipo, con logo) ────────────

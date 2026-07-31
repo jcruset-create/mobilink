@@ -22,6 +22,7 @@ import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } fro
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import ConfigWebfleet from "../components/ConfigWebfleet";
+import AdminCamposItv from "../components/AdminCamposItv";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fila de configuración de ejes con su imagen de chasis asociada: la imagen
@@ -943,6 +944,10 @@ export default function Configuracion() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <AdminCamposItv puedeEditar={puedeEditar} />
       </div>
 
       <div className="mt-4 rounded-lg bg-slate-800 p-3">
