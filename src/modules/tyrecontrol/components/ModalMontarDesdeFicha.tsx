@@ -200,7 +200,9 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
             let visibles = fMarcaProd ? base.filter((i) => i.marca === fMarcaProd) : base;
             const hayStock = stock !== null;
             // el filtro de stock solo aplica a los de almacén; los de catálogo siempre salen (se montan sin descuento)
+            const antesDeStock = visibles.length;
             if (hayStock && soloConStock) visibles = visibles.filter((i) => i.tipo === "catalogo" || (dispDe(i.id) ?? 0) > 0);
+            const ocultosPorStock = antesDeStock - visibles.length;
             visibles = [...visibles].sort((a, b) => (a.marca + (a.modelo ?? "")).localeCompare(b.marca + (b.modelo ?? "")));
             const etiqueta = (i: Item) => {
               const nom = `${i.marca} ${i.modelo ?? ""} · ${i.medida}`.replace(/\s+/g, " ").trim();
@@ -232,6 +234,14 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
                     </label>
                   )}
                 </div>
+                {/* Sin esto no se entiende por qué "faltan" modelos: están en
+                    el almacén pero a cero, y el filtro de stock los esconde. */}
+                {ocultosPorStock > 0 && (
+                  <div className="mt-1 text-[11px] text-amber-300">
+                    Hay {ocultosPorStock} modelo(s) más de esta medida en el almacén, pero sin stock {condicion}.
+                    Desmarca «mostrar solo con stock» para verlos.
+                  </div>
+                )}
                 {visibles.length === 0 && (
                   <div className="mt-1 text-[11px] text-amber-300">Sin resultados{filtrarMedida ? ` para la medida ${medidaActual}` : ""}.</div>
                 )}

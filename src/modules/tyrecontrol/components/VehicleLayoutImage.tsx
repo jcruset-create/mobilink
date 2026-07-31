@@ -785,6 +785,7 @@ export default function VehicleLayoutImage({
           posicionNombre={posSeleccionada.nombre ?? posSeleccionada.codigo_posicion}
           vehiculoId={vehiculoId}
           posicionId={posSeleccionada.id}
+          medidaVehiculo={medidaPorPosicionId?.[posSeleccionada.id] ?? null}
           onClose={() => setModalFueraAlmacen(false)}
           onDone={() => { setModalFueraAlmacen(false); setSeleccion(null); onChanged?.(); }}
         />
