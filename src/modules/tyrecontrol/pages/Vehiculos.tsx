@@ -170,7 +170,7 @@ export default function Vehiculos() {
     return { en_base, pend_base, venc_base, en_ruta, sin_conexion };
   }, [items, estados, revEstados]);
 
-  const visibles = useMemo(() => {
+  const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase();
     return items.filter((v) => {
       if (fEmpresa && v.empresa_id !== fEmpresa) return false;
@@ -187,6 +187,48 @@ export default function Vehiculos() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, revEstados]);
+
+  // ── Orden por columna ──────────────────────────────────────────────
+  // Se pulsa la cabecera: primera vez ascendente, segunda descendente.
+  type Columna = "empresa" | "matricula" | "unidad" | "delegacion" | "marca" | "config" | "medida" | "km" | "estado";
+  const [orden, setOrden] = useState<{ col: Columna; asc: boolean }>({ col: "matricula", asc: true });
+
+  function ordenarPor(col: Columna) {
+    setOrden((o) => (o.col === col ? { col, asc: !o.asc } : { col, asc: true }));
+  }
+
+  const visibles = useMemo(() => {
+    const medidaDe = (v: Vehiculo) =>
+      v.medidas_por_eje ? "por eje" : (medidas.find((m) => m.id === v.medida_id)?.valor ?? "");
+    // El nº de unidad es un número escrito como texto ("1096"): ordenarlo
+    // como texto pondría el 1000 antes que el 674.
+    const comoNumero = (s: string) => {
+      const n = Number(String(s).replace(/[^\d.-]/g, ""));
+      return Number.isFinite(n) && String(s).trim() !== "" ? n : null;
+    };
+    const valor = (v: Vehiculo): string | number => {
+      switch (orden.col) {
+        case "empresa": return v.empresa?.nombre ?? "";
+        case "matricula": return v.matricula ?? "";
+        case "unidad": return comoNumero(v.numero_unidad ?? "") ?? (v.numero_unidad ?? "");
+        case "delegacion": return v.delegacion?.nombre ?? "";
+        case "marca": return v.marca ?? "";
+        case "config": return v.config_ejes?.nombre ?? "";
+        case "medida": return medidaDe(v);
+        case "km": return Number(v.km_actual) || 0;
+        case "estado": return v.activo ? "Activo" : "Inactivo";
+      }
+    };
+    const signo = orden.asc ? 1 : -1;
+    return [...filtrados].sort((a, b) => {
+      const va = valor(a), vb = valor(b);
+      // Lo que no tiene dato siempre al final, se ordene como se ordene.
+      const vacioA = va === "" || va == null, vacioB = vb === "" || vb == null;
+      if (vacioA !== vacioB) return vacioA ? 1 : -1;
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * signo;
+      return String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" }) * signo;
+    });
+  }, [filtrados, orden, medidas]);
 
   const delegacionesForm = useMemo(
     () => delegaciones.filter((d) => !modal?.draft.empresa_id || d.empresa_id === modal.draft.empresa_id),
@@ -350,9 +392,21 @@ export default function Vehiculos() {
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Empresa</th><th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Delegación</th>
-          <th className={thCls}>Marca</th><th className={thCls}>Config.</th><th className={thCls}>Medida</th>
-          <th className={thCls}>Km</th><th className={thCls}>Webfleet</th><th className={thCls}>Estado</th><th className={thCls}>Acciones</th>
+          {([
+            ["empresa", "Empresa"], ["matricula", "Matrícula"], ["unidad", "Nº unidad"], ["delegacion", "Delegación"],
+            ["marca", "Marca"], ["config", "Config."], ["medida", "Medida"], ["km", "Km"],
+          ] as [Columna, string][]).map(([col, label]) => (
+            <th key={col} className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
+              onClick={() => ordenarPor(col)} title={`Ordenar por ${label.toLowerCase()}`}>
+              {label}{orden.col === col && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
+            </th>
+          ))}
+          <th className={thCls}>Webfleet</th>
+          <th className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
+            onClick={() => ordenarPor("estado")} title="Ordenar por estado">
+            Estado{orden.col === "estado" && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
+          </th>
+          <th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
