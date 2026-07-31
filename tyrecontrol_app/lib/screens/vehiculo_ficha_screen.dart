@@ -97,12 +97,14 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
           e['plan_id'] as String: e
       };
 
-      // Imagen del plano: la del tipo si la tiene; si no, la de la config de ejes.
+      // Imagen del plano, con el mismo orden que el panel web: manda la de la
+      // configuración de ejes (un 2x4 se dibuja igual sea tractora o camión) y
+      // solo se usa la del tipo si la configuración no tiene ninguna.
       final tipo = v['tipo'];
       final cfgEjes = v['config_ejes'];
-      String? img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
+      String? img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
       if (img == null || img.isEmpty) {
-        img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
+        img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
       }
 
       // Presión recomendada por eje y umbrales de profundidad: sin ellos el
