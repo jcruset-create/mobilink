@@ -50,9 +50,28 @@ jobs:
       # asi cada APK se instala encima de la anterior sin desinstalar. Si el
       # secret no esta, se firma con la clave debug del runner (cada build
       # tendria firma distinta y Android pediria desinstalar entre versiones).
+      # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir
+      # "el secret no existe" de "existe pero está mal pegado", sin exponer la
+      # clave (GitHub además enmascara el valor en los logs).
+      - name: Estado de los secrets de firma
+        run: |
+          echo "MOBILINK_KEYSTORE_BASE64: ${#KS_B64} caracteres (se esperan ~3536)"
+          echo "MOBILINK_KEYSTORE_PASSWORD: ${#KS_PASS} caracteres (se esperan 20)"
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::El secret MOBILINK_KEYSTORE_BASE64 llega vacío." \
+                 "Comprueba que está en Settings → Secrets and variables → Actions," \
+                 "pestaña Secrets (no Variables), como 'Repository secret', y que el" \
+                 "nombre coincide exactamente."
+          fi
+
       - name: Preparar keystore de firma
         if: ${{ env.KS_B64 != '' }}
-        run: echo "$KS_B64" | base64 -d > /tmp/mobilink.keystore
+        run: |
+          echo "$KS_B64" | base64 -d > /tmp/mobilink.keystore
+          # Un base64 cortado al pegar produce un fichero corrupto que Gradle
+          # rechaza mucho más tarde con un error críptico.
+          keytool -list -keystore /tmp/mobilink.keystore -storepass "$KS_PASS" >/dev/null
+          echo "Keystore válido y contraseña correcta."
 
       - name: Build APK
         run: flutter build apk --release
