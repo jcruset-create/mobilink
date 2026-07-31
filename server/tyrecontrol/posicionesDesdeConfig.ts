@@ -33,9 +33,9 @@ export interface PosicionGenerada {
 // quedan 38 puntos que son justo DOS recuadros de 19. Por eso el ancho del
 // recuadro no puede crecer por encima de su porcentaje: si se le pone un
 // suelo en píxeles, en pantallas estrechas se come el chasis.
-export const BANDA_IZQ = 38;   // 0..38 libre a la izquierda
-export const BANDA_DER = 62;   // 62..100 libre a la derecha
-const ANCHO = 19;              // 38 / 2 recuadros por banda
+export const BANDA_IZQ = 28;   // 0..28 libre a la izquierda
+export const BANDA_DER = 72;   // 72..100 libre a la derecha
+const ANCHO = 14;              // 28 / 2 recuadros por banda
 const ALTO = 14;
 
 const X_SIMPLE = { izq: (BANDA_IZQ - ANCHO) / 2, der: BANDA_DER + (BANDA_IZQ - ANCHO) / 2 };

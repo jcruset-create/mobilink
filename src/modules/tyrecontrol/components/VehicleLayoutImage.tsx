@@ -28,7 +28,7 @@ interface Coords { x: number; y: number; w: number; h: number; }
 
 // Todos los recuadros miden lo mismo y son lo bastante grandes para que
 // quepa dentro marca, modelo, medida, profundidad y presión.
-const DEFAULT_W = 19;
+const DEFAULT_W = 14;
 const DEFAULT_H = 14;
 
 // El ANCHO no lleva suelo en píxeles a propósito: el recuadro mide
