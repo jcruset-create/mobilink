@@ -10,16 +10,18 @@ import OpenAI from "openai";
  * Usa la Responses API (`/v1/responses`), que es la interfaz vigente y la que
  * admite Structured Outputs con esquema estricto.
  *
- * Verificado contra la API real (30-07-2026) con gpt-5-mini: texto, imágenes
- * por data-URI y json_schema estricto funcionan.
+ * Verificado contra la API real (30-07-2026) con gpt-5.6-luna: texto,
+ * imágenes por data-URI y json_schema estricto funcionan.
  */
 
 // ── Modelos: SIEMPRE por variable de entorno ─────────────────
-// Un solo sitio donde vive el nombre del modelo. gpt-5-mini es el valor por
-// defecto por relación calidad/precio; el fallback solo se usa ante errores
-// técnicos del proveedor, nunca por una respuesta funcionalmente mala.
+// Un solo sitio donde vive el nombre del modelo. gpt-5.6-luna es el valor por
+// defecto por relación calidad/precio (en la ficha técnica real: 2,6 veces
+// más rápido, más barato y con más confianza que gpt-5-mini); el fallback
+// solo se usa ante errores técnicos del proveedor, nunca por una respuesta
+// funcionalmente mala.
 export const MODELOS = {
-  get porDefecto() { return process.env.OPENAI_DEFAULT_MODEL || "gpt-5-mini"; },
+  get porDefecto() { return process.env.OPENAI_DEFAULT_MODEL || "gpt-5.6-luna"; },
   get documento() { return process.env.OPENAI_DOCUMENT_MODEL || this.porDefecto; },
   get informe()   { return process.env.OPENAI_REPORT_MODEL   || this.porDefecto; },
   get asistente() { return process.env.OPENAI_ASSISTANT_MODEL || this.porDefecto; },
