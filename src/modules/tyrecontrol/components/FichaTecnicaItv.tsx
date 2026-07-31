@@ -24,7 +24,10 @@ const numeroEs = (n: number) => n.toLocaleString("es-ES", { maximumFractionDigit
 
 /** Cómo se lee un valor en pantalla, según lo que traiga normalizado. */
 export function textoValor(v: ValorItv): string {
-  const unidad = v.unidad ? ` ${v.unidad}` : "";
+  // La unidad la manda el catálogo: una batalla se mide en mm aunque el OCR
+  // leyera "kg" por estar la casilla al lado de las masas.
+  const u = v.campo?.unidad ?? v.unidad;
+  const unidad = u ? ` ${u}` : "";
   const json = v.valor_json as Record<string, unknown> | unknown[] | null;
 
   if (json && !Array.isArray(json) && typeof json === "object") {
