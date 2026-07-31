@@ -27,21 +27,26 @@ export interface PosicionGenerada {
 // Cada recuadro no es un punto sobre la rueda: lleva dentro marca, modelo,
 // medida, profundidad y presión. Así que TODOS miden lo mismo y son lo
 // bastante grandes para que quepa esa información.
-const ANCHO = 15;
+//
+// El reparto es exacto y por construcción no puede solaparse: el chasis se
+// reencuadra siempre para ocupar la banda central 38–62 %, y a cada lado
+// quedan 38 puntos que son justo DOS recuadros de 19. Por eso el ancho del
+// recuadro no puede crecer por encima de su porcentaje: si se le pone un
+// suelo en píxeles, en pantallas estrechas se come el chasis.
+export const BANDA_IZQ = 38;   // 0..38 libre a la izquierda
+export const BANDA_DER = 62;   // 62..100 libre a la derecha
+const ANCHO = 19;              // 38 / 2 recuadros por banda
 const ALTO = 14;
 
-// Y por eso van en los márgenes, no encima del chasis: medido sobre los
-// planos reales (lienzo 1536x1024 con el chasis centrado, el formato del
-// plano del semirremolque), el chasis ocupa del 34 % al 64 %, así que queda
-// libre de 0 a 34 por la izquierda y de 64 a 100 por la derecha.
-const X_SIMPLE = { izq: 9.5, der: 74.5 };
-// En un eje gemelado hay dos recuadros por lado, uno al lado del otro.
-const X_GEMELO = { izq_ext: 1.5, izq_int: 17.5, der_int: 67, der_ext: 83 };
+const X_SIMPLE = { izq: (BANDA_IZQ - ANCHO) / 2, der: BANDA_DER + (BANDA_IZQ - ANCHO) / 2 };
+// En un eje gemelado hay dos recuadros por lado, pegados uno al otro y sin
+// invadir la banda del chasis.
+const X_GEMELO = { izq_ext: 0, izq_int: ANCHO, der_int: BANDA_DER, der_ext: BANDA_DER + ANCHO };
 
 // El reparto vertical es aproximado: cada plano coloca los ejes a su manera,
 // así que quedan repartidos y ya se afinan arrastrándolos.
-const Y_PRIMERO = 12;
-const Y_ULTIMO = 74;
+const Y_PRIMERO = 10;
+const Y_ULTIMO = 76;
 
 /** "2x4x2" → [2, 4, 2]. Devuelve [] si la etiqueta no es válida. */
 export function ruedasPorEje(config: string | null | undefined): number[] {

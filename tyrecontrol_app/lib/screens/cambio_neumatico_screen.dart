@@ -1079,7 +1079,10 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih) {
     final co = _coords(p, i);
-    final cardW = (co.w / 100 * iw).clamp(96.0, 200.0);
+    // Ancho exacto en porcentaje, sin suelo en pixeles (ver
+    // vehicle_layout_image.dart): asi dos tarjetas del mismo eje nunca se
+    // pisan ni se meten encima del chasis.
+    final cardW = co.w / 100 * iw;
     // En modo plan el plano enseña CÓMO VA A QUEDAR: cada posición pinta la
     // rueda que acabará ahí, con una etiqueta de dónde viene.
     final mReal = _montajePorPosicion[p.id];
@@ -1101,8 +1104,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             border: Border.all(color: AppColors.info, width: esA ? 3 : 2),
           )
         : null;
+    // Anclada por el CENTRO (ver vehicle_layout_image.dart): con el suelo de
+    // 96 px la tarjeta crece hacia los dos lados y no pisa el chasis.
+    final centroX = ox + (co.x + co.w / 2) / 100 * iw;
     return Positioned(
-      left: (ox + co.x / 100 * iw).clamp(0.0, ox + iw - cardW),
+      left: (centroX - cardW / 2).clamp(0.0, ox + iw - cardW),
       top: (oy + co.y / 100 * ih).clamp(0.0, oy + ih - 44),
       width: cardW,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
