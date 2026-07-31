@@ -26,12 +26,14 @@ const SUGERENCIAS = [
   "¿Cuál es el estado general de mi flota?",
   "¿Qué vehículos tengo que revisar?",
   "¿Tengo alertas urgentes?",
+  "¿Qué marcas y medidas llevo montadas?",
 ];
 
 const NOMBRE_HERRAMIENTA: Record<string, string> = {
   estado_flota: "Estado de flota",
   vehiculos_pendientes: "Vehículos pendientes",
   alertas_activas: "Alertas activas",
+  marcas_neumaticos: "Marcas y medidas",
 };
 
 /** Negritas de markdown (**así**) → <strong>. El backend solo usa eso. */

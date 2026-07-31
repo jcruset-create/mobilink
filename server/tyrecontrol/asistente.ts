@@ -181,6 +181,144 @@ async function alertasActivas(a: Alcance) {
   return { total: filas.length, criticas, incidencias: filas };
 }
 
+/**
+ * Marcas y modelos de los neumáticos MONTADOS. Si se pasa matrícula, responde
+ * posición a posición; si no, agrega por marca para toda la flota.
+ *
+ * Solo mira montajes vigentes (tc_montajes_actuales): la pregunta "qué marca
+ * llevo" es sobre lo que rueda hoy, no sobre el histórico ni el almacén.
+ */
+// Separador para agrupar modelo+medida en una sola clave. No puede ser un
+// espacio: los modelos ya llevan espacios ("SDL1 154L") y al deshacer la clave
+// partiría el nombre por la mitad.
+const SEP = "\u001F";
+
+async function marcasNeumaticos(a: Alcance, matricula?: string | null) {
+  const minimo = await umbralMinimo(a.empresaId);
+
+  const mat = String(matricula ?? "").trim();
+  // Con matrícula se fuerza !inner: si no, PostgREST no descarta la fila, solo
+  // deja el embed a null y saldrían todos los montajes de la empresa.
+  let q = supabase
+    .from("tc_montajes_actuales")
+    .select(
+      `vehiculo:tc_vehiculos${mat ? "!inner" : ""}(matricula), posicion:tc_posiciones_vehiculo(codigo_posicion), ` +
+      "neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm, reesculturado)",
+    )
+    .eq("empresa_id", a.empresaId);
+
+  if (mat) q = q.ilike("tc_vehiculos.matricula", mat);
+
+  // El recauchutado NO es un campo del neumático: se deduce de la marca
+  // (INSA y demás marcas marcadas como es_recauchutado en el catálogo), igual
+  // que hace el informe de montaje en server/index.ts.
+  const [{ data }, { data: mr }] = await Promise.all([
+    q,
+    supabase.from("tc_cat_marcas_neumatico").select("nombre")
+      .eq("es_recauchutado", true).eq("activo", true),
+  ]);
+  const marcasRecau = new Set((mr ?? []).map((m: any) => String(m.nombre ?? "").trim().toUpperCase()));
+  const esRecau = (marca: any) => marcasRecau.has(String(marca ?? "").trim().toUpperCase());
+
+  const filas = (data ?? []).filter((m: any) => !mat || m.vehiculo?.matricula);
+
+  // Detalle por posición: solo tiene sentido para un vehículo concreto.
+  if (mat) {
+    if (filas.length === 0) {
+      return { matricula: mat, encontrado: false, nota: `No hay neumáticos montados registrados para la matrícula ${mat}.` };
+    }
+    return {
+      matricula: filas[0]?.vehiculo?.matricula ?? mat,
+      total_montados: filas.length,
+      neumaticos: filas.slice(0, MAX_FILAS).map((m: any) => ({
+        posicion: m.posicion?.codigo_posicion ?? null,
+        marca: m.neumatico?.marca ?? null,
+        modelo: m.neumatico?.modelo ?? null,
+        medida: m.neumatico?.medida ?? null,
+        profundidad_mm: Number.isFinite(Number(m.neumatico?.profundidad_actual_mm))
+          ? Number(m.neumatico.profundidad_actual_mm) : null,
+        reesculturado: Boolean(m.neumatico?.reesculturado),
+        recauchutado: esRecau(m.neumatico?.marca),
+      })),
+    };
+  }
+
+  // Agregado de flota por marca (y modelos dentro de cada marca).
+  // Dentro de cada marca se agrupa por modelo+medida: el mismo modelo en dos
+  // medidas son dos referencias distintas para el taller.
+  const porMarca = new Map<string, { unidades: number; bajo_minimo: number; suma: number; conMedida: number; modelos: Map<string, number> }>();
+  const porMedida = new Map<string, number>();
+  let sinMarca = 0;
+  let sinMedida = 0;
+  let reesculturados = 0;
+  let recauchutados = 0;
+  let sinReprocesar = 0;
+  for (const m of filas) {
+    const n = (m as any).neumatico;
+    const medida = String(n?.medida ?? "").trim();
+    if (medida) porMedida.set(medida, (porMedida.get(medida) ?? 0) + 1);
+    else sinMedida++;
+    // Ojo: un mismo neumático puede ser recauchutado Y reesculturado, así que
+    // "sin reprocesar" se cuenta aparte en vez de restar los dos totales.
+    const rees = Boolean(n?.reesculturado);
+    const recau = esRecau(n?.marca);
+    if (rees) reesculturados++;
+    if (recau) recauchutados++;
+    if (!rees && !recau) sinReprocesar++;
+
+    const marca = String(n?.marca ?? "").trim();
+    if (!marca) { sinMarca++; continue; }
+    const e = porMarca.get(marca) ?? { unidades: 0, bajo_minimo: 0, suma: 0, conMedida: 0, modelos: new Map() };
+    e.unidades++;
+    const mm = Number(n?.profundidad_actual_mm);
+    if (Number.isFinite(mm)) { e.suma += mm; e.conMedida++; if (mm <= minimo) e.bajo_minimo++; }
+    const modelo = String(n?.modelo ?? "").trim();
+    if (modelo || medida) {
+      const clave = `${modelo}${SEP}${medida}`;
+      e.modelos.set(clave, (e.modelos.get(clave) ?? 0) + 1);
+    }
+    porMarca.set(marca, e);
+  }
+
+  const marcas = [...porMarca.entries()]
+    .map(([marca, e]) => ({
+      marca,
+      unidades: e.unidades,
+      bajo_minimo: e.bajo_minimo,
+      profundidad_media_mm: e.conMedida ? Number((e.suma / e.conMedida).toFixed(1)) : null,
+      modelos: [...e.modelos.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8)
+        .map(([clave, unidades]) => {
+          const [modelo, medida] = clave.split(SEP);
+          return { modelo, medida: medida || null, unidades };
+        }),
+    }))
+    .sort((x, y) => y.unidades - x.unidades)
+    .slice(0, MAX_FILAS);
+
+  const medidas = [...porMedida.entries()]
+    .sort((x, y) => y[1] - x[1])
+    .slice(0, MAX_FILAS)
+    .map(([medida, unidades]) => ({ medida, unidades }));
+
+  return {
+    total_montados: filas.length,
+    marcas_distintas: marcas.length,
+    medidas_distintas: medidas.length,
+    umbral_minimo_mm: minimo,
+    marcas,
+    medidas,
+    reesculturados,
+    recauchutados,
+    sin_reprocesar: sinReprocesar,
+    sin_medida_registrada: sinMedida,
+    // Se dice para que el modelo no presente el reparto como si fuera completo.
+    sin_marca_registrada: sinMarca,
+    nota: sinMarca > 0
+      ? `${sinMarca} neumáticos montados no tienen marca registrada en la ficha.`
+      : undefined,
+  };
+}
+
 // Definición para el modelo, en formato de la **Responses API** (function con
 // los campos planos, no anidados en `function:` como en chat/completions).
 // Se usa Responses porque es lo que usa el resto del proyecto (pedirIA) y
@@ -213,6 +351,21 @@ const HERRAMIENTAS = [
   },
   {
     type: "function" as const,
+    name: "marcas_neumaticos",
+    description:
+      "Marcas, modelos y medidas de los neumáticos MONTADOS, indicando cuáles son reesculturados o recauchutados. Sin matrícula devuelve el reparto de toda la flota; con matrícula, el detalle posición a posición de ese vehículo. Úsala para '¿qué marca/modelo/medida llevan mis neumáticos?', '¿llevo recauchutados?' o '¿qué monta el 1234ABC?'.",
+    parameters: {
+      type: "object",
+      properties: {
+        matricula: { type: ["string", "null"], description: "Matrícula concreta; null = toda la flota" },
+      },
+      required: ["matricula"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: "function" as const,
     name: "alertas_activas",
     description:
       "Incidencias abiertas de la flota, con matrícula, posición y gravedad. Úsala para '¿tengo alertas urgentes?'.",
@@ -225,6 +378,7 @@ async function ejecutarHerramienta(nombre: string, args: any, a: Alcance): Promi
   switch (nombre) {
     case "estado_flota": return await estadoFlota(a);
     case "vehiculos_pendientes": return await vehiculosPendientes(a, Number(args?.dias) || 90);
+    case "marcas_neumaticos": return await marcasNeumaticos(a, args?.matricula ? String(args.matricula) : null);
     case "alertas_activas": return await alertasActivas(a);
     default: return { error: `Herramienta desconocida: ${nombre}` };
   }
@@ -241,6 +395,11 @@ REGLAS:
 - Un neumático por debajo del mínimo legal se SUSTITUYE. No des matices ni
   alternativas sobre eso.
 - No hables de otros clientes, ni de precios, ni prometas plazos.
+- "Recauchutado" se deduce de la marca (marcas de recauchutado del catálogo) y
+  "reesculturado" es una operación registrada en el neumático: son cosas
+  distintas y un mismo neumático puede ser las dos.
+- Si un dato no está registrado en la ficha (marca, medida...), di cuántos
+  faltan en vez de dar el reparto como si fuera completo.
 - Si la pregunta no es sobre la flota, dilo con educación y ofrece lo que sí
   puedes responder.
 - Termina con la acción concreta más útil, si la hay.
