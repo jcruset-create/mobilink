@@ -3,6 +3,7 @@ import { listarProductosAlmacen, montarDesdeAlmacen, sustituirNeumatico, esError
 import type { ProductoAlmacen, MotivoDesmontaje, DestinoDesmontaje, ReferenciaNeumatico } from "../types";
 import { MOTIVO_DESMONTAJE_LABELS } from "../types";
 import { Modal, Field, inputCls } from "./ui";
+import { baseMedida } from "../services/medidas";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 interface Props {
@@ -17,14 +18,6 @@ interface Props {
   onDone: () => void;
 }
 
-// Medida base canónica (ancho/perfil R llanta), ignorando índice de carga y
-// velocidad, para casar "385/65R22.5" (ficha) con "385/65 R22.5 158L" (almacén).
-const baseMedida = (s?: string | null) => {
-  const t = (s ?? "").toUpperCase().replace(/\s+/g, "");
-  const m = t.match(/(\d{2,3})(?:\/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)/);
-  if (!m) return t;
-  return `${m[1]}${m[2] ? "/" + m[2] : ""}R${m[3].replace(",", ".")}`;
-};
 
 export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empresaId, posicionId, montajeActualId, medidaActual, posicionesBulk, onClose, onDone }: Props) {
   const bulk = (posicionesBulk?.length ?? 0) > 1;

@@ -8,6 +8,7 @@ import {
   listarFotosCatalogoPorModelo, claveModeloCatalogo,
 } from "../services/data";
 import { inputCls, Modal } from "./ui";
+import { mismaMedida } from "../services/medidas";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
 import { supabase } from "../services/supabase";
@@ -139,6 +140,8 @@ export default function VehicleLayoutImage({
 
   const [seleccion, setSeleccion] = useState<string | null>(null);
   const [disponibles, setDisponibles] = useState<Neumatico[]>([]);
+  // Por defecto solo se ofrecen los de la medida del vehículo; esto lo abre.
+  const [verTodasMedidas, setVerTodasMedidas] = useState(false);
   const [neumaticoElegido, setNeumaticoElegido] = useState("");
   const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
@@ -703,15 +706,35 @@ export default function VehicleLayoutImage({
             {editable && (
               <div className="mt-2 flex flex-col gap-2">
                 <button onClick={() => setModalFicha({ sustitucion: false })} className="w-full rounded bg-emerald-600 px-2 py-1 text-[12px] font-bold text-white">Montar desde ficha genérica</button>
-                {disponibles.length > 0 && (
-                  <>
-                    <select className={`${inputCls} text-[12px]`} value={neumaticoElegido} onChange={(e) => setNeumaticoElegido(e.target.value)}>
-                      <option value="">…o elegir neumático ya existente</option>
-                      {disponibles.map((n) => <option key={n.id} value={n.id}>{n.numero_interno ?? n.codigo_interno ?? n.numero_serie} · {n.marca} {n.medida}</option>)}
-                    </select>
-                    <button onClick={confirmarMontar} disabled={saving || !neumaticoElegido} className="w-full rounded border border-emerald-600 px-2 py-1 text-[12px] font-bold text-emerald-300 disabled:opacity-50">Montar seleccionado</button>
-                  </>
-                )}
+                {disponibles.length > 0 && (() => {
+                  // Solo los que sirven para esta posición: la medida que el
+                  // vehículo tiene configurada. Se compara la medida base
+                  // porque el almacén la escribe con índices ("385/65 R22.5 158L").
+                  const medidaPos = medidaPorPosicionId?.[posSeleccionada.id] ?? null;
+                  const compatibles = medidaPos && !verTodasMedidas
+                    ? disponibles.filter((n) => mismaMedida(n.medida, medidaPos))
+                    : disponibles;
+                  return (
+                    <>
+                      <select className={`${inputCls} text-[12px]`} value={neumaticoElegido} onChange={(e) => setNeumaticoElegido(e.target.value)}>
+                        <option value="">…o elegir neumático ya existente</option>
+                        {compatibles.map((n) => <option key={n.id} value={n.id}>{n.numero_interno ?? n.codigo_interno ?? n.numero_serie} · {n.marca} {n.medida}</option>)}
+                      </select>
+                      {medidaPos && (
+                        <label className="flex items-center gap-1 text-[11px] text-slate-400">
+                          <input type="checkbox" checked={verTodasMedidas} onChange={(e) => { setVerTodasMedidas(e.target.checked); setNeumaticoElegido(""); }} />
+                          Ver todas las medidas (por defecto solo {medidaPos})
+                        </label>
+                      )}
+                      {compatibles.length === 0 && (
+                        <div className="text-[11px] text-amber-300">
+                          No hay neumáticos libres de la medida {medidaPos}. Marca «ver todas» si quieres montar otra.
+                        </div>
+                      )}
+                      <button onClick={confirmarMontar} disabled={saving || !neumaticoElegido} className="w-full rounded border border-emerald-600 px-2 py-1 text-[12px] font-bold text-emerald-300 disabled:opacity-50">Montar seleccionado</button>
+                    </>
+                  );
+                })()}
                 <button onClick={() => setModalFueraAlmacen(true)} className="w-full rounded border border-amber-600 px-2 py-1 text-[12px] font-bold text-amber-300">Montar fuera de almacén</button>
               </div>
             )}
