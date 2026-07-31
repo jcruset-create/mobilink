@@ -441,6 +441,38 @@ export interface Vehiculo {
   norma_emisiones?: string | null;
   nivel_sonoro?: number | null;
   fecha_emision?: string | null;
+  // Resto de códigos de la tarjeta ITV. Los "campo_xx" son códigos que la
+  // tarjeta trae pero cuyo nombre oficial no tenemos confirmado: se guardan
+  // igual para no perder el dato.
+  campo_ci?: string | null;                 // C.I
+  campo_cv?: string | null;                 // C.V
+  direccion_fabricante?: string | null;     // A.2
+  procedencia?: string | null;              // D.6
+  color?: string | null;                    // R
+  campo_j2?: string | null;                 // J.2
+  campo_j3?: string | null;                 // J.3
+  observaciones_ficha?: string | null;      // Z
+  mma_por_eje?: string | null;              // F.1.1 ("8000 / 13000 / /")
+  mma_autorizada?: number | null;           // F.2
+  mma_autorizada_por_eje?: string | null;   // F.2.1
+  masa_remolque_con_freno?: number | null;  // O.1
+  campo_o11?: string | null;                // O.1.1
+  carga_vertical_maxima?: number | null;    // O.1.2
+  campo_o13?: string | null;                // O.1.3
+  campo_o14?: string | null;                // O.1.4
+  campo_f7?: string | null;                 // F.7
+  campo_f71?: string | null;                // F.7.1
+  voladizo?: string | null;                 // M.1 ("3900 / ...")
+  anchura_vias?: string | null;             // M.4
+  configuracion_ejes_ficha?: string | null; // L.1
+  fabricante_motor?: string | null;         // P.5.1
+  tipo_motor?: string | null;               // P.5
+  alimentacion?: string | null;             // P.1.1 ("6 / EN LINEA")
+  relacion_potencia?: number | null;        // P.2.1
+  num_plazas?: number | null;               // S.1
+  plazas_pie?: number | null;               // S.2
+  regimen_motor?: number | null;            // U.2
+  co2?: number | null;                      // V.7
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
