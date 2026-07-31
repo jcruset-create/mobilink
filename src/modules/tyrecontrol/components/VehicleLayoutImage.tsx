@@ -46,6 +46,12 @@ function defaultCoords(index: number): Coords {
   return { x: col === 0 ? 8 : 83, y: 10 + row * 18, w: DEFAULT_W, h: DEFAULT_H };
 }
 
+// Etiqueta corta de la posición para encima del recuadro: "Eje 2 izq ext".
+function etiquetaPosicion(p: PosicionVehiculo): string {
+  if (p.eje == null) return p.nombre ?? p.codigo_posicion;
+  return `Eje ${p.eje}${p.lado ? ` ${p.lado}` : ""}${p.interior_exterior ? ` ${p.interior_exterior}` : ""}`;
+}
+
 function coordsDe(p: PosicionVehiculo, index: number): Coords {
   if (p.pos_x != null && p.pos_y != null && p.pos_w != null && p.pos_h != null) {
     return { x: p.pos_x, y: p.pos_y, w: p.pos_w, h: p.pos_h };
@@ -640,16 +646,13 @@ export default function VehicleLayoutImage({
                   setMenuContextual({ codigo: p.codigo_posicion, x: e.clientX, y: e.clientY });
                 }}
               >
-                {esCopiaOrigen && (
-                  <span className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-violet-600 px-1 py-0.5 text-[10px] font-bold text-white">ORIGEN</span>
-                )}
+                {/* Encima de cada recuadro, siempre, de qué rueda se trata. */}
+                <span className={`pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-bold ${
+                  esCopiaOrigen ? "bg-violet-600 text-white" : calibrando ? "bg-slate-900/90 text-amber-300" : "bg-slate-900/90 text-slate-300"}`}>
+                  {esCopiaOrigen ? `ORIGEN · ${etiquetaPosicion(p)}` : etiquetaPosicion(p)}
+                </span>
                 {calibrando ? (
-                  <>
-                    <span className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold text-amber-300">
-                      {p.nombre ?? p.codigo_posicion}
-                    </span>
-                    <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">{p.codigo_posicion}</span>
-                  </>
+                  <span className="pointer-events-none px-1 text-center text-[10px] font-bold leading-tight text-slate-100">{p.codigo_posicion}</span>
                 ) : ocupado ? (() => {
                   const neu = m!.neumatico!;
                   const medicion = medicionesActuales[neu.id];
