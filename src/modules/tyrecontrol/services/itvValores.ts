@@ -16,9 +16,10 @@ export function hasRealValue(value: unknown): boolean {
   if (typeof value === "string") {
     const limpio = value.trim();
     if (limpio === "") return false;
-    // Una tira de guiones ("------") es la forma habitual de dejar en
-    // blanco una casilla impresa.
-    if (/^-+$/.test(limpio)) return false;
+    // Una casilla impresa que se deja en blanco se rellena con guiones, y
+    // si el campo tiene varios tramos, con guiones y barras: "------",
+    // "--- / ----", "· / ·". Si no hay ni una letra ni una cifra, no hay dato.
+    if (!/[\p{L}\p{N}]/u.test(limpio)) return false;
     return !MARCADORES_VACIOS.includes(limpio.toUpperCase());
   }
   if (Array.isArray(value)) return value.some(hasRealValue);
