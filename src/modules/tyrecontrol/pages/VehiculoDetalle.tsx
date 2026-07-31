@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarAtributosTecnicos, listarCatalogoCamposFicha, imagenChasisDeMarca } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarAtributosTecnicos, listarCatalogoCamposFicha, imagenChasisDeMarca, generarPosicionesDeTipo } from "../services/data";
 import type { Intervencion, AtributoTecnicoVehiculo, CampoCatalogoFicha } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -50,7 +50,19 @@ export default function VehiculoDetalle() {
   async function cargar() {
     const veh = await obtenerVehiculo(id);
     setV(veh);
-    if (veh?.tipo_vehiculo_id) setPosiciones(await listarPosiciones(veh.tipo_vehiculo_id));
+    if (veh?.tipo_vehiculo_id) {
+      let pos = await listarPosiciones(veh.tipo_vehiculo_id);
+      // Si el tipo aún no tiene posiciones, se calculan solas a partir de su
+      // configuración de ejes ("2x4x2" = 8 ruedas) en vez de dejar el plano
+      // vacío hasta que alguien las cree a mano.
+      if (pos.length === 0) {
+        try {
+          await generarPosicionesDeTipo(veh.tipo_vehiculo_id);
+          pos = await listarPosiciones(veh.tipo_vehiculo_id);
+        } catch { /* configuración inválida: se avisa en el bloque de posiciones */ }
+      }
+      setPosiciones(pos);
+    }
     setMontajes(await listarMontajesVehiculo(id));
 
     // Catálogos para traducir medida_id / tipo_llanta_id a etiquetas legibles.

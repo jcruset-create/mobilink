@@ -23,6 +23,7 @@ import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
+import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -14423,6 +14424,42 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
 });
 
 // Documentos de un vehículo (con URL firmada de la primera página).
+// Crea las posiciones de neumático que le faltan a un tipo de vehículo a
+// partir de su configuración de ejes ("2x4x2" = 3 ejes con 2, 4 y 2 ruedas).
+// Es un cálculo, no una estimación: no interviene ningún modelo de IA.
+// Idempotente: solo añade los códigos que aún no existen, nunca borra.
+app.post("/api/tyrecontrol/tipos/:id/generar-posiciones", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const tipoId = String(req.params.id);
+    const { data: tipo } = await supabase
+      .from("tc_tipos_vehiculo").select("id, nombre, configuracion_ejes").eq("id", tipoId).maybeSingle();
+    if (!tipo) return res.status(404).json({ error: "Tipo de vehículo no encontrado" });
+
+    const generadas = generarPosiciones((tipo as any).configuracion_ejes);
+    if (!generadas.length) {
+      return res.status(422).json({
+        error: `El tipo "${(tipo as any).nombre}" no tiene una configuración de ejes válida (${(tipo as any).configuracion_ejes ?? "vacía"}). Indícala primero en Configuración.`,
+      });
+    }
+
+    const { data: existentes } = await supabase
+      .from("tc_posiciones_vehiculo").select("codigo_posicion").eq("tipo_vehiculo_id", tipoId);
+    const ya = new Set(((existentes ?? []) as any[]).map((p) => p.codigo_posicion));
+
+    const nuevas = generadas.filter((p) => !ya.has(p.codigo_posicion));
+    if (nuevas.length) {
+      const { error } = await supabase.from("tc_posiciones_vehiculo")
+        .insert(nuevas.map((p) => ({ ...p, tipo_vehiculo_id: tipoId, activo: true })));
+      if (error) throw new Error(error.message);
+    }
+
+    res.json({ ok: true, creadas: nuevas.length, total: generadas.length, yaExistian: generadas.length - nuevas.length });
+  } catch (e: any) {
+    console.error("POST tipos/:id/generar-posiciones error:", e);
+    res.status(500).json({ error: e?.message || "Error generando las posiciones" });
+  }
+});
+
 app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlPanelUser, async (req, res) => {
   try {
     const { data, error } = await supabase
