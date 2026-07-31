@@ -181,38 +181,43 @@ async function alertasActivas(a: Alcance) {
   return { total: filas.length, criticas, incidencias: filas };
 }
 
-// Definición para el modelo. Descripciones en español: el modelo elige mejor.
+// Definición para el modelo, en formato de la **Responses API** (function con
+// los campos planos, no anidados en `function:` como en chat/completions).
+// Se usa Responses porque es lo que usa el resto del proyecto (pedirIA) y
+// porque los modelos de razonamiento NO admiten herramientas en
+// /v1/chat/completions salvo desactivando el razonamiento.
+// Descripciones en español: el modelo elige mejor.
 const HERRAMIENTAS = [
   {
     type: "function" as const,
-    function: {
-      name: "estado_flota",
-      description:
-        "Resumen general de la flota del cliente: nº de vehículos, cuántos se han revisado en los últimos 90 días, incidencias abiertas por gravedad y neumáticos montados por debajo del mínimo. Úsala para '¿cómo está mi flota?'.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-    },
+    name: "estado_flota",
+    description:
+      "Resumen general de la flota del cliente: nº de vehículos, cuántos se han revisado en los últimos 90 días, incidencias abiertas por gravedad y neumáticos montados por debajo del mínimo. Úsala para '¿cómo está mi flota?'.",
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+    strict: true,
   },
   {
     type: "function" as const,
-    function: {
-      name: "vehiculos_pendientes",
-      description:
-        "Lista de vehículos sin revisión completada en los últimos N días (por defecto 90). Úsala para '¿qué vehículos tengo que revisar?'.",
-      parameters: {
-        type: "object",
-        properties: { dias: { type: "integer", description: "Días sin revisión, por defecto 90", minimum: 1, maximum: 365 } },
-        additionalProperties: false,
+    name: "vehiculos_pendientes",
+    description:
+      "Lista de vehículos sin revisión completada en los últimos N días. Úsala para '¿qué vehículos tengo que revisar?'.",
+    parameters: {
+      type: "object",
+      properties: {
+        dias: { type: ["integer", "null"], description: "Días sin revisión; null = 90 por defecto" },
       },
+      required: ["dias"],
+      additionalProperties: false,
     },
+    strict: true,
   },
   {
     type: "function" as const,
-    function: {
-      name: "alertas_activas",
-      description:
-        "Incidencias abiertas de la flota, con matrícula, posición y gravedad. Úsala para '¿tengo alertas urgentes?'.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-    },
+    name: "alertas_activas",
+    description:
+      "Incidencias abiertas de la flota, con matrícula, posición y gravedad. Úsala para '¿tengo alertas urgentes?'.",
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+    strict: true,
   },
 ];
 
@@ -263,45 +268,53 @@ export function mountAsistente(app: Express, ...guards: RequestHandler[]): void 
       if (!alcance) return res.status(403).json({ error: "Sin acceso a los datos de esa empresa" });
 
       const cliente = getClienteIA();
-      const mensajes: any[] = [
-        { role: "system", content: SYSTEM(alcance) },
-        { role: "user", content: pregunta },
-      ];
+      // Responses API: `input` es una lista de items que va creciendo con lo
+      // que devuelve el modelo y con la salida de cada herramienta.
+      const input: any[] = [{ role: "user", content: pregunta }];
       const usadas: { herramienta: string; args: any }[] = [];
       const datos: Record<string, unknown> = {};
 
       // Bucle de function calling, acotado: el modelo pide herramientas, se le
       // devuelven los agregados y al final redacta.
       for (let vuelta = 0; vuelta <= MAX_LLAMADAS_HERRAMIENTA; vuelta++) {
-        const r = await cliente.chat.completions.create({
+        const r: any = await cliente.responses.create({
           model: MODELOS.asistente,
-          messages: mensajes,
-          tools: HERRAMIENTAS,
+          instructions: SYSTEM(alcance),
+          input,
+          tools: HERRAMIENTAS as any,
           // En la última vuelta se le impide pedir más y se le obliga a responder.
           tool_choice: vuelta === MAX_LLAMADAS_HERRAMIENTA ? "none" : "auto",
-        });
-        const msg = r.choices[0]?.message;
-        if (!msg) break;
-        mensajes.push(msg);
+          max_output_tokens: 1200,
+        } as any, { timeout: 60_000 });
 
-        const llamadas = msg.tool_calls ?? [];
+        const salida: any[] = Array.isArray(r?.output) ? r.output : [];
+        const llamadas = salida.filter((o) => o?.type === "function_call");
+
         if (llamadas.length === 0) {
+          const texto = String(r?.output_text ?? "").trim();
           return res.json({
-            respuesta: msg.content ?? "",
+            respuesta: texto,
             herramientas_usadas: usadas.map((u) => u.herramienta),
             datos,
             fecha_datos: new Date().toISOString(),
           });
         }
 
+        // Se reinyecta TODO lo que devolvió el modelo (incluidos los items de
+        // razonamiento): si se pierden, el modelo no reconoce sus llamadas.
+        input.push(...salida);
         for (const c of llamadas) {
-          const nombre = (c as any).function?.name as string;
+          const nombre = String(c.name ?? "");
           let args: any = {};
-          try { args = JSON.parse((c as any).function?.arguments || "{}"); } catch {/* args vacíos */}
+          try { args = JSON.parse(c.arguments || "{}"); } catch {/* args vacíos */}
           const resultado = await ejecutarHerramienta(nombre, args, alcance);
           usadas.push({ herramienta: nombre, args });
           datos[nombre] = resultado;
-          mensajes.push({ role: "tool", tool_call_id: (c as any).id, content: JSON.stringify(resultado) });
+          input.push({
+            type: "function_call_output",
+            call_id: c.call_id,
+            output: JSON.stringify(resultado),
+          });
         }
       }
 
