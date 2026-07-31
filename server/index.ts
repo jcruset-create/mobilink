@@ -21,6 +21,10 @@ import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from 
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
+// Las reglas de "esto es un dato de verdad" y la normalizacion viven en un
+// solo sitio: el mismo modulo que usa el panel, para que servidor y cliente
+// no puedan discrepar sobre si un guion es un valor.
+import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/services/itvValores.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
@@ -14296,27 +14300,15 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
       denominacion_comercial: "denominacion_comercial", fabricante: "fabricante",
       categoria: "categoria", clasificacion: "clasificacion", carroceria: "carroceria",
       num_homologacion: "num_homologacion", combustible: "combustible", norma_emisiones: "norma_emisiones",
-      // Resto de codigos de la tarjeta ITV.
-      campo_ci: "campo_ci", campo_cv: "campo_cv", direccion_fabricante: "direccion_fabricante",
-      procedencia: "procedencia", color: "color", campo_j2: "campo_j2", campo_j3: "campo_j3",
-      observaciones_ficha: "observaciones_ficha", mma_por_eje: "mma_por_eje",
-      mma_autorizada_por_eje: "mma_autorizada_por_eje", campo_o11: "campo_o11",
-      campo_o13: "campo_o13", campo_o14: "campo_o14", campo_f7: "campo_f7", campo_f71: "campo_f71",
-      voladizo: "voladizo", anchura_vias: "anchura_vias", configuracion_ejes_ficha: "configuracion_ejes_ficha",
-      fabricante_motor: "fabricante_motor", tipo_motor: "tipo_motor", alimentacion: "alimentacion",
     };
     const COLUMNAS_ENTERO: Record<string, string> = {
       num_ejes: "num_ejes", num_ruedas: "num_ruedas", ejes_motrices: "ejes_motrices", num_cilindros: "num_cilindros",
-      num_plazas: "num_plazas", plazas_pie: "plazas_pie",
     };
     const COLUMNAS_NUMERICO: Record<string, string> = {
       distancia_ejes: "distancia_ejes", via: "via", mma: "mma", masa_maxima_conjunto: "masa_maxima_conjunto",
       masa_orden_marcha: "masa_orden_marcha", tara: "tara", masa_remolcable: "masa_remolcable",
       longitud: "longitud", anchura: "anchura", altura: "altura", cilindrada: "cilindrada",
       potencia: "potencia", nivel_sonoro: "nivel_sonoro",
-      mma_autorizada: "mma_autorizada", masa_remolque_con_freno: "masa_remolque_con_freno",
-      carga_vertical_maxima: "carga_vertical_maxima", relacion_potencia: "relacion_potencia",
-      regimen_motor: "regimen_motor", co2: "co2",
     };
     const COLUMNAS_FECHA: Record<string, string> = {
       fecha_primera_matriculacion: "fecha_matriculacion", fecha_emision: "fecha_emision",
@@ -14391,35 +14383,86 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
       aplicado.push(`${ejes.length} eje(s)`);
     }
 
-    // 4) Atributos técnicos sin columna propia, ya validados. El código y la
-    //    descripción, si la clave está en el catálogo, son los oficiales
-    //    (no el texto suelto que trajera el documento).
+    // 4) Valores de la ficha técnica ITV. Esta tabla es la fuente de la
+    //    verdad del módulo: un código solo existe aquí si trae dato real,
+    //    enlazado al maestro y con el valor normalizado por su tipo.
+    //    Todo cambio deja rastro en el historial.
+    const ignorados: string[] = [];
     if (Array.isArray(atributos) && atributos.length) {
       const { data: catalogoRows } = await supabase
-        .from("tc_cat_campos_ficha_tecnica").select("clave, codigo, descripcion, unidad");
-      const catalogo = new Map((catalogoRows ?? []).map((c: any) => [c.clave, c]));
+        .from("tc_cat_campos_ficha_tecnica")
+        .select("id, clave, codigo, descripcion, unidad, tipo_dato, activo");
+      const porClave = new Map((catalogoRows ?? []).map((c: any) => [c.clave, c]));
+      const porCodigo = new Map((catalogoRows ?? [])
+        .filter((c: any) => c.codigo)
+        .map((c: any) => [String(c.codigo).toUpperCase().trim(), c]));
 
-      const filas = atributos.map((a: any) => {
-        const cat = a.clave ? catalogo.get(a.clave) : undefined;
-        return {
+      const { data: previosRows } = await supabase
+        .from("tc_vehiculo_atributos_tecnicos")
+        .select("id, campo_ficha_id, valor_bruto, unidad")
+        .eq("vehiculo_id", vehiculoId);
+      const previoPorCampo = new Map((previosRows ?? [])
+        .filter((p: any) => p.campo_ficha_id)
+        .map((p: any) => [p.campo_ficha_id as string, p]));
+
+      let guardados = 0;
+      for (const a of atributos as any[]) {
+        // Regla dura: nada vacío, ni guiones, ni "N/A". El cero sí entra.
+        if (!hasRealValue(a?.valor)) { continue; }
+        const cat = (a.clave ? porClave.get(a.clave) : null)
+          ?? (a.codigo_origen ? porCodigo.get(String(a.codigo_origen).toUpperCase().trim()) : null);
+        // Un código que no está en el maestro NO se guarda solo: se
+        // devuelve para que alguien decida si merece una definición.
+        if (!cat || cat.activo === false) {
+          ignorados.push(String(a.codigo_origen ?? a.clave ?? a.etiqueta_origen ?? "?"));
+          continue;
+        }
+
+        const n = normalizarValor(String(a.valor), cat.tipo_dato, cat.unidad);
+        const previo = previoPorCampo.get(cat.id);
+        const fila: Record<string, unknown> = {
           vehiculo_id: vehiculoId,
           documento_id: docId,
-          codigo_origen: cat?.codigo ?? a.codigo_origen ?? null,
-          etiqueta_origen: cat?.descripcion ?? a.etiqueta_origen ?? null,
-          clave_normalizada: a.clave ?? null,
-          valor_bruto: a.valor ?? null,
-          valor_normalizado: a.valor ?? null,
-          unidad: cat?.unidad ?? a.unidad ?? null,
+          campo_ficha_id: cat.id,
+          codigo_origen: cat.codigo ?? a.codigo_origen ?? null,
+          etiqueta_origen: cat.descripcion ?? a.etiqueta_origen ?? null,
+          clave_normalizada: cat.clave,
+          valor_bruto: String(a.valor).trim(),
+          valor_normalizado: n.texto,
+          valor_json: n.json,
+          valor_numero: n.numero,
+          valor_fecha: n.fecha,
+          valor_booleano: n.booleano,
+          tipo_valor: cat.tipo_dato,
+          unidad: cat.unidad ?? a.unidad ?? null,
           confianza: a.confianza ?? null,
           estado: "validado",
+          origen: "ocr",
+          verificado_manualmente: true, // el usuario lo ha confirmado en la revisión
           pagina: a.pagina ?? null,
           validado_por: userId,
           validado_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         };
-      });
-      const { error } = await supabase.from("tc_vehiculo_atributos_tecnicos").insert(filas);
-      if (error) throw new Error(error.message);
-      aplicado.push(`${filas.length} dato(s) técnico(s)`);
+
+        const { error } = previo
+          ? await supabase.from("tc_vehiculo_atributos_tecnicos").update(fila).eq("id", previo.id)
+          : await supabase.from("tc_vehiculo_atributos_tecnicos").insert(fila);
+        if (error) throw new Error(error.message);
+
+        await supabase.from("tc_vehiculo_ficha_historial").insert({
+          atributo_id: previo?.id ?? null,
+          vehiculo_id: vehiculoId,
+          campo_ficha_id: cat.id,
+          valor_anterior: previo ? { valor: previo.valor_bruto, unidad: previo.unidad } : null,
+          valor_nuevo: { valor: fila.valor_bruto, unidad: fila.unidad },
+          motivo_cambio: "ocr",
+          cambiado_por: userId,
+          documento_id: docId,
+        });
+        guardados++;
+      }
+      if (guardados) aplicado.push(`${guardados} dato(s) de ficha técnica`);
     }
 
     // Enlaza el documento huérfano con el vehículo recién creado.
@@ -14428,7 +14471,7 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
         .update({ vehiculo_id: vehiculoId, vigente: true }).eq("id", docId);
     }
 
-    res.json({ ok: true, aplicado });
+    res.json({ ok: true, aplicado, ignorados });
   } catch (e: any) {
     console.error("POST documentos/:id/aplicar error:", e);
     res.status(500).json({ error: e?.message || "Error aplicando los cambios" });

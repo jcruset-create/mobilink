@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarAtributosTecnicos, listarCatalogoCamposFicha, imagenChasisDeMarca, generarPosicionesDeTipo } from "../services/data";
-import type { Intervencion, AtributoTecnicoVehiculo, CampoCatalogoFicha } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo } from "../services/data";
+import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
-import { columnaDe } from "../services/fichaTecnicaCampos";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
 import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
+import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -41,9 +41,7 @@ export default function VehiculoDetalle() {
   const [modalOps, setModalOps] = useState(false);
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
-  const [atributos, setAtributos] = useState<AtributoTecnicoVehiculo[]>([]);
-  const [catalogoFicha, setCatalogoFicha] = useState<CampoCatalogoFicha[]>([]);
-  const [verFicha, setVerFicha] = useState(false); // los ~30 campos van plegados
+  const [recargarItv, setRecargarItv] = useState(0); // fuerza recarga del bloque ITV al aplicar una ficha
   // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
   // MAN no se dibuja como uno de Volvo). Si no hay, manda la de la config.
   const [imagenMarca, setImagenMarca] = useState<string | null>(null);
@@ -75,7 +73,6 @@ export default function VehiculoDetalle() {
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
-    setAtributos(await listarAtributosTecnicos(id).catch(() => []));
     setImagenMarca(
       await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
     );
@@ -91,7 +88,6 @@ export default function VehiculoDetalle() {
     try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
-  useEffect(() => { listarCatalogoCamposFicha().then(setCatalogoFicha).catch(() => setCatalogoFicha([])); }, []);
 
   const dato = (l: string, val?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{val || "—"}</div></div>
@@ -138,61 +134,14 @@ export default function VehiculoDetalle() {
           {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
           {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
         </div>
-        {/* Todos los campos de la ficha técnica, siempre visibles: el OCR los
-            va rellenando, no hace falta que ya tengan dato para aparecer.
-            El valor sale de la columna propia del vehículo; solo lo que quede
-            fuera del catálogo vive en tc_vehiculo_atributos_tecnicos. */}
-        {catalogoFicha.length > 0 && (() => {
-          // Ya cubiertos arriba con columna propia: no se repiten aquí.
-          const CUBIERTOS = new Set(["matricula", "marca", "modelo", "vin", "bastidor", "fecha_primera_matriculacion"]);
-          const porClave = new Map(atributos.map((a) => [a.clave_normalizada, a]));
-          const filas = catalogoFicha.filter((c) => !CUBIERTOS.has(c.clave));
-          const conDato = filas.filter((c) => {
-            const col = columnaDe(c.clave);
-            const val = (col ? (v as any)[col] : null) ?? porClave.get(c.clave)?.valor_bruto ?? null;
-            return val != null && val !== "";
-          }).length;
-          return (
-            <>
-              {/* Son ~30 campos: plegados por defecto para no tapar el resto
-                  de la ficha, que es lo que se mira a diario. */}
-              <button
-                onClick={() => setVerFicha(!verFicha)}
-                className="mt-3 flex w-full items-center gap-2 rounded bg-slate-900/60 px-2 py-1.5 text-left hover:bg-slate-900"
-              >
-                <span className="text-[11px] text-slate-400">{verFicha ? "▾" : "▸"}</span>
-                <span className="flex-1 text-[11px] font-bold uppercase text-slate-400">Datos de la ficha técnica</span>
-                <span className="text-[11px] text-slate-500">{conDato} de {filas.length} con dato</span>
-              </button>
-              <div className={`mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 ${verFicha ? "" : "hidden"}`}>
-                {filas.map((c) => {
-                  const col = columnaDe(c.clave);
-                  const propio = col ? (v as any)[col] : null;
-                  const val = propio ?? porClave.get(c.clave)?.valor_bruto ?? null;
-                  const texto = val == null || val === "" ? null : String(val);
-                  // P.2 potencia: la ficha la da en kW, pero se trabaja en CV.
-                  // Las columnas numeric pueden llegar como texto, de ahí el Number().
-                  const kw = c.clave === "potencia" && texto ? Number(texto) : NaN;
-                  const cv = Number.isFinite(kw) ? Math.round(kw * 1.35962) : null;
-                  return (
-                    <div key={c.clave}>
-                      <div className="text-[10px] text-slate-400">{c.codigo ? `${c.codigo} · ` : ""}{c.descripcion}</div>
-                      <div className="text-sm text-slate-200">
-                        {texto ?? "—"}{texto && c.unidad ? ` ${c.unidad}` : ""}
-                        {cv != null && <span className="text-slate-400"> · {cv} CV</span>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          );
-        })()}
       </div>
 
       {/* Ficha técnica (documento + OCR): justo debajo de los datos generales,
           que es de donde salen esos datos. */}
-      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={cargar} />
+      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={() => { void cargar(); setRecargarItv((n) => n + 1); }} />
+
+      {/* Ficha técnica ITV: solo los códigos que tienen dato real. */}
+      <FichaTecnicaItv key={recargarItv} vehiculoId={v.id} puedeEditar={!esCliente} onCambio={cargar} />
 
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
       {!esCliente && (
