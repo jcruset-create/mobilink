@@ -155,7 +155,13 @@ export default function FichaTecnicaItv({ vehiculoId, puedeEditar, onCambio }: {
                         <span className="flex-1 text-[12px] text-slate-400">
                           {v.campo?.descripcion ?? v.etiqueta_origen ?? v.clave_normalizada}
                         </span>
-                        <span className="text-[13px] font-semibold text-slate-100">{textoValor(v)}</span>
+                        <span className="text-[13px] font-semibold text-slate-100">
+                          {textoValor(v)}
+                          {/* P.2: la ficha la da en kW pero aquí se trabaja en CV. */}
+                          {v.clave_normalizada === "potencia" && v.valor_numero != null && (
+                            <span className="font-normal text-slate-400"> · {Math.round(v.valor_numero * 1.35962)} CV</span>
+                          )}
+                        </span>
                         {!v.verificado_manualmente && v.confianza != null && v.confianza < 0.9 && (
                           <span className="rounded bg-amber-900/40 px-1 text-[10px] font-bold text-amber-300"
                             title="Detectado por OCR con confianza baja, sin revisar">

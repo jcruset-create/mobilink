@@ -1,28 +1,19 @@
 import type { VehiculoInput } from "../types";
 
 /**
- * Mapeo clave del catálogo de la ficha técnica → columna tipada del
- * vehículo. Mismo mapeo que usa el servidor en /documentos/:id/aplicar:
- * nada de texto libre salvo lo que quede fuera del catálogo.
+ * Los datos de la ficha técnica viven en tc_vehiculo_atributos_tecnicos, no
+ * en columnas del vehículo. Aquí solo quedan los cuatro campos que SÍ son
+ * columna porque son la identidad operativa del vehículo y los usan listas,
+ * montajes, informes y la APK: marca, modelo, bastidor y fecha de
+ * matriculación. Mismo mapeo que usa el servidor en /documentos/:id/aplicar.
  */
 export const COLUMNAS_TEXTO: Record<string, keyof VehiculoInput> = {
   marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
-  tipo: "tipo_ficha", variante: "variante", version: "version",
-  denominacion_comercial: "denominacion_comercial", fabricante: "fabricante",
-  categoria: "categoria", clasificacion: "clasificacion", carroceria: "carroceria",
-  num_homologacion: "num_homologacion", combustible: "combustible", norma_emisiones: "norma_emisiones",
 };
-export const COLUMNAS_ENTERO: Record<string, keyof VehiculoInput> = {
-  num_ejes: "num_ejes", num_ruedas: "num_ruedas", ejes_motrices: "ejes_motrices", num_cilindros: "num_cilindros",
-};
-export const COLUMNAS_NUMERICO: Record<string, keyof VehiculoInput> = {
-  distancia_ejes: "distancia_ejes", via: "via", mma: "mma", masa_maxima_conjunto: "masa_maxima_conjunto",
-  masa_orden_marcha: "masa_orden_marcha", tara: "tara", masa_remolcable: "masa_remolcable",
-  longitud: "longitud", anchura: "anchura", altura: "altura", cilindrada: "cilindrada",
-  potencia: "potencia", nivel_sonoro: "nivel_sonoro",
-};
+export const COLUMNAS_ENTERO: Record<string, keyof VehiculoInput> = {};
+export const COLUMNAS_NUMERICO: Record<string, keyof VehiculoInput> = {};
 export const COLUMNAS_FECHA: Record<string, keyof VehiculoInput> = {
-  fecha_primera_matriculacion: "fecha_matriculacion", fecha_emision: "fecha_emision",
+  fecha_primera_matriculacion: "fecha_matriculacion",
 };
 
 /** Columna del vehículo donde vive el valor de una clave del catálogo (si tiene). */

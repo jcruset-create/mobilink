@@ -35,11 +35,7 @@ const COLS_VEHICULO = [
   "empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor",
   "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id",
   "tipo_llanta_id", "medidas_por_eje", "revision_intervalo_dias", "revision_intervalo_km",
-  // Campos de la ficha técnica (catálogo tc_cat_campos_ficha_tecnica), cada uno con su columna tipada.
-  "tipo_ficha", "variante", "version", "denominacion_comercial", "fabricante", "categoria", "clasificacion",
-  "carroceria", "num_homologacion", "num_ejes", "num_ruedas", "ejes_motrices", "distancia_ejes", "via", "mma",
-  "masa_maxima_conjunto", "masa_orden_marcha", "tara", "masa_remolcable", "longitud", "anchura", "altura",
-  "combustible", "cilindrada", "potencia", "num_cilindros", "norma_emisiones", "nivel_sonoro", "fecha_emision",
+  // Los datos de la ficha técnica no son columnas: van a tc_vehiculo_atributos_tecnicos.
 ] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
