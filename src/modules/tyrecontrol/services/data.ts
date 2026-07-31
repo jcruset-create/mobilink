@@ -39,6 +39,14 @@ const COLS_VEHICULO = [
   "carroceria", "num_homologacion", "num_ejes", "num_ruedas", "ejes_motrices", "distancia_ejes", "via", "mma",
   "masa_maxima_conjunto", "masa_orden_marcha", "tara", "masa_remolcable", "longitud", "anchura", "altura",
   "combustible", "cilindrada", "potencia", "num_cilindros", "norma_emisiones", "nivel_sonoro", "fecha_emision",
+  // Resto de codigos de la tarjeta ITV (C.I, C.V, A.2, D.6, R, J.2, J.3, Z, F.1.1, F.2,
+  // F.2.1, O.1..O.1.4, F.7, F.7.1, M.1, M.4, L.1, P.5, P.5.1, P.1.1, P.2.1, S.1, S.2, U.2, V.7).
+  "campo_ci", "campo_cv", "direccion_fabricante", "procedencia", "color", "campo_j2", "campo_j3",
+  "observaciones_ficha", "mma_por_eje", "mma_autorizada", "mma_autorizada_por_eje",
+  "masa_remolque_con_freno", "campo_o11", "carga_vertical_maxima", "campo_o13", "campo_o14",
+  "campo_f7", "campo_f71", "voladizo", "anchura_vias", "configuracion_ejes_ficha",
+  "fabricante_motor", "tipo_motor", "alimentacion", "relacion_potencia", "num_plazas",
+  "plazas_pie", "regimen_motor", "co2",
 ] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 

@@ -62,7 +62,22 @@ Lee TODAS las páginas y devuelve EXCLUSIVAMENTE un JSON válido con esta forma:
 }
 
 Reglas estrictas:
-- Usa estas claves normalizadas cuando reconozcas el dato: matricula, vin, marca, modelo, tipo, variante, version, denominacion_comercial, fabricante, categoria, clasificacion, carroceria, num_ejes, num_ruedas, ejes_motrices, mma, masa_maxima_conjunto, masa_orden_marcha, tara, masa_remolcable, longitud, anchura, altura, distancia_ejes, via, combustible, cilindrada, potencia, num_cilindros, norma_emisiones, nivel_sonoro, fecha_emision, fecha_primera_matriculacion, num_homologacion.
+- Usa estas claves normalizadas cuando reconozcas el dato, casando por el CÓDIGO de la tarjeta:
+  A→matricula, B→fecha_primera_matriculacion, CL→clasificacion, C.I→campo_ci, C.V→campo_cv,
+  A.1→fabricante, A.2→direccion_fabricante, D.1→marca, D.2→tipo/variante/version (y modelo si aparece),
+  D.3→denominacion_comercial, D.6→procedencia, E→vin, J→categoria, J.1→carroceria, J.2→campo_j2,
+  J.3→campo_j3, R→color, K→num_homologacion, Z→observaciones_ficha, G→masa_orden_marcha, F.1→mma,
+  F.1.1→mma_por_eje, F.1.5→longitud, F.2→mma_autorizada, F.2.1→mma_autorizada_por_eje,
+  F.3→masa_maxima_conjunto, F.3.1→masa_remolcable, O.1→masa_remolque_con_freno, O.1.1→campo_o11,
+  O.1.2→carga_vertical_maxima, O.1.3→campo_o13, O.1.4→campo_o14, F.4→distancia_ejes, F.5→anchura,
+  F.6→altura, F.7→campo_f7, F.7.1→campo_f71, F.8→via, M.1→voladizo, M.4→anchura_vias, L→num_ejes,
+  L.0→ejes_motrices, L.1→configuracion_ejes_ficha, L.2→num_ruedas, P.5.1→fabricante_motor,
+  P.5→tipo_motor, P.3→combustible, P.1→cilindrada, P.1.1→alimentacion, P.2→potencia,
+  P.2.1→relacion_potencia, S.1→num_plazas, S.2→plazas_pie, U.1→nivel_sonoro, U.2→regimen_motor,
+  V.7→co2, V.9→norma_emisiones, I→fecha_emision. También: tara y num_cilindros si el documento los da aparte.
+- Los códigos compuestos (F.1.1, F.2.1, M.1, M.4, L, L.0, L.1, L.2, P.1.1) se devuelven TAL CUAL aparecen
+  ("8000 / 13000 / /", "6 / EN LINEA", "2 / 6"), sin partirlos ni interpretarlos.
+- Si el valor de un código son solo guiones o está vacío, NO lo devuelvas: es un campo sin dato.
 - Para cualquier otro dato del documento, deja "clave" a null pero CONSERVA "codigo_origen", "etiqueta_origen" y "valor". No descartes nada.
 - "ruedas" es el número de NEUMÁTICOS de ese eje (2 rueda simple, 4 rueda gemela). Si el documento no lo dice con claridad, pon null: NO lo inventes.
 - Los ejes van SIEMPRE ordenados de delante hacia atrás, empezando por posicion 1.
