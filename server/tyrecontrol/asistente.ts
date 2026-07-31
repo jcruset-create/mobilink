@@ -243,6 +243,12 @@ REGLAS:
 
 // ── Endpoint ────────────────────────────────────────────────────────────────
 export function mountAsistente(app: Express, ...guards: RequestHandler[]): void {
+  // ¿Se puede usar el asistente? Lo consulta el panel para no mostrar el botón
+  // si el servidor no tiene IA configurada.
+  app.get("/api/tyrecontrol/asistente/estado", ...guards, (_req, res) => {
+    res.json({ disponible: hayIA() });
+  });
+
   app.post("/api/tyrecontrol/asistente/preguntar", ...guards, async (req, res) => {
     try {
       if (!hayIA()) return res.status(503).json({ error: "Asistente no disponible (falta OPENAI_API_KEY)" });
