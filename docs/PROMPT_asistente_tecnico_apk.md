@@ -141,9 +141,54 @@ en local aunque haya red** (más rápido y gratis): *"¿cuánto le queda a esta?
   - En Inicio: *"¿Qué me queda hoy?"*, *"¿Qué hay para mañana?"*
 - **Respuestas de 2-3 líneas**, cifras en negrita, tipografía `AppSizes` (modo
   exterior). Nada de tablas.
-- **Entrada por voz**: valiosa con guantes, pero exige dependencia nueva
-  (`speech_to_text`) y permiso de micrófono. **Fase 2**, no ahora — primero hay
-  que ver si el asistente se usa.
+
+### Dictado por voz (botón de micrófono)
+
+Es **la entrada natural** para alguien con guantes y las manos sucias: escribir
+en una tablet en esas condiciones es justo lo que hace que una herramienta no se
+use. Va junto a la caja de texto, no la sustituye.
+
+**Cómo:** paquete `speech_to_text` (Flutter). Usa el reconocedor **del propio
+sistema** — `SpeechRecognizer` en Android, framework Speech en iOS —, así que no
+se sube audio a ningún servidor nuestro ni de OpenAI.
+
+**Lo que hay que tocar:**
+- `pubspec.yaml`: añadir `speech_to_text` (dependencia nueva, la primera de
+  audio del proyecto).
+- `AndroidManifest.xml`: **falta `RECORD_AUDIO`** (hoy solo hay INTERNET, CAMERA,
+  BLUETOOTH_* y ACCESS_FINE_LOCATION) y, en Android 11+, la entrada `<queries>`
+  con `android.speech.RecognitionService` — sin ella el reconocedor no se
+  encuentra y falla en silencio.
+- `permission_handler` ya está en el proyecto: se reutiliza para pedir el
+  permiso, con el mismo patrón que Bluetooth.
+- iOS: `NSSpeechRecognitionUsageDescription` y `NSMicrophoneUsageDescription` en
+  el `Info.plist`.
+
+**Comportamiento:**
+1. Mantener pulsado el micro → escucha; soltar → transcribe y envía.
+   Mantener pulsado evita disparos accidentales, que en un bolsillo o con la
+   tablet apoyada serían constantes.
+2. **La transcripción se muestra antes de enviarse** y es editable. En un taller
+   se va a equivocar: el técnico debe poder corregir sin repetir todo.
+3. Si el permiso se deniega o no hay reconocedor, el botón se oculta y queda la
+   caja de texto. Nunca bloquea.
+4. Idioma fijado a `es_ES`.
+
+**Aviso honesto sobre el ruido:** un taller con compresor o pistola de impacto
+es un entorno malo para el reconocimiento de voz. El dictado del sistema
+funciona bien en el patio o en cabina, y regular al lado de una máquina. No se
+debe vender como infalible, y **por eso la caja de texto no desaparece nunca**.
+
+**Sin conexión:** el reconocimiento de Android puede funcionar offline **solo si
+el técnico tiene descargado el paquete de voz en español** (Ajustes → Idiomas →
+Reconocimiento de voz sin conexión). Conviene dejarlo hecho al preparar las
+tablets. Si no está, sin red no hay dictado.
+
+**Alternativa descartada:** grabar audio y transcribir con Whisper en el backend
+daría mejor precisión con ruido, pero exige red siempre, añade coste por
+minuto, sube voz del técnico a un tercero y mete latencia. Para frases de cinco
+palabras no compensa. Si el ruido resulta ser un problema serio en campo, se
+reconsidera.
 
 ---
 
@@ -171,6 +216,13 @@ en local aunque haya red** (más rápido y gratis): *"¿cuánto le queda a esta?
 - [ ] El botón no tapa el plano ni los botones de Finalizar/Deshacer.
 - [ ] `flutter analyze` limpio.
 
+**Voz**
+- [ ] Mantener pulsado el micro dicta; la transcripción se puede **corregir**
+      antes de enviar.
+- [ ] Denegar el permiso de micrófono **no rompe nada**: el botón desaparece y
+      queda la caja de texto.
+- [ ] Funciona con guantes puestos (zona táctil del botón ≥ 56 px).
+
 ---
 
 ## Riesgos y decisiones
@@ -193,8 +245,9 @@ en local aunque haya red** (más rápido y gratis): *"¿cuánto le queda a esta?
 2. **Conexión al backend** del asistente del cliente, con perfil `tecnico` y
    contexto de pantalla.
 3. **Herramientas propias** (stock, historial de posición, catálogo).
-4. **Medir uso.** Si se usa, seguir; si no, retirar el botón.
-5. *(Fase 2)* Entrada por voz.
+4. **Dictado por voz.** Va aquí y no al final: con guantes es lo que hace que el
+   asistente se use o no, y sin él la fase 5 mediría un uso falsamente bajo.
+5. **Medir uso.** Si se usa, seguir; si no, retirar el botón.
 
 > Empezar por la 1 tiene truco a propósito: entrega valor **sin depender de la
 > IA ni de la red**, y sirve para saber si el técnico va a usar esto antes de
