@@ -4566,6 +4566,66 @@ app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req,
   }
 });
 
+// Diagnóstico de COMBUSTIBLE. showObjectReportExtern no devuelve nivel ni
+// consumo si el equipo no tiene enlace CAN/FMS, pero los informes de viaje
+// pueden traer fuel_usage (consumo, estimado o real según configuración).
+// Este endpoint lanza las tres consultas y devuelve la respuesta CRUDA de
+// cada una + las claves detectadas, para saber de qué datos disponemos.
+//   /api/webfleet/debug-fuel?objectno=001&dias=7
+app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const objectno = String(req.query.objectno || "").trim();
+    if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
+    const dias = Math.min(31, Math.max(1, Number(req.query.dias) || 7));
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+
+    const consultar = async (action: string, extra: Record<string, string>) => {
+      try {
+        const { url, headers } = buildWebfleetRequest(action, extra);
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        let claves: string[] = [];
+        let filas: number | null = null;
+        try {
+          const j = JSON.parse(text);
+          const arr = Array.isArray(j) ? j : j?.data ?? [];
+          filas = Array.isArray(arr) ? arr.length : null;
+          if (Array.isArray(arr) && arr.length) claves = Object.keys(arr[0]);
+        } catch {/* respuesta no JSON: se devuelve el texto igualmente */}
+        // Lo que buscamos: cualquier clave que hable de combustible.
+        const clavesCombustible = claves.filter((k) => /fuel|consum|tank|litro|liter/i.test(k));
+        return { status: r.status, filas, claves, clavesCombustible, muestra: text.slice(0, 1500) };
+      } catch (e: any) {
+        return { error: e?.message || String(e) };
+      }
+    };
+
+    const [objeto, viajes, resumen] = await Promise.all([
+      consultar("showObjectReportExtern", { objectno }),
+      consultar("showTripReportExtern", { objectno, ...rango }),
+      consultar("showTripSummaryReportExtern", { objectno, ...rango }),
+    ]);
+
+    const hayCombustible = [objeto, viajes, resumen].some(
+      (x: any) => Array.isArray(x?.clavesCombustible) && x.clavesCombustible.length > 0
+    );
+    res.json({
+      objectno,
+      dias,
+      veredicto: hayCombustible
+        ? "Hay campos de combustible: ver clavesCombustible en cada bloque."
+        : "Sin campos de combustible en ninguna de las 3 consultas (equipo sin enlace CAN/FMS).",
+      showObjectReportExtern: objeto,
+      showTripReportExtern: viajes,
+      showTripSummaryReportExtern: resumen,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Error consultando Webfleet" });
+  }
+});
+
 app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
