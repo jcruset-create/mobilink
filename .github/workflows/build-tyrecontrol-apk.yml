@@ -54,7 +54,16 @@ jobs:
       # "el secret no existe" de "existe pero está mal pegado", sin exponer la
       # clave (GitHub además enmascara el valor en los logs).
       - name: Estado de los secrets de firma
+        env:
+          # toJSON(secrets) expone el mapa de secrets visibles para este job.
+          # Se imprimen SOLO las claves: los valores los enmascara GitHub, pero
+          # aun así no se sacan. Esto distingue "el secret no existe a nivel de
+          # repositorio" de "existe con otro nombre", que es lo que no se puede
+          # ver desde fuera.
+          SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
+          echo "Secrets visibles para este job:"
+          echo "$SECRETS_JSON" | jq -r 'keys[]' | sed 's/^/  - /'
           echo "MOBILINK_KEYSTORE_BASE64: ${#KS_B64} caracteres (se esperan ~3536)"
           echo "MOBILINK_KEYSTORE_PASSWORD: ${#KS_PASS} caracteres (se esperan 20)"
           if [ -z "$KS_B64" ]; then
