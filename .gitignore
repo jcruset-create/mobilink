@@ -42,3 +42,11 @@ supabase/.temp/
 */.metadata
 */analysis_options.yaml
 lite_app/.gitignore
+
+# Claves de firma de Android. Este repositorio es PÚBLICO: con la clave privada
+# cualquiera podría firmar un APK que Android aceptaría como actualización
+# legítima de Mobilink. Viven solo en los secrets del repositorio.
+*.keystore
+*.jks
+*.p12
+key.properties
