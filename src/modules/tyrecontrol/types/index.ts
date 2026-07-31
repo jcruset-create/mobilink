@@ -406,45 +406,12 @@ export interface Vehiculo {
   medidas_por_eje?: boolean;
   revision_intervalo_dias?: number | null; // override de periodicidad por vehículo
   revision_intervalo_km?: number | null;
-  // Campos de la ficha técnica sin columna "de negocio" propia: una columna
-  // tipada por cada campo del catálogo (tc_cat_campos_ficha_tecnica), no
-  // texto libre. Lo que el documento traiga y no esté en el catálogo sigue
-  // yendo a tc_vehiculo_atributos_tecnicos.
-  // (clave del catálogo "tipo" → columna tipo_ficha: "tipo" ya lo usa la
-  // relación con tc_tipos_vehiculo más abajo)
-  tipo_ficha?: string | null;
-  variante?: string | null;
-  version?: string | null;
-  denominacion_comercial?: string | null;
-  fabricante?: string | null;
-  categoria?: string | null;
-  clasificacion?: string | null;
-  carroceria?: string | null;
-  num_homologacion?: string | null;
-  num_ejes?: number | null;
-  num_ruedas?: number | null;
-  ejes_motrices?: number | null;
-  distancia_ejes?: number | null;
-  via?: number | null;
-  mma?: number | null;
-  masa_maxima_conjunto?: number | null;
-  masa_orden_marcha?: number | null;
-  tara?: number | null;
-  masa_remolcable?: number | null;
-  longitud?: number | null;
-  anchura?: number | null;
-  altura?: number | null;
-  combustible?: string | null;
-  cilindrada?: number | null;
-  potencia?: number | null;
-  num_cilindros?: number | null;
-  norma_emisiones?: string | null;
-  nivel_sonoro?: number | null;
-  fecha_emision?: string | null;
-  // El resto de códigos de la ficha (A.2, D.6, R, Z, O.1.x, M.x, P.5…) NO
-  // tienen columna: viven en tc_vehiculo_atributos_tecnicos, que es la
-  // fuente de la verdad de la ficha técnica. Estas columnas son solo la
-  // proyección de los datos que la app usa para listar, filtrar e informar.
+  // Los datos de la ficha técnica NO viven aquí: cada código de la tarjeta
+  // (A.1, F.1.1, P.2, V.9…) es una fila de tc_vehiculo_atributos_tecnicos
+  // enlazada al maestro tc_cat_campos_ficha_tecnica, y solo existe si trae
+  // dato real. Matrícula, marca, modelo, bastidor y fecha de matriculación
+  // se quedan arriba porque son la identidad operativa del vehículo, no un
+  // dato de ficha.
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;

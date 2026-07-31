@@ -14294,24 +14294,16 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
     // 1) Campos del vehículo aceptados: cada clave del catálogo tiene su
     //    columna propia y tipada (texto, entero, numérico o fecha) — no se
     //    guarda como texto libre salvo lo que quede fuera del catálogo.
+    // La ficha tecnica vive en tc_vehiculo_atributos_tecnicos. Aqui solo
+    // quedan los campos que son columna del vehiculo porque son su identidad
+    // operativa (los usan listas, montajes, informes y la APK).
     const COLUMNAS_TEXTO: Record<string, string> = {
       marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
-      tipo: "tipo_ficha", variante: "variante", version: "version",
-      denominacion_comercial: "denominacion_comercial", fabricante: "fabricante",
-      categoria: "categoria", clasificacion: "clasificacion", carroceria: "carroceria",
-      num_homologacion: "num_homologacion", combustible: "combustible", norma_emisiones: "norma_emisiones",
     };
-    const COLUMNAS_ENTERO: Record<string, string> = {
-      num_ejes: "num_ejes", num_ruedas: "num_ruedas", ejes_motrices: "ejes_motrices", num_cilindros: "num_cilindros",
-    };
-    const COLUMNAS_NUMERICO: Record<string, string> = {
-      distancia_ejes: "distancia_ejes", via: "via", mma: "mma", masa_maxima_conjunto: "masa_maxima_conjunto",
-      masa_orden_marcha: "masa_orden_marcha", tara: "tara", masa_remolcable: "masa_remolcable",
-      longitud: "longitud", anchura: "anchura", altura: "altura", cilindrada: "cilindrada",
-      potencia: "potencia", nivel_sonoro: "nivel_sonoro",
-    };
+    const COLUMNAS_ENTERO: Record<string, string> = {};
+    const COLUMNAS_NUMERICO: Record<string, string> = {};
     const COLUMNAS_FECHA: Record<string, string> = {
-      fecha_primera_matriculacion: "fecha_matriculacion", fecha_emision: "fecha_emision",
+      fecha_primera_matriculacion: "fecha_matriculacion",
     };
     // "25/10/2017" → "2017-10-25". Una fecha en formato no ISO rompe el
     // guardado (columna date de Postgres): mejor no aplicarla que romperlo.
