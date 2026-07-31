@@ -24,15 +24,21 @@ export interface PosicionGenerada {
   pos_h: number;
 }
 
-// Referencia tomada del semirremolque ya calibrado: rueda de 9x13 %, con la
-// izquierda al 14 % y la derecha al 71,5 %.
-const ANCHO = 9;
-const ALTO = 13;
-const X_SIMPLE = { izq: 14, der: 71.5 };
-// En un eje gemelado caben cuatro: exterior e interior a cada lado.
-const X_GEMELO = { izq_ext: 8, izq_int: 20, der_int: 65.5, der_ext: 77.5 };
-const Y_PRIMERO = 19;
-const Y_ULTIMO = 70;
+// Valores MEDIDOS sobre los planos reales (lienzo 1536x1024 con el chasis
+// centrado, que es el formato del plano del semirremolque): las ruedas caen
+// entre el 34 y el 39 % a la izquierda y entre el 61 y el 64 % a la derecha.
+// No se copian de las coordenadas guardadas de ningún tipo porque varias
+// están desfasadas: apuntan al fondo, de cuando la imagen era otra.
+const ANCHO = 7;
+const ALTO = 11;
+const X_SIMPLE = { izq: 34, der: 58.9 };
+// En un eje gemelado caben cuatro, así que cada marca es más estrecha.
+const ANCHO_GEMELO = 5;
+const X_GEMELO = { izq_ext: 34.9, izq_int: 38.6, der_int: 56.4, der_ext: 60.1 };
+// El reparto vertical es aproximado: cada plano coloca los ejes a su manera,
+// así que esto deja las ruedas repartidas y ya se afinan arrastrándolas.
+const Y_PRIMERO = 15;
+const Y_ULTIMO = 78;
 
 /** "2x4x2" → [2, 4, 2]. Devuelve [] si la etiqueta no es válida. */
 export function ruedasPorEje(config: string | null | undefined): number[] {
@@ -57,13 +63,14 @@ export function generarPosiciones(config: string | null | undefined): PosicionGe
       ? (Y_PRIMERO + Y_ULTIMO) / 2
       : Y_PRIMERO + (i * (Y_ULTIMO - Y_PRIMERO)) / (ejes.length - 1);
 
+    const ancho = ruedas === 2 ? ANCHO : ANCHO_GEMELO;
     const añadir = (sufijo: string, nombre: string, lado: "izq" | "der", ie: "int" | "ext" | null, x: number) => {
       posiciones.push({
         codigo_posicion: `E${eje}_${sufijo}`,
         nombre: `Eje ${eje} ${nombre}`,
         eje, lado, interior_exterior: ie,
         orden_visual: orden++,
-        pos_x: x, pos_y: y, pos_w: ANCHO, pos_h: ALTO,
+        pos_x: x, pos_y: y, pos_w: ancho, pos_h: ALTO,
       });
     };
 
