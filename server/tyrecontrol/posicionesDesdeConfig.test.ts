@@ -78,6 +78,33 @@ describe("generarPosiciones — colocación en el plano", () => {
     }
   });
 
+  it("todos los recuadros miden lo mismo, tenga el eje 2 ruedas o 4", () => {
+    // Dentro va marca, modelo, medida, profundidad y presión: si unos son
+    // más estrechos que otros, la información no cabe igual en todos.
+    for (const config of ["2x2", "2x4", "2x4x2", "2x4x4", "2x2x2", "2x2x2x2"]) {
+      const p = generarPosiciones(config);
+      const tamaños = new Set(p.map((x) => `${x.pos_w}x${x.pos_h}`));
+      expect(tamaños.size, `${config} usa ${[...tamaños].join(" y ")}`).toBe(1);
+    }
+  });
+
+  it("los recuadros son lo bastante grandes para la información que llevan", () => {
+    const [p] = generarPosiciones("2x4x2");
+    expect(p.pos_w).toBeGreaterThanOrEqual(12);
+    expect(p.pos_h).toBeGreaterThanOrEqual(12);
+  });
+
+  it("dos recuadros del mismo eje no se solapan", () => {
+    const p = generarPosiciones("2x4x2");
+    for (const eje of [1, 2, 3]) {
+      const fila = p.filter((x) => x.eje === eje).sort((a, b) => a.pos_x - b.pos_x);
+      for (let i = 1; i < fila.length; i++) {
+        expect(fila[i].pos_x, `eje ${eje}: ${fila[i - 1].codigo_posicion} pisa a ${fila[i].codigo_posicion}`)
+          .toBeGreaterThanOrEqual(fila[i - 1].pos_x + fila[i - 1].pos_w);
+      }
+    }
+  });
+
   it("todas las posiciones caben dentro del recuadro", () => {
     for (const x of generarPosiciones("2x4x4")) {
       expect(x.pos_x).toBeGreaterThanOrEqual(0);
