@@ -72,14 +72,20 @@ export default function TyreControlApp() {
               <Route path="alertas" element={<InformeAlertas />} />
               <Route path="estado-flota" element={<InformeEstadoFlota />} />
               <Route path="inventario" element={<InformeInventario />} />
-              <Route path="historial-neumatico" element={<InformeHistorialNeumatico />} />
               <Route path="historial-vehiculo" element={<InformeHistorialVehiculo />} />
-              <Route path="economico" element={<InformeEconomico />} />
-              <Route path="rankings" element={<InformeRankings />} />
               <Route path="desgaste" element={<InformeDesgaste />} />
               <Route path="presiones" element={<InformePresiones />} />
-              <Route path="productividad" element={<InformeProductividad />} />
-              <Route path="operaciones-informe" element={<InformeOperaciones />} />
+              {/* Informes INTERNOS: costes, productividad de técnicos y códigos
+                  internos. Un cliente no los ve en pestañas (InformesLayout) y
+                  tampoco por URL directa — este RoleRoute es la barrera real.
+                  Misma lista que TABS con `interna: true`: mantener en espejo. */}
+              <Route element={<RoleRoute roles={["administrador"]} />}>
+                <Route path="economico" element={<InformeEconomico />} />
+                <Route path="rankings" element={<InformeRankings />} />
+                <Route path="productividad" element={<InformeProductividad />} />
+                <Route path="operaciones-informe" element={<InformeOperaciones />} />
+                <Route path="historial-neumatico" element={<InformeHistorialNeumatico />} />
+              </Route>
             </Route>
 
             {/* Cliente */}
