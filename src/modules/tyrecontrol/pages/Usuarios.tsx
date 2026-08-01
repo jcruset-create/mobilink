@@ -2,11 +2,23 @@ import { useEffect, useState } from "react";
 import {
   listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas,
   listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario,
-  generarEnlaceAcceso,
+  generarEnlaceAcceso, ultimosAccesos, obtenerPantallasUsuario, guardarPantallasUsuario,
 } from "../services/data";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { Modal, inputCls } from "../components/ui";
 import { ROL_LABELS, type Empresa, type Perfil, type Rol } from "../types";
+import { NAV } from "../config/navigation";
+
+/** Hace legible un "hace cuánto" sin traer una librería de fechas. */
+function haceCuanto(iso: string | null | undefined): { txt: string; frio: boolean } {
+  if (!iso) return { txt: "nunca", frio: true };
+  const dias = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (dias <= 0) return { txt: "hoy", frio: false };
+  if (dias === 1) return { txt: "ayer", frio: false };
+  if (dias < 30) return { txt: `hace ${dias} días`, frio: dias > 14 };
+  const meses = Math.floor(dias / 30);
+  return { txt: meses === 1 ? "hace 1 mes" : `hace ${meses} meses`, frio: true };
+}
 
 const EMPTY = { nombre: "", email: "", password: "", rol: "cliente" as Rol, acceso_apk: false, acceso_panel: true, empresa_id: "" };
 
@@ -19,12 +31,18 @@ export default function Usuarios() {
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState({ ...EMPTY });
   const [ficha, setFicha] = useState<Perfil | null>(null);
+  const [filtroRol, setFiltroRol] = useState<"todos" | Rol>("todos");
+  const [busca, setBusca] = useState("");
+  const [accesos, setAccesos] = useState<Record<string, string | null>>({});
 
   async function cargar() {
     setLoading(true);
     try {
       setItems(await listarUsuarios());
       if (esSuper) setEmpresas(await listarEmpresas());
+      // El último acceso es informativo: si falla, la pantalla sigue siendo
+      // útil, así que no se propaga el error.
+      ultimosAccesos().then(setAccesos).catch(() => setAccesos({}));
     } catch (e: any) { setMsg(e?.message || "Error cargando usuarios"); }
     finally { setLoading(false); }
   }
@@ -61,7 +79,16 @@ export default function Usuarios() {
   }
 
   const inp = "rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500";
-  const cols = esSuper ? 7 : 6;
+  const cols = esSuper ? 8 : 7;
+
+  const visibles = items.filter((u) => {
+    if (filtroRol !== "todos" && u.rol !== filtroRol) return false;
+    const q = busca.trim().toLowerCase();
+    if (!q) return true;
+    return u.nombre.toLowerCase().includes(q)
+      || (u.email ?? "").toLowerCase().includes(q)
+      || (u.empresa?.nombre ?? "").toLowerCase().includes(q);
+  });
 
   return (
     <div>
@@ -95,6 +122,32 @@ export default function Usuarios() {
         <button onClick={crear} className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">Crear usuario</button>
       </div>
 
+      {/* Filtros: con varios clientes dentro, la lista plana deja de servir */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="flex gap-1">
+          {([["todos", "Todos"], ["cliente", "Clientes"], ["operador", "Técnicos"], ["administrador", "Administradores"]] as const).map(([v, txt]) => (
+            <button
+              key={v}
+              onClick={() => setFiltroRol(v as "todos" | Rol)}
+              className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold ${
+                filtroRol === v ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              {txt}
+              <span className="ml-1.5 opacity-60">
+                {v === "todos" ? items.length : items.filter((u) => u.rol === v).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        <input
+          className={`${inp} ml-auto max-w-[240px]`}
+          placeholder="Buscar nombre, email o empresa…"
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+        />
+      </div>
+
       {/* Lista */}
       <div className="overflow-hidden rounded-lg border border-slate-700 bg-slate-800">
         <table className="w-full text-sm">
@@ -102,22 +155,25 @@ export default function Usuarios() {
             <tr>
               <th className="px-4 py-2">Nombre</th><th className="px-4 py-2">Email</th>
               <th className="px-4 py-2">Rol</th>{esSuper && <th className="px-4 py-2">Empresa</th>}
-              <th className="px-4 py-2">Accesos</th><th className="px-4 py-2">Estado</th>
+              <th className="px-4 py-2">Accesos</th><th className="px-4 py-2">Último acceso</th><th className="px-4 py-2">Estado</th>
               <th className="px-4 py-2">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr><td className="px-4 py-4 text-slate-500" colSpan={cols}>Cargando…</td></tr>
-            ) : items.length === 0 ? (
-              <tr><td className="px-4 py-4 text-slate-500" colSpan={cols}>Sin usuarios.</td></tr>
-            ) : items.map((u) => (
+            ) : visibles.length === 0 ? (
+              <tr><td className="px-4 py-4 text-slate-500" colSpan={cols}>Sin usuarios que coincidan.</td></tr>
+            ) : visibles.map((u) => (
               <tr key={u.id} className="border-t border-slate-700/60">
                 <td className="px-4 py-2 font-semibold">{u.nombre}{u.es_superadmin ? " ⭐" : ""}</td>
                 <td className="px-4 py-2 text-slate-400">{u.email}</td>
                 <td className="px-4 py-2">{ROL_LABELS[u.rol]}</td>
                 {esSuper && <td className="px-4 py-2 text-slate-400">{u.empresa?.nombre ?? "—"}{u.empresas_manual ? <span className="ml-1 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300" title="Empresas visibles asignadas a mano">+manual</span> : null}</td>}
                 <td className="px-4 py-2 text-[11px] text-slate-400">{u.acceso_panel ? "Panel " : ""}{u.acceso_apk ? "APK" : ""}</td>
+                <td className="px-4 py-2 text-[11px]" title={accesos[u.id] ?? "Sin registro de acceso"}>
+                  {(() => { const a = haceCuanto(accesos[u.id]); return <span className={a.frio ? "text-slate-500" : "text-slate-300"}>{a.txt}</span>; })()}
+                </td>
                 <td className="px-4 py-2">
                   <button
                     disabled={u.es_superadmin}
@@ -177,6 +233,8 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   const [nuevoPin, setNuevoPin] = useState("");
   const [cambiandoPin, setCambiandoPin] = useState(false);
   const [pinMsg, setPinMsg] = useState("");
+  const [pantallas, setPantallas] = useState<Set<string> | null>(null); // null = todas
+  const [pantallasMsg, setPantallasMsg] = useState("");
   const [enlace, setEnlace] = useState("");
   const [generando, setGenerando] = useState(false);
   const [enlaceMsg, setEnlaceMsg] = useState("");
@@ -214,6 +272,28 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   }
 
   const activas = empresas.filter((e) => e.activo !== false);
+
+  // Pantallas que este rol puede tener. Se derivan del propio menú para que al
+  // añadir una pantalla nueva aparezca aquí sola, sin una lista paralela que
+  // se quede desfasada.
+  const pantallasDelRol = NAV.filter(
+    (i) => !i.superadminOnly && (!i.roles || i.roles.includes(rol)) && i.path !== "perfil" && i.path !== "ayuda",
+  );
+
+  useEffect(() => {
+    obtenerPantallasUsuario(usuario.id)
+      .then((p) => setPantallas(p ? new Set(p) : null))
+      .catch(() => setPantallas(null));
+  }, [usuario.id]);
+
+  async function guardarPantallas(nuevas: Set<string> | null) {
+    setPantallas(nuevas);
+    setPantallasMsg("");
+    try {
+      await guardarPantallasUsuario(usuario.id, nuevas ? [...nuevas] : null);
+      setPantallasMsg("✔ Guardado");
+    } catch (e: any) { setPantallasMsg(e?.message || "Error guardando"); }
+  }
 
   useEffect(() => {
     listarEmpresasDeUsuario(usuario.id)
@@ -332,6 +412,50 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
           </div>
           {pinMsg && <div className={`mt-1 text-[12px] ${pinMsg.startsWith("✔") ? "text-emerald-400" : "text-rose-300"}`}>{pinMsg}</div>}
         </div>
+        )}
+
+        {/* Pantallas permitidas: por defecto todas las de su rol */}
+        {!usuario.es_superadmin && (
+          <div className="rounded-lg bg-slate-800 p-3">
+            <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Pantallas permitidas</div>
+            <div className="mb-2 flex flex-wrap gap-4 text-sm text-slate-300">
+              <label className="flex items-center gap-1">
+                <input type="radio" checked={pantallas === null} onChange={() => void guardarPantallas(null)} />
+                Todas las de su rol
+              </label>
+              <label className="flex items-center gap-1">
+                <input
+                  type="radio"
+                  checked={pantallas !== null}
+                  onChange={() => void guardarPantallas(new Set(pantallasDelRol.map((i) => i.path)))}
+                />
+                Solo estas:
+              </label>
+            </div>
+            {pantallas !== null && (
+              <div className="grid gap-1 sm:grid-cols-2">
+                {pantallasDelRol.map((i) => (
+                  <label key={i.key} className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1.5 text-sm text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={pantallas.has(i.path)}
+                      onChange={(ev) => {
+                        const n = new Set(pantallas);
+                        ev.target.checked ? n.add(i.path) : n.delete(i.path);
+                        void guardarPantallas(n.size === 0 ? null : n);
+                      }}
+                    />
+                    {i.label}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 text-[11px] text-slate-500">
+              El Dashboard y la Ayuda están siempre disponibles. Desmarcar todas equivale a «Todas»:
+              dejar a alguien sin ninguna pantalla le echaría del panel sin poder avisarle.
+            </div>
+            {pantallasMsg && <div className={`mt-1 text-[12px] ${pantallasMsg.startsWith("✔") ? "text-emerald-400" : "text-rose-300"}`}>{pantallasMsg}</div>}
+          </div>
         )}
 
         {esSuper && (

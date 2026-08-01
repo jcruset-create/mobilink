@@ -52,6 +52,9 @@ export const NAV: NavItem[] = [
   { key: "perfil", path: "perfil", label: "Perfil", icon: User },
 ];
 
+/** Pantallas que nunca se filtran por permisos. */
+export const SIEMPRE_VISIBLES = ["dashboard", "ayuda", "perfil"];
+
 export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean, pantallas?: string[] | null): boolean {
   if (item.superadminOnly) return esSuperadmin;
   // el super-admin ve lo de administrador; el resto según su rol
@@ -64,7 +67,9 @@ export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: bo
   }
   // Gating por pantallas (usuarios unificados): se compara por path;
   // null = todas las del rol; el super-admin no se filtra.
-  if (!esSuperadmin && pantallas && item.path !== "dashboard" && item.path !== "ayuda" && !pantallas.includes(item.path)) {
+  // Dashboard, Ayuda y Perfil no se filtran nunca: dejar a alguien sin su
+  // propia ficha o sin la ayuda no es restringir, es dejarle atrapado.
+  if (!esSuperadmin && pantallas && !SIEMPRE_VISIBLES.includes(item.path) && !pantallas.includes(item.path)) {
     return false;
   }
   return true;

@@ -14130,6 +14130,59 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
 });
 
 /**
+ * Últimos accesos de los usuarios visibles para quien pregunta.
+ *
+ * `last_sign_in_at` vive en auth.users, que no es accesible desde el navegador
+ * ni con RLS: hace falta service role. Se devuelve un mapa {id: fecha} para no
+ * tener que rehacer el listado de usuarios, que sigue saliendo por Supabase.
+ *
+ * El alcance lo pone el servidor, no el cliente: un admin de empresa solo ve
+ * los de SU empresa. Aceptar una lista de ids del body sin comprobarla dejaría
+ * consultar la actividad de cualquiera.
+ */
+app.get(
+  "/api/tyrecontrol/usuarios/ultimos-accesos",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const admin = (req as any).tcAdmin as { id: string; es_superadmin: boolean };
+
+      let q = supabase.from("tc_usuarios").select("id");
+      if (!admin.es_superadmin) {
+        const { data: yo } = await supabase
+          .from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle();
+        if (!yo?.empresa_id) return res.json({ accesos: {} });
+        q = q.eq("empresa_id", yo.empresa_id);
+      }
+      const { data: visibles } = await q;
+      const permitidos = new Set((visibles ?? []).map((u: any) => u.id as string));
+      if (permitidos.size === 0) return res.json({ accesos: {} });
+
+      // listUsers pagina de 50 en 50 por defecto. Se recorre hasta agotar,
+      // con un tope por si el proyecto crece: mejor un dato incompleto que
+      // una petición que nunca termina.
+      const accesos: Record<string, string | null> = {};
+      const PAGINAS_MAX = 40;
+      for (let page = 1; page <= PAGINAS_MAX; page++) {
+        const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error) return res.status(400).json({ error: error.message });
+        const lote = data?.users ?? [];
+        for (const u of lote) {
+          if (permitidos.has(u.id)) accesos[u.id] = (u as any).last_sign_in_at ?? null;
+        }
+        if (lote.length < 1000) break;
+      }
+      res.json({ accesos });
+    } catch (error: any) {
+      console.error("GET /api/tyrecontrol/usuarios/ultimos-accesos error:", error?.message);
+      res.status(500).json({ error: error?.message || "Error consultando los accesos" });
+    }
+  },
+);
+
+/**
  * Genera un enlace de acceso de un solo uso para un usuario del panel.
  *
  * Por qué existe: el panel se entra con enlace mágico por email

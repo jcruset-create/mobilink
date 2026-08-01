@@ -159,14 +159,31 @@ faltaba era solo acceso y navegación:
   "Operaciones" → "Trabajos realizados". Son entradas propias del rol, así que
   el vocabulario del taller no cambia.
 
-### Fase 4 — Auditoría y control (cuando haya varios clientes activos)
+### Fase 4 — Auditoría y control — HECHO
 
-- Registro de últimos accesos por usuario cliente (ya existe `last_sign_in` en
-  auth; superficiarlo en la ficha).
-- Página en Usuarios filtrable por "solo clientes" con su empresa y estado.
-- Opcional por cliente: activar/desactivar módulos (p. ej. mostrar Económico a
-  un cliente concreto que paga por ello) usando el gating `pantallas` que ya
-  existe — sin código nuevo, solo UI para configurarlo.
+- Columna **Último acceso** en Usuarios ("hoy", "hace 12 días", "nunca"), en
+  gris apagado si hace más de dos semanas. `last_sign_in_at` vive en
+  auth.users, así que va por un endpoint con service role
+  (`GET /usuarios/ultimos-accesos`) cuyo alcance decide el servidor: un admin
+  de empresa solo ve los suyos. Si esa llamada falla, la pantalla sigue
+  funcionando: el dato es informativo.
+- Filtros por rol (Todos / Clientes / Técnicos / Administradores) con su
+  recuento, más buscador por nombre, email o empresa.
+- Editor de **pantallas permitidas** en la ficha: "todas las de su rol" o una
+  selección. La lista se deriva del propio menú (`NAV`), así que una pantalla
+  nueva aparece sola sin mantener una lista paralela.
+
+Dos correcciones al diseño original:
+
+- Se usa `tc_permisos_cliente` y **no** `app_usuario_modulos`: esta última
+  referencia `app_usuarios`, y un cliente creado desde este panel solo existe
+  en `tc_usuarios` — el guardado habría fallado por clave ajena. La tabla
+  nativa ya traía las políticas necesarias (admin gestiona los de su empresa,
+  cada usuario lee los suyos), así que no hizo falta endpoint ni migración.
+- **Perfil** pasa a la lista de pantallas que nunca se filtran, junto a
+  Dashboard y Ayuda: restringir pantallas dejaba a la persona sin su propia
+  ficha. Y un cliente al que se le quite Informes ya no es redirigido allí al
+  entrar, que le habría dejado en "no tienes acceso".
 
 ---
 
@@ -188,7 +205,7 @@ faltaba era solo acceso y navegación:
 | ~~2 Invitación~~ | HECHO | ~~Contraseñas conocidas por el admin~~ |
 | ~~2b Ficha vehículo solo lectura~~ | HECHO | ~~El cliente ve la lista pero no puede abrir nada~~ |
 | ~~3 Aterrizaje~~ | HECHO | ~~Primera impresión pobre~~ |
-| 4 Auditoría | 1 día | Solo importa con varios clientes |
+| ~~4 Auditoría~~ | HECHO | ~~Solo importa con varios clientes~~ |
 
 La Fase 1 es la única **bloqueante** antes de dar el primer acceso real a
 ENCATRANS: con lo demás se puede convivir unos días; con un cliente viendo la
