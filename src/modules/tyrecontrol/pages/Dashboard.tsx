@@ -1,3 +1,4 @@
+import { Navigate } from "react-router-dom";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { useFiltrosInformes } from "../hooks/useFiltrosInformes";
 import { FiltroBarInformes } from "../components/informes/FiltroBarInformes";
@@ -8,6 +9,13 @@ import { DashboardEjecutivo } from "../components/informes/DashboardEjecutivo";
 export default function Dashboard() {
   const { perfil } = useTyreAuth();
   const { filtros, setFiltros, esCliente, empresas } = useFiltrosInformes();
+
+  // Este dashboard está pensado para el taller (operaciones, técnicos, stock).
+  // Un cliente entra a ver su flota, así que va directo a su informe
+  // ejecutivo. Se redirige AQUÍ y no solo en el login porque el enlace del
+  // email aterriza en /dashboard: si no, el cliente vería esta pantalla cada
+  // vez que entrase desde su correo.
+  if (esCliente) return <Navigate to="/tyrecontrol/informes/ejecutivo" replace />;
 
   return (
     <div>

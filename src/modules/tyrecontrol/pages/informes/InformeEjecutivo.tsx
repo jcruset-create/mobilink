@@ -416,11 +416,14 @@ export default function InformeEjecutivo() {
           ].map((x) => (
             <div key={x.t} className="rounded-lg bg-slate-900 p-3">
               <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{x.t}</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-2xl font-black text-slate-100">{nf(x.a, x.dec ?? 0)}</span>
+              {/* En móvil el valor y la tendencia compartían línea y "sin
+                  comparativa" se partía encima de la cifra. Cada cosa en su
+                  renglón: la cifra manda y la tendencia la acompaña. */}
+              <div className="mt-1 text-2xl font-black leading-tight text-slate-100">{nf(x.a, x.dec ?? 0)}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                 <Tendencia pct={variacion(x.a, x.p)} mejorSiBaja={x.baja} />
+                <span className="text-[11px] text-slate-500">antes: {nf(x.p, x.dec ?? 0)}</span>
               </div>
-              <div className="text-[11px] text-slate-500">antes: {nf(x.p, x.dec ?? 0)}</div>
             </div>
           ))}
         </div>
@@ -447,7 +450,7 @@ export default function InformeEjecutivo() {
                 ].map(([k, v]) => (
                   <div key={k} className="rounded-lg bg-slate-900 p-3">
                     <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{k}</dt>
-                    <dd className="mt-0.5 text-lg font-black text-slate-100">{v}</dd>
+                    <dd className="mt-0.5 whitespace-nowrap text-lg font-black text-slate-100">{v}</dd>
                   </div>
                 ))}
               </dl>

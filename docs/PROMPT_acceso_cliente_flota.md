@@ -53,7 +53,10 @@ cuela. Eso es este prompt.
    Rankings usan costes: por defecto, fuera del rol cliente.
 4. **Productividad de técnicos es interna.** Tiempos, pausas y ranking de
    operarios de Mobilink no son asunto del cliente. Fuera siempre.
-5. **Ningún dato de otro cliente ni agregado que permita inferirlo.**
+5. **Ningún dato de otro cliente ni agregado que permita inferirlo.** Un
+   cliente tampoco ve a los demás usuarios de su propia empresa: la política
+   `tc_usuarios_select` le deja solo su propia fila (migración
+   `tyrecontrol_cliente_solo_se_ve_a_si_mismo.sql`).
 6. Todo reutiliza el rol `cliente` existente. **No se crea un rol nuevo** ni
    un panel paralelo.
 
@@ -137,15 +140,24 @@ faltaba era solo acceso y navegación:
   ofrece: `/neumaticos/:id` es pantalla de administrador y el botón "Ver ficha"
   del plano habría quedado muerto.
 
-### Fase 3 — Bienvenida y a prueba de directores de flota
+### Fase 3 — Bienvenida y a prueba de directores de flota — HECHO
 
-- Al entrar un cliente, aterrizar directamente en **Informes → Ejecutivo** (su
-  pantalla de valor), no en un dashboard genérico.
+- Al entrar un cliente, aterrizar directamente en **Informes → Ejecutivo**. Se
+  redirige en dos sitios a propósito: al iniciar sesión y dentro del propio
+  Dashboard, porque el enlace del email aterriza en `/dashboard` y si no el
+  cliente vería el panel del taller cada vez que entrase desde su correo.
 - El asistente ya le funciona; añadir sus sugerencias orientadas a cliente
   ("¿cuál es el estado general de mi flota?" ya está).
 - Revisión de textos: nada de jerga interna ("intervención", "lote") sin
   explicar.
-- Usable en móvil: el director de flota lo abrirá desde el teléfono.
+- Usable en móvil: comprobado a 390 px. La página no desborda en horizontal
+  (las tablas anchas scrollean dentro de su contenedor, que es lo correcto) y
+  se corrigieron dos cortes de lectura: en "Evolución" el valor y la tendencia
+  compartían línea y "sin comparativa" se partía encima de la cifra, y en la
+  estadística "10,0 mm" se rompía en dos renglones.
+- Menú del cliente en su idioma: "Montajes actuales" → "Neumáticos montados" y
+  "Operaciones" → "Trabajos realizados". Son entradas propias del rol, así que
+  el vocabulario del taller no cambia.
 
 ### Fase 4 — Auditoría y control (cuando haya varios clientes activos)
 
@@ -175,7 +187,7 @@ faltaba era solo acceso y navegación:
 | ~~1 Curar visibilidad~~ | HECHO | ~~Cliente ve costes y productividad interna~~ |
 | ~~2 Invitación~~ | HECHO | ~~Contraseñas conocidas por el admin~~ |
 | ~~2b Ficha vehículo solo lectura~~ | HECHO | ~~El cliente ve la lista pero no puede abrir nada~~ |
-| 3 Aterrizaje | Horas | Primera impresión pobre |
+| ~~3 Aterrizaje~~ | HECHO | ~~Primera impresión pobre~~ |
 | 4 Auditoría | 1 día | Solo importa con varios clientes |
 
 La Fase 1 es la única **bloqueante** antes de dar el primer acceso real a
