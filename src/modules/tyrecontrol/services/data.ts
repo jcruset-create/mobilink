@@ -1,11 +1,12 @@
 import { supabase } from "./supabase";
+import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
-  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
+  MarcaNeumatico, MarcaVehiculo, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   TipoIncidencia, TipoIncidenciaInput, MotivoPendiente, MotivoPendienteInput,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
@@ -30,7 +31,12 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 
 const COLS_EMPRESA = ["nombre", "cif", "codigo_cliente", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
 const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo", "webfleet_lat", "webfleet_lng", "webfleet_radio_m", "webfleet_zona_nombre", "webfleet_genera_avisos"] as const;
-const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id", "tipo_llanta_id", "medidas_por_eje", "revision_intervalo_dias", "revision_intervalo_km"] as const;
+const COLS_VEHICULO = [
+  "empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor",
+  "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id",
+  "tipo_llanta_id", "medidas_por_eje", "revision_intervalo_dias", "revision_intervalo_km",
+  // Los datos de la ficha técnica no son columnas: van a tc_vehiculo_atributos_tecnicos.
+] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
 // ── Empresas ─────────────────────────────────────────────────
@@ -119,9 +125,18 @@ export type NuevoUsuario = {
 };
 
 export async function crearUsuario(input: NuevoUsuario): Promise<void> {
-  const { data, error } = await supabase.functions.invoke("crear-usuario", { body: input });
-  if (error) throw new Error(error.message);
-  if (data && (data as any).error) throw new Error((data as any).error);
+  // La Edge Function "crear-usuario" no está desplegada; se usa el backend
+  // (server en Render, con service-role), igual que para eliminar usuarios.
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error creando usuario");
 }
 
 // ── Catálogo: tipos y posiciones ─────────────────────────────
@@ -313,6 +328,20 @@ export async function eliminarUsuario(id: string): Promise<void> {
   if (!r.ok) throw new Error((j as any)?.error || "Error eliminando usuario");
 }
 
+/// Cambia la contraseña/PIN de un usuario (vía backend, service-role).
+export async function cambiarPasswordUsuario(id: string, password: string): Promise<void> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ password }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error cambiando la contraseña");
+}
+
 // ── Neumáticos ───────────────────────────────────────────────
 const NEU_SELECT = "*, empresa:tc_empresas(*)";
 
@@ -440,6 +469,27 @@ export async function listarPresionesCatalogoPorModelo(): Promise<Record<string,
   return mapa;
 }
 
+/**
+ * Profundidad de dibujo (de fábrica) del catálogo por marca|modelo|medida.
+ * Es la que enseña la tablet cuando el neumático aún no tiene ninguna
+ * medición propia; el panel hacía lo mismo con la presión pero no con la
+ * profundidad, y por eso una rueda recién montada salía con "— mm".
+ */
+export async function listarProfundidadesCatalogoPorModelo(): Promise<Record<string, number>> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico")
+    .select("profundidad_dibujo_mm, modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)")
+    .eq("activo", true).not("profundidad_dibujo_mm", "is", null);
+  if (error) throw new Error(error.message);
+  const mapa: Record<string, number> = {};
+  for (const r of ((data ?? []) as any[])) {
+    const marca = r.modelo?.marca?.nombre; const modelo = r.modelo?.nombre; const medida = r.tyre_size?.medida;
+    if (!marca || !modelo || !medida || r.profundidad_dibujo_mm == null) continue;
+    const clave = `${marca}|${modelo}|${medida}`.toLowerCase().replace(/\s+/g, "");
+    if (mapa[clave] == null) mapa[clave] = r.profundidad_dibujo_mm;
+  }
+  return mapa;
+}
+
 export async function montarNeumatico(params: {
   vehiculoId: string; neumaticoId: string; posicionId: string; km?: number | null; fecha?: string | null; observaciones?: string | null;
   forzarMedida?: boolean;
@@ -466,6 +516,29 @@ export async function desmontarNeumatico(params: {
     p_nuevo_estado: params.destino, p_obs: params.observaciones ?? null,
   });
   if (error) throw new Error(error.message);
+}
+
+// Aplica un PLAN DE TRABAJO completo (movimientos + reesculturados + giros +
+// reparaciones en sitio) en una sola transacción — la misma RPC que usa la APK.
+export async function aplicarPlanTrabajo(params: {
+  vehiculoId: string;
+  acciones: Array<{ tipo: string; montaje: string; posicion?: string; valor?: number }>;
+  km?: number | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_aplicar_plan_trabajo", {
+    p_vehiculo: params.vehiculoId, p_acciones: params.acciones,
+    p_km: params.km ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+// Marcas de recauchutado (p. ej. INSA): el distintivo RECAUCH. se hereda de la
+// marca, no del neumático.
+export async function listarMarcasRecauchutadas(): Promise<Set<string>> {
+  const { data } = await supabase.from("tc_cat_marcas_neumatico")
+    .select("nombre").eq("es_recauchutado", true).eq("activo", true);
+  return new Set(((data ?? []) as any[]).map((m) => String(m.nombre ?? "").trim().toUpperCase()).filter(Boolean));
 }
 
 export async function rotarNeumatico(params: { montajeOrigenId: string; posicionDestinoId: string }): Promise<void> {
@@ -822,6 +895,9 @@ export interface MontajeSnapshot {
   x?: number | null; y?: number | null; w?: number | null; h?: number | null;
   marca?: string | null; modelo?: string | null; medida?: string | null;
   mm?: number | null; presion?: number | null; averias?: string[] | null;
+  // Distintivos del propio neumático (reesculturado, girado en llanta,
+  // recauchutado por marca) — presentes en snapshots recientes.
+  reesc?: boolean | null; girado?: boolean | null; recau?: boolean | null;
 }
 export interface IncidenciaOrigen {
   posicion_id?: string | null; codigo?: string | null; averias?: string[] | null; gravedad?: string | null;
@@ -957,6 +1033,7 @@ export async function crearMarca(nombre: string): Promise<void> {
 export async function actualizarMarca(id: string, patch: {
   nombre?: string; logo_url?: string | null; fabricante_id?: string | null;
   pais_origen?: string | null; segmento?: string | null; tipo_principal?: string | null; observaciones?: string | null;
+  es_recauchutado?: boolean;
 }): Promise<void> {
   const payload: Record<string, any> = {};
   if (patch.nombre != null) payload.nombre = patch.nombre.trim();
@@ -966,6 +1043,7 @@ export async function actualizarMarca(id: string, patch: {
   if (patch.segmento !== undefined) payload.segmento = patch.segmento;
   if (patch.tipo_principal !== undefined) payload.tipo_principal = patch.tipo_principal;
   if (patch.observaciones !== undefined) payload.observaciones = patch.observaciones;
+  if (patch.es_recauchutado !== undefined) payload.es_recauchutado = patch.es_recauchutado;
   const { error } = await supabase.from("tc_cat_marcas_neumatico").update(payload).eq("id", id);
   if (error) throw new Error(error.message);
 }
@@ -1000,6 +1078,379 @@ export async function eliminarFabricante(id: string): Promise<void> {
 }
 
 const BUCKET_MARCAS = "tc-marcas";
+// ── Ficha técnica del vehículo (documento + OCR) ────────────────
+export interface DocumentoVehiculo {
+  id: string; tipo: string; nombre_original?: string | null; paginas?: number | null;
+  tamano_bytes?: number | null; fecha_emision?: string | null;
+  ocr_estado: "pendiente" | "procesando" | "ok" | "error";
+  ocr_confianza?: number | null; version: number; vigente: boolean;
+  created_at: string; url?: string | null;
+}
+
+export interface CampoFicha {
+  codigo_origen?: string | null; etiqueta_origen?: string | null; clave?: string | null;
+  valor: string; unidad?: string | null; confianza?: number | null; pagina?: number | null;
+}
+
+export interface EjeFicha {
+  posicion: number; ruedas: number; directriz: boolean; motriz: boolean; elevable: boolean;
+  medida?: string | null; indice_carga?: string | null; codigo_velocidad?: string | null;
+}
+
+export interface ResultadoFichaTecnica {
+  campos: CampoFicha[];
+  ejes: EjeFicha[];
+  configuracion: string | null;
+  configuracionPendiente: string | null;
+  configuracionExisteEnCatalogo: boolean;
+  configuracionConvencional: string | null;
+  observaciones: string | null;
+  confianza: number | null;
+  avisos: string[];
+  /** Si tiene contenido, el documento NO es de este vehículo: no aplicar. */
+  bloqueos: string[];
+}
+
+async function tokenSesion(): Promise<string> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  return token;
+}
+
+export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/documentos`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => []);
+  if (!r.ok) throw new Error((j as any)?.error || "Error listando documentos");
+  return j as DocumentoVehiculo[];
+}
+
+/** Sube la ficha técnica: un PDF o varias imágenes de las páginas. */
+export async function subirFichaTecnica(vehiculoId: string, files: File[]): Promise<{ documento: { id: string } }> {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/ficha-tecnica`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error subiendo el documento");
+  return j as any;
+}
+
+export async function procesarOcrDocumento(documentoId: string): Promise<ResultadoFichaTecnica> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/ocr`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error procesando el documento");
+  return j as ResultadoFichaTecnica;
+}
+
+/** Aplica SOLO lo que el técnico ha aceptado en la pantalla de revisión. */
+export async function aplicarFichaTecnica(documentoId: string, cambios: {
+  campos?: Record<string, string>;
+  ejes?: EjeFicha[];
+  configuracion?: string | null;
+  configuracionConvencional?: string | null;
+  atributos?: CampoFicha[];
+  vehiculoId?: string;
+}): Promise<{ aplicado: string[]; ignorados?: string[] }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/aplicar`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
+    body: JSON.stringify(cambios),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error aplicando los cambios");
+  return j as any;
+}
+
+/** Sube una ficha técnica SIN vehículo: para crear el vehículo directamente a partir del documento. */
+export async function subirFichaTecnicaNueva(empresaId: string, files: File[]): Promise<{ documento: { id: string } }> {
+  const fd = new FormData();
+  fd.append("empresaId", empresaId);
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/nueva-ficha`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error subiendo la ficha técnica");
+  return j as any;
+}
+
+/** Campo de la ficha técnica con su código oficial y descripción. */
+export interface CampoCatalogoFicha { codigo: string | null; clave: string; descripcion: string; unidad: string | null; }
+
+/** Dato técnico del vehículo sin columna propia (de la ficha técnica), ya validado. */
+export interface AtributoTecnicoVehiculo {
+  codigo_origen: string | null; etiqueta_origen: string | null; clave_normalizada: string | null;
+  valor_bruto: string | null; unidad: string | null;
+}
+
+export async function listarAtributosTecnicos(vehiculoId: string): Promise<AtributoTecnicoVehiculo[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select("codigo_origen, etiqueta_origen, clave_normalizada, valor_bruto, unidad")
+    .eq("vehiculo_id", vehiculoId).eq("estado", "validado")
+    .order("codigo_origen");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as AtributoTecnicoVehiculo[];
+}
+
+export async function listarCatalogoCamposFicha(): Promise<CampoCatalogoFicha[]> {
+  const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica")
+    .select("codigo, clave, descripcion, unidad").order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CampoCatalogoFicha[];
+}
+
+// ── Ficha técnica ITV: maestro de campos + valores por vehículo ─────
+// El maestro guarda TODOS los códigos posibles; el vehículo, solo los que
+// tienen dato real. Ver supabase/migrations/tyrecontrol_itv_*.sql.
+
+export interface CampoItv {
+  id: string; codigo: string | null; clave: string; descripcion: string;
+  categoria: string | null; orden_seccion: number; orden: number;
+  tipo_dato: TipoDatoItv; unidad: string | null; es_multiple: boolean;
+  ayuda: string | null; activo: boolean;
+}
+
+export interface ValorItv {
+  id: string; vehiculo_id: string; campo_ficha_id: string | null;
+  codigo_origen: string | null; etiqueta_origen: string | null; clave_normalizada: string | null;
+  valor_bruto: string | null; valor_normalizado: string | null; valor_json: unknown | null;
+  valor_numero: number | null; valor_fecha: string | null; valor_booleano: boolean | null;
+  unidad: string | null; confianza: number | null; estado: string;
+  origen: string; verificado_manualmente: boolean; documento_id: string | null;
+  campo?: CampoItv | null;
+}
+
+export interface CambioItv {
+  id: string; campo_ficha_id: string; valor_anterior: unknown | null; valor_nuevo: unknown | null;
+  motivo_cambio: string; cambiado_por: string | null; documento_id: string | null; created_at: string;
+  campo?: Pick<CampoItv, "codigo" | "descripcion"> | null;
+}
+
+const CAMPO_ITV_SELECT = "id, codigo, clave, descripcion, categoria, orden_seccion, orden, tipo_dato, unidad, es_multiple, ayuda, activo";
+
+/** Maestro completo. `soloActivos` deja fuera los códigos desactivados (p. ej. titular). */
+export async function listarCamposItv(soloActivos = true): Promise<CampoItv[]> {
+  let q = supabase.from("tc_cat_campos_ficha_tecnica").select(CAMPO_ITV_SELECT);
+  if (soloActivos) q = q.eq("activo", true);
+  const { data, error } = await q.order("orden_seccion").order("orden").order("codigo");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CampoItv[];
+}
+
+export async function actualizarCampoItv(id: string, patch: Partial<CampoItv>): Promise<void> {
+  const cols = ["codigo", "descripcion", "categoria", "orden_seccion", "orden", "tipo_dato", "unidad", "es_multiple", "ayuda", "activo"] as const;
+  const next: any = { updated_at: new Date().toISOString() };
+  for (const c of cols) if (patch[c] !== undefined) next[c] = patch[c];
+  const { error } = await supabase.from("tc_cat_campos_ficha_tecnica").update(next).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function crearCampoItv(campo: Omit<CampoItv, "id">): Promise<string> {
+  const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica").insert(campo).select("id").single();
+  if (error) throw new Error(error.message);
+  return (data as { id: string }).id;
+}
+
+/** ¿Se puede borrar un código del maestro? Solo si ningún vehículo lo usa. */
+export async function campoItvEnUso(id: string): Promise<number> {
+  const { count, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select("id", { count: "exact", head: true }).eq("campo_ficha_id", id);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+/**
+ * Valores de un vehículo. Solo devuelve los que tienen dato real: un
+ * código sin valor no debe existir como fila, pero si alguno se coló
+ * (datos antiguos), aquí se filtra igualmente.
+ */
+export async function listarValoresItv(vehiculoId: string): Promise<ValorItv[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select(`id, vehiculo_id, campo_ficha_id, codigo_origen, etiqueta_origen, clave_normalizada,
+             valor_bruto, valor_normalizado, valor_json, valor_numero, valor_fecha, valor_booleano,
+             unidad, confianza, estado, origen, verificado_manualmente, documento_id,
+             campo:tc_cat_campos_ficha_tecnica(${CAMPO_ITV_SELECT})`)
+    .eq("vehiculo_id", vehiculoId)
+    .neq("estado", "rechazado");
+  if (error) throw new Error(error.message);
+  const filas = (data ?? []) as unknown as ValorItv[];
+  return filas
+    .filter((v) => v.campo?.activo !== false)
+    .filter((v) => hasRealValue(v.valor_bruto) || v.valor_numero != null || v.valor_fecha != null
+      || v.valor_booleano != null || hasRealValue(v.valor_json))
+    .sort((a, b) => (a.campo?.orden_seccion ?? 99) - (b.campo?.orden_seccion ?? 99)
+      || (a.campo?.orden ?? 99) - (b.campo?.orden ?? 99)
+      || (a.campo?.codigo ?? "").localeCompare(b.campo?.codigo ?? ""));
+}
+
+export interface ValorItvEntrada {
+  campoFichaId: string;
+  valorBruto: string;
+  confianza?: number | null;
+  documentoId?: string | null;
+  origen?: "manual" | "ocr" | "importacion" | "api";
+}
+
+/**
+ * Guarda (crea o actualiza) valores de ficha, dejando rastro en el
+ * historial de lo que había antes. Los valores sin dato real se ignoran:
+ * nunca se crea una fila vacía.
+ */
+export async function guardarValoresItv(vehiculoId: string, entradas: ValorItvEntrada[]): Promise<number> {
+  const campos = await listarCamposItv(false);
+  const porId = new Map(campos.map((c) => [c.id, c]));
+  const previos = await listarValoresItv(vehiculoId);
+  const previoPorCampo = new Map(previos.map((v) => [v.campo_ficha_id ?? "", v]));
+  const usuario = (await supabase.auth.getUser()).data.user?.id ?? null;
+
+  let guardados = 0;
+  for (const e of entradas) {
+    const campo = porId.get(e.campoFichaId);
+    if (!campo) continue;
+    if (!hasRealValue(e.valorBruto)) continue; // regla dura: nada vacío
+
+    const n = normalizarValor(e.valorBruto, campo.tipo_dato, campo.unidad);
+    const anterior = previoPorCampo.get(e.campoFichaId) ?? null;
+    const fila = {
+      vehiculo_id: vehiculoId,
+      campo_ficha_id: campo.id,
+      codigo_origen: campo.codigo,
+      etiqueta_origen: campo.descripcion,
+      clave_normalizada: campo.clave,
+      valor_bruto: String(e.valorBruto).trim(),
+      valor_normalizado: n.texto,
+      valor_json: n.json,
+      valor_numero: n.numero,
+      valor_fecha: n.fecha,
+      valor_booleano: n.booleano,
+      tipo_valor: campo.tipo_dato,
+      unidad: campo.unidad,
+      confianza: e.confianza ?? null,
+      estado: "validado",
+      origen: e.origen ?? "manual",
+      verificado_manualmente: (e.origen ?? "manual") === "manual",
+      documento_id: e.documentoId ?? null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = anterior
+      ? await supabase.from("tc_vehiculo_atributos_tecnicos").update(fila).eq("id", anterior.id)
+      : await supabase.from("tc_vehiculo_atributos_tecnicos").insert(fila);
+    if (error) throw new Error(error.message);
+
+    await supabase.from("tc_vehiculo_ficha_historial").insert({
+      atributo_id: anterior?.id ?? null,
+      vehiculo_id: vehiculoId,
+      campo_ficha_id: campo.id,
+      valor_anterior: anterior ? { valor: anterior.valor_bruto, unidad: anterior.unidad } : null,
+      valor_nuevo: { valor: fila.valor_bruto, unidad: fila.unidad },
+      motivo_cambio: e.origen ?? "manual",
+      cambiado_por: usuario,
+      documento_id: e.documentoId ?? null,
+    });
+    guardados++;
+  }
+  return guardados;
+}
+
+export async function borrarValorItv(valor: ValorItv): Promise<void> {
+  const usuario = (await supabase.auth.getUser()).data.user?.id ?? null;
+  const { error } = await supabase.from("tc_vehiculo_atributos_tecnicos").delete().eq("id", valor.id);
+  if (error) throw new Error(error.message);
+  if (!valor.campo_ficha_id) return;
+  await supabase.from("tc_vehiculo_ficha_historial").insert({
+    atributo_id: null, vehiculo_id: valor.vehiculo_id, campo_ficha_id: valor.campo_ficha_id,
+    valor_anterior: { valor: valor.valor_bruto, unidad: valor.unidad }, valor_nuevo: null,
+    motivo_cambio: "borrado", cambiado_por: usuario, documento_id: valor.documento_id ?? null,
+  });
+}
+
+export async function listarHistorialItv(vehiculoId: string): Promise<CambioItv[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_ficha_historial")
+    .select("id, campo_ficha_id, valor_anterior, valor_nuevo, motivo_cambio, cambiado_por, documento_id, created_at, campo:tc_cat_campos_ficha_tecnica(codigo, descripcion)")
+    .eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false }).limit(200);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as CambioItv[];
+}
+
+// ── Marcas de VEHÍCULO (catálogo por tipo, con logo) ────────────
+// Una marca puede servir para varios tipos (Mercedes-Benz es tractora,
+// camión, furgoneta y autobús), de ahí la tabla de relación.
+export async function listarMarcasVehiculo(tipoVehiculoId?: string): Promise<MarcaVehiculo[]> {
+  const { data, error } = await supabase.from("tc_cat_marcas_vehiculo")
+    .select("*, tipos:tc_cat_marcas_vehiculo_tipos(tipo_vehiculo_id)")
+    .eq("activo", true).order("orden").order("nombre");
+  if (error) throw new Error(error.message);
+  const marcas = ((data ?? []) as any[]).map((m) => ({
+    ...m, tipo_ids: (m.tipos ?? []).map((t: any) => t.tipo_vehiculo_id as string),
+  })) as MarcaVehiculo[];
+  return tipoVehiculoId ? marcas.filter((m) => m.tipo_ids.includes(tipoVehiculoId)) : marcas;
+}
+
+export async function crearMarcaVehiculo(nombre: string, tipoIds: string[] = []): Promise<string> {
+  const { data, error } = await supabase.from("tc_cat_marcas_vehiculo")
+    .insert({ nombre: nombre.trim() }).select("id").single();
+  if (error) throw new Error(error.message);
+  const id = (data as any).id as string;
+  if (tipoIds.length) await guardarTiposMarcaVehiculo(id, tipoIds);
+  return id;
+}
+
+export async function actualizarMarcaVehiculo(id: string, patch: {
+  nombre?: string; logo_url?: string | null; pais_origen?: string | null; activo?: boolean;
+}): Promise<void> {
+  const payload: Record<string, any> = {};
+  if (patch.nombre != null) payload.nombre = patch.nombre.trim();
+  if (patch.logo_url !== undefined) payload.logo_url = patch.logo_url;
+  if (patch.pais_origen !== undefined) payload.pais_origen = patch.pais_origen;
+  if (patch.activo !== undefined) payload.activo = patch.activo;
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo").update(payload).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/// Marca/desmarca un tipo de vehículo para una marca.
+export async function alternarTipoMarcaVehiculo(marcaId: string, tipoId: string, activar: boolean): Promise<void> {
+  if (activar) {
+    const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+      .upsert({ marca_id: marcaId, tipo_vehiculo_id: tipoId });
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+      .delete().eq("marca_id", marcaId).eq("tipo_vehiculo_id", tipoId);
+    if (error) throw new Error(error.message);
+  }
+}
+
+async function guardarTiposMarcaVehiculo(marcaId: string, tipoIds: string[]): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+    .upsert(tipoIds.map((t) => ({ marca_id: marcaId, tipo_vehiculo_id: t })));
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarMarcaVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function subirLogoMarcaVehiculo(marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `vehiculo/${marcaId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from(BUCKET_MARCAS).upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from(BUCKET_MARCAS).getPublicUrl(ruta).data.publicUrl;
+}
+
 export async function subirLogoMarca(marcaId: string, file: File): Promise<string> {
   const extension = file.name.split(".").pop() || "png";
   const ruta = `${marcaId}/${Date.now()}.${extension}`;
@@ -1080,6 +1531,14 @@ export async function listarConfigEjes(): Promise<ConfigEjes[]> {
 }
 export async function crearConfigEjes(nombre: string, descripcion?: string): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").insert({ nombre: nombre.trim(), descripcion: descripcion?.trim() || null });
+  if (error) throw new Error(error.message);
+}
+export async function actualizarConfigEjes(id: string, patch: { nombre?: string; descripcion?: string | null }): Promise<void> {
+  const next: Record<string, unknown> = {};
+  if (patch.nombre != null) next.nombre = patch.nombre.trim();
+  if (patch.descripcion !== undefined) next.descripcion = patch.descripcion?.trim() || null;
+  if (!Object.keys(next).length) return;
+  const { error } = await supabase.from("tc_config_ejes").update(next).eq("id", id);
   if (error) throw new Error(error.message);
 }
 export async function desactivarConfigEjes(id: string): Promise<void> {
@@ -1510,8 +1969,84 @@ export async function subirImagenConfigEjes(configId: string, file: File): Promi
   return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
 }
 
+/**
+ * Crea las posiciones de neumático que le falten a un tipo, calculadas a
+ * partir de su configuración de ejes. Va por el servidor porque escribir en
+ * el catálogo de posiciones exige super-admin, y así funciona para cualquier
+ * usuario del panel. Idempotente: no duplica ni borra nada.
+ */
+export async function generarPosicionesDeTipo(tipoId: string): Promise<{ creadas: number; total: number }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tipos/${tipoId}/generar-posiciones`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error generando las posiciones");
+  return j as any;
+}
+
 export async function actualizarImagenConfigEjes(configId: string, url: string | null): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").update({ imagen_chasis_url: url }).eq("id", configId);
+  if (error) throw new Error(error.message);
+}
+
+// ── Imagen de chasis por configuración + MARCA ───────────────
+// Un 2x4 de MAN no se dibuja igual que uno de Volvo. Si la marca no tiene
+// imagen propia se hereda la genérica de la configuración.
+export interface ImagenConfigMarca {
+  config_ejes_id: string; marca_id: string; imagen_chasis_url: string | null;
+}
+
+export async function listarImagenesConfigMarca(configId?: string): Promise<ImagenConfigMarca[]> {
+  let q = supabase.from("tc_config_ejes_marca").select("config_ejes_id, marca_id, imagen_chasis_url");
+  if (configId) q = q.eq("config_ejes_id", configId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ImagenConfigMarca[];
+}
+
+export async function subirImagenConfigMarca(configId: string, marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `config-ejes/${configId}/marca-${marcaId}-${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from("tc-chasis").upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
+}
+
+/** Normaliza para comparar marcas: sin acentos, sin mayúsculas ni espacios de más. */
+const normMarca = (s: string) =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+/**
+ * Imagen de chasis específica de la marca de un vehículo para su
+ * configuración. Devuelve null si esa marca no tiene una propia: entonces
+ * el plano usa la genérica de la configuración.
+ *
+ * La mayoría de vehículos guardan la marca como texto suelto y no enlazada
+ * al catálogo, así que se empareja por nombre normalizado si no hay marca_id.
+ */
+export async function imagenChasisDeMarca(
+  configId?: string | null, marcaId?: string | null, marcaNombre?: string | null,
+): Promise<string | null> {
+  if (!configId) return null;
+
+  let id = marcaId ?? null;
+  if (!id && marcaNombre?.trim()) {
+    const { data } = await supabase.from("tc_cat_marcas_vehiculo").select("id, nombre").eq("activo", true);
+    const objetivo = normMarca(marcaNombre);
+    id = ((data ?? []) as any[]).find((m) => normMarca(m.nombre) === objetivo)?.id ?? null;
+  }
+  if (!id) return null;
+
+  const { data } = await supabase.from("tc_config_ejes_marca")
+    .select("imagen_chasis_url").eq("config_ejes_id", configId).eq("marca_id", id).limit(1);
+  return ((data ?? []) as any[])[0]?.imagen_chasis_url ?? null;
+}
+
+export async function guardarImagenConfigMarca(configId: string, marcaId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_config_ejes_marca")
+    .upsert({ config_ejes_id: configId, marca_id: marcaId, imagen_chasis_url: url, updated_at: new Date().toISOString() },
+            { onConflict: "config_ejes_id,marca_id" });
   if (error) throw new Error(error.message);
 }
 
@@ -1814,16 +2349,65 @@ async function upsertModelo(marcaId: string, nombre: string): Promise<string> {
 async function upsertTyreSize(medida: string, icSimple: string, icDoble: string | null, velocidad: string): Promise<string> {
   const { ancho, perfil, diametro } = parsearMedida(medida);
   const medidaStr = construirMedidaTs(ancho, perfil, diametro);
-  const referencia_completa = construirReferenciaTs(medidaStr, icSimple, icDoble, velocidad);
+  const vel = velocidad.trim() || null;
+  const referencia_completa = construirReferenciaTs(medidaStr, icSimple, icDoble, vel ?? "").trim();
   const { data } = await supabase.from("tyre_sizes").select("id").eq("referencia_completa", referencia_completa).limit(1).maybeSingle();
   if (data) return (data as any).id;
   const medida_id = await resolverMedidaId(medidaStr);
   const { data: c, error } = await supabase.from("tyre_sizes").insert({
     medida: medidaStr, referencia_completa, medida_id, ancho, perfil, diametro_llanta: diametro,
-    indice_carga_simple: icSimple, indice_carga_doble: icDoble, codigo_velocidad: velocidad, activo: true,
+    indice_carga_simple: icSimple, indice_carga_doble: icDoble, codigo_velocidad: vel, activo: true,
   }).select("id").single();
   if (error) throw new Error(error.message);
   return (c as any).id;
+}
+
+// Propone índice de carga y código de velocidad para una medida cuando el
+// neumático real no los trae: consulta otras referencias/neumáticos de la
+// MISMA medida y devuelve la combinación de índices más frecuente. Así se
+// puede catalogar de un clic sin dejar la referencia incompleta.
+export interface IndicesPropuestos {
+  indiceCargaSimple: string; indiceCargaDoble: string | null; codigoVelocidad: string;
+}
+export async function proponerIndicesMedida(medida: string): Promise<IndicesPropuestos | null> {
+  let medidaStr: string;
+  try {
+    const { ancho, perfil, diametro } = parsearMedida(medida);
+    medidaStr = construirMedidaTs(ancho, perfil, diametro);
+  } catch { return null; }
+
+  const cuenta = new Map<string, { v: IndicesPropuestos; n: number }>();
+  const anota = (simple?: string | null, doble?: string | null, vel?: string | null) => {
+    const s = (simple ?? "").trim();
+    const ve = (vel ?? "").trim().toUpperCase();
+    if (!s) return; // sin índice de carga no sirve como propuesta
+    const d = (doble ?? "").trim() || null;
+    const clave = `${s}|${d ?? ""}|${ve}`;
+    const found = cuenta.get(clave);
+    if (found) found.n += 1;
+    else cuenta.set(clave, { v: { indiceCargaSimple: s, indiceCargaDoble: d, codigoVelocidad: ve }, n: 1 });
+  };
+
+  // 1) tyre_sizes canónicos de la misma medida (fuente más fiable).
+  const { data: sizes } = await supabase.from("tyre_sizes")
+    .select("indice_carga_simple, indice_carga_doble, codigo_velocidad")
+    .eq("medida", medidaStr).eq("activo", true).limit(500);
+  for (const ts of (sizes ?? []) as any[]) anota(ts.indice_carga_simple, ts.indice_carga_doble, ts.codigo_velocidad);
+
+  // 2) Si no hay, mirar neumáticos reales de la misma medida con índices.
+  if (cuenta.size === 0) {
+    const valorCanonico = medidaStr.replace(/\s+/g, "");
+    const { data: neus } = await supabase.from("tc_neumaticos")
+      .select("indice_carga, indice_velocidad")
+      .eq("medida", valorCanonico).eq("activo", true).limit(1000);
+    for (const n of (neus ?? []) as any[]) {
+      const [s, d] = String(n.indice_carga ?? "").split("/");
+      anota(s, d, n.indice_velocidad);
+    }
+  }
+
+  if (cuenta.size === 0) return null;
+  return Array.from(cuenta.values()).sort((a, b) => b.n - a.n)[0].v;
 }
 
 // Crea (o reutiliza) la referencia de catálogo para una combinación
@@ -1835,7 +2419,8 @@ export async function crearReferenciaNeumatico(input: {
   const icSimple = input.indiceCargaSimple.trim();
   const velocidad = input.codigoVelocidad.trim().toUpperCase();
   if (!icSimple) throw new Error("Falta el índice de carga");
-  if (!velocidad) throw new Error("Falta el código de velocidad");
+  // El código de velocidad es opcional (la columna admite null): permite
+  // catalogar aunque la propuesta por medida no lo aporte.
   const marcaId = await upsertMarca(input.marca);
   const modeloId = await upsertModelo(marcaId, input.modelo);
   const tyreSizeId = await upsertTyreSize(input.medida, icSimple, input.indiceCargaDoble?.trim() || null, velocidad);

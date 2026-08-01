@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas,
-  listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario,
+  listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario,
 } from "../services/data";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { Modal, inputCls } from "../components/ui";
@@ -165,6 +165,19 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   const [cargandoEmpresas, setCargandoEmpresas] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [nuevoPin, setNuevoPin] = useState("");
+  const [cambiandoPin, setCambiandoPin] = useState(false);
+  const [pinMsg, setPinMsg] = useState("");
+
+  async function cambiarPin() {
+    if (nuevoPin.trim().length < 4) { setPinMsg("El PIN/contraseña debe tener al menos 4 caracteres"); return; }
+    setCambiandoPin(true); setPinMsg("");
+    try {
+      await cambiarPasswordUsuario(usuario.id, nuevoPin.trim());
+      setNuevoPin(""); setPinMsg("✔ Contraseña actualizada");
+    } catch (e: any) { setPinMsg(e?.message || "Error"); }
+    finally { setCambiandoPin(false); }
+  }
 
   const activas = empresas.filter((e) => e.activo !== false);
 
@@ -218,6 +231,33 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
         <div className="flex items-center gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-1"><input type="checkbox" checked={accesoPanel} onChange={(e) => setAccesoPanel(e.target.checked)} /> Panel</label>
           <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>
+        </div>
+
+        {/* Cambiar contraseña / PIN de la APK */}
+        <div className="rounded-lg bg-slate-800 p-3">
+          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Contraseña</div>
+          <div className="mb-2 text-[11px] text-slate-500">
+            Es la contraseña con la que entra este usuario (en la APK, el PIN). Escribe la nueva y pulsa cambiar.
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              className={inputCls}
+              type="password"
+              inputMode="numeric"
+              autoComplete="new-password"
+              placeholder="Nueva contraseña / PIN"
+              value={nuevoPin}
+              onChange={(e) => setNuevoPin(e.target.value)}
+            />
+            <button
+              onClick={() => void cambiarPin()}
+              disabled={cambiandoPin || nuevoPin.trim().length < 4}
+              className="shrink-0 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              {cambiandoPin ? "Cambiando…" : "Cambiar"}
+            </button>
+          </div>
+          {pinMsg && <div className={`mt-1 text-[12px] ${pinMsg.startsWith("✔") ? "text-emerald-400" : "text-rose-300"}`}>{pinMsg}</div>}
         </div>
 
         {esSuper && (

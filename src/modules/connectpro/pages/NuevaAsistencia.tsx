@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
+import CapturaWhatsApp from "../components/CapturaWhatsApp";
+import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../components/ConfirmarImportacionIA";
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 
@@ -58,6 +60,19 @@ export default function NuevaAsistencia() {
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Extracción por IA: pegar la conversación de WhatsApp o subir capturas
+  const [iaAbierto, setIaAbierto] = useState(false);
+  const [iaTexto, setIaTexto] = useState("");
+  const [iaImagenes, setIaImagenes] = useState<string[]>([]);
+  const [iaBusy, setIaBusy] = useState(false);
+  const [iaMsg, setIaMsg] = useState<string | null>(null);
+  // Sesión de captura de WhatsApp, para vincularla a la asistencia al crearla
+  const [capturaId, setCapturaId] = useState<number | null>(null);
+  /** Propuesta de la IA pendiente de confirmar (ventana de revisión). */
+  const [revision, setRevision] = useState<{
+    origen: string; propuestas: PropuestaIA[]; extras: ExtraIA[];
+    resumen: string | null; confianza: "high" | "medium" | "low" | null;
+  } | null>(null);
 
   useEffect(() => {
     boFetch<{ service_types: ServiceType[]; vehicle_types?: VehicleType[] }>("/catalogs")
@@ -71,6 +86,107 @@ export default function NuevaAsistencia() {
 
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value } as Form);
+
+  /**
+   * Convierte lo que ha entendido la IA en propuestas revisables. No toca el
+   * formulario: abre la ventana de confirmación para que el operador decida.
+   */
+  const proponerExtraccion = (d: Record<string, any>, origen: string) => {
+    const texto = (v: unknown) => (v == null ? "" : String(v));
+    const mapa: [keyof Form, string, unknown][] = [
+      ["expedientNumber", "Nº expediente", d.expedientNumber],
+      ["externalReference", "Referencia externa", d.externalReference],
+      ["clientName", "Cliente (texto libre)", d.clientName],
+      ["serviceType", "Tipo de asistencia", d.serviceType],
+      ["priority", "Prioridad", d.priority === "urgente" ? "urgente" : undefined],
+      ["slaMinutes", "SLA (min llegada)", d.slaMinutes],
+      ["customerName", "Nombre del cliente", d.customerName],
+      ["customerPhone", "Teléfono del cliente", d.customerPhone],
+      ["requesterName", "Solicitante", d.requesterName],
+      ["requesterPhone", "Tel. solicitante", d.requesterPhone],
+      ["requesterEmail", "Email", d.requesterEmail],
+      ["address", "Dirección", d.address],
+      ["lat", "Latitud", d.latitude],
+      ["lng", "Longitud", d.longitude],
+      ["road", "Carretera", d.road],
+      ["km", "Km", d.km],
+      ["direction", "Sentido", d.direction],
+      ["placeRef", "Referencia del lugar", d.placeRef],
+      ["vehicleType", "Tipo de vehículo", d.vehicleType],
+      ["make", "Marca", d.make],
+      ["model", "Modelo", d.model],
+      ["plate", "Matrícula", d.plate],
+      ["vin", "VIN", d.vin],
+      ["fuel", "Combustible", d.fuel],
+      ["weight", "Peso (t)", d.weight],
+      ["cargo", "Carga", d.cargo],
+      ["description", "Descripción de la incidencia", d.description],
+      ["diagnosis", "Diagnóstico inicial", d.diagnosis],
+    ];
+
+    const propuestas: PropuestaIA[] = [];
+    for (const [clave, label, valor] of mapa) {
+      if (valor == null || texto(valor) === "") continue;
+      propuestas.push({ key: clave, label, valor: texto(valor), actual: texto(f[clave]).trim() });
+    }
+    if (d.trailer === true && !f.trailer) propuestas.push({ key: "trailer", label: "Remolque", valor: "sí", actual: "" });
+    if (d.dangerous === true && !f.dangerous) propuestas.push({ key: "dangerous", label: "Mercancía peligrosa", valor: "sí", actual: "" });
+
+    const extras: ExtraIA[] = (Array.isArray(d.datosDetectados) ? d.datosDetectados : [])
+      .filter((x: any) => x?.campo && x?.valor)
+      .map((x: any) => ({ campo: String(x.campo), valor: String(x.valor) }));
+    if (d.notes) extras.push({ campo: "Observaciones", valor: String(d.notes) });
+
+    setRevision({ origen, propuestas, extras, resumen: d.resumen ?? null, confianza: d.confidence ?? null });
+  };
+
+  /** Aplica al formulario solo lo que el operador ha confirmado. */
+  const aplicarConfirmado = (campos: Record<string, string>, extras: ExtraIA[]) => {
+    const siguiente: Form = { ...f };
+    for (const [clave, valor] of Object.entries(campos)) {
+      if (clave === "trailer" || clave === "dangerous") (siguiente as any)[clave] = true;
+      else (siguiente as any)[clave] = valor;
+    }
+    const lineas = extras
+      .map((x) => `${x.campo}: ${x.valor}`)
+      .filter((l) => !siguiente.notes.includes(l));
+    if (lineas.length) siguiente.notes = [siguiente.notes, ...lineas].filter(Boolean).join("\n");
+    setF(siguiente);
+    const total = Object.keys(campos).length + lineas.length;
+    setRevision(null);
+    setIaMsg(total > 0 ? `Importados ${total} dato${total !== 1 ? "s" : ""}.` : "No se ha importado nada.");
+  };
+
+  const analizarConIA = async () => {
+    if (!iaTexto.trim() && iaImagenes.length === 0) {
+      setIaMsg("Pega la conversación o añade una captura.");
+      return;
+    }
+    setIaBusy(true);
+    setIaMsg(null);
+    try {
+      const r = await boFetch<{ data: Record<string, any> }>("/ai-extract", {
+        method: "POST",
+        body: { text: iaTexto.trim(), images: iaImagenes },
+      });
+      proponerExtraccion(r.data ?? {}, "Texto y capturas pegados");
+    } catch (e: any) {
+      setIaMsg(e.message);
+    } finally {
+      setIaBusy(false);
+    }
+  };
+
+  const añadirImagenes = (files: FileList | null) => {
+    if (!files) return;
+    const restantes = 6 - iaImagenes.length;
+    for (const file of Array.from(files).slice(0, Math.max(0, restantes))) {
+      if (file.size > 6 * 1024 * 1024) { setIaMsg("Cada imagen debe ocupar menos de 6 MB."); continue; }
+      const lector = new FileReader();
+      lector.onload = () => setIaImagenes((prev) => [...prev, String(lector.result)]);
+      lector.readAsDataURL(file);
+    }
+  };
 
   const buildBody = (draft: boolean) => ({
     draft,
@@ -107,6 +223,12 @@ export default function NuevaAsistencia() {
     setError(null);
     try {
       const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft) });
+      // Las fotos y mensajes recibidos por WhatsApp pasan a la asistencia creada
+      if (capturaId) {
+        await boFetch(`/whatsapp-capture/${capturaId}/link`, {
+          method: "POST", body: { assistanceId: row.id },
+        }).catch(() => {/* la asistencia ya existe: no bloquear por esto */});
+      }
       navigate(`/connect/asistencias/${row.id}`);
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -116,9 +238,86 @@ export default function NuevaAsistencia() {
       <PageTitle title="Nueva asistencia" subtitle="Crea una asistencia manualmente. Puedes guardarla como borrador si faltan datos." />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
+      {/* Recepción directa de WhatsApp (mismo número que Mobilink Assist) */}
+      <CapturaWhatsApp
+        onSugerencias={(datos) => proponerExtraccion(datos, "Conversación de WhatsApp")}
+        onSesion={setCapturaId}
+      />
+
+      {revision && (
+        <ConfirmarImportacionIA
+          origen={revision.origen}
+          propuestas={revision.propuestas}
+          extras={revision.extras}
+          resumen={revision.resumen}
+          confianza={revision.confianza}
+          onCancelar={() => { setRevision(null); setIaMsg("Importación cancelada."); }}
+          onConfirmar={aplicarConfirmado}
+        />
+      )}
+
+      {/* Importación por IA: la misma que en Mobilink Assist */}
+      <Card className="mb-4 border-violet-500/30 p-4">
+        {!iaAbierto ? (
+          <Button variant="ghost" onClick={() => setIaAbierto(true)}>
+            ✨ Rellenar con IA (pegar WhatsApp o subir captura)
+          </Button>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-violet-300">Extracción por IA</h2>
+              <button onClick={() => setIaAbierto(false)} className="text-slate-500 hover:text-slate-300">✕</button>
+            </div>
+            <textarea
+              value={iaTexto}
+              onChange={(e) => setIaTexto(e.target.value)}
+              rows={3}
+              placeholder="Pega aquí la conversación de WhatsApp, un correo o los datos que te han pasado…"
+              className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-[13px] text-slate-100 placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+            />
+            {iaImagenes.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {iaImagenes.map((src, i) => (
+                  <div key={i} className="relative">
+                    <img src={src} alt="captura" className="h-16 w-16 rounded-lg border border-slate-600 object-cover" />
+                    <button
+                      onClick={() => setIaImagenes((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1 -top-1 rounded-full bg-slate-900 px-1 text-[11px] text-red-400"
+                      title="Quitar"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer rounded-lg border border-slate-600 px-3 py-2 text-[13px] text-slate-300 hover:bg-slate-700">
+                Añadir captura o foto
+                <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => añadirImagenes(e.target.files)} />
+              </label>
+              <Button onClick={analizarConIA} disabled={iaBusy}>
+                {iaBusy ? "Analizando…" : "Analizar y rellenar"}
+              </Button>
+              {iaMsg && <span className="text-[12px] text-slate-400">{iaMsg}</span>}
+            </div>
+            <p className="text-[12px] text-slate-500">
+              Lee también el texto de las fotos (datos del conductor, teléfonos, albaranes…). Al terminar
+              se abre una ventana para revisar y confirmar qué datos se importan: nada se escribe solo.
+            </p>
+          </div>
+        )}
+      </Card>
+
       <div className="flex flex-col gap-4">
         <Section title="Expediente">
-          <Field label="Nº expediente"><Input value={f.expedientNumber} onChange={set("expedientNumber")} className="w-40" /></Field>
+          <Field label="Nº expediente">
+            <Input
+              value={f.expedientNumber} onChange={set("expedientNumber")} className="w-40"
+              placeholder={`Auto · AS-${new Date().getFullYear()}-…`}
+              title="Si lo dejas vacío se genera un número correlativo automáticamente"
+            />
+          </Field>
           <Field label="Referencia externa"><Input value={f.externalReference} onChange={set("externalReference")} className="w-40" /></Field>
           <Field label="Cliente de cartera">
             <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>

@@ -10,6 +10,7 @@ import { syncFromCore, expireOfferedAssignments } from "./service.ts";
 import { deliverPendingWebhooks, enqueueWebhookEvent } from "./webhooks.ts";
 import { computeWorkshopScores, notifySlaEvents, detectAnomalies } from "./score.ts";
 import { syncMobileUnits } from "./mobileunits.ts";
+import { storeDailyKpiSnapshot, predictDemand, backfillDemandActuals, generateRecommendations } from "./intelligence.ts";
 
 const TICK_MS = 15_000;
 const SCORE_EVERY_TICKS = 20; // recalcular el score cada ~5 min
@@ -32,7 +33,13 @@ export async function runConnectChecksOnce(): Promise<void> {
       if (scored > 0) console.log(`[Connect] worker: score recalculado para ${scored} taller(es)`);
       const anomalies = await detectAnomalies();
       if (anomalies > 0) console.log(`[Connect] worker: ${anomalies} anomalía(s) de red detectadas`);
+      // Inteligencia operacional: snapshot diario, precisión de demanda y recomendaciones
+      await storeDailyKpiSnapshot();
+      await backfillDemandActuals();
+      const recs = await generateRecommendations();
+      if (recs > 0) console.log(`[Connect] worker: ${recs} recomendación(es) de IA generadas`);
     }
+    if (tick % 240 === 3) await predictDemand(); // predicción de demanda cada hora
     await deliverPendingWebhooks();
   } catch (err: any) {
     console.error("[Connect] worker error:", err?.message);

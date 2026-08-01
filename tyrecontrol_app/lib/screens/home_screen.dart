@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import '../services/offline_store.dart';
 import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
+import 'analitica_screen.dart';
 import 'identify_vehicle_screen.dart';
 import 'incidencias_screen.dart';
 import 'login_screen.dart';
@@ -66,20 +68,22 @@ class _InicioTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        children: [
-          // Logo de la marca en la portada de inicio.
-          Padding(
-            padding: const EdgeInsets.only(bottom: 18),
-            child: Image.asset(
-              'assets/logo_cabecera.png',
-              height: 84,
-              fit: BoxFit.contain,
-            ),
+    return Stack(
+      children: [
+        // Logo de Mobilink TyreControl centrado (horizontal y vertical) como
+        // marca de la portada; el menú se mantiene por encima, con el diseño
+        // y los estilos de siempre.
+        Center(
+          child: Opacity(
+            opacity: 0.10,
+            child: Image.asset('assets/logo_cabecera.png', width: 460, fit: BoxFit.contain),
           ),
-          _BigTile(
+        ),
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              _BigTile(
             icon: Icons.add_circle,
             label: 'Nueva revisión',
             primary: true,
@@ -139,6 +143,15 @@ class _InicioTab extends StatelessWidget {
             children: [
               Expanded(
                 child: _BigTile(
+                  icon: Icons.insights,
+                  label: 'Analítica',
+                  small: true,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AnaliticaScreen())),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: _BigTile(
                   icon: Icons.build,
                   label: 'Herramientas',
                   small: true,
@@ -156,8 +169,12 @@ class _InicioTab extends StatelessWidget {
               ),
             ],
           ),
-        ],
-      ),
+          // "Cerrar sesión" vive ahora en la cabecera (a la derecha del estado
+          // de conexión), que es donde se busca; aquí solo queda el menú.
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -184,17 +201,21 @@ class _BigTile extends StatelessWidget {
         child: Container(
           width: double.infinity,
           height: small ? 96 : (primary ? 140 : 88),
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: primary ? null : Border.all(color: AppColors.cardBorder),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon, color: fg, size: primary ? 38 : 30),
-              const SizedBox(height: 8),
-              Text(label, textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: primary ? 20 : 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Flexible(
+                child: Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: fg, fontSize: primary ? 20 : 16, fontWeight: FontWeight.w700)),
+              ),
             ],
           ),
         ),
@@ -205,7 +226,8 @@ class _BigTile extends StatelessWidget {
 
 // Reexport util para logout desde ProfileScreen
 Future<void> doLogout(BuildContext context) async {
-  await TyreControlApi.signOut();
+  await TyreControlApi.signOut(); // olvida el cliente activo
+  await OfflineStore.limpiarDatosCliente(); // limpia cachés del cliente
   if (!context.mounted) return;
   Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
 }

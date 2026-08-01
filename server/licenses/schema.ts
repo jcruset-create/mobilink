@@ -73,5 +73,13 @@ export async function initLicenses(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_licenses_expires ON licenses("expiresAtMs");
     CREATE INDEX IF NOT EXISTS idx_license_history_license ON license_history("licenseId");
   `);
+
+  // Multi-taller Assist: la licencia (= empresa) se dimensiona por nº de
+  // unidades móviles (furgonetas) gestionadas, no por usuarios.
+  await db.query(`
+    ALTER TABLE licenses
+    ADD COLUMN IF NOT EXISTS "maxUnidadesMoviles" INTEGER NOT NULL DEFAULT 5;
+  `);
+
   console.log("Licencias: esquema inicializado");
 }

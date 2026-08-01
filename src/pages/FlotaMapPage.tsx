@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
+import { sessionHeaders } from "../modules/sessionHeaders";
 
 // Fix Leaflet default icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -21,14 +22,26 @@ type Vehicle = {
   postext?: string | null;
   timestamp?: string | null;
   plate?: string | null;
+  // Multi-taller (fase 4)
+  tallerId?: number | null;
+  tallerNombre?: string | null;
+  esPropio?: boolean;
+  estado?: "trabajando" | "en_taller";
+  techName?: string | null;
 };
 
-function makeVanIcon(plate: string) {
+function makeVanIcon(plate: string, esPropio = true) {
+  // Furgonetas de otros talleres de la empresa: en gris (solo estado/técnico)
+  const imgFilter = esPropio
+    ? "drop-shadow(0 2px 6px rgba(0,0,0,0.4))"
+    : "grayscale(1) opacity(0.75) drop-shadow(0 2px 6px rgba(0,0,0,0.4))";
+  const badgeBg = esPropio ? "#1e3a5f" : "#3a3f46";
+  const badgeColor = esPropio ? "#f0c040" : "#cbd5e1";
   return L.divIcon({
     html: `
       <div style="text-align:center">
-        <img src="/van-icon.png" style="width:40px;height:60px;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.4));" />
-        <div style="background:#1e3a5f;color:#f0c040;font-size:10px;font-weight:900;padding:1px 5px;border-radius:4px;margin-top:2px;white-space:nowrap;border:1px solid #2d4a6a;letter-spacing:0.5px;">
+        <img src="/van-icon.png" style="width:40px;height:60px;filter:${imgFilter};" />
+        <div style="background:${badgeBg};color:${badgeColor};font-size:10px;font-weight:900;padding:1px 5px;border-radius:4px;margin-top:2px;white-space:nowrap;border:1px solid #2d4a6a;letter-spacing:0.5px;">
           ${plate}
         </div>
       </div>
@@ -79,7 +92,7 @@ export default function FlotaMapPage() {
   async function load() {
     try {
       const res = await apiFetch(`${API_BASE}/api/webfleet/vehicles`, {
-        headers: getAdminHeaders(),
+        headers: await sessionHeaders(getAdminHeaders() as Record<string, string>),
       });
       if (!res.ok) throw new Error(`Error ${res.status}`);
       const data: Vehicle[] = await res.json();
@@ -161,23 +174,34 @@ export default function FlotaMapPage() {
               <Marker
                 key={v.objectno}
                 position={[v.lat, v.lng]}
-                icon={makeVanIcon(v.plate ?? v.objectname ?? v.objectno)}
+                icon={makeVanIcon(v.plate ?? v.objectname ?? v.objectno, v.esPropio !== false)}
               >
                 <Popup>
                   <div className="text-sm">
                     <div className="font-bold">{v.plate ?? v.objectname}</div>
+                    {v.tallerNombre && (
+                      <div className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${v.esPropio === false ? "bg-slate-200 text-slate-600" : "bg-blue-100 text-blue-700"}`}>
+                        {v.tallerNombre}{v.esPropio === false ? " · otro taller" : ""}
+                      </div>
+                    )}
+                    <div className={`mt-1 text-xs font-bold ${v.estado === "trabajando" ? "text-amber-600" : "text-emerald-600"}`}>
+                      {v.estado === "trabajando" ? "● Trabajando" : "● En taller"}
+                      {v.techName && <span className="ml-1 font-normal text-gray-600">· {v.techName}</span>}
+                    </div>
                     {v.postext && <div className="text-gray-600 mt-1">{v.postext}</div>}
                     {v.timestamp && (
                       <div className="text-gray-400 text-xs mt-1">
                         {new Date(v.timestamp).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}
                       </div>
                     )}
-                    <button
-                      onClick={() => openTrackingReport(v.objectno)}
-                      className="mt-2 w-full rounded bg-blue-600 px-2 py-1 text-xs font-bold text-white hover:bg-blue-700"
-                    >
-                      🛰️ Informe seguimiento (día)
-                    </button>
+                    {v.esPropio !== false && (
+                      <button
+                        onClick={() => openTrackingReport(v.objectno)}
+                        className="mt-2 w-full rounded bg-blue-600 px-2 py-1 text-xs font-bold text-white hover:bg-blue-700"
+                      >
+                        🛰️ Informe seguimiento (día)
+                      </button>
+                    )}
                   </div>
                 </Popup>
               </Marker>
@@ -190,9 +214,13 @@ export default function FlotaMapPage() {
       {vehicles.length > 0 && (
         <div className="flex gap-2 overflow-x-auto px-4 py-2 bg-[#162232] border-t border-[#2d4a6a]">
           {vehicles.map(v => (
-            <div key={v.objectno} className="flex-shrink-0 rounded-lg bg-[#1e3a5f] px-3 py-1.5 text-center border border-[#2d4a6a]">
-              <div className="text-xs font-black text-[#f0c040]">{v.plate ?? v.objectname}</div>
-              {v.postext && <div className="text-[10px] text-slate-400 max-w-[120px] truncate">{v.postext}</div>}
+            <div key={v.objectno} className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-center border ${v.esPropio === false ? "bg-[#22262c] border-[#3a3f46] opacity-80" : "bg-[#1e3a5f] border-[#2d4a6a]"}`}>
+              <div className={`text-xs font-black ${v.esPropio === false ? "text-slate-300" : "text-[#f0c040]"}`}>{v.plate ?? v.objectname}</div>
+              <div className={`text-[10px] font-bold ${v.estado === "trabajando" ? "text-amber-400" : "text-emerald-400"}`}>
+                {v.estado === "trabajando" ? "Trabajando" : "En taller"}
+                {v.techName ? ` · ${v.techName}` : ""}
+              </div>
+              {v.tallerNombre && <div className="text-[10px] text-slate-500">{v.tallerNombre}</div>}
             </div>
           ))}
         </div>

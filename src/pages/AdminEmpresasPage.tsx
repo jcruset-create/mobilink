@@ -31,6 +31,7 @@ type Licencia = {
 
 const MODULOS = [
   "taller",
+  "workplanner",
   "administracion",
   "tyrecontrol",
   "almacen",

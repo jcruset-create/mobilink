@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
-import 'home_screen.dart';
+import 'cliente_screen.dart';
 
 /// Login unificado: el tecnico usa el MISMO nombre + PIN de 4 digitos
 /// que en la app de asistencias en carretera. Sin contrasenas nuevas.
@@ -35,7 +35,9 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await TyreControlApi.signInOperario(name, pin);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+      // Tras el login se pasa SIEMPRE por la selección de cliente.
+      TyreControlApi.clienteActivo.value = null;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const ClienteScreen()));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -94,7 +96,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('PIN de acceso (el mismo que en Mobilink Assist)', style: tt.bodyMedium),
+                    child: Text('PIN de acceso (4 dígitos)', style: tt.bodyMedium),
                   ),
                   const SizedBox(height: 12),
 

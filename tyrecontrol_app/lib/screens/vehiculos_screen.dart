@@ -29,7 +29,11 @@ const double _wEmpresa = 118,
     _wKm = 84,
     _wWebfleet = 158,
     _wEstado = 76,
-    _wAcciones = 150;
+    _wAcciones = 178; // cabe "Ficha · Editar · Desactivar" sin desbordar
+// Padding horizontal de cada fila (izq+der). Se suma al ancho de la tabla
+// porque las columnas ya ocupan su ancho completo; si no, la última columna
+// (Acciones) se salía y Flutter pintaba el aviso de overflow a rayas.
+const double _kRowHPad = 8;
 const double _tableWidth = _wEmpresa +
     _wMatricula +
     _wUnidad +
@@ -253,7 +257,7 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SizedBox(
-        width: _tableWidth,
+        width: _tableWidth + _kRowHPad * 2,
         child: Column(
           children: [
             _headerRow(),
@@ -292,7 +296,7 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
         );
     return Container(
       color: AppColors.surface,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: _kRowHPad, vertical: 8),
       child: Row(
         children: [
           h('Empresa', _wEmpresa),
@@ -334,7 +338,7 @@ class _VehiculosScreenState extends State<VehiculosScreen> {
         border:
             Border(bottom: BorderSide(color: AppColors.cardBorder, width: 0.5)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: _kRowHPad, vertical: 8),
       child: Row(
         children: [
           c(_nombre(v['empresa']) ?? '—', _wEmpresa,

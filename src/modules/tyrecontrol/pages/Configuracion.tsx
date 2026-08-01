@@ -10,22 +10,69 @@ import {
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
   listarContadoresMarcas,
   listarMotivosFueraAlmacen, crearMotivoFueraAlmacen, actualizarMotivoFueraAlmacen, eliminarMotivoFueraAlmacen,
-  listarConfigEjes, crearConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
+  listarConfigEjes, crearConfigEjes, actualizarConfigEjes, desactivarConfigEjes, subirImagenConfigEjes, actualizarImagenConfigEjes,
+  listarImagenesConfigMarca, subirImagenConfigMarca, guardarImagenConfigMarca,
   listarTiposLlanta, crearTipoLlanta, desactivarTipoLlanta,
   listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
+  listarMarcasVehiculo, crearMarcaVehiculo, actualizarMarcaVehiculo, eliminarMarcaVehiculo,
+  alternarTipoMarcaVehiculo, subirLogoMarcaVehiculo,
 } from "../services/data";
-import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
+import type { MarcaVehiculo, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import ConfigWebfleet from "../components/ConfigWebfleet";
+import AdminCamposItv from "../components/AdminCamposItv";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fila de configuración de ejes con su imagen de chasis asociada: la imagen
 // se sube una vez aquí y la heredan todos los vehículos con esa configuración.
-function FilaConfigEjes({ config, puedeEditar, onCambio }: { config: ConfigEjes; puedeEditar: boolean; onCambio: () => void }) {
+function FilaConfigEjes({ config, puedeEditar, onCambio, tipos, marcas }: {
+  config: ConfigEjes; puedeEditar: boolean; onCambio: () => void;
+  tipos: TipoVehiculo[]; marcas: MarcaVehiculo[];
+}) {
   const [subiendo, setSubiendo] = useState(false);
   const [err, setErr] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [porMarca, setPorMarca] = useState<Record<string, string | null>>({});
+  const [verTodas, setVerTodas] = useState(false);
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(config.nombre);
+  const [descripcion, setDescripcion] = useState(config.descripcion ?? "");
+
+  // Marcas que pueden llevar esta configuración: las asociadas a los tipos de
+  // vehículo cuya configuración es esta (un 2x4 lo montan camiones y
+  // tractoras, no un turismo).
+  const tipoIds = tipos.filter((t) => t.configuracion_ejes === config.nombre).map((t) => t.id);
+  const marcasDelTipo = marcas.filter((m) => m.tipo_ids.some((id) => tipoIds.includes(id)));
+  const marcasVisibles = verTodas || marcasDelTipo.length === 0 ? marcas : marcasDelTipo;
+
+  async function cargarMarcas() {
+    try {
+      const filas = await listarImagenesConfigMarca(config.id);
+      setPorMarca(Object.fromEntries(filas.map((f) => [f.marca_id, f.imagen_chasis_url])));
+    } catch (e: any) { setErr(e?.message || "Error cargando las imágenes por marca"); }
+  }
+  async function abrir() {
+    const nuevo = !abierto;
+    setAbierto(nuevo);
+    if (nuevo) await cargarMarcas();
+  }
+
+  async function subirDeMarca(marcaId: string, file: File | undefined) {
+    if (!file) return;
+    setSubiendo(true); setErr("");
+    try {
+      const url = await subirImagenConfigMarca(config.id, marcaId, file);
+      await guardarImagenConfigMarca(config.id, marcaId, url);
+      await cargarMarcas();
+    } catch (e: any) { setErr(e?.message || "Error al subir la imagen"); } finally { setSubiendo(false); }
+  }
+  async function quitarDeMarca(marcaId: string, nombre: string) {
+    if (!window.confirm(`¿Quitar la imagen de ${nombre} para ${config.nombre}? Volverá a usarse la genérica.`)) return;
+    try { await guardarImagenConfigMarca(config.id, marcaId, null); await cargarMarcas(); }
+    catch (e: any) { setErr(e?.message || "Error"); }
+  }
 
   async function onArchivo(file: File | undefined) {
     if (!file) return;
@@ -49,26 +96,111 @@ function FilaConfigEjes({ config, puedeEditar, onCambio }: { config: ConfigEjes;
     await desactivarConfigEjes(config.id); onCambio();
   }
 
+  async function guardarEdicion() {
+    const n = nombre.trim();
+    if (!n) { setErr("El nombre no puede quedar vacío"); return; }
+    setErr("");
+    try {
+      await actualizarConfigEjes(config.id, { nombre: n, descripcion });
+      setEditando(false);
+      onCambio();
+    } catch (e: any) { setErr(e?.message || "Error al guardar"); }
+  }
+
   return (
-    <div className="flex items-center gap-2 rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">
-      {config.imagen_chasis_url ? (
-        <img src={config.imagen_chasis_url} alt={config.nombre} className="h-8 w-8 rounded border border-slate-700 object-contain bg-slate-950" />
-      ) : (
-        <div className="flex h-8 w-8 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin img</div>
-      )}
-      <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
-      {err && <span className="text-[10px] text-rose-400">{err}</span>}
-      {puedeEditar && (
-        <>
-          <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
-            {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
-            <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
-          </label>
-          {config.imagen_chasis_url && (
-            <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+    // Desplegada ocupa toda la fila: en una columna estrecha las marcas no caben.
+    <div className={`rounded bg-slate-900 ${abierto ? "sm:col-span-2 lg:col-span-3" : ""}`}>
+      <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-slate-300">
+        {config.imagen_chasis_url ? (
+          <img src={config.imagen_chasis_url} alt={config.nombre} className="h-8 w-8 rounded border border-slate-700 object-contain bg-slate-950" />
+        ) : (
+          <div className="flex h-8 w-8 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin img</div>
+        )}
+        {editando ? (
+          <div className="flex flex-1 flex-wrap items-center gap-1">
+            <input className={`${inputCls} w-24 text-[12px]`} value={nombre} autoFocus
+              onChange={(e) => setNombre(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void guardarEdicion(); if (e.key === "Escape") setEditando(false); }} />
+            <input className={`${inputCls} min-w-0 flex-1 text-[12px]`} placeholder="Descripción" value={descripcion}
+              onChange={(e) => setDescripcion(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void guardarEdicion(); if (e.key === "Escape") setEditando(false); }} />
+          </div>
+        ) : (
+          <span className="flex-1"><b>{config.nombre}</b>{config.descripcion ? ` · ${config.descripcion}` : ""}</span>
+        )}
+        {err && <span className="text-[10px] text-rose-400">{err}</span>}
+        {editando ? (
+          <>
+            <button onClick={() => void guardarEdicion()} className="text-[10px] font-bold text-emerald-300 hover:underline">guardar</button>
+            <button onClick={() => { setEditando(false); setNombre(config.nombre); setDescripcion(config.descripcion ?? ""); setErr(""); }}
+              className="text-[10px] text-slate-400 hover:underline">cancelar</button>
+          </>
+        ) : (
+          <>
+            <button onClick={abrir} className="text-[10px] text-slate-300 hover:underline">
+              {abierto ? "▾ marcas" : "▸ marcas"}
+            </button>
+            {puedeEditar && (
+              <>
+                <button onClick={() => setEditando(true)} className="text-[10px] text-sky-300 hover:underline">editar</button>
+                <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+                  {subiendo ? "subiendo…" : config.imagen_chasis_url ? "cambiar" : "imagen"}
+                  <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
+                </label>
+                {config.imagen_chasis_url && (
+                  <button onClick={quitarImagen} className="text-[10px] text-amber-300 hover:underline">quitar img</button>
+                )}
+                <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Imagen por marca: si la marca del vehículo tiene una aquí, manda
+          sobre la genérica de la configuración. */}
+      {abierto && (
+        <div className="border-t border-slate-800 px-2 py-2">
+          <div className="mb-1 flex items-center gap-2 text-[10px] text-slate-500">
+            <span>Imagen propia por marca (si no tiene, se usa la genérica de {config.nombre})</span>
+            {marcasDelTipo.length > 0 && (
+              <button onClick={() => setVerTodas(!verTodas)} className="text-sky-300 hover:underline">
+                {verTodas ? "solo las del tipo" : "ver todas"}
+              </button>
+            )}
+          </div>
+          {marcasVisibles.length === 0 ? (
+            <div className="text-[11px] text-slate-500">No hay marcas en el catálogo.</div>
+          ) : (
+            <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+              {marcasVisibles.map((m) => {
+                const img = porMarca[m.id] ?? null;
+                return (
+                  <div key={m.id} className={`flex items-center gap-2 rounded px-2 py-1 text-[11px] ${img ? "bg-slate-800" : "bg-slate-950/60"}`}>
+                    {img ? (
+                      <img src={img} alt={m.nombre} className="h-7 w-10 rounded border border-slate-700 object-contain bg-slate-950" />
+                    ) : (
+                      <div className="flex h-7 w-10 items-center justify-center rounded border border-dashed border-slate-700 text-[8px] text-slate-600">sin img</div>
+                    )}
+                    <span className={`flex-1 ${img ? "text-slate-200" : "text-slate-500"}`}>{m.nombre}</span>
+                    {puedeEditar && (
+                      <>
+                        <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+                          {img ? "cambiar" : "subir"}
+                          <input type="file" accept="image/*" className="hidden" disabled={subiendo}
+                            onChange={(e) => { void subirDeMarca(m.id, e.target.files?.[0]); e.target.value = ""; }} />
+                        </label>
+                        {img && (
+                          <button onClick={() => quitarDeMarca(m.id, m.nombre)} className="text-[10px] text-amber-300 hover:underline">quitar</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
-          <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
-        </>
+        </div>
       )}
     </div>
   );
@@ -136,6 +268,82 @@ function FilaFabricante({ fabricante, puedeEditar, onCambio }: { fabricante: Fab
           <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Marca de vehículo: logo + nombre + casillas de los tipos en los que aparece.
+// Una misma marca sirve para varios tipos (Mercedes-Benz es tractora, camión,
+// furgoneta y autobús), por eso son casillas y no un desplegable.
+function FilaMarcaVehiculo({ marca, tipos, puedeEditar, onCambio }: {
+  marca: MarcaVehiculo; tipos: TipoVehiculo[]; puedeEditar: boolean; onCambio: () => void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(marca.nombre);
+  const [subiendo, setSubiendo] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function guardarNombre() {
+    if (!nombre.trim() || nombre === marca.nombre) { setEditando(false); return; }
+    try { await actualizarMarcaVehiculo(marca.id, { nombre }); setEditando(false); onCambio(); }
+    catch (e: any) { setErr(e?.message || "Error"); }
+  }
+  async function onArchivo(file: File | undefined) {
+    if (!file) return;
+    setSubiendo(true); setErr("");
+    try {
+      const url = await subirLogoMarcaVehiculo(marca.id, file);
+      await actualizarMarcaVehiculo(marca.id, { logo_url: url });
+      onCambio();
+    } catch (e: any) { setErr(e?.message || "Error al subir el logo"); } finally { setSubiendo(false); }
+  }
+  async function borrar() {
+    if (!window.confirm(`¿Eliminar la marca "${marca.nombre}"? Los vehículos que la usen conservarán el texto.`)) return;
+    await eliminarMarcaVehiculo(marca.id); onCambio();
+  }
+
+  return (
+    <div className="rounded bg-slate-900 px-2 py-1.5 text-[12px] text-slate-300">
+      <div className="flex items-center gap-2">
+        {marca.logo_url ? (
+          <img src={marca.logo_url} alt={marca.nombre} className="h-8 w-12 rounded border border-slate-700 bg-slate-950 object-contain" />
+        ) : (
+          <div className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-600">sin logo</div>
+        )}
+        {editando ? (
+          <input autoFocus className="flex-1 rounded border border-slate-600 bg-slate-800 px-1 py-0.5 text-[12px] text-slate-100"
+            value={nombre} onChange={(e) => setNombre(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && guardarNombre()} onBlur={guardarNombre} />
+        ) : (
+          <span className="flex-1 font-semibold text-slate-100">{marca.nombre}
+            {marca.pais_origen ? <span className="ml-1 font-normal text-slate-500">· {marca.pais_origen}</span> : null}
+          </span>
+        )}
+        {puedeEditar && !editando && (
+          <div className="flex gap-2">
+            <label className="cursor-pointer text-[10px] text-sky-300 hover:underline">
+              {subiendo ? "subiendo…" : marca.logo_url ? "cambiar logo" : "logo"}
+              <input type="file" accept="image/*" className="hidden" disabled={subiendo}
+                onChange={(e) => { void onArchivo(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+            <button onClick={() => setEditando(true)} className="text-[10px] text-slate-400 hover:underline">editar</button>
+            <button onClick={borrar} className="text-[10px] text-rose-400 hover:underline">borrar</button>
+          </div>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 pl-14">
+        {tipos.map((t) => (
+          <label key={t.id} className="flex items-center gap-1 text-[10px] text-slate-400">
+            <input type="checkbox" checked={marca.tipo_ids.includes(t.id)} disabled={!puedeEditar}
+              onChange={async (e) => {
+                try { await alternarTipoMarcaVehiculo(marca.id, t.id, e.target.checked); onCambio(); }
+                catch (err2: any) { setErr(err2?.message || "Error"); }
+              }} />
+            {t.descripcion ?? t.nombre}
+          </label>
+        ))}
+      </div>
+      {err && <div className="mt-1 text-[10px] text-rose-400">{err}</div>}
     </div>
   );
 }
@@ -218,6 +426,11 @@ function FilaMarca({ marca, fabricantes, contadores, seleccionada, puedeEditar, 
             País
             <input className={`${inputCls} mt-0.5 text-[11px]`} defaultValue={marca.pais_origen ?? ""} disabled={!puedeEditar}
               onBlur={async (e) => { if (e.target.value !== (marca.pais_origen ?? "")) { await actualizarMarca(marca.id, { pais_origen: e.target.value || null }); onCambio(); } }} />
+          </label>
+          <label className="col-span-2 flex items-center gap-2 text-[11px] text-slate-300">
+            <input type="checkbox" checked={!!marca.es_recauchutado} disabled={!puedeEditar}
+              onChange={async (e) => { await actualizarMarca(marca.id, { es_recauchutado: e.target.checked }); onCambio(); }} />
+            Marca de recauchutado (sus neumáticos salen marcados en la ficha del vehículo)
           </label>
           {contadores && (
             <div className="col-span-2 flex gap-3 text-[10px] text-slate-500">
@@ -447,16 +660,26 @@ export default function Configuracion() {
   const [nuevoModelo, setNuevoModelo] = useState("");
   const [nuevaMedida, setNuevaMedida] = useState("");
   const [nuevoFabricante, setNuevoFabricante] = useState("");
+  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
+  const [nuevaMarcaVeh, setNuevaMarcaVeh] = useState("");
   const [msg, setMsg] = useState("");
 
   async function cargar() {
-    const [m, med, ic, iv, t, f, c, mf, ce, tl, po] = await Promise.all([
+    const [m, med, ic, iv, t, f, c, mf, ce, tl, po, mv] = await Promise.all([
       listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
       listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
       listarConfigEjes(), listarTiposLlanta(), listarPresionesObjetivo().catch(() => []),
+      listarMarcasVehiculo().catch(() => []),
     ]);
     setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
-    setConfigEjes(ce); setTiposLlanta(tl); setPresiones(po);
+    setConfigEjes(ce); setTiposLlanta(tl); setPresiones(po); setMarcasVeh(mv);
+  }
+
+  async function guardarMarcaVeh() {
+    if (!nuevaMarcaVeh.trim()) return;
+    setMsg("");
+    try { await crearMarcaVehiculo(nuevaMarcaVeh); setNuevaMarcaVeh(""); await cargar(); }
+    catch (e: any) { setMsg(e?.message || "Error al crear la marca"); }
   }
 
   async function guardarPresion() {
@@ -553,9 +776,13 @@ export default function Configuracion() {
             <button onClick={guardarConfig} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
           </div>
         )}
-        <div className="mb-2 text-[11px] text-slate-500">La imagen de chasis asociada a cada configuración la heredan todos los vehículos que la usen (si el tipo de vehículo tiene imagen propia, esa tiene prioridad).</div>
+        <div className="mb-2 text-[11px] text-slate-500">
+          La imagen de chasis de cada configuración la heredan todos los vehículos que la usen. Con
+          <b className="text-slate-300"> ▸ marcas</b> puedes poner una imagen distinta por marca (un 2x4 de MAN no
+          se dibuja como uno de Volvo); si la marca no tiene la suya, se usa la genérica de la configuración.
+        </div>
         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
-          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} />)}
+          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} tipos={tipos} marcas={marcasVeh} />)}
         </div>
       </div>
 
@@ -652,6 +879,33 @@ export default function Configuracion() {
         </div>
       </div>
 
+      {/* Marcas de vehículo: alimentan el desplegable MARCA del alta de
+          vehículos, filtrado por el tipo elegido. */}
+      <div className="mb-4 rounded-lg bg-slate-800 p-3">
+        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Marcas de vehículo ({marcasVeh.length})</div>
+        <div className="mb-3 text-[11px] text-slate-500">
+          Alimentan el desplegable <b>Marca</b> del alta de vehículos, filtrado por el tipo elegido: en una cabeza tractora salen MAN, Scania…; en un semirremolque, Krone, Schmitz Cargobull… Marca las casillas de los tipos en los que debe aparecer cada una y sube su logo.
+          {!puedeEditar && " Solo un administrador Mobilink puede editarlas."}
+        </div>
+        {puedeEditar && (
+          <div className="mb-2 flex gap-2">
+            <input className={`${inputCls} max-w-xs`} placeholder="Nueva marca de vehículo…" value={nuevaMarcaVeh}
+              onChange={(e) => setNuevaMarcaVeh(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && guardarMarcaVeh()} />
+            <button onClick={guardarMarcaVeh} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+ Añadir</button>
+          </div>
+        )}
+        {marcasVeh.length === 0 ? (
+          <div className="text-[12px] text-slate-500">Sin marcas de vehículo. Ejecuta la migración del catálogo o añade la primera.</div>
+        ) : (
+          <div className="max-h-96 space-y-1 overflow-y-auto">
+            {marcasVeh.map((m) => (
+              <FilaMarcaVehiculo key={m.id} marca={m} tipos={tipos} puedeEditar={puedeEditar} onCambio={cargar} />
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg bg-slate-800 p-3">
         <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Catálogo de neumáticos (marca / modelo / medida)</div>
         <div className="mb-3 text-[11px] text-slate-500">Alimenta los desplegables del alta de neumáticos en todas las empresas. Abre "detalle" en una marca para asignar fabricante, segmento y país, y ver cuántos neumáticos/vehículos la usan.{!puedeEditar && " Solo un administrador Mobilink puede añadir valores."}</div>
@@ -726,6 +980,10 @@ export default function Configuracion() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <AdminCamposItv puedeEditar={puedeEditar} />
       </div>
 
       <div className="mt-4 rounded-lg bg-slate-800 p-3">

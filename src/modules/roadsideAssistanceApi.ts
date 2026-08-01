@@ -1,4 +1,5 @@
 import { API_BASE, fetchWithTimeout, getAdminHeaders } from "./workshopApi";
+import { sessionHeaders } from "./sessionHeaders";
 import type {
   RoadsideAssistance,
   RoadsideAssistanceDraft,
@@ -157,10 +158,14 @@ export async function geocodeAddress(address: string) {
 }
 
 export async function loadRoadsideAssistancesFromBackend(
-  includeClosed = true
+  includeClosed = true,
+  tallerId?: number | null
 ) {
+  const qs = new URLSearchParams({ includeClosed: String(includeClosed) });
+  if (tallerId != null) qs.set("tallerId", String(tallerId));
   const response = await fetchWithTimeout(
-    `${API_BASE}/api/roadside-assistances?includeClosed=${includeClosed}`
+    `${API_BASE}/api/roadside-assistances?${qs.toString()}`,
+    { headers: await sessionHeaders() }
   );
 
   if (!response.ok) {
@@ -169,6 +174,26 @@ export async function loadRoadsideAssistancesFromBackend(
 
   const data = await response.json();
   return Array.isArray(data) ? (data as RoadsideAssistance[]) : [];
+}
+
+export type AsistenciasContexto = {
+  esAdmin: boolean;
+  tallerId: number | null;
+  sinContexto: boolean;
+  talleres: { id: number; nombre: string }[];
+};
+
+/** Contexto del usuario del panel: si es admin (selector) o taller fijo. */
+export async function fetchAsistenciasContexto(): Promise<AsistenciasContexto> {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/roadside-assistances/mi-contexto`,
+    { headers: await sessionHeaders() }
+  );
+  if (!response.ok) {
+    // Sin contexto → comportamiento actual (ve todo, sin selector)
+    return { esAdmin: true, tallerId: null, sinContexto: true, talleres: [] };
+  }
+  return (await response.json()) as AsistenciasContexto;
 }
 
 export async function loadRoadsideVehiclesFromBackend(includeInactive = true) {

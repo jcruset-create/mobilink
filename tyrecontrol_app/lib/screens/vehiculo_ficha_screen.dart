@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../models/umbrales.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/vehicle_layout_image.dart';
@@ -45,7 +46,14 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
   List<Map<String, dynamic>> _revisiones = [];
   Map<String, String> _medidas = {};
   List<Map<String, dynamic>> _llantas = [];
-  Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por posición
+  // Última medición por NEUMÁTICO: un neumático recién montado no puede heredar
+  // los mm del que estaba antes en esa posición (por eso no vale la medición
+  // indexada por posición, que es lo que usaba esta pantalla antes).
+  Map<String, RevisionDetalleDraft> _medPorNeumatico = {};
+  Map<String, ({double? prof, double? pres})> _datosCat = {}; // catálogo por marca|modelo|medida
+  Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // por eje
+  UmbralConfig? _umbralEmpresa;
+  Map<String, UmbralConfig> _umbralPorMedida = {};
   String? _imagenChasis;
 
   @override
@@ -75,7 +83,9 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
         TyreControlApi.listarRevisionesDeVehiculo(widget.vehiculoId),
         TyreControlApi.mapaMedidas(),
         TyreControlApi.listarTiposLlantaCat(),
-        TyreControlApi.ultimasMedicionesPorPosicion(widget.vehiculoId),
+        TyreControlApi.ultimasMedicionesPorNeumatico(widget.vehiculoId),
+        TyreControlApi.datosCatalogoPorModelo(),
+        TyreControlApi.marcasRecauchutadas(), // para el distintivo RECAUCH.
       ]);
 
       final montajes = results[1] as List<MontajeActual>;
@@ -87,18 +97,32 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
           e['plan_id'] as String: e
       };
 
-      // Imagen del plano: la del tipo si la tiene; si no, la de la config de ejes.
+      // Imagen del plano, con el mismo orden que el panel web: manda la de la
+      // configuración de ejes (un 2x4 se dibuja igual sea tractora o camión) y
+      // solo se usa la del tipo si la configuración no tiene ninguna.
       final tipo = v['tipo'];
       final cfgEjes = v['config_ejes'];
-      String? img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
+      String? img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
       if (img == null || img.isEmpty) {
-        img = cfgEjes is Map ? cfgEjes['imagen_chasis_url'] as String? : null;
+        img = tipo is Map ? tipo['imagen_chasis_url'] as String? : null;
       }
+
+      // Presión recomendada por eje y umbrales de profundidad: sin ellos el
+      // plano no puede decir si una rueda está bien, justa o mal.
+      final posiciones = results[0] as List<PosicionVehiculo>;
+      final ejesSet = posiciones.map((p) => p.eje).whereType<int>().toSet().toList();
+      final presObj = ejesSet.isEmpty
+          ? <int, ({num presion, num margen})>{}
+          : await TyreControlApi.presionesObjetivoDeVehiculo(widget.vehiculoId, ejesSet);
+      final empresaId = v['empresa_id'] as String?;
+      final ({UmbralConfig? empresa, Map<String, UmbralConfig> porMedida}) umb = empresaId != null
+          ? await TyreControlApi.umbralesDeEmpresa(empresaId)
+          : (empresa: null, porMedida: <String, UmbralConfig>{});
 
       if (!mounted) return;
       setState(() {
         _v = v;
-        _posiciones = results[0] as List<PosicionVehiculo>;
+        _posiciones = posiciones;
         _montajePorPosicion = {for (final m in montajes) m.posicionId: m};
         _planes = planes;
         _planEstado = estados;
@@ -106,7 +130,11 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
         _revisiones = results[5] as List<Map<String, dynamic>>;
         _medidas = results[6] as Map<String, String>;
         _llantas = results[7] as List<Map<String, dynamic>>;
-        _mediciones = results[8] as Map<String, RevisionDetalleDraft>;
+        _medPorNeumatico = results[8] as Map<String, RevisionDetalleDraft>;
+        _datosCat = results[9] as Map<String, ({double? prof, double? pres})>;
+        _presionesObjetivo = presObj;
+        _umbralEmpresa = umb.empresa;
+        _umbralPorMedida = umb.porMedida;
         _imagenChasis = (img != null && img.isNotEmpty) ? img : null;
       });
     } catch (e) {
@@ -115,6 +143,52 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // ── Estado y valores de cada posición del plano ──────────────
+  // Misma lógica que la pantalla de cambio: la medición manda, y si no la hay
+  // se cae a la profundidad del propio neumático, al dibujo del catálogo y a
+  // la presión objetivo del eje. Sin esto el plano mostraba "— bar" siempre
+  // que la revisión no anotara presión.
+
+  /// Umbral efectivo: override por medida del neumático → empresa → app.
+  Umbrales _umbralDe(PosicionVehiculo p) {
+    final medida = _montajePorPosicion[p.id]?.neumatico?.medida;
+    UmbralConfig? c;
+    if (medida != null) {
+      c = _umbralPorMedida[medida.toUpperCase().replaceAll(RegExp(r'\s+'), '')];
+    }
+    c ??= _umbralEmpresa;
+    if (c == null) return Umbrales.def;
+    return Umbrales(profCriticaMm: c.minimaMm, profAvisoMm: c.avisoMm);
+  }
+
+  /// Un neumático montado desde almacén/catálogo y todavía sin ninguna
+  /// revisión está SIN ESTRENAR: se pinta en verde brillante.
+  static bool _esNuevo(Neumatico? n, RevisionDetalleDraft? med) =>
+      med == null && (n?.origen == 'almacen_generico' || n?.origen == 'catalogo_sin_stock');
+
+  ({double? prof, double? pres, TireStatus estado}) _evaluarPosicion(PosicionVehiculo p) {
+    final m = _montajePorPosicion[p.id];
+    final n = m?.neumatico;
+    if (n == null) return (prof: null, pres: null, estado: TireStatus.pendiente);
+
+    final med = _medPorNeumatico[m!.neumaticoId];
+    final obj = p.eje != null ? _presionesObjetivo[p.eje] : null;
+    final cat = _datosCat[TyreControlApi.claveCatalogo(n.marca, n.modelo, n.medida)];
+    final prof = med?.profundidadMm ?? n.profundidadActualMm?.toDouble() ?? cat?.prof;
+    final pres = med?.presionBar ?? obj?.presion.toDouble() ?? cat?.pres;
+
+    if (_esNuevo(n, med)) return (prof: prof, pres: pres, estado: TireStatus.nuevo);
+    // Sin medición y sin profundidad conocida no hay diagnóstico posible.
+    if (med == null && prof == null) {
+      return (prof: prof, pres: pres, estado: TireStatus.pendiente);
+    }
+    // Solo la presión MEDIDA puede marcar anomalía: la de respaldo (objetivo o
+    // catálogo) coincidiría siempre consigo misma.
+    final base = med ?? RevisionDetalleDraft(posicionId: p.id, profundidadMm: prof);
+    final estado = _umbralDe(p).evaluar(base, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+    return (prof: prof, pres: pres, estado: estado);
   }
 
   String _medidaLabel(String? id) => id == null ? '—' : (_medidas[id] ?? '—');
@@ -450,14 +524,20 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
   }
 
   Widget _plano() {
+    final ev = {for (final p in _posiciones) p.id: _evaluarPosicion(p)};
     return _seccion(
       'Plano del vehículo',
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         Expanded(
           child: FilledButton.icon(
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId))),
+            // Al volver de Cambiar se recarga la ficha: los montajes se
+            // escriben en BD dentro de esa pantalla, pero la ficha guarda su
+            // estado y sin recargar seguiría mostrando el plano "antiguo".
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(
+                    builder: (_) => CambioNeumaticoScreen(vehiculoId: widget.vehiculoId)))
+                .then((_) { if (mounted) _cargar(); }),
             icon: const Icon(Icons.swap_horiz),
             label: const Text('Cambiar'),
           ),
@@ -482,19 +562,23 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
               imagenUrl: _imagenChasis!,
               posiciones: _posiciones,
               montajePorPosicion: _montajePorPosicion,
-              // Última medición por posición: el plano muestra "X mm · Y bar".
-              detalles: _mediciones,
-              estados: const {},
+              // El plano muestra "X mm · Y bar" y pinta el recuadro segun el
+              // estado; ambos salen ya resueltos de _evaluarPosicion.
+              detalles: const {},
+              valores: {
+                for (final e in ev.entries) e.key: (prof: e.value.prof, pres: e.value.pres),
+              },
+              estados: {for (final e in ev.entries) e.key: e.value.estado},
               seleccionadaId: null,
               liveProf: null,
               livePres: null,
               onTap: (p) {
                 final m = _montajePorPosicion[p.id];
                 final n = m?.neumatico;
-                final med = _mediciones[p.id];
-                final medTxt = med == null
+                final e = ev[p.id];
+                final medTxt = e == null
                     ? ''
-                    : ' · ${med.profundidadMm != null ? '${med.profundidadMm!.toStringAsFixed(1)} mm' : '— mm'} · ${med.presionBar != null ? '${med.presionBar!.toStringAsFixed(1)} bar' : '— bar'}';
+                    : ' · ${e.prof != null ? '${e.prof!.toStringAsFixed(1)} mm' : '— mm'} · ${e.pres != null ? '${e.pres!.toStringAsFixed(1)} bar' : '— bar'}';
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text(n == null
                       ? '${p.codigoPosicion} · sin neumático montado$medTxt'

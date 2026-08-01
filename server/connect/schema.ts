@@ -418,6 +418,71 @@ export async function initConnect(): Promise<void> {
       UNIQUE ("authorizationId", "serviceTypeCode")
     );
 
+    -- Centro de Inteligencia Operacional: definiciones y valores de KPI
+    CREATE TABLE IF NOT EXISTS connect_kpi_definitions (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'operational',
+      unit TEXT NOT NULL DEFAULT '',
+      direction TEXT NOT NULL DEFAULT 'lower_better', -- lower_better | higher_better
+      "targetValue" DOUBLE PRECISION,
+      "warningThreshold" DOUBLE PRECISION,
+      "criticalThreshold" DOUBLE PRECISION,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "sortOrder" INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS connect_kpi_values (
+      id SERIAL PRIMARY KEY,
+      "kpiCode" TEXT NOT NULL,
+      "periodDate" TEXT NOT NULL,          -- YYYY-MM-DD del día cerrado
+      value DOUBLE PRECISION,
+      "sampleSize" INTEGER,
+      "calculatedAtMs" BIGINT NOT NULL,
+      UNIQUE ("kpiCode", "periodDate")
+    );
+
+    -- Predicciones (demanda por hora; extensible a otros tipos)
+    CREATE TABLE IF NOT EXISTS connect_predictions (
+      id SERIAL PRIMARY KEY,
+      "predictionType" TEXT NOT NULL,      -- demand_hourly
+      "targetKey" TEXT NOT NULL,           -- p.ej. 2026-07-26T18 (hora local)
+      "predictedValue" DOUBLE PRECISION NOT NULL,
+      "confidenceMin" DOUBLE PRECISION,
+      "confidenceMax" DOUBLE PRECISION,
+      "sampleSize" INTEGER,
+      "modelVersion" TEXT NOT NULL DEFAULT 'v1-hourly-profile',
+      "actualValue" DOUBLE PRECISION,
+      "errorValue" DOUBLE PRECISION,
+      "createdAtMs" BIGINT NOT NULL,
+      UNIQUE ("predictionType", "targetKey")
+    );
+
+    -- Recomendaciones de IA (accionables, explicables, con feedback)
+    CREATE TABLE IF NOT EXISTS connect_recommendations (
+      id SERIAL PRIMARY KEY,
+      "recommendationType" TEXT NOT NULL,
+      -- demand_peak | sla_risk_bulk | provider_degradation | coverage_gap
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'medium', -- low | medium | high
+      explanation TEXT,                    -- datos y factores utilizados
+      "proposedAction" TEXT,
+      "expectedImpact" TEXT,
+      "entityType" TEXT,
+      "entityId" TEXT,
+      status TEXT NOT NULL DEFAULT 'open', -- open | accepted | rejected | expired
+      "resolvedByUserId" INTEGER,
+      "resolvedByName" TEXT,
+      "resolvedAtMs" BIGINT,
+      "rejectionReason" TEXT,
+      "expiresAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_recommendations_status
+      ON connect_recommendations (status, id DESC);
+
     -- Fase 3 (solo DDL, sin lógica): unidades móviles
     CREATE TABLE IF NOT EXISTS connect_mobile_units (
       id SERIAL PRIMARY KEY,
@@ -440,6 +505,89 @@ export async function initConnect(): Promise<void> {
       "updatedAtMs" BIGINT NOT NULL
     );
 
+    -- ============================================================
+    -- Jerarquía Empresa → Taller → Unidades y Operarios
+    -- ============================================================
+
+    -- Ficha completa de la empresa (datos fiscales y de facturación)
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "legalName" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "taxId" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS address TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "postalCode" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS province TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS web TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "billingEmail" TEXT;
+
+    -- Las unidades cuelgan del taller, no solo de la empresa
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "workshopId" INTEGER;
+
+    -- Trazabilidad del servicio: quién lo hizo y con qué. Se copian aquí (no
+    -- se dejan solo en el core) para que el historial y el informe sigan
+    -- diciendo la verdad aunque después cambie el vehículo o el técnico.
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedTechName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedVehicleName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedVehiclePlate" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "reportUrl" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "reportAtMs" BIGINT;
+
+    -- Contactos manuales del taller (imprescindible en talleres EXTERNAL,
+    -- útil en todos: encargado, centralita, guardia…)
+    CREATE TABLE IF NOT EXISTS connect_workshop_contacts (
+      id SERIAL PRIMARY KEY,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      phone TEXT,
+      role TEXT,
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_ws_contacts ON connect_workshop_contacts ("workshopId");
+
+    -- Back office de la asistencia (mismos bloques que el de Mobilink Assist).
+    -- Solo se usa para asistencias SIN fila en el core: las que sí la tienen
+    -- comparten roadside_backoffice con Assist, para no tener dos verdades.
+    CREATE TABLE IF NOT EXISTS connect_assistance_backoffice (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL UNIQUE REFERENCES connect_assistances(id) ON DELETE CASCADE,
+
+      -- Contactos
+      "solicitanteNombre" TEXT, "solicitanteTelefono" TEXT, "solicitanteWhatsapp" TEXT,
+      "solicitanteEmail" TEXT, "conductorTelefono" TEXT,
+      "responsableNombre" TEXT, "responsableTelefono" TEXT, "responsableCargo" TEXT,
+      "autorizadorNombre" TEXT, "autorizadorTelefono" TEXT, "autorizadorCargo" TEXT,
+
+      -- Empresas
+      "empresaSolicitanteNombre" TEXT, "empresaSolicitanteTelefono" TEXT, "empresaSolicitanteEmail" TEXT,
+      "empresaServicioNombre" TEXT, "empresaServicioCif" TEXT, "empresaServicioTelefono" TEXT,
+      "empresaFacturacionNombre" TEXT, "empresaFacturacionCif" TEXT, "empresaFacturacionEmail" TEXT,
+      "expedienteExterno" TEXT, "referenciaCliente" TEXT, "referenciaAutorizacion" TEXT,
+
+      -- Operativa
+      "tiposAsistencia" TEXT, "tipoVehiculo" TEXT, "estadoVehiculo" TEXT, "ubicacionIncidencia" TEXT,
+
+      -- Vehículo
+      marca TEXT, modelo TEXT, color TEXT, vin TEXT, kilometraje INTEGER,
+      "medidaNeumatico" TEXT, "ejeAfectado" TEXT, "posicionRueda" TEXT,
+      "vehiculoCargado" BOOLEAN, mercancia TEXT, adr BOOLEAN,
+
+      -- Facturación
+      facturable BOOLEAN DEFAULT true, "pendienteAutorizacion" BOOLEAN DEFAULT false,
+      garantia BOOLEAN DEFAULT false, interna BOOLEAN DEFAULT false,
+      "importeAcordado" NUMERIC(10,2), "observacionesFacturacion" TEXT,
+
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    -- Contadores correlativos (nº de expediente por año, etc.)
+    CREATE TABLE IF NOT EXISTS connect_counters (
+      scope TEXT PRIMARY KEY,
+      value INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS connect_mobile_unit_events (
       id SERIAL PRIMARY KEY,
       "unitId" INTEGER NOT NULL REFERENCES connect_mobile_units(id) ON DELETE CASCADE,
@@ -460,6 +608,10 @@ export async function initConnect(): Promise<void> {
     -- manual | api | partner | import | reopen | derived | core
 
     -- Sprint 2: creación manual con borradores y ficha completa
+    -- Las asistencias creadas desde el centro de control no tienen partner
+    -- (el partner es el cliente B2B que las crea por API). Todo el código ya
+    -- lo trataba como opcional; era el esquema el que iba por detrás.
+    ALTER TABLE connect_assistances ALTER COLUMN "partnerId" DROP NOT NULL;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "expedientNumber" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "clientName" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS requester TEXT NOT NULL DEFAULT '{}';
@@ -473,6 +625,17 @@ export async function initConnect(): Promise<void> {
     -- Sprint 3: la autorización decide si las asistencias requieren aceptación explícita
     ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "requiresAcceptance" BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE connect_provider_authorizations ADD COLUMN IF NOT EXISTS "acceptTimeoutMin" INTEGER NOT NULL DEFAULT 10;
+
+    -- Integración Assist ↔ Central Pro: adhesión a la red, tipo de taller y unidades compartidas
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "networkParticipation" BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "networkChangedBy" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "networkChangedAtMs" BIGINT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "integrationType" TEXT NOT NULL DEFAULT 'assist';
+    -- assist (integrado: la asistencia se inyecta en Mobilink Assist)
+    -- external (taller sin Assist: gestión y estados manuales desde Central)
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "sharedWithCentral" BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "sharedChangedBy" TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "sharedChangedAtMs" BIGINT;
 
     -- Sprint 6: avisos de SLA (webhooks sla_risk / sla_breached una sola vez)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "slaRiskNotifiedAtMs" BIGINT;
@@ -498,6 +661,186 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "positionText" TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_mobile_units_core
       ON connect_mobile_units ("coreVehicleId") WHERE "coreVehicleId" IS NOT NULL;
+
+    -- ============================================================
+    -- Mobilink Assist Lite — talleres colaboradores sin Assist completo
+    -- ============================================================
+
+    -- integrationType pasa a tener tres valores (producto contratado):
+    --   assist   → FULL     (Mobilink Assist completo, inyección al core)
+    --   lite     → LITE     (APK Mobilink Assist Lite contra Central Pro)
+    --   external → EXTERNAL (sin digitalizar, estados manuales)
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS features TEXT NOT NULL DEFAULT '{}';
+    -- Código corto que el taller teclea en la APK (además de su id)
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteCode" TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_workshops_lite_code
+      ON connect_workshops ("liteCode") WHERE "liteCode" IS NOT NULL;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteSettings" TEXT NOT NULL DEFAULT '{}';
+    -- {arrivalRadiusUrbanM, arrivalRadiusRuralM, workshopRadiusM, trackWhileWorking, finishRules:{...}}
+
+    -- Resultado y datos de cierre reportados por el taller (Lite o externo)
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resultCode" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resolutionNotes" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "odometerKm" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "workedMinutes" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "acceptedAtMs" BIGINT;
+    -- Operario Lite responsable y última posición conocida de su dispositivo
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "liteUserId" INTEGER;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "liteUserName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorLat" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorLng" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorAccuracyM" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorSpeedKmh" DOUBLE PRECISION;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "operatorLocationAtMs" BIGINT;
+
+    -- Usuarios operativos del taller Lite (no son usuarios de Central Pro:
+    -- son el equivalente a techs del core, con PIN y sesión de dispositivo)
+    CREATE TABLE IF NOT EXISTS connect_lite_users (
+      id SERIAL PRIMARY KEY,
+      uuid TEXT NOT NULL UNIQUE,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id),
+      "providerCompanyId" INTEGER,
+      name TEXT NOT NULL,
+      username TEXT NOT NULL,              -- código corto de acceso, único por taller
+      email TEXT,
+      phone TEXT,
+      "pinHash" TEXT NOT NULL,             -- sha256(pin + salt); nunca el PIN
+      "pinSalt" TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'operator', -- workshop_admin | operator
+      active BOOLEAN NOT NULL DEFAULT true,
+      "lastLoginAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      UNIQUE ("workshopId", username)
+    );
+
+    -- Dispositivos y sesiones (token opaco; solo se guarda su hash)
+    CREATE TABLE IF NOT EXISTS connect_lite_devices (
+      id SERIAL PRIMARY KEY,
+      "userId" INTEGER NOT NULL REFERENCES connect_lite_users(id) ON DELETE CASCADE,
+      "workshopId" INTEGER NOT NULL,
+      "deviceId" TEXT NOT NULL,
+      "tokenHash" TEXT NOT NULL UNIQUE,
+      platform TEXT,
+      "osVersion" TEXT,
+      "appVersion" TEXT,
+      "fcmToken" TEXT,
+      "gpsPermission" TEXT,
+      "cameraPermission" TEXT,
+      "notifPermission" TEXT,
+      "lastSeenAtMs" BIGINT,
+      "revokedAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_user ON connect_lite_devices ("userId");
+    CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_ws ON connect_lite_devices ("workshopId");
+
+    -- Rastro GPS del operario durante la asistencia (solo servicios activos)
+    CREATE TABLE IF NOT EXISTS connect_assistance_tracks (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "liteUserId" INTEGER,
+      "deviceId" INTEGER,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "headingDeg" DOUBLE PRECISION,
+      status TEXT,
+      "deviceTsMs" BIGINT NOT NULL,
+      "serverTsMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_tracks_assistance
+      ON connect_assistance_tracks ("assistanceId", "deviceTsMs");
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_tracks_dedupe
+      ON connect_assistance_tracks ("assistanceId", "deviceTsMs", lat, lng);
+
+    -- Evidencias (fotografías y documentos) subidas desde la APK
+    CREATE TABLE IF NOT EXISTS connect_assistance_files (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "workshopId" INTEGER,
+      "liteUserId" INTEGER,
+      category TEXT NOT NULL DEFAULT 'other',
+      url TEXT NOT NULL,
+      "storagePath" TEXT,
+      "fileName" TEXT,
+      "mimeType" TEXT,
+      "sizeBytes" INTEGER,
+      sha256 TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      "deviceTsMs" BIGINT,
+      "deletedAtMs" BIGINT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_files_assistance ON connect_assistance_files ("assistanceId");
+
+    -- Firma del cliente (una vigente por asistencia; el histórico se conserva)
+    CREATE TABLE IF NOT EXISTS connect_assistance_signatures (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      "workshopId" INTEGER,
+      "liteUserId" INTEGER,
+      "signerName" TEXT NOT NULL,
+      "signerDocument" TEXT,
+      "consentText" TEXT,
+      "consentAccepted" BOOLEAN NOT NULL DEFAULT true,
+      url TEXT NOT NULL,
+      "storagePath" TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      "signedAtMs" BIGINT NOT NULL,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_signatures_assistance
+      ON connect_assistance_signatures ("assistanceId");
+
+    -- Idempotencia de operaciones enviadas desde la APK (cola offline)
+    CREATE TABLE IF NOT EXISTS connect_lite_actions (
+      "clientActionId" TEXT PRIMARY KEY,
+      "liteUserId" INTEGER,
+      "assistanceId" INTEGER,
+      kind TEXT NOT NULL,
+      result TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_lite_actions_created
+      ON connect_lite_actions ("createdAtMs");
+  `);
+
+  // Backfills idempotentes de la jerarquía (solo actúan sobre filas sin dato)
+  await db.query(`
+    -- Unidad → taller, vínculo EXACTO: el vehículo del core dice a qué taller
+    -- pertenece (roadside_vehicles."workshopId" ↔ connect_workshops."coreWorkshopId")
+    UPDATE connect_mobile_units mu
+       SET "workshopId" = w.id
+      FROM roadside_vehicles rv, connect_workshops w
+     WHERE mu."workshopId" IS NULL
+       AND rv.id = mu."coreVehicleId"
+       AND rv."workshopId" IS NOT NULL
+       AND w."coreWorkshopId" = rv."workshopId";
+  `);
+  await db.query(`
+    -- Fallback: si la empresa de la unidad tiene UN solo taller, asignarlo
+    UPDATE connect_mobile_units mu
+       SET "workshopId" = w.id
+      FROM connect_workshops w
+     WHERE mu."workshopId" IS NULL
+       AND w."providerCompanyId" = mu."providerCompanyId"
+       AND (SELECT COUNT(*) FROM connect_workshops w2
+             WHERE w2."providerCompanyId" = mu."providerCompanyId") = 1;
+  `);
+  await db.query(`
+    -- Operarios del core → taller: si solo hay un taller integrado (caso SEA)
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
+    UPDATE techs
+       SET "workshopId" = (SELECT w."coreWorkshopId" FROM connect_workshops w
+                            WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL
+                            LIMIT 1)
+     WHERE "workshopId" IS NULL
+       AND (SELECT COUNT(DISTINCT w."coreWorkshopId") FROM connect_workshops w
+             WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL) = 1;
   `);
 
   await seedConnectDefaults();
@@ -576,6 +919,33 @@ async function seedConnectDefaults(): Promise<void> {
       `INSERT INTO connect_vehicle_types (code, name, "sortOrder")
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
       [vehicleTypes[i][0], vehicleTypes[i][1], i],
+    );
+  }
+
+  // KPIs del Centro de Inteligencia Operacional (código, nombre, categoría,
+  // unidad, dirección, objetivo, aviso, crítico)
+  const kpis: Array<[string, string, string, string, string, number | null, number | null, number | null]> = [
+    ["created_today", "Servicios recibidos", "operational", "", "higher_better", null, null, null],
+    ["pending_assign", "Pendientes de asignación", "operational", "", "lower_better", 0, 3, 6],
+    ["active_now", "Servicios activos", "operational", "", "higher_better", null, null, null],
+    ["delayed_now", "Servicios con retraso (SLA)", "operational", "", "lower_better", 0, 1, 3],
+    ["avg_assign_min", "Tiempo medio de asignación", "time", "min", "lower_better", 10, 20, 40],
+    ["avg_arrival_min", "Tiempo medio de llegada", "time", "min", "lower_better", 45, 60, 90],
+    ["avg_resolution_min", "Tiempo medio de resolución", "time", "min", "lower_better", 90, 150, 240],
+    ["sla_pct", "Cumplimiento de SLA", "quality", "%", "higher_better", 90, 85, 75],
+    ["acceptance_pct", "Tasa de aceptación de ofertas", "providers", "%", "higher_better", 85, 75, 60],
+    ["cancel_pct", "Tasa de cancelación", "quality", "%", "lower_better", 5, 10, 20],
+    ["eta_accuracy_min", "Precisión del ETA (desvío medio)", "quality", "min", "lower_better", 10, 15, 25],
+    ["avg_cost", "Coste medio por servicio", "economic", "€", "lower_better", null, null, null],
+    ["billing_today", "Facturación estimada del día", "economic", "€", "higher_better", null, null, null],
+  ];
+  for (let i = 0; i < kpis.length; i++) {
+    const [code, name, category, unit, direction, target, warn, crit] = kpis[i];
+    await db.query(
+      `INSERT INTO connect_kpi_definitions
+         (code, name, category, unit, direction, "targetValue", "warningThreshold", "criticalThreshold", "sortOrder")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (code) DO NOTHING`,
+      [code, name, category, unit, direction, target, warn, crit, i],
     );
   }
 

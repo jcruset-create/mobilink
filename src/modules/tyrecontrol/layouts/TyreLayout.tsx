@@ -5,6 +5,7 @@ import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { NAV, navVisible } from "../config/navigation";
 import { ROL_LABELS } from "../types";
 import AlertasWebfleet from "../components/AlertasWebfleet";
+import AsistenteChat from "../components/AsistenteChat";
 
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
@@ -102,6 +103,9 @@ export default function TyreLayout() {
           )}
         </main>
       </div>
+
+      {/* Asistente: acompaña a todo el módulo, sin ocupar sitio en las pantallas. */}
+      <AsistenteChat />
     </div>
   );
 }

@@ -5,9 +5,9 @@
  */
 
 import {
-  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2, Warehouse,
-  Truck, AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, type LucideIcon,
+  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
+  AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -22,14 +22,15 @@ export type ConnectNavItem = {
 
 export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "dashboard", path: "dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "analyst" },
+  { key: "inteligencia", path: "inteligencia", label: "Inteligencia operacional", icon: BrainCircuit, minRole: "analyst" },
   { key: "centro", path: "centro", label: "Centro de control", icon: Radio, minRole: "operator" },
   { key: "nueva", path: "nueva", label: "Nueva asistencia", icon: PlusCircle, minRole: "operator" },
   { key: "asistencias", path: "asistencias", label: "Asistencias", icon: ClipboardList, minRole: "analyst" },
   { key: "ofertas", path: "ofertas", label: "Ofertas", icon: Handshake, minRole: "provider_user" },
   { key: "mapa", path: "mapa", label: "Mapa operativo", icon: Map, minRole: "operator" },
+  // Empresas → Talleres → Unidades y Operarios: una sola entrada; las vistas
+  // transversales /talleres y /unidades siguen accesibles por URL directa.
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
-  { key: "talleres", path: "talleres", label: "Talleres", icon: Warehouse, minRole: "analyst" },
-  { key: "unidades", path: "unidades", label: "Unidades móviles", icon: Truck, minRole: "operator" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },
   { key: "sla", path: "sla", label: "SLA y alertas", icon: BellRing, minRole: "operator" },
   { key: "clientes", path: "clientes", label: "Clientes", icon: Contact, minRole: "operator" },
