@@ -115,7 +115,12 @@ export default function VehiculoDetalle() {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <button onClick={() => navigate("/tyrecontrol/vehiculos")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Vehículos</button>
+        <button
+          onClick={() => navigate(esCliente ? "/tyrecontrol/mis-vehiculos" : "/tyrecontrol/vehiculos")}
+          className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200"
+        >
+          ← {esCliente ? "Mis vehículos" : "Vehículos"}
+        </button>
         <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
         <span className="ml-2 text-lg font-black text-slate-100">
@@ -191,7 +196,7 @@ export default function VehiculoDetalle() {
           medidaPorPosicionId={medidaPorPosicionId}
           editable={!esCliente}
           puedeCalibrar={!!perfil?.es_superadmin}
-          onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
+          onFicha={esCliente ? undefined : (nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
           onChanged={cargar}
           onTipoChanged={cargar}
           onOperaciones={() => setModalOps(true)}
