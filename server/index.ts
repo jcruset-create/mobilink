@@ -4627,6 +4627,134 @@ app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (
   }
 });
 
+// ── Odómetro histórico: ¿nos puede decir Webfleet los km de un vehículo en una
+// fecha y hora concretas del pasado?
+//
+// Vía 2 (libro de ruta): showLogbook devuelve los viajes de los últimos meses
+// CON lectura de odómetro, así que el dato es directo. No todas las cuentas lo
+// tienen contratado/activado; si no está, Webfleet responde errorCode 9.
+// Vía 1 (viajes): showTripReportExtern siempre está, pero solo trae distancia,
+// así que el km en T se reconstruye restando al odómetro actual lo recorrido
+// después de T (interpolando el viaje que contenga T).
+//
+//   /api/webfleet/debug-odometer?objectno=001&dias=30&at=2026-07-15T09:40:00Z
+app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const objectno = String(req.query.objectno || "").trim();
+    if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
+    const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+    const atMs = req.query.at ? new Date(String(req.query.at)).getTime() : null;
+    if (req.query.at && !Number.isFinite(atMs as number)) {
+      return res.status(400).json({ error: "Parámetro at no es una fecha válida (ISO 8601)" });
+    }
+
+    const RE_ODO = /odo|mileage|kilomet|milage/i;
+    const consultar = async (action: string, extra: Record<string, string>) => {
+      try {
+        const { url, headers } = buildWebfleetRequest(action, extra);
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
+        const text = await r.text();
+        let json: any = null;
+        try { json = JSON.parse(text); } catch {/* respuesta no JSON */}
+        if (json && !Array.isArray(json) && json.errorCode) {
+          return { status: r.status, errorCode: json.errorCode, errorMsg: json.errorMsg, filas: null, claves: [], clavesOdometro: [], datos: [] as any[] };
+        }
+        const arr: any[] = Array.isArray(json) ? json : json?.data ?? [];
+        const claves = arr.length ? Object.keys(arr[0]) : [];
+        return {
+          status: r.status,
+          filas: arr.length,
+          claves,
+          clavesOdometro: claves.filter((k) => RE_ODO.test(k)),
+          datos: arr,
+          muestra: text.slice(0, 800),
+        };
+      } catch (e: any) {
+        return { error: e?.message || String(e), filas: null, claves: [], clavesOdometro: [], datos: [] as any[] };
+      }
+    };
+
+    const [objeto, libro, libroHist, viajes] = await Promise.all([
+      consultar("showObjectReportExtern", { objectno }),
+      consultar("showLogbook", { objectno, ...rango }),
+      consultar("showLogbook_history", { objectno, ...rango }),
+      consultar("showTripReportExtern", { objectno, ...rango }),
+    ]);
+
+    const odometroActualKm = objeto.datos?.length ? webfleetOdometerKm(objeto.datos[0]) : null;
+
+    // Km en el instante pedido, por las dos vías, para poder compararlas.
+    const num = (x: any) => (Number.isFinite(Number(x)) ? Number(x) : null);
+    const kmEn = (filas: any[], ts: number, anclaKm: number | null) => {
+      const tramos = filas
+        .map((f) => ({
+          ini: f.start_time ? new Date(f.start_time).getTime() : null,
+          fin: f.end_time ? new Date(f.end_time).getTime() : null,
+          odoFin: num(f.end_odometer ?? f.odometer_end ?? f.end_odo ?? f.odometer),
+          distancia: num(f.distance),
+        }))
+        .filter((f) => f.fin != null)
+        .sort((a, b) => (a.fin as number) - (b.fin as number));
+
+      const previos = tramos.filter((f) => (f.fin as number) <= ts && f.odoFin != null);
+      if (previos.length) {
+        const p = previos[previos.length - 1];
+        return { km: p.odoFin, metodo: "lectura directa del libro de ruta",
+                 referencia: new Date(p.fin as number).toISOString(), precisionKm: 0 };
+      }
+      if (anclaKm == null) return null;
+      let despues = 0;
+      let dentro = 0;
+      for (const f of tramos) {
+        const d = (f.distancia ?? 0) / 1000;
+        if (f.ini != null && f.ini >= ts) despues += d;
+        else if (f.ini != null && f.ini < ts && (f.fin as number) > ts) {
+          despues += d * (((f.fin as number) - ts) / ((f.fin as number) - f.ini));
+          dentro = d;
+        }
+      }
+      return { km: Math.round((anclaKm - despues) * 10) / 10,
+               metodo: "reconstruido desde el odómetro actual restando los viajes posteriores",
+               referencia: "odómetro actual", precisionKm: Math.round(dentro * 10) / 10 };
+    };
+
+    const filasLibro = (libro.datos?.length ? libro.datos : libroHist.datos) ?? [];
+    const kmSolicitado = atMs
+      ? {
+          at: new Date(atMs).toISOString(),
+          porLibroDeRuta: filasLibro.length ? kmEn(filasLibro, atMs, odometroActualKm) : null,
+          porViajes: viajes.datos?.length ? kmEn(viajes.datos, atMs, odometroActualKm) : null,
+        }
+      : null;
+
+    const libroDisponible = filasLibro.length > 0;
+    const libroConOdometro = libro.clavesOdometro.length > 0 || libroHist.clavesOdometro.length > 0;
+
+    res.json({
+      objectno,
+      dias,
+      odometroActualKm,
+      veredicto: libroDisponible
+        ? (libroConOdometro
+            ? "VÍA 2 DISPONIBLE: el libro de ruta responde y trae odómetro (ver clavesOdometro)."
+            : "El libro de ruta responde pero SIN campos de odómetro: usar la vía 1 (viajes).")
+        : "Sin libro de ruta en esta cuenta (ver errorCode): usar la vía 1 (viajes) + serie propia.",
+      kmSolicitado,
+      // Se devuelven solo las claves y unas pocas filas: el volcado completo no
+      // aporta y puede ser enorme.
+      showObjectReportExtern: { ...objeto, datos: objeto.datos?.slice(0, 1) },
+      showLogbook: { ...libro, datos: libro.datos?.slice(0, 3) },
+      showLogbook_history: { ...libroHist, datos: libroHist.datos?.slice(0, 3) },
+      showTripReportExtern: { ...viajes, datos: viajes.datos?.slice(0, 3) },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Error consultando Webfleet" });
+  }
+});
+
 app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
