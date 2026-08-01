@@ -90,6 +90,27 @@ cliente, no.
 - Reenviar invitación y desactivar acceso desde la misma ficha.
 - Varios usuarios por empresa cliente (ENCATRANS puede querer 2-3).
 
+### Fase 2b — Ficha de vehículo en solo lectura
+
+Hoy "Mis vehículos" es una tabla plana sin enlace: el cliente no puede abrir
+ningún vehículo. La ficha (`VehiculoDetalle`: plano del chasis con los
+recuadros coloreados, profundidades y presiones por posición, historial) es de
+lo más valioso que se le puede enseñar — y su ruta está en el bloque de
+administrador.
+
+- Cada fila de "Mis vehículos" enlaza a una ficha de SOLO lectura del
+  vehículo: mismo plano y mismas mediciones, **sin ningún botón de acción**
+  (ni editar, ni revisión, ni cambio de neumático, ni notas).
+- Reutilizar `VehiculoDetalle` con un modo `soloLectura` que oculte las
+  acciones, no duplicar la pantalla: dos fichas divergen en un mes.
+- La garantía de "no puede modificar nada" NO es la interfaz: son las
+  políticas RLS de escritura, que ya exigen admin (`tc_is_admin()`), y que
+  cualquier endpoint Express con service role valide el rol. La interfaz solo
+  evita frustración; la base de datos evita el problema.
+- **Prueba de aceptación**: como cliente, abrir la ficha, comprobar que no hay
+  botones de escritura, y forzar un `update` de vehículo por consola con su
+  sesión → rechazado por RLS.
+
 ### Fase 3 — Bienvenida y a prueba de directores de flota
 
 - Al entrar un cliente, aterrizar directamente en **Informes → Ejecutivo** (su
@@ -127,6 +148,7 @@ cliente, no.
 |---|---|---|
 | 1 Curar visibilidad | Medio día | Cliente ve costes y productividad interna |
 | 2 Invitación | Medio día | Contraseñas conocidas por el admin |
+| 2b Ficha vehículo solo lectura | Medio día | El cliente ve la lista pero no puede abrir nada |
 | 3 Aterrizaje | Horas | Primera impresión pobre |
 | 4 Auditoría | 1 día | Solo importa con varios clientes |
 
@@ -142,3 +164,6 @@ productividad de los técnicos, no.
 4. El asistente responde por ENCATRANS aunque le pida otra empresa.
 5. En Usuarios, un admin ve cuándo entró por última vez.
 6. Crear el acceso del siguiente cliente no requiere tocar código.
+7. Abre la ficha de un vehículo suyo (plano + mediciones) y no encuentra
+   ningún botón de escritura; un `update` forzado con su sesión lo rechaza
+   la RLS.
