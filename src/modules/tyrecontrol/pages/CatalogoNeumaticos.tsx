@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico } from "../services/data";
+import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico, proponerIndicesMedida } from "../services/data";
 import type { ComboSinCatalogar } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { presionTxt } from "../types";
@@ -50,6 +50,7 @@ export default function CatalogoNeumaticos() {
   const [sinCatalogar, setSinCatalogar] = useState<ComboSinCatalogar[] | null>(null);
   const [cargandoSC, setCargandoSC] = useState(false);
   const [creandoClave, setCreandoClave] = useState<string | null>(null);
+  const [msgOkSC, setMsgOkSC] = useState("");
 
   function abrirNuevaRef(prefill?: Partial<FormRef>) {
     setMsgRef("");
@@ -65,6 +66,11 @@ export default function CatalogoNeumaticos() {
         indiceCargaSimple: nuevaRef.indiceCargaSimple, indiceCargaDoble: nuevaRef.indiceCargaDoble || null,
         codigoVelocidad: nuevaRef.codigoVelocidad,
       });
+      // Si el formulario se abrió desde una combinación sin catalogar, quítala
+      // de la lista y avisa (el modal sin-catalogar puede seguir abierto detrás).
+      const clave = `${nuevaRef.marca}|${nuevaRef.modelo}|${nuevaRef.medida}`;
+      setSinCatalogar((prev) => (prev ? prev.filter((x) => `${x.marca}|${x.modelo}|${x.medida}` !== clave) : prev));
+      setMsgOkSC(`${nuevaRef.marca} ${nuevaRef.modelo} ${nuevaRef.medida} añadida correctamente.`);
       setNuevaRef(null);
       await cargar();
     } catch (e: any) { setMsgRef(e?.message || "Error al crear la referencia"); } finally { setCreandoRef(false); }
@@ -83,24 +89,38 @@ export default function CatalogoNeumaticos() {
   }
 
   async function crearDesdeCombo(c: ComboSinCatalogar) {
-    const { simple, doble } = separarIndiceCarga(c.indice_carga);
-    // Si faltan índices para crear el tyre_size, abrimos el formulario prefijado
-    if (!simple || !c.indice_velocidad) {
-      abrirNuevaRef({ marca: c.marca, modelo: c.modelo, medida: c.medida, indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: c.indice_velocidad ?? "" });
-      return;
-    }
+    let { simple, doble } = separarIndiceCarga(c.indice_carga);
+    let velocidad = c.indice_velocidad ?? "";
     const clave = `${c.marca}|${c.modelo}|${c.medida}`;
-    setCreandoClave(clave); setMsgRef("");
+    setCreandoClave(clave); setMsgRef(""); setMsgOkSC("");
     try {
+      // Si el neumático real no trae índices, se proponen consultando otras
+      // referencias/neumáticos de la MISMA medida (la combinación más común).
+      let propuesta: string | null = null;
+      if (!simple || !velocidad) {
+        const prop = await proponerIndicesMedida(c.medida);
+        if (prop) {
+          if (!simple) { simple = prop.indiceCargaSimple; doble = prop.indiceCargaDoble ?? ""; }
+          if (!velocidad) velocidad = prop.codigoVelocidad;
+          propuesta = `${simple}${doble ? "/" + doble : ""}${velocidad}`;
+        }
+      }
+      // Sin índice de carga (ni propio ni propuesto) no se puede crear el
+      // tyre_size: se abre el formulario para completarlo a mano.
+      if (!simple) {
+        abrirNuevaRef({ marca: c.marca, modelo: c.modelo, medida: c.medida, indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: velocidad });
+        return;
+      }
       await crearReferenciaNeumatico({
         marca: c.marca, modelo: c.modelo, medida: c.medida,
-        indiceCargaSimple: simple, indiceCargaDoble: doble || null, codigoVelocidad: c.indice_velocidad,
+        indiceCargaSimple: simple, indiceCargaDoble: doble || null, codigoVelocidad: velocidad,
       });
       setSinCatalogar((prev) => (prev ?? []).filter((x) => `${x.marca}|${x.modelo}|${x.medida}` !== clave));
+      setMsgOkSC(`${c.marca} ${c.modelo} ${c.medida} añadida correctamente${propuesta ? ` (índices ${propuesta}, propuestos por misma medida)` : ""}.`);
       await cargar();
     } catch (e: any) {
       // si falla (p.ej. medida no parseable), abrimos el formulario para corregir
-      abrirNuevaRef({ marca: c.marca, modelo: c.modelo, medida: c.medida, indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: c.indice_velocidad ?? "" });
+      abrirNuevaRef({ marca: c.marca, modelo: c.modelo, medida: c.medida, indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: velocidad });
       setMsgRef(e?.message || "Revisa los datos");
     } finally { setCreandoClave(null); }
   }
@@ -440,10 +460,11 @@ export default function CatalogoNeumaticos() {
       )}
 
       {sinCatalogar !== null && (
-        <Modal title="Neumáticos sin catalogar" size="xl" onClose={() => setSinCatalogar(null)}>
+        <Modal title="Neumáticos sin catalogar" size="xl" onClose={() => { setSinCatalogar(null); setMsgOkSC(""); }}>
           <p className="mb-3 text-xs text-slate-400">
-            Combinaciones marca/modelo/medida presentes en neumáticos reales que aún no tienen referencia en el catálogo. Crea la que falte con un clic; si faltan índices se abre el formulario para completarlos.
+            Combinaciones marca/modelo/medida presentes en neumáticos reales que aún no tienen referencia en el catálogo. Crea la que falte con un clic: si faltan índices se proponen a partir de otras referencias de la misma medida; si no hay ninguna, se abre el formulario para completarlos.
           </p>
+          {msgOkSC && <div className="mb-3 rounded-lg border border-emerald-600/40 bg-emerald-600/10 px-3 py-2 text-xs text-emerald-300">✓ {msgOkSC}</div>}
           {cargandoSC ? (
             <div className="text-sm text-slate-500">Analizando neumáticos…</div>
           ) : sinCatalogar.length === 0 ? (

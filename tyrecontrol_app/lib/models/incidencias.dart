@@ -211,8 +211,8 @@ const kOperaciones = <OperacionTipo>[
   OperacionTipo('reapretar', 'Reapretar rueda', Icons.build_circle),
   OperacionTipo('actualizar_neumatico', 'Actualizar neumático instalado', Icons.rule),
   OperacionTipo('sustituir_neumatico', 'Sustituir neumático', Icons.autorenew, disponible: false),
-  OperacionTipo('cambiar_posicion', 'Cambiar posición', Icons.swap_vert, disponible: false),
-  OperacionTipo('intercambiar', 'Intercambiar neumáticos', Icons.swap_horiz, disponible: false),
+  OperacionTipo('cambiar_posicion', 'Cambiar posición', Icons.swap_vert),
+  OperacionTipo('intercambiar', 'Intercambiar neumáticos', Icons.swap_horiz),
   OperacionTipo('otra', 'Otra operación', Icons.more_horiz),
 ];
 

@@ -406,6 +406,12 @@ export interface Vehiculo {
   medidas_por_eje?: boolean;
   revision_intervalo_dias?: number | null; // override de periodicidad por vehículo
   revision_intervalo_km?: number | null;
+  // Los datos de la ficha técnica NO viven aquí: cada código de la tarjeta
+  // (A.1, F.1.1, P.2, V.9…) es una fila de tc_vehiculo_atributos_tecnicos
+  // enlazada al maestro tc_cat_campos_ficha_tecnica, y solo existe si trae
+  // dato real. Matrícula, marca, modelo, bastidor y fecha de matriculación
+  // se quedan arriba porque son la identidad operativa del vehículo, no un
+  // dato de ficha.
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
@@ -487,6 +493,8 @@ export const MOTIVO_DESMONTAJE_LABELS: Record<MotivoDesmontaje, string> = {
 export interface Neumatico {
   id: string;
   empresa_id: string;
+  reesculturado?: boolean | null;
+  girado_en_llanta?: boolean | null;
   numero_interno?: string | null;
   control_individual?: boolean;
   creado_automaticamente?: boolean;
@@ -790,6 +798,17 @@ export interface MarcaNeumatico {
   id: string; nombre: string; activo: boolean; logo_url?: string | null;
   fabricante_id?: string | null; pais_origen?: string | null;
   segmento?: SegmentoMarca | null; tipo_principal?: TipoPrincipalMarca | null; observaciones?: string | null;
+  /// Marca de recauchutado (p. ej. INSA): sus neumáticos salen marcados como
+  /// recauchutados en la ficha del vehículo y en la pantalla de cambios.
+  es_recauchutado?: boolean | null;
+}
+
+/// Marca de vehículo (catálogo con logo). `tipo_ids` son los tipos de
+/// vehículo en los que aparece: una misma marca sirve para varios.
+export interface MarcaVehiculo {
+  id: string; nombre: string; activo: boolean;
+  logo_url?: string | null; pais_origen?: string | null; orden?: number;
+  tipo_ids: string[];
 }
 
 export interface MarcaContadores { id: string; num_modelos: number; num_neumaticos: number; num_vehiculos: number; }

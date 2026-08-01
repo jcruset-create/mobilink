@@ -63,6 +63,14 @@ export type WhatsAppAiSuggestions = {
   // Avería
   tipoAveria?: string | null;
   descripcionAveria?: string | null;
+  // Teléfono del conductor (a menudo solo aparece en una foto)
+  conductorTelefono?: string | null;
+  /**
+   * Datos relevantes leídos (sobre todo en imágenes) que no encajan en ningún
+   * campo fijo: póliza, albarán, DNI, aseguradora… Se ofrecen para añadirlos
+   * a las observaciones en lugar de perderse.
+   */
+  datosDetectados?: { campo: string; valor: string; origen?: string }[] | null;
   // Resumen
   resumen?: string | null;
   // Meta

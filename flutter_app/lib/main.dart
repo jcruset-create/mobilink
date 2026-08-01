@@ -12,9 +12,8 @@ final exteriorMode = ValueNotifier<bool>(false);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // App bloqueada en vertical: la tablet se usa en soporte de furgoneta y el
-  // giro accidental descolocaba la pantalla en mitad de una asistencia.
-  // portraitDown incluido porque en algunos soportes la tablet va invertida.
+  // La app funciona siempre en vertical (nunca horizontal). portraitDown
+  // incluido porque en algunos soportes la tablet va invertida.
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

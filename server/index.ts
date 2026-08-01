@@ -13,15 +13,27 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
-import OpenAI, { toFile } from "openai";
+import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
+import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
+import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
+// Las reglas de "esto es un dato de verdad" y la normalizacion viven en un
+// solo sitio: el mismo modulo que usa el panel, para que servidor y cliente
+// no puedan discrepar sobre si un guion es un valor.
+import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/services/itvValores.ts";
+import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
+import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
+import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
+import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
+import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
+import { saveCaptureAnalysis } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -496,10 +508,9 @@ app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRol
 const PORT = process.env.PORT || 4000;
 
 const RESET_PASSWORD = "sea123";
+// El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
+// Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2026-04-22.dahlia",
 });
@@ -570,6 +581,7 @@ function normalizeTechRow(t: any) {
     priorities: safeJsonParse(t.priorities, {}),
     avatar: t.avatar ?? null,
     roadsideCapable: t.roadsideCapable === true || t.roadsideCapable === "true",
+    compartidoCentral: t.compartidoCentral === true || t.compartidoCentral === "true",
     currentRoadsideAssistanceId:
       t.currentRoadsideAssistanceId != null ? Number(t.currentRoadsideAssistanceId) : null,
     phone: t.phone ?? null,
@@ -686,6 +698,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
+    origen: row.origen === "central" ? "central" : "taller",
+    expedienteCentral: row.expedienteCentral ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -715,6 +729,7 @@ function normalizeRoadsideVehicleRow(row: any) {
     marca: row.marca ?? null,
     modelo: row.modelo ?? null,
     esTaller: row.esTaller === true || row.esTaller === "true",
+    compartidoCentral: row.compartidoCentral === true || row.compartidoCentral === "true",
     notes: row.notes ?? null,
     active: row.active !== false,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
@@ -1493,6 +1508,50 @@ async function getRoadsideOperatorFromRequest(req: express.Request) {
   };
 }
 
+/**
+ * Multi-taller: resuelve el usuario del PANEL WEB (login del hub, Supabase) y
+ * su taller para aislar las asistencias. Best-effort: si no hay token válido
+ * devuelve null (y el llamante decide el comportamiento de compatibilidad).
+ *   - esAdmin: superadmin de plataforma O admin de asistencias (assist_panel_users).
+ *   - tallerId: taller fijo del usuario (si no es admin).
+ */
+type AssistPanelUser = {
+  userId: string;
+  username: string | null;
+  esAdmin: boolean;
+  tallerId: number | null;
+};
+async function getAssistPanelUser(req: express.Request): Promise<AssistPanelUser | null> {
+  const auth = String(req.headers.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return null;
+  let ctx;
+  try {
+    ctx = await resolveAuthContext(token);
+  } catch {
+    return null;
+  }
+  if (!ctx) return null;
+  let tallerId: number | null = null;
+  let esAdminPanel = false;
+  try {
+    const r = await db.query(
+      `SELECT "tallerId", "esAdmin" FROM assist_panel_users WHERE "userId" = $1`,
+      [ctx.userId]
+    );
+    if (r.rows.length) {
+      tallerId = r.rows[0].tallerId != null ? Number(r.rows[0].tallerId) : null;
+      esAdminPanel = r.rows[0].esAdmin === true;
+    }
+  } catch { /* tabla aún no migrada: tratamos como sin config */ }
+  return {
+    userId: ctx.userId,
+    username: ctx.username ?? null,
+    esAdmin: ctx.esSuperadmin === true || esAdminPanel,
+    tallerId,
+  };
+}
+
 function requireRoadsideOperator(
   req: express.Request,
   res: express.Response,
@@ -1546,13 +1605,14 @@ app.get("/api/health", (_req, res) => {
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
 app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
-    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis } = req.body ?? {};
+    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis,
+      inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
     // Operaciones de la sesión aún sin intervención.
     const { data: ops, error } = await supabase
       .from("operaciones_neumaticos")
-      .select("id, empresa_id, tecnico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
+      .select("id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
         "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
         "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
         "neumatico:tc_neumaticos(marca, modelo, medida)")
@@ -1579,16 +1639,65 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
     const resumen = lineas.join("\n");
 
-    // Estado del vehículo DESPUÉS: montajes actuales por posición.
+    // Estado del vehículo DESPUÉS: montajes actuales por posición, más la
+    // última presión medida por neumático (o la objetivo del eje como
+    // respaldo) y los distintivos del propio neumático (reesculturado,
+    // girado, recauchutado por marca).
     const curPorPos = new Map<string, any>();
+    const presPorNeu = new Map<string, number>();
+    const presObjPorEje = new Map<number | null, number>();
+    let marcasRecau = new Set<string>();
     try {
       const { data: md } = await supabase
         .from("tc_montajes_actuales")
-        .select("posicion_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm), " +
+        .select("posicion_id, neumatico_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm, reesculturado, girado_en_llanta), " +
           "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje, pos_x, pos_y, pos_w, pos_h)")
         .eq("vehiculo_id", vehiculoId);
       for (const r of (md ?? []) as any[]) curPorPos.set(r.posicion_id, r);
+
+      const { data: revs } = await supabase
+        .from("revisiones_neumaticos_detalle")
+        .select("neumatico_id, presion_bar, created_at")
+        .eq("vehiculo_id", vehiculoId)
+        .order("created_at", { ascending: false })
+        .limit(400);
+      for (const r of (revs ?? []) as any[]) {
+        if (r.neumatico_id && r.presion_bar != null && !presPorNeu.has(r.neumatico_id)) {
+          presPorNeu.set(r.neumatico_id, Number(r.presion_bar));
+        }
+      }
+
+      const { data: veh } = await supabase.from("tc_vehiculos").select("tipo_vehiculo_id").eq("id", vehiculoId).maybeSingle();
+      if (veh?.tipo_vehiculo_id) {
+        const { data: po } = await supabase
+          .from("tc_presiones_objetivo")
+          .select("eje, presion_objetivo_bar, vehiculo_id, tipo_vehiculo_id")
+          .or(`vehiculo_id.eq.${vehiculoId},tipo_vehiculo_id.eq.${veh.tipo_vehiculo_id}`);
+        // La específica de vehículo pisa a la de tipo; eje null aplica a todos.
+        for (const p of (po ?? []) as any[]) {
+          if (p.vehiculo_id && p.vehiculo_id !== vehiculoId) continue;
+          const clave = p.eje ?? null;
+          if (p.vehiculo_id === vehiculoId || !presObjPorEje.has(clave)) {
+            presObjPorEje.set(clave, Number(p.presion_objetivo_bar));
+          }
+        }
+      }
+
+      const { data: mr } = await supabase
+        .from("tc_cat_marcas_neumatico").select("nombre")
+        .eq("es_recauchutado", true).eq("activo", true);
+      marcasRecau = new Set((mr ?? []).map((m: any) => String(m.nombre ?? "").trim().toUpperCase()));
     } catch (e) { console.error("montaje después falló:", e); }
+
+    const presionDe = (cur: any): number | null => {
+      if (!cur) return null;
+      const medida = cur.neumatico_id ? presPorNeu.get(cur.neumatico_id) : undefined;
+      if (medida != null) return medida;
+      const eje = cur.posicion?.eje ?? null;
+      return presObjPorEje.get(eje) ?? presObjPorEje.get(null) ?? null;
+    };
+    const esRecau = (cur: any): boolean =>
+      marcasRecau.has(String(cur?.neumatico?.marca ?? "").trim().toUpperCase());
 
     // El plano "después" reutiliza el esqueleto del "antes" (mismas posiciones y
     // coordenadas), sustituyendo el neumático por el actual y limpiando averías.
@@ -1602,7 +1711,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
           modelo: cur?.neumatico?.modelo ?? null,
           medida: cur?.neumatico?.medida ?? null,
           mm: cur?.neumatico?.profundidad_actual_mm ?? null,
-          presion: null,
+          presion: presionDe(cur),
+          reesc: cur?.neumatico?.reesculturado === true,
+          girado: cur?.neumatico?.girado_en_llanta === true,
+          recau: esRecau(cur),
           averias: null,
         };
       });
@@ -1617,7 +1729,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         modelo: r.neumatico?.modelo ?? null,
         medida: r.neumatico?.medida ?? null,
         mm: r.neumatico?.profundidad_actual_mm ?? null,
-        presion: null,
+        presion: presionDe(r),
+        reesc: r.neumatico?.reesculturado === true,
+        girado: r.neumatico?.girado_en_llanta === true,
+        recau: esRecau(r),
       }));
     }
 
@@ -1635,23 +1750,50 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         origen.length ? `Averías de origen:\n${origen.join("\n")}` : "",
         `Acciones realizadas:\n${resumen}`,
       ].filter(Boolean).join("\n\n");
-      const r = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. No inventes datos ni cifras que no aparezcan." },
-          { role: "user", content: partes },
-        ],
+      const r = await pedirIA({
+        operacion: "tyrecontrol.informe-intervencion",
+        proposito: "informe",
+        prompt:
+          "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) " +
+          "de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. " +
+          "No inventes datos ni cifras que no aparezcan.\n\n" + partes,
       });
-      resumenIa = r.choices[0]?.message?.content?.trim() || resumen;
+      resumenIa = r.texto.trim() || resumen;
     } catch (e) { console.error("IA intervención falló, se guarda solo el resumen:", e); }
 
     const empresaId = (activas[0] as any).empresa_id;
     const tecnicoId = (activas[0] as any).tecnico_id ?? null;
+
+    // Cronometraje automático (Analítica de Productividad): la APK manda las
+    // marcas de inicio/fin de la sesión de cambio y el total de pausas; aquí
+    // se calculan duración y tiempo efectivo (duración = trabajo + pausa).
+    const tIni = inicioAt ? new Date(inicioAt) : null;
+    const tFin = finAt ? new Date(finAt) : null;
+    const durSeg = tIni && tFin && !isNaN(+tIni) && !isNaN(+tFin)
+      ? Math.max(0, Math.round((+tFin - +tIni) / 1000)) : null;
+    const pSeg = Number.isFinite(Number(pausaSeg)) ? Math.max(0, Math.round(Number(pausaSeg))) : 0;
+    // Tipo dominante y neumáticos afectados, derivados de las operaciones.
+    const cuenta = new Map<string, number>();
+    const neus = new Set<string>();
+    for (const o of activas as any[]) {
+      cuenta.set(o.tipo_operacion, (cuenta.get(o.tipo_operacion) ?? 0) + 1);
+      if (o.neumatico_id) neus.add(o.neumatico_id);
+    }
+    const tipoPrincipal = [...cuenta.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
     const { data: interv, error: e2 } = await supabase
       .from("tc_intervenciones")
       .insert({
         empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId,
         resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
+        inicio_at: tIni && !isNaN(+tIni) ? tIni.toISOString() : null,
+        fin_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : null,
+        duracion_seg: durSeg,
+        trabajo_seg: durSeg != null ? Math.max(0, durSeg - pSeg) : null,
+        pausa_seg: pSeg,
+        n_pausas: Number.isFinite(Number(nPausas)) ? Math.max(0, Math.round(Number(nPausas))) : 0,
+        tipo_principal: tipoPrincipal,
+        n_neumaticos: neus.size || null,
         montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
         montaje_despues: montajeDespues.length ? montajeDespues : null,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
@@ -1670,17 +1812,12 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
 
 app.get("/api/ai-test", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Eres un asistente técnico." },
-        { role: "user", content: "Dime una recomendación de tecnología para un mecánico" }
-      ],
+    const r = await pedirIA({
+      operacion: "diagnostico.ai-test",
+      prompt: "Eres un asistente técnico. Dime una recomendación de tecnología para un mecánico",
     });
 
-    res.json({
-      result: response.choices[0].message.content,
-    });
+    res.json({ result: r.texto, model: r.modelo });
 
   } catch (error) {
     console.error(error);
@@ -1812,14 +1949,13 @@ No propongas saltarte reglas.
 Si no hay técnico válido, responsable debe ser null.
 `;
 
-    const response = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: prompt,
+    const rIa = await pedirIA({
+      operacion: "taller.asignacion",
+      proposito: "asistente",
+      prompt,
     });
 
-    res.json({
-      text: response.output_text,
-    });
+    res.json({ text: rIa.texto });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error IA" });
@@ -1833,7 +1969,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "currentRoadsideAssistanceId", phone,
+             "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
              "statusChangedAtMs", "statusTotals"
       FROM techs
       ORDER BY id ASC
@@ -3342,35 +3478,27 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
       return res.status(400).json({ error: "Indica la ciudad" });
     }
 
-    const response = await openai.chat.completions.create({
-      model: process.env.FESTIVOS_IA_MODEL || "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
-            "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
-            "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
-            "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
-            'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.',
-        },
-        {
-          role: "user",
-          content:
-            `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
-            "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
-            'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
-            '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
-            '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
-            "(por ejemplo Viernes Santo o Lunes de Pascua). " +
-            `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
-            "(23 de septiembre). Ordena por fecha.",
-        },
-      ],
+    const rIa = await pedirIA({
+      operacion: "agenda.festivos",
+      prompt:
+      "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
+      "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
+      "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
+      "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
+      'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.' +
+      "\n\n" +
+      `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
+      "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
+      'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
+      '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
+      '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
+      "(por ejemplo Viernes Santo o Lunes de Pascua). " +
+      `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
+      "(23 de septiembre). Ordena por fecha.",
+      maxTokens: 4000,
     });
 
-    const raw = safeJsonParse<any>(response.choices[0]?.message?.content ?? "", null);
+    const raw = safeJsonParse<any>(rIa.texto, null);
     const items = Array.isArray(raw?.festivos) ? raw.festivos : [];
 
     const seen = new Set<string>();
@@ -3431,6 +3559,71 @@ app.get("/api/roadside-vehicles", protectWhenStrict(authenticate), async (req, r
   }
 });
 
+/**
+ * Fase 5 multi-taller: la licencia (= empresa) limita el nº de unidades
+ * móviles ACTIVAS entre todos sus talleres (licenses.maxUnidadesMoviles).
+ *
+ * Resuelve el taller de la furgoneta (tallerId explícito o por nombre de la
+ * base) y comprueba el cupo de su licencia. `excludeVehicleId` evita contarse
+ * a sí misma al editar. Sin taller/licencia resoluble no se limita (compat).
+ */
+async function resolveVehicleTallerId(body: any): Promise<number | null> {
+  if (body?.tallerId != null && Number.isFinite(Number(body.tallerId))) {
+    return Number(body.tallerId);
+  }
+  const base = body?.base ? String(body.base).trim() : "";
+  if (!base) return null;
+  const r = await db.query(
+    `SELECT id FROM assist_talleres WHERE activo = true AND LOWER(nombre) = LOWER($1) LIMIT 1`,
+    [base]
+  );
+  return r.rows.length ? Number(r.rows[0].id) : null;
+}
+
+async function checkUnidadesMovilesLicense(
+  tallerId: number | null,
+  excludeVehicleId?: number
+): Promise<{ allowed: boolean; error?: string; aviso?: string }> {
+  if (tallerId == null) return { allowed: true };
+  const lic = await db.query(
+    `SELECT l.id, l."maxUnidadesMoviles",
+            COALESCE(NULLIF(l."companyName", ''), l."customerName") AS empresa
+     FROM assist_talleres t
+     JOIN licenses l ON l.id = t."licenseId"
+     WHERE t.id = $1`,
+    [tallerId]
+  );
+  if (!lic.rows.length) return { allowed: true };
+  const max = Number(lic.rows[0].maxUnidadesMoviles ?? 0);
+  if (!Number.isFinite(max) || max <= 0) return { allowed: true };
+
+  const cnt = await db.query(
+    `SELECT COUNT(*)::int AS n
+     FROM roadside_vehicles v
+     JOIN assist_talleres t ON t.id = v."tallerId"
+     WHERE t."licenseId" = $1 AND v.active = true
+       AND ($2::int IS NULL OR v.id <> $2)`,
+    [lic.rows[0].id, excludeVehicleId ?? null]
+  );
+  const enUso = Number(cnt.rows[0].n);
+  const empresa = lic.rows[0].empresa;
+
+  if (enUso >= max) {
+    return {
+      allowed: false,
+      error: `Límite de licencia alcanzado: ${empresa} tiene ${enUso}/${max} unidades móviles activas. Amplía la licencia o desactiva otra unidad.`,
+    };
+  }
+  const tras = enUso + 1;
+  if (tras >= max * 0.8) {
+    return {
+      allowed: true,
+      aviso: `Licencia de ${empresa}: ${tras}/${max} unidades móviles en uso.`,
+    };
+  }
+  return { allowed: true };
+}
+
 app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
   try {
     const body = req.body ?? {};
@@ -3439,6 +3632,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
 
     if (!name) {
       return res.status(400).json({ error: "El nombre es obligatorio" });
+    }
+
+    const tallerId = await resolveVehicleTallerId(body);
+    const activa = body.active !== false;
+    let avisoLicencia: string | undefined;
+    if (activa) {
+      const check = await checkUnidadesMovilesLicense(tallerId);
+      if (!check.allowed) return res.status(409).json({ error: check.error, code: "LICENSE_UNITS_LIMIT" });
+      avisoLicencia = check.aviso;
     }
 
     const result = await db.query(
@@ -3454,10 +3656,11 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
           "esTaller",
           notes,
           active,
+          "tallerId",
           "createdAtMs",
           "updatedAtMs"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
         RETURNING *
       `,
       [
@@ -3470,12 +3673,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
         body.modelo ? String(body.modelo).trim() : null,
         body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
-        body.active !== false,
+        activa,
+        tallerId,
         now,
       ]
     );
 
-    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    const payload: any = normalizeRoadsideVehicleRow(result.rows[0]);
+    if (avisoLicencia) payload.avisoLicencia = avisoLicencia;
+    res.json(payload);
   } catch (error) {
     console.error("POST /api/roadside-vehicles error:", error);
     res.status(500).json({ error: "Error creando furgoneta" });
@@ -3497,6 +3703,16 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
       return res.status(400).json({ error: "El nombre es obligatorio" });
     }
 
+    const tallerId = await resolveVehicleTallerId(body);
+    const activa = body.active !== false;
+    let avisoLicencia: string | undefined;
+    if (activa) {
+      // Al editar, la propia furgoneta no cuenta contra el cupo.
+      const check = await checkUnidadesMovilesLicense(tallerId, id);
+      if (!check.allowed) return res.status(409).json({ error: check.error, code: "LICENSE_UNITS_LIMIT" });
+      avisoLicencia = check.aviso;
+    }
+
     const result = await db.query(
       `
         UPDATE roadside_vehicles
@@ -3511,7 +3727,8 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
           "esTaller" = $9,
           notes = $10,
           active = $11,
-          "updatedAtMs" = $12
+          "tallerId" = $12,
+          "updatedAtMs" = $13
         WHERE id = $1
         RETURNING *
       `,
@@ -3526,7 +3743,8 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
         body.modelo ? String(body.modelo).trim() : null,
         body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
-        body.active !== false,
+        activa,
+        tallerId,
         now,
       ]
     );
@@ -3535,7 +3753,9 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
       return res.status(404).json({ error: "Furgoneta no encontrada" });
     }
 
-    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    const payload: any = normalizeRoadsideVehicleRow(result.rows[0]);
+    if (avisoLicencia) payload.avisoLicencia = avisoLicencia;
+    res.json(payload);
   } catch (error) {
     console.error("PUT /api/roadside-vehicles/:id error:", error);
     res.status(500).json({ error: "Error actualizando furgoneta" });
@@ -3577,26 +3797,339 @@ app.delete(
   }
 );
 
+/* =========================================================
+   COMPARTIR CON CENTRAL — furgonetas y técnicos visibles para la red
+========================================================= */
+
+// Listado combinado con el flag de compartición
+app.get("/api/central-sharing", requireSupervisorRole, async (_req, res) => {
+  try {
+    const [vehicles, techs] = await Promise.all([
+      db.query(`SELECT * FROM roadside_vehicles WHERE active = true ORDER BY name ASC`),
+      db.query(
+        `SELECT name, status, blocked, "roadsideCapable", "compartidoCentral",
+                "currentRoadsideAssistanceId"
+         FROM techs ORDER BY name ASC`
+      ),
+    ]);
+    res.json({
+      vehicles: vehicles.rows.map(normalizeRoadsideVehicleRow),
+      techs: techs.rows.map(normalizeTechRow),
+    });
+  } catch (error) {
+    console.error("GET /api/central-sharing error:", error);
+    res.status(500).json({ error: "Error obteniendo compartición con Central" });
+  }
+});
+
+// Compartir/ocultar una furgoneta
+app.patch("/api/central-sharing/vehicle/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const compartido = req.body?.compartido === true;
+    const r = await db.query(
+      `UPDATE roadside_vehicles SET "compartidoCentral" = $2, "updatedAtMs" = $3 WHERE id = $1 RETURNING *`,
+      [id, compartido, Date.now()]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Furgoneta no encontrada" });
+    res.json(normalizeRoadsideVehicleRow(r.rows[0]));
+  } catch (error) {
+    console.error("PATCH /api/central-sharing/vehicle/:id error:", error);
+    res.status(500).json({ error: "Error actualizando furgoneta" });
+  }
+});
+
+// Compartir/ocultar un técnico
+app.patch("/api/central-sharing/tech/:name", requireSupervisorRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const compartido = req.body?.compartido === true;
+    const r = await db.query(
+      `UPDATE techs SET "compartidoCentral" = $2 WHERE name = $1
+       RETURNING name, status, blocked, "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId"`,
+      [name, compartido]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json(normalizeTechRow(r.rows[0]));
+  } catch (error) {
+    console.error("PATCH /api/central-sharing/tech/:name error:", error);
+    res.status(500).json({ error: "Error actualizando técnico" });
+  }
+});
+
+// Compartir/ocultar todos de un tipo
+app.post("/api/central-sharing/bulk", requireSupervisorRole, async (req, res) => {
+  try {
+    const tipo = String(req.body?.tipo || "");
+    const compartido = req.body?.compartido === true;
+    if (tipo === "vehicles") {
+      await db.query(`UPDATE roadside_vehicles SET "compartidoCentral" = $1, "updatedAtMs" = $2 WHERE active = true`, [compartido, Date.now()]);
+    } else if (tipo === "techs") {
+      await db.query(`UPDATE techs SET "compartidoCentral" = $1`, [compartido]);
+    } else {
+      return res.status(400).json({ error: "tipo debe ser 'vehicles' o 'techs'" });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/central-sharing/bulk error:", error);
+    res.status(500).json({ error: "Error actualizando" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// Multi-taller Assist: gestión de talleres (una empresa = una licencia
+// puede tener varios talleres) y asignación de técnicos a cada taller.
+// ─────────────────────────────────────────────────────────────
+
+// Listado: talleres + empresas (licencias) para el desplegable + técnicos
+app.get("/api/assist-talleres", requireSupervisorRole, async (_req, res) => {
+  try {
+    const [talleres, empresas, techs] = await Promise.all([
+      db.query(`
+        SELECT
+          t.id, t.nombre, t.direccion, t.telefono, t."codigoInterno",
+          t.activo, t."licenseId",
+          COALESCE(NULLIF(l."companyName", ''), l."customerName") AS "empresaNombre",
+          (SELECT COUNT(*) FROM techs th WHERE th."tallerId" = t.id) AS "nTecnicos",
+          (SELECT COUNT(*) FROM roadside_vehicles v WHERE v."tallerId" = t.id AND v.active = true) AS "nUnidades"
+        FROM assist_talleres t
+        LEFT JOIN licenses l ON l.id = t."licenseId"
+        ORDER BY t.activo DESC, t.nombre ASC
+      `),
+      db.query(`
+        SELECT l.id,
+               COALESCE(NULLIF(l."companyName", ''), l."customerName") AS nombre,
+               l."maxUnidadesMoviles",
+               (SELECT COUNT(*) FROM roadside_vehicles v
+                JOIN assist_talleres t ON t.id = v."tallerId"
+                WHERE t."licenseId" = l.id AND v.active = true) AS "unidadesEnUso"
+        FROM licenses l
+        ORDER BY nombre ASC
+      `),
+      db.query(`SELECT name, "tallerId" FROM techs ORDER BY name ASC`),
+    ]);
+    res.json({
+      talleres: talleres.rows.map((r) => ({
+        id: Number(r.id),
+        nombre: r.nombre,
+        direccion: r.direccion ?? null,
+        telefono: r.telefono ?? null,
+        codigoInterno: r.codigoInterno ?? null,
+        activo: r.activo === true,
+        licenseId: r.licenseId != null ? Number(r.licenseId) : null,
+        empresaNombre: r.empresaNombre ?? null,
+        nTecnicos: Number(r.nTecnicos ?? 0),
+        nUnidades: Number(r.nUnidades ?? 0),
+      })),
+      empresas: empresas.rows.map((r) => ({
+        id: Number(r.id),
+        nombre: r.nombre,
+        maxUnidadesMoviles: Number(r.maxUnidadesMoviles ?? 0),
+        unidadesEnUso: Number(r.unidadesEnUso ?? 0),
+      })),
+      techs: techs.rows.map((r) => ({
+        name: r.name,
+        tallerId: r.tallerId != null ? Number(r.tallerId) : null,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/assist-talleres error:", error);
+    res.status(500).json({ error: "Error obteniendo talleres" });
+  }
+});
+
+// Crear taller
+app.post("/api/assist-talleres", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre || "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+    const licenseId = req.body?.licenseId != null ? Number(req.body.licenseId) : null;
+    const direccion = req.body?.direccion ? String(req.body.direccion).trim() : null;
+    const telefono = req.body?.telefono ? String(req.body.telefono).trim() : null;
+    const codigoInterno = req.body?.codigoInterno ? String(req.body.codigoInterno).trim() : null;
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO assist_talleres
+         ("licenseId", nombre, direccion, telefono, "codigoInterno", activo, "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5, true, $6, $6)
+       RETURNING id`,
+      [licenseId, nombre, direccion, telefono, codigoInterno, now]
+    );
+    res.json({ ok: true, id: Number(r.rows[0].id) });
+  } catch (error) {
+    console.error("POST /api/assist-talleres error:", error);
+    res.status(500).json({ error: "Error creando taller" });
+  }
+});
+
+// Editar taller (nombre, empresa, contacto, activo)
+app.patch("/api/assist-talleres/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const fields: string[] = [];
+    const values: any[] = [];
+    let i = 1;
+    const set = (col: string, val: any) => { fields.push(`"${col}" = $${i++}`); values.push(val); };
+    if (typeof req.body?.nombre === "string") set("nombre", req.body.nombre.trim());
+    if ("licenseId" in (req.body || {})) set("licenseId", req.body.licenseId != null ? Number(req.body.licenseId) : null);
+    if ("direccion" in (req.body || {})) set("direccion", req.body.direccion ? String(req.body.direccion).trim() : null);
+    if ("telefono" in (req.body || {})) set("telefono", req.body.telefono ? String(req.body.telefono).trim() : null);
+    if ("codigoInterno" in (req.body || {})) set("codigoInterno", req.body.codigoInterno ? String(req.body.codigoInterno).trim() : null);
+    if (typeof req.body?.activo === "boolean") set("activo", req.body.activo);
+    if (!fields.length) return res.status(400).json({ error: "Nada que actualizar" });
+    set("updatedAtMs", Date.now());
+    values.push(id);
+    const r = await db.query(
+      `UPDATE assist_talleres SET ${fields.join(", ")} WHERE id = $${i} RETURNING id`,
+      values
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Taller no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("PATCH /api/assist-talleres/:id error:", error);
+    res.status(500).json({ error: "Error actualizando taller" });
+  }
+});
+
+// Asignar (o quitar) el taller de un técnico
+app.patch("/api/assist-talleres/tech/:name", requireSupervisorRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const tallerId = req.body?.tallerId != null ? Number(req.body.tallerId) : null;
+    const r = await db.query(
+      `UPDATE techs SET "tallerId" = $2 WHERE name = $1 RETURNING name, "tallerId"`,
+      [name, tallerId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json({ ok: true, name, tallerId });
+  } catch (error) {
+    console.error("PATCH /api/assist-talleres/tech/:name error:", error);
+    res.status(500).json({ error: "Error asignando taller al técnico" });
+  }
+});
+
+// Usuarios del panel web (hub) → taller. Superadmins siempre ven todo; aquí se
+// asigna el taller fijo del resto y se marca quién es admin de asistencias.
+app.get("/api/assist-panel-users", requireSupervisorRole, async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT u.id AS "userId", u.username, u.nombre, u.es_superadmin AS "esSuperadmin",
+             p."tallerId", COALESCE(p."esAdmin", false) AS "esAdmin"
+      FROM app_usuarios u
+      LEFT JOIN assist_panel_users p ON p."userId" = u.id
+      WHERE u.activo = true
+      ORDER BY u.nombre ASC NULLS LAST, u.username ASC
+    `);
+    res.json({
+      usuarios: r.rows.map((x: any) => ({
+        userId: x.userId,
+        username: x.username,
+        nombre: x.nombre ?? x.username,
+        esSuperadmin: x.esSuperadmin === true,
+        esAdmin: x.esAdmin === true,
+        tallerId: x.tallerId != null ? Number(x.tallerId) : null,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/assist-panel-users error:", error);
+    res.status(500).json({ error: "Error obteniendo usuarios del panel" });
+  }
+});
+
+// Asignar taller / marcar admin a un usuario del panel (upsert)
+app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, res) => {
+  try {
+    const userId = String(req.params.userId);
+    const tallerId = req.body?.tallerId != null ? Number(req.body.tallerId) : null;
+    const esAdmin = req.body?.esAdmin === true;
+    // Resolver username para dejarlo legible en la tabla de mapeo.
+    const u = await db.query(`SELECT username FROM app_usuarios WHERE id = $1`, [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: "Usuario no encontrado" });
+    await db.query(
+      `INSERT INTO assist_panel_users ("userId", username, "tallerId", "esAdmin", "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT ("userId") DO UPDATE
+         SET username = EXCLUDED.username,
+             "tallerId" = EXCLUDED."tallerId",
+             "esAdmin" = EXCLUDED."esAdmin",
+             "updatedAtMs" = EXCLUDED."updatedAtMs"`,
+      [userId, u.rows[0].username ?? null, tallerId, esAdmin, Date.now()]
+    );
+    res.json({ ok: true, userId, tallerId, esAdmin });
+  } catch (error) {
+    console.error("PATCH /api/assist-panel-users/:userId error:", error);
+    res.status(500).json({ error: "Error asignando taller al usuario" });
+  }
+});
+
 app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
 
-    const result = await db.query(`
-      SELECT *
-      FROM roadside_assistances
-      ${
-        includeClosed
-          ? ""
-          : `WHERE status NOT IN ('llegada_taller', 'cancelada')`
+    // Aislamiento multi-taller. Reglas:
+    //  - Admin (superadmin / admin de asistencias): respeta ?tallerId= del
+    //    selector; sin parámetro ve todos los talleres.
+    //  - Usuario con taller fijo: se fuerza su taller (ignora ?tallerId=).
+    //  - Usuario sin taller y no admin: no ve ninguna asistencia (estricto).
+    //  - Sin token (compatibilidad durante la transición): ve todo.
+    const panelUser = await getAssistPanelUser(req);
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (!includeClosed) {
+      conditions.push(`status NOT IN ('llegada_taller', 'cancelada')`);
+    }
+
+    if (panelUser) {
+      if (panelUser.esAdmin) {
+        const sel = req.query.tallerId != null ? Number(req.query.tallerId) : NaN;
+        if (Number.isFinite(sel)) {
+          conditions.push(`"tallerId" = $${idx++}`);
+          params.push(sel);
+        }
+        // sin selección → todos los talleres
+      } else if (panelUser.tallerId != null) {
+        conditions.push(`"tallerId" = $${idx++}`);
+        params.push(panelUser.tallerId);
+      } else {
+        // Sin taller y sin ser admin: no ve nada.
+        return res.json([]);
       }
-      ORDER BY "createdAtMs" DESC
-      LIMIT 200
-    `);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const result = await db.query(
+      `SELECT * FROM roadside_assistances ${where} ORDER BY "createdAtMs" DESC LIMIT 200`,
+      params
+    );
 
     res.json(result.rows.map(normalizeRoadsideAssistanceRow));
   } catch (error) {
     console.error("GET /api/roadside-assistances error:", error);
     res.status(500).json({ error: "Error obteniendo asistencias" });
+  }
+});
+
+// Contexto del usuario del panel para pintar (o no) el selector de taller.
+app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
+  try {
+    const panelUser = await getAssistPanelUser(req);
+    const talleres = await db.query(
+      `SELECT id, nombre FROM assist_talleres WHERE activo = true ORDER BY nombre ASC`
+    );
+    res.json({
+      esAdmin: panelUser?.esAdmin ?? false,
+      tallerId: panelUser?.tallerId ?? null,
+      // Sin token (transición) tratamos como admin para no romper la vista.
+      sinContexto: panelUser == null,
+      talleres: talleres.rows.map((r: any) => ({ id: Number(r.id), nombre: r.nombre })),
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/mi-contexto error:", error);
+    res.status(500).json({ error: "Error obteniendo contexto" });
   }
 });
 
@@ -4034,6 +4567,66 @@ app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req,
   }
 });
 
+// Diagnóstico de COMBUSTIBLE. showObjectReportExtern no devuelve nivel ni
+// consumo si el equipo no tiene enlace CAN/FMS, pero los informes de viaje
+// pueden traer fuel_usage (consumo, estimado o real según configuración).
+// Este endpoint lanza las tres consultas y devuelve la respuesta CRUDA de
+// cada una + las claves detectadas, para saber de qué datos disponemos.
+//   /api/webfleet/debug-fuel?objectno=001&dias=7
+app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const objectno = String(req.query.objectno || "").trim();
+    if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
+    const dias = Math.min(31, Math.max(1, Number(req.query.dias) || 7));
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+
+    const consultar = async (action: string, extra: Record<string, string>) => {
+      try {
+        const { url, headers } = buildWebfleetRequest(action, extra);
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        let claves: string[] = [];
+        let filas: number | null = null;
+        try {
+          const j = JSON.parse(text);
+          const arr = Array.isArray(j) ? j : j?.data ?? [];
+          filas = Array.isArray(arr) ? arr.length : null;
+          if (Array.isArray(arr) && arr.length) claves = Object.keys(arr[0]);
+        } catch {/* respuesta no JSON: se devuelve el texto igualmente */}
+        // Lo que buscamos: cualquier clave que hable de combustible.
+        const clavesCombustible = claves.filter((k) => /fuel|consum|tank|litro|liter/i.test(k));
+        return { status: r.status, filas, claves, clavesCombustible, muestra: text.slice(0, 1500) };
+      } catch (e: any) {
+        return { error: e?.message || String(e) };
+      }
+    };
+
+    const [objeto, viajes, resumen] = await Promise.all([
+      consultar("showObjectReportExtern", { objectno }),
+      consultar("showTripReportExtern", { objectno, ...rango }),
+      consultar("showTripSummaryReportExtern", { objectno, ...rango }),
+    ]);
+
+    const hayCombustible = [objeto, viajes, resumen].some(
+      (x: any) => Array.isArray(x?.clavesCombustible) && x.clavesCombustible.length > 0
+    );
+    res.json({
+      objectno,
+      dias,
+      veredicto: hayCombustible
+        ? "Hay campos de combustible: ver clavesCombustible en cada bloque."
+        : "Sin campos de combustible en ninguna de las 3 consultas (equipo sin enlace CAN/FMS).",
+      showObjectReportExtern: objeto,
+      showTripReportExtern: viajes,
+      showTripSummaryReportExtern: resumen,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Error consultando Webfleet" });
+  }
+});
+
 app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
@@ -4043,26 +4636,58 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
     const data = await response.json();
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
-    // Cruzar con matrícula de nuestra BD
-    const dbVehicles = await db.query(
-      `SELECT "webfleetVehicleId", plate FROM roadside_vehicles WHERE "webfleetVehicleId" IS NOT NULL`
+    // Cruzar con nuestra BD: matrícula, taller y estado operativo.
+    // Multi-taller (fase 4): las furgonetas de OTROS talleres de la empresa se
+    // ven con estado + ubicación + técnico, pero sin el detalle de la
+    // asistencia (ni informe de seguimiento).
+    const dbVehicles = await db.query(`
+      SELECT rv."webfleetVehicleId", rv.plate, rv.name, rv."tallerId",
+             at.nombre AS "tallerNombre",
+             ra.id AS "asistenciaActivaId",
+             ra."assignedTechName" AS "techName"
+      FROM roadside_vehicles rv
+      LEFT JOIN assist_talleres at ON at.id = rv."tallerId"
+      LEFT JOIN LATERAL (
+        SELECT id, "assignedTechName"
+        FROM roadside_assistances a
+        WHERE a."assignedVehicleName" = rv.name
+          AND a.status IN ('asignada','en_camino','en_punto','inicio_reparacion','finalizada','en_camino_base')
+        ORDER BY a."createdAtMs" DESC
+        LIMIT 1
+      ) ra ON true
+      WHERE rv."webfleetVehicleId" IS NOT NULL
+    `);
+    const infoByWebfleetId = new Map<string, any>(
+      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r])
     );
-    const plateByWebfleetId = new Map<string, string>(
-      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r.plate])
-    );
+
+    // Taller del usuario del panel (si tiene taller fijo). Admin/superadmin o
+    // sin token → todo se trata como propio (compatibilidad).
+    const panelUser = await getAssistPanelUser(_req);
+    const miTallerId = panelUser && !panelUser.esAdmin ? panelUser.tallerId : null;
 
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     res.json(
-      vehicles.map((v: any) => ({
-        objectno: v.objectno,
-        objectname: v.objectname ?? v.objectno,
-        lat: Number(v.latitude_mdeg) / 1_000_000,
-        lng: Number(v.longitude_mdeg) / 1_000_000,
-        postext: v.postext_short ?? v.postext ?? null,
-        timestamp: v.pos_time ?? null,
-        plate: plateByWebfleetId.get(v.objectno) ?? null,
-        speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
-      }))
+      vehicles.map((v: any) => {
+        const info = infoByWebfleetId.get(v.objectno);
+        const tallerId = info?.tallerId != null ? Number(info.tallerId) : null;
+        const esPropio = miTallerId == null || tallerId == null || tallerId === miTallerId;
+        return {
+          objectno: v.objectno,
+          objectname: v.objectname ?? v.objectno,
+          lat: Number(v.latitude_mdeg) / 1_000_000,
+          lng: Number(v.longitude_mdeg) / 1_000_000,
+          postext: v.postext_short ?? v.postext ?? null,
+          timestamp: v.pos_time ?? null,
+          plate: info?.plate ?? null,
+          speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
+          tallerId,
+          tallerNombre: info?.tallerNombre ?? null,
+          esPropio,
+          estado: info?.asistenciaActivaId != null ? "trabajando" : "en_taller",
+          techName: info?.techName ?? null,
+        };
+      })
     );
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "Error listando vehículos Webfleet" });
@@ -4159,6 +4784,160 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
       pos_time: o.pos_time ?? null,
     });
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
+});
+
+// ── Conducción eficiente (Webfleet) ─────────────────────────────────────────
+// Los equipos de la flota no tienen enlace CAN/FMS, así que Webfleet devuelve
+// fuel_usage y co2 SIEMPRE a 0. Lo que sí trae, y es aprovechable, son los
+// indicadores de conducción de TomTom (OptiDrive), el ralentí y los excesos de
+// velocidad. Este endpoint los agrega para la pestaña "Conducción" de la
+// Analítica de Productividad.
+//
+// Una sola llamada por informe para TODA la flota (sin objectno), no una por
+// vehículo: es lo que hace que esto sea rápido con flotas grandes.
+//   /api/tyrecontrol/webfleet/conduccion?empresa=<uuid>&dias=30
+app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyrecontrol"), async (req, res) => {
+  try {
+    const empresa = String(req.query.empresa || "");
+    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
+    const creds = await resolveWebfleetCreds(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
+
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+
+    const pedir = async (action: string) => {
+      const { url, headers } = buildWebfleetRequest(action, rango, creds);
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
+      if (!r.ok) throw new Error(`Webfleet ${action} HTTP ${r.status}`);
+      const data = await r.json();
+      if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
+      return (Array.isArray(data) ? data : data?.data ?? []) as any[];
+    };
+
+    const [viajes, resumen] = await Promise.all([
+      pedir("showTripReportExtern"),
+      pedir("showTripSummaryReportExtern"),
+    ]);
+
+    // Matrícula de nuestros vehículos por objectno de Webfleet.
+    const { data: vehs } = await supabase
+      .from("tc_vehiculos")
+      .select("matricula, webfleet_vehicle_id")
+      .eq("empresa_id", empresa)
+      .not("webfleet_vehicle_id", "is", null);
+    const matriculaPorObj = new Map<string, string>(
+      (vehs ?? []).map((v: any) => [String(v.webfleet_vehicle_id), v.matricula])
+    );
+
+    const num = (x: any) => (Number.isFinite(Number(x)) ? Number(x) : 0);
+    type Acc = {
+      objectno: string; objectname: string; matricula: string | null;
+      viajes: number; distancia_m: number; duracion_s: number; ralenti_s: number;
+      optidriveSuma: number; optidriveN: number;
+      excesos: number; eventos: number; vmax: number;
+    };
+    const porVehiculo = new Map<string, Acc>();
+    const porConductor = new Map<string, { conductor: string; viajes: number; distancia_m: number; ralenti_s: number; duracion_s: number; optidriveSuma: number; optidriveN: number }>();
+
+    for (const t of viajes) {
+      const key = String(t.objectno ?? "");
+      if (!key) continue;
+      const a = porVehiculo.get(key) ?? {
+        objectno: key, objectname: t.objectname ?? key,
+        matricula: matriculaPorObj.get(key) ?? null,
+        viajes: 0, distancia_m: 0, duracion_s: 0, ralenti_s: 0,
+        optidriveSuma: 0, optidriveN: 0, excesos: 0, eventos: 0, vmax: 0,
+      };
+      a.viajes += 1;
+      a.distancia_m += num(t.distance);
+      a.duracion_s += num(t.duration);
+      a.ralenti_s += num(t.idle_time);
+      // Los indicadores de OptiDrive son 0..1; solo cuentan si vienen informados.
+      if (t.optidrive_indicator != null) { a.optidriveSuma += num(t.optidrive_indicator); a.optidriveN += 1; }
+      a.excesos += num(t.speeding_indicator);
+      a.eventos += num(t.drivingevents_indicator);
+      a.vmax = Math.max(a.vmax, num(t.max_speed));
+      porVehiculo.set(key, a);
+
+      const cond = (t.drivername ?? "").toString().trim();
+      if (cond) {
+        const c = porConductor.get(cond) ?? { conductor: cond, viajes: 0, distancia_m: 0, ralenti_s: 0, duracion_s: 0, optidriveSuma: 0, optidriveN: 0 };
+        c.viajes += 1; c.distancia_m += num(t.distance); c.ralenti_s += num(t.idle_time); c.duracion_s += num(t.duration);
+        if (t.optidrive_indicator != null) { c.optidriveSuma += num(t.optidrive_indicator); c.optidriveN += 1; }
+        porConductor.set(cond, c);
+      }
+    }
+
+    // El resumen diario aporta el tiempo con motor en marcha (operatingtime) y
+    // las paradas, que el informe de viajes no da.
+    const standstillPorObj = new Map<string, { standstill_s: number; operating_s: number; tours: number }>();
+    for (const s of resumen) {
+      const key = String(s.objectno ?? "");
+      if (!key) continue;
+      const cur = standstillPorObj.get(key) ?? { standstill_s: 0, operating_s: 0, tours: 0 };
+      cur.standstill_s += num(s.standstill);
+      cur.operating_s += num(s.operatingtime);
+      cur.tours += num(s.tours);
+      standstillPorObj.set(key, cur);
+    }
+
+    const pct = (parte: number, total: number) => (total > 0 ? Math.round((1000 * parte) / total) / 10 : 0);
+    const filas = [...porVehiculo.values()].map((a) => {
+      const extra = standstillPorObj.get(a.objectno);
+      return {
+        objectno: a.objectno,
+        vehiculo: a.matricula ?? a.objectname,
+        enlazado: a.matricula != null,
+        viajes: a.viajes,
+        km: Math.round(a.distancia_m / 1000),
+        horas: Math.round((a.duracion_s / 3600) * 10) / 10,
+        ralenti_min: Math.round(a.ralenti_s / 60),
+        pct_ralenti: pct(a.ralenti_s, a.duracion_s),
+        optidrive: a.optidriveN ? Math.round((100 * a.optidriveSuma) / a.optidriveN) : null,
+        excesos: Math.round(a.excesos * 10) / 10,
+        vmax: a.vmax,
+        paradas_min: extra ? Math.round(extra.standstill_s / 60) : null,
+        tours: extra?.tours ?? null,
+      };
+    }).sort((x, y) => y.km - x.km);
+
+    const totDur = [...porVehiculo.values()].reduce((s, a) => s + a.duracion_s, 0);
+    const totRal = [...porVehiculo.values()].reduce((s, a) => s + a.ralenti_s, 0);
+    const totKm = filas.reduce((s, f) => s + f.km, 0);
+    const conOpti = filas.filter((f) => f.optidrive != null);
+
+    res.json({
+      dias,
+      // Se deja explícito para que la app pueda avisar: sin CAN no hay consumo.
+      combustible_disponible: false,
+      kpis: {
+        vehiculos: filas.length,
+        viajes: filas.reduce((s, f) => s + f.viajes, 0),
+        km: totKm,
+        horas: Math.round((totDur / 3600) * 10) / 10,
+        ralenti_horas: Math.round((totRal / 3600) * 10) / 10,
+        pct_ralenti: pct(totRal, totDur),
+        optidrive: conOpti.length
+          ? Math.round(conOpti.reduce((s, f) => s + (f.optidrive ?? 0), 0) / conOpti.length)
+          : null,
+      },
+      por_vehiculo: filas,
+      por_conductor: [...porConductor.values()]
+        .map((c) => ({
+          conductor: c.conductor,
+          viajes: c.viajes,
+          km: Math.round(c.distancia_m / 1000),
+          pct_ralenti: pct(c.ralenti_s, c.duracion_s),
+          optidrive: c.optidriveN ? Math.round((100 * c.optidriveSuma) / c.optidriveN) : null,
+        }))
+        .sort((a, b) => b.km - a.km),
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || "Error consultando Webfleet" });
+  }
 });
 
 app.post("/api/asistencias/:id/en-camino", protectWhenStrict(authenticate), async (req, res) => {
@@ -4280,7 +5059,7 @@ app.post("/api/roadside-operator/login", async (req, res) => {
 
     const techResult = await db.query(
       `
-        SELECT name
+        SELECT name, "tallerId"
         FROM techs
         WHERE name = $1
         LIMIT 1
@@ -4292,6 +5071,36 @@ app.post("/api/roadside-operator/login", async (req, res) => {
       return res.status(404).json({
         error: "Operario no encontrado",
       });
+    }
+
+    // Multi-taller: resolver el taller del operario y su empresa (= licencia).
+    // Si el técnico aún no tiene taller asignado, ambos van a null y la app
+    // sigue funcionando (compatibilidad hacia atrás).
+    let taller: { id: number; nombre: string } | null = null;
+    let empresa: { id: number; nombre: string } | null = null;
+    const tallerId = techResult.rows[0].tallerId;
+    if (tallerId != null) {
+      const tallerRes = await db.query(
+        `
+          SELECT
+            t.id AS "tallerId",
+            t.nombre AS "tallerNombre",
+            l.id AS "empresaId",
+            COALESCE(NULLIF(l."companyName", ''), l."customerName") AS "empresaNombre"
+          FROM assist_talleres t
+          LEFT JOIN licenses l ON l.id = t."licenseId"
+          WHERE t.id = $1 AND t.activo = true
+          LIMIT 1
+        `,
+        [tallerId]
+      );
+      if (tallerRes.rows.length > 0) {
+        const r = tallerRes.rows[0];
+        taller = { id: Number(r.tallerId), nombre: r.tallerNombre };
+        if (r.empresaId != null) {
+          empresa = { id: Number(r.empresaId), nombre: r.empresaNombre || "" };
+        }
+      }
     }
 
     // Sesión unificada (fase 1 SaaS): garantizar usuario de Supabase Auth
@@ -4346,6 +5155,8 @@ app.post("/api/roadside-operator/login", async (req, res) => {
     res.json({
       ok: true,
       techName,
+      empresa,
+      taller,
       session,
     });
   } catch (error) {
@@ -5931,28 +6742,19 @@ async function detectPlateFromImage(
         : "En España, la matrícula BLANCA es la del CAMIÓN/vehículo tractor y la matrícula ROJA es la del REMOLQUE. " +
           "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula BLANCA (la del camión), ignorando la roja. ";
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Esta es una foto de la matrícula de un vehículo español. " +
-                colorInstruction +
-                "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
-                "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ] as any,
-        },
-      ],
-      max_tokens: 20,
+    const r = await pedirIA({
+      operacion: "assist.detectPlate",
+      proposito: "documento",
+      prompt:
+        "Esta es una foto de la matrícula de un vehículo español. " +
+        colorInstruction +
+        "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
+        "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
     });
 
-    const text = response.choices[0]?.message?.content?.trim() ?? "";
+    const text = r.texto.trim();
     const plate = normalizePlateText(text);
     return plate && plate !== "NONE" && plate.length >= 5 ? plate : null;
   } catch (error) {
@@ -5967,34 +6769,29 @@ async function detectBothPlatesFromImage(
   imageUrl: string
 ): Promise<{ white: string | null; red: string | null }> {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
-                "y la matrícula ROJA es del REMOLQUE. " +
-                "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
-                "Identifica las matrículas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
-                '{"blanca":"XXXX","roja":"RYYYYZZZ"}. ' +
-                "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
-                "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ] as any,
+    const r = await pedirIA<{ blanca: string | null; roja: string | null }>({
+      operacion: "assist.detectBothPlates",
+      proposito: "documento",
+      prompt:
+        "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
+        "y la matrícula ROJA es del REMOLQUE. " +
+        "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
+        "Identifica las matrículas que aparezcan. " +
+        "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
+        "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
+      esquema: {
+        nombre: "matriculas",
+        schema: {
+          type: "object", additionalProperties: false,
+          required: ["blanca", "roja"],
+          properties: { blanca: { type: ["string", "null"] }, roja: { type: ["string", "null"] } },
         },
-      ],
-      max_tokens: 60,
-      response_format: { type: "json_object" } as any,
+      },
     });
 
-    const raw = response.choices[0]?.message?.content?.trim() ?? "{}";
-    let parsed: any = {};
-    try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+    const parsed: any = r.datos ?? {};
 
     const normOrNull = (v: unknown) => {
       const p = normalizePlateText(v);
@@ -6213,6 +7010,31 @@ app.delete(
 /* =========================================================
    ROADSIDE PDF REPORT
 ========================================================= */
+
+// Cabecera de marca común a todos los informes PDF de Mobilink Assist:
+// banda azul oscuro + logo a la izquierda, título y subtítulo a la derecha.
+// Se registra en "pageAdded" para que aparezca en todas las páginas.
+function attachBrandedHeader(doc: any, title: string, subtitle?: string) {
+  const M = 40;
+  const draw = () => {
+    doc.rect(0, 0, doc.page.width, 62).fill("#101a33");
+    try {
+      const logoPath = path.join(process.cwd(), "public", "logo_horizontal.png");
+      if (fs.existsSync(logoPath)) doc.image(logoPath, M, 14, { height: 34 });
+    } catch { /* sin logo */ }
+    doc.fillColor("#ffffff").fontSize(12).font("Helvetica-Bold")
+      .text(title, 280, subtitle ? 18 : 24, { width: doc.page.width - 280 - M, align: "right", lineBreak: false });
+    if (subtitle) {
+      doc.fillColor("#cbd5e1").fontSize(9).font("Helvetica")
+        .text(subtitle, 280, 35, { width: doc.page.width - 280 - M, align: "right", lineBreak: false });
+    }
+    doc.fillColor("#000000");
+    doc.x = M;
+    doc.y = 74;
+  };
+  draw();
+  doc.on("pageAdded", draw);
+}
 
 // Builds a 480×260 map image by compositing a 3×3 grid of OSM tiles + red marker
 async function buildMapImage(lat: number, lng: number): Promise<Buffer | null> {
@@ -6755,6 +7577,12 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       const mainPlate = remolquePrincipal ? `Remolque ${a.plateRemolque}` : (a.plate || "");
       if (mainPlate) bx += badge(mainPlate, bx, by0, "#dbeafe", "#1e40af") + 6;
       if (a.priority === "urgente") bx += badge("URGENTE", bx, by0, "#fee2e2", "#991b1b") + 6;
+      if (a.origen === "central") {
+        bx += badge(
+          a.expedienteCentral ? `CENTRAL · EXP. ${a.expedienteCentral}` : "VÍA CENTRAL",
+          bx, by0, "#e0e7ff", "#3730a3"
+        ) + 6;
+      }
       const secondaryBits: string[] = [];
       if (remolquePrincipal && a.plate) secondaryBits.push(`Tractora ${a.plate}`);
       if (!remolquePrincipal && a.plateRemolque) secondaryBits.push(`Remolque ${a.plateRemolque}`);
@@ -7109,14 +7937,14 @@ async function buildVehicleTrackingPdfBuffer(
   doc.on("data", (c) => chunks.push(c));
   const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Seguimiento de furgoneta", { align: "center" });
-  doc.moveDown(0.3);
-  doc.fontSize(11).font("Helvetica").text(
-    `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`,
-    { align: "center" }
+  attachBrandedHeader(
+    doc,
+    "Seguimiento de furgoneta",
+    `${opts.plate || objectno}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`
   );
-  doc.fontSize(10).text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, { align: "center" });
-  doc.moveDown(1);
+  doc.fontSize(10).font("Helvetica").fillColor("#64748b")
+    .text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, 40, doc.y, { align: "left" });
+  doc.fillColor("#000000").moveDown(0.8);
 
   function row(label: string, value: string) {
     doc.fontSize(10).font("Helvetica-Bold").text(label, { continued: true, width: 180 });
@@ -7495,14 +8323,9 @@ app.post(
         return res.status(503).json({ error: "OPENAI_API_KEY no configurada" });
       }
 
-      const systemPrompt = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios. Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
-- Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
-- Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
-- Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
-- Vehículo: plate (matrícula del vehículo/camión), plateRemolque (matrícula roja del remolque: R+4 dígitos+3 letras), marca, modelo, color, vin, kilometraje (número), medidaNeumatico, ejeAfectado (Dirección, Tracción, Remolque), posicionRueda (Interior, Exterior), vehiculoCargado (true/false), mercancia, adr (true/false)
-- Averia: descripcionAveria (texto libre de la avería o trabajos)
-- Facturación: importeAcordado (número), observacionesFacturacion
-Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera del JSON.`;
+      // El prompt vive en core/ai.ts: lo comparten el back office de Assist
+      // y el de Central Pro, que rellenan exactamente los mismos campos.
+      const systemPrompt = AI_BACKOFFICE_PROMPT;
 
       type ContentPart =
         | { type: "text"; text: string }
@@ -7515,16 +8338,15 @@ Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera
         })),
       ];
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.1,
-        max_tokens: 800,
+      const rIa = await pedirIA({
+        operacion: "assist.backoffice-extract",
+        proposito: "asistente",
+        prompt: `${systemPrompt}\n\n${text || "(sin texto: analiza las imágenes)"}`,
+        imagenes: images.map((url: string) => ({ url })),
+        temperatura: 0.1,
+        maxTokens: 4000,
       });
-      const rawOut = response.choices[0]?.message?.content ?? "{}";
+      const rawOut = rIa.texto || "{}";
       const cleaned = rawOut.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       let parsed: Record<string, any> = {};
       try { parsed = JSON.parse(cleaned); } catch { parsed = {}; }
@@ -10866,27 +11688,15 @@ Reglas obligatorias:
 - Si una página no parece un albarán, no la incluyas.
 `;
 
-      const response = await (openai.responses.create as any)({
-        model: "gpt-4o-mini",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_file",
-                filename: req.file.originalname || "albaranes.pdf",
-                file_data: `data:application/pdf;base64,${base64Pdf}`,
-              },
-            ],
-          },
-        ],
+      const rIa = await pedirIA({
+        operacion: "almacen.leer-pdf",
+        proposito: "documento",
+        prompt,
+        archivos: [{ nombre: req.file.originalname || "albaranes.pdf", dataUri: `data:application/pdf;base64,${base64Pdf}` }],
+        maxTokens: 8000,
       });
 
-      const textoRespuesta = String(response.output_text || "");
+      const textoRespuesta = rIa.texto;
       const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
 
       let datosRaw: any;
@@ -11047,27 +11857,15 @@ Reglas obligatorias:
 - Si una página no parece un albarán de entrada de cliente, no la incluyas.
 `;
 
-      const response = await (openai.responses.create as any)({
-        model: "gpt-4o-mini",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_file",
-                filename: req.file.originalname || "entrada.pdf",
-                file_data: `data:application/pdf;base64,${base64Pdf}`,
-              },
-            ],
-          },
-        ],
+      const rIa = await pedirIA({
+        operacion: "almacen.leer-pdf",
+        proposito: "documento",
+        prompt,
+        archivos: [{ nombre: req.file.originalname || "entrada.pdf", dataUri: `data:application/pdf;base64,${base64Pdf}` }],
+        maxTokens: 8000,
       });
 
-      const textoRespuesta = String(response.output_text || "");
+      const textoRespuesta = rIa.texto;
       const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
 
       let datosRaw: any;
@@ -11446,17 +12244,15 @@ Devuelve SOLO el JSON sin texto adicional:
 }`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: `Mensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}` },
-      ],
-      temperature: 0.1,
-      max_tokens: 800,
+    const rIa = await pedirIA({
+      operacion: "assist.whatsapp-extract",
+      proposito: "asistente",
+      prompt: `${systemPrompt}\n\nMensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}`,
+      temperatura: 0.1,
+      maxTokens: 4000,
     });
 
-    const raw = response.choices[0]?.message?.content ?? "{}";
+    const raw = rIa.texto || "{}";
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     const confidence = parsed.confidence ?? "medium";
@@ -11935,12 +12731,10 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
     const buffer = Buffer.from(await resp.arrayBuffer());
 
     const file = await toFile(buffer, `audio.${ext}`, { type: contentType });
-    const tr = await openai.audio.transcriptions.create({
-      file,
-      model: "whisper-1",
+    const transcript = await transcribirAudio(file, {
+      operacion: "assist.whatsapp-transcripcion",
       prompt: "Asistencia en carretera: matrícula, avería, ubicación, chofer, autorización.",
     });
-    const transcript = (tr.text || "").trim();
 
     // Guardamos la transcripción y la usamos como text_content para que el análisis IA la incluya
     const upd = await db.query(
@@ -11987,113 +12781,8 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
   }
 }
 
-async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<string, any>> {
-  const result = await db.query(
-    `SELECT message_type, text_content, latitude, longitude, address,
-            contact_name, contact_phone, media_stored_url, media_url, transcript, received_at
-     FROM whatsapp_capture_messages
-     WHERE session_id = $1
-     ORDER BY received_at ASC`,
-    [sessionId]
-  );
-  const messages = result.rows;
-  if (!messages.length) return {};
-
-  // Build context for AI — text lines + image URLs for vision
-  const lines: string[] = [];
-  const imageUrls: string[] = [];
-  for (const m of messages) {
-    const hora = m.received_at
-      ? new Date(m.received_at).toLocaleTimeString("es-ES", { hour12: false, timeZone: "Europe/Madrid" })
-      : "";
-    const ts = hora ? ` ${hora}` : "";
-    if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO${ts}] ${m.text_content}`);
-    else if (m.message_type === "location") lines.push(`[UBICACION${ts}] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
-    else if (m.message_type === "contact") lines.push(`[CONTACTO${ts}] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
-    else if (m.message_type === "image") {
-      const url = m.media_stored_url || m.media_url;
-      if (url) imageUrls.push(url);
-      lines.push(`[IMAGEN${ts} enviada]`);
-    }
-    else if (m.message_type === "audio") lines.push(m.transcript ? `[AUDIO${ts} transcrito] ${m.transcript}` : `[AUDIO${ts} sin transcribir]`);
-    else if (m.message_type === "document") lines.push(`[DOCUMENTO${ts}]`);
-  }
-
-  const systemPrompt = `Eres un asistente de una empresa de asistencia en carretera.
-Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
-
-INSTRUCCIONES CRÍTICAS para imágenes:
-1. Busca matrículas de vehículos en todas las imágenes (en la placa física, documentos, capturas de pantalla).
-2. Busca coordenadas GPS en cualquier formato: decimal (41.123, 1.456), DMS (41°19'20.4"N 1°15'57.8"E), o en capturas de mapas.
-   - Si encuentras coordenadas DMS, conviértelas a decimal: grados + minutos/60 + segundos/3600. Norte/Este = positivo, Sur/Oeste = negativo.
-3. Busca direcciones, nombres de calles, municipios visibles en imágenes de mapas o capturas de pantalla.
-
-UBICACIONES MÚLTIPLES:
-- Si la sesión contiene varias ubicaciones GPS, usa SIEMPRE la más reciente (la de hora más tardía) para latitude/longitude/address/municipio/provincia. Una ubicación posterior corrige a la anterior: el conductor puede haberse movido o haber enviado primero una ubicación equivocada.
-- Excepción: si un mensaje de texto o audio posterior indica lo contrario (p. ej. "la buena es la primera", "ignora la última ubicación"), obedece al texto.
-- Si las ubicaciones difieren mucho entre sí y no hay texto que lo aclare, usa la última pero baja "confidence" a "medium" y menciónalo en "resumen" (p. ej. "Se recibieron 2 ubicaciones distintas; se usa la última").
-
-MATRÍCULAS (España):
-- Matrícula BLANCA = camión/vehículo tractor → campo "plate".
-- Matrícula ROJA = REMOLQUE → campo "plateRemolque". Formato del remolque: una "R" seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). Devuélvela sin espacios ni guiones, empezando por R.
-- Si en una imagen aparecen la blanca y la roja juntas: la blanca es del camión ("plate") y la roja del remolque ("plateRemolque").
-- No pongas una matrícula roja (que empieza por R con formato R+4 dígitos+3 letras) en "plate"; esa va siempre en "plateRemolque".
-
-Responde SOLO con JSON válido, sin markdown.
-Campos a extraer (null si no disponible):
-{
-  "customerName": string,
-  "conductorNombre": string,
-  "empresa": string,
-  "contactoNombre": string,
-  "contactoTelefono": string,
-  "plate": string (matrícula BLANCA del vehículo averiado/camión, sin espacios ni guiones),
-  "plateRemolque": string (matrícula ROJA del remolque, formato R+4 dígitos+3 letras, ej. R0000BBB, o null),
-  "vehicleBrand": string,
-  "vehicleModel": string,
-  "vehicleDescription": string,
-  "latitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
-  "longitude": number (decimal, extraído de texto, imagen de mapa o coordenadas DMS),
-  "address": string,
-  "municipio": string,
-  "provincia": string,
-  "tipoAveria": string,
-  "descripcionAveria": string,
-  "resumen": string (resumen breve de 1-2 frases),
-  "confidence": "high"|"medium"|"low"
-}`;
-
-  // Build vision-capable user message content
-  type ContentPart =
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string; detail: "auto" } };
-
-  const userContent: ContentPart[] = [
-    { type: "text", text: `Mensajes de la sesión:\n${lines.join("\n")}` },
-    ...imageUrls.map((url) => ({
-      type: "image_url" as const,
-      image_url: { url, detail: "auto" as const },
-    })),
-  ];
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.1,
-      max_tokens: 700,
-    });
-    const raw = response.choices[0]?.message?.content ?? "{}";
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    console.error("analyzeCaptureSesionWithAI error:", e);
-    return {};
-  }
-}
+// El análisis de la sesión de captura vive en core/whatsappCapture.ts:
+// lo comparten Mobilink Assist y Central Pro, que reciben por el mismo número.
 
 // Helper: detect message type from Twilio payload
 function detectMessageType(body: Record<string, any>): string {
@@ -12179,16 +12868,36 @@ app.post("/api/whatsapp-capture/sessions", requireAdminRole, async (req, res) =>
     // enrutan a la sesión activa). Si la que bloquea es de una asistencia ya
     // cerrada, se cierra sola y se permite la nueva.
     const existing = await db.query(
-      `SELECT s.id, s.job_id, COALESCE(NULLIF(ra.plate, ''), ra."plateRemolque") AS plate, ra."customerName", ra.status AS job_status
+      `SELECT s.id, s.job_id, s.connect_assistance_id,
+              COALESCE(NULLIF(ra.plate, ''), ra."plateRemolque") AS plate,
+              ra."customerName", ra.status AS job_status, ca.status AS connect_status
        FROM whatsapp_capture_sessions s
        LEFT JOIN roadside_assistances ra ON ra.id = s.job_id
+       LEFT JOIN connect_assistances ca ON ca.id = s.connect_assistance_id
        WHERE s.status = 'ACTIVE'`
     );
     const CLOSED = new Set(["llegada_taller", "redirigida", "cancelada"]);
+    const CONNECT_CLOSED = new Set(["at_workshop", "cancelled"]);
     for (const active of existing.rows) {
       // Misma asistencia: ya tiene su captura, no creamos otra
       if (Number(active.job_id) === Number(job_id)) {
         return res.status(409).json({ error: "Esta asistencia ya tiene una captura activa" });
+      }
+      // Captura de Central Pro (mismo número de WhatsApp): solo se cierra sola
+      // si su asistencia ya está cerrada; si sigue viva, manda ella.
+      if (active.connect_assistance_id != null || active.job_id == null) {
+        const cerrada = active.connect_status != null && CONNECT_CLOSED.has(active.connect_status);
+        if (cerrada) {
+          await db.query(
+            `UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`,
+            [active.id, Date.now()]
+          );
+          continue;
+        }
+        return res.status(409).json({
+          error: "Hay una captura activa en Assist Central Pro. Ciérrala antes de empezar otra.",
+          activeSession: active,
+        });
       }
       // Captura huérfana (asistencia cerrada o inexistente) → cerrarla automáticamente
       if (!active.job_status || CLOSED.has(active.job_status)) {
@@ -12280,15 +12989,9 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     }
 
     // Run AI analysis asynchronously — don't block the response
-    analyzeCaptureSesionWithAI(id).then(async (suggestions) => {
-      if (Object.keys(suggestions).length > 0) {
-        await db.query(
-          `UPDATE whatsapp_capture_sessions SET ai_suggestions = $2 WHERE id = $1`,
-          [id, JSON.stringify(suggestions)]
-        );
-        console.log(`WhatsApp capture session #${id} AI analysis complete`);
-      }
-    }).catch((e) => console.error("AI analysis error:", e));
+    saveCaptureAnalysis(id)
+      .then((s) => console.log(`WhatsApp capture session #${id} analizada (${Object.keys(s).length} campos)`))
+      .catch((e) => console.error("AI analysis error:", e));
 
     const updated = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
     return res.json(updated.rows[0]);
@@ -12358,6 +13061,23 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       vehicleDescription: '"vehicleDescription"',
       notes: "notes",
     };
+
+    // Añadir a observaciones sin borrar lo que ya hubiera (los datos sueltos
+    // leídos de una foto se acumulan, no se pisan entre ellos)
+    if (field === "notesAppend") {
+      const linea = String(value ?? "").trim();
+      if (!linea) return res.status(400).json({ error: "Texto vacío" });
+      const prev = await db.query(`SELECT notes FROM roadside_assistances WHERE id = $1`, [jobId]);
+      const actuales = String(prev.rows[0]?.notes ?? "");
+      if (!actuales.includes(linea)) {
+        await db.query(
+          `UPDATE roadside_assistances SET notes = $2, "updatedAtMs" = $3 WHERE id = $1`,
+          [jobId, [actuales, linea].filter(Boolean).join("\n"), Date.now()]
+        );
+      }
+      const updated = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [jobId]);
+      return res.json({ ok: true, assistance: updated.rows[0] });
+    }
 
     // Special compound action: apply location (address + lat + lng)
     if (field === "location") {
@@ -13004,10 +13724,11 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     doc.on("data", (c) => chunks.push(c));
     const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-    doc.fontSize(18).font("Helvetica-Bold").text("Mobilink – Orden de Trabajo de Flota", { align: "center" });
-    doc.moveDown(0.3);
-    doc.fontSize(11).font("Helvetica").text(`OTF nº ${data.id}   |   ${formatDateEs(data.createdAtMs)}`, { align: "center" });
-    doc.moveDown(1);
+    attachBrandedHeader(
+      doc,
+      `Orden de Trabajo de Flota #${data.id}`,
+      formatDateEs(data.createdAtMs)
+    );
 
     const row = (l: string, v: string) => {
       doc.fontSize(10).font("Helvetica-Bold").text(l, { continued: true, width: 170 });
@@ -13147,6 +13868,39 @@ function requireTyreControlUser(
   });
 }
 
+// Igual que requireTyreControlUser pero para el DASHBOARD WEB (acceso_panel),
+// no la APK (acceso_apk) — la ficha técnica se sube desde la web, y un
+// administrador que solo usa el panel no tiene por qué tener acceso_apk.
+function requireTyreControlPanelUser(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const authHeader = String(req.headers["authorization"] ?? "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "No autenticado" });
+
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("id, acceso_panel, es_superadmin, activo")
+      .eq("id", data.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.activo || (!perfil.acceso_panel && !perfil.es_superadmin)) {
+      return res.status(403).json({ error: "Sin acceso al panel" });
+    }
+
+    (req as any).tyreControlUserId = data.user.id;
+    next();
+  })().catch((error) => {
+    console.error("requireTyreControlPanelUser error:", error);
+    res.status(500).json({ error: "Error de autenticación" });
+  });
+}
+
 // Login unificado: el técnico usa el MISMO nombre + PIN que en la app
 // de asistencias (tabla techs / roadsideOperatorCode). Este endpoint
 // valida ese PIN y crea/sincroniza por detrás el usuario de Supabase
@@ -13156,108 +13910,118 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
   try {
     const techName = String(req.body?.techName || "").trim();
     const code = String(req.body?.code || "").trim();
-    const expectedCode = await getExpectedRoadsideOperatorCode(techName);
-
-    if (!techName || !code || !expectedCode || code !== expectedCode) {
-      return res.status(401).json({ error: "Operario o código incorrecto" });
+    if (!techName || !code) {
+      return res.status(400).json({ error: "Introduce tu nombre y PIN" });
     }
 
-    const slug = techName
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[̀-ͯ]/g, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    const email = `apk-${slug}@seatyrecheck.app`;
-
-    // ¿Ya existe el usuario? (tc_usuarios.id == auth.users.id)
-    const { data: existente } = await supabase
+    // Login SOLO contra usuarios de TyreControl con acceso a la APK. Los
+    // operarios de Assist (tabla techs) YA NO pueden entrar en TyreControl.
+    // El PIN es la propia contraseña del usuario en Supabase Auth (se fija al
+    // crear el usuario y se cambia desde Usuarios); aquí solo resolvemos su
+    // email y la APK hace signInWithPassword(email, PIN) → Supabase valida.
+    const { data: usuarios } = await supabase
       .from("tc_usuarios")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
-
-    let userId: string;
-    if (existente) {
-      userId = existente.id;
-      // Mantener la contraseña de Supabase sincronizada con el PIN actual
-      await supabase.auth.admin.updateUserById(userId, { password: code });
-      await supabase
-        .from("tc_usuarios")
-        .update({ acceso_apk: true, activo: true, nombre: techName })
-        .eq("id", userId);
-    } else {
-      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
-        email,
-        password: code,
-        email_confirm: true,
-      });
-      if (createErr || !created.user) {
-        throw new Error(createErr?.message || "No se pudo crear el usuario");
-      }
-      userId = created.user.id;
-
-      // Empresa de referencia: Mobilink Tarragona (nombre legacy "SEA Tarragona"
-      // aceptado hasta ejecutar la migración de datos; si no, la más antigua).
-      const { data: empresa } = await supabase
-        .from("tc_empresas")
-        .select("id")
-        .in("nombre", ["Mobilink Tarragona", "SEA Tarragona"])
-        .order("nombre", { ascending: true }) // "Mobilink..." < "SEA..." → prioriza el nuevo
-        .limit(1)
-        .maybeSingle();
-      let empresaId = empresa?.id;
-      if (!empresaId) {
-        const { data: primera } = await supabase
-          .from("tc_empresas")
-          .select("id")
-          .order("created_at", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        empresaId = primera?.id;
-      }
-      if (!empresaId) throw new Error("No hay empresas en TyreControl");
-
-      const { error: insertErr } = await supabase.from("tc_usuarios").insert({
-        id: userId,
-        empresa_id: empresaId,
-        nombre: techName,
-        email,
-        rol: "operador",
-        acceso_apk: true,
-        acceso_panel: false,
-        activo: true,
-      });
-      if (insertErr) throw new Error(insertErr.message);
+      .select("id, email, nombre, activo, acceso_apk, empresas_manual")
+      .ilike("nombre", techName)
+      .eq("acceso_apk", true)
+      .eq("activo", true)
+      .limit(1);
+    const user = (usuarios || [])[0];
+    if (!user || !user.email) {
+      return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
 
-    // El técnico de SEA atiende a todas las flotas: asignar todas las
-    // empresas activas (la RLS de operador solo muestra las asignadas).
-    // EXCEPTO si el usuario tiene asignación manual desde el panel
-    // (empresas_manual): entonces sus empresas las gestiona el administrador
-    // y el login no las toca.
-    const { data: perfilUsuario } = await supabase
-      .from("tc_usuarios")
-      .select("empresas_manual")
-      .eq("id", userId)
-      .maybeSingle();
-    if (!perfilUsuario?.empresas_manual) {
+    // Empresas: si no tiene asignación manual, ve todas las activas (default);
+    // si es "manual", las gestiona el administrador desde Usuarios.
+    if (!user.empresas_manual) {
       const { data: empresas } = await supabase
         .from("tc_empresas")
         .select("id")
         .eq("activo", true);
       if (empresas && empresas.length > 0) {
         await supabase.from("tc_operador_empresas").upsert(
-          empresas.map((e: { id: string }) => ({ usuario_id: userId, empresa_id: e.id })),
+          empresas.map((e: { id: string }) => ({ usuario_id: user.id, empresa_id: e.id })),
           { onConflict: "usuario_id,empresa_id" }
         );
       }
     }
 
-    res.json({ ok: true, email, techName });
+    res.json({ ok: true, email: user.email, techName: user.nombre });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/login-operario error:", error);
     res.status(500).json({ error: error?.message || "Error iniciando sesión" });
+  }
+});
+
+// Cambiar la contraseña/PIN de un usuario de TyreControl (solo admin/super).
+app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Sin token" });
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return res.status(401).json({ error: "No autenticado" });
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("rol, es_superadmin, activo")
+      .eq("id", userData.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.activo) return res.status(403).json({ error: "Perfil no válido" });
+    if (perfil.es_superadmin !== true && perfil.rol !== "administrador") {
+      return res.status(403).json({ error: "Permisos insuficientes" });
+    }
+
+    const nueva = String(req.body?.password ?? "");
+    if (nueva.length < 4) return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
+    const { error } = await supabase.auth.admin.updateUserById(String(req.params.id), { password: nueva });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error("POST /api/tyrecontrol/usuarios/:id/password error:", error);
+    res.status(500).json({ error: error?.message || "Error cambiando la contraseña" });
+  }
+});
+
+// Empresas (clientes) asignadas al operario, para la pantalla de selección de
+// cliente de la APK. Se resuelve con service-role (sin RLS): la RLS del SaaS
+// restringe tc_empresas al "tenant" del usuario, así que un técnico asignado a
+// varios clientes por tc_operador_empresas no podía leer los nombres.
+app.get("/api/tyrecontrol/mis-empresas", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Sin token" });
+
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return res.status(401).json({ error: "Token inválido" });
+    const uid = userData.user.id;
+
+    // Empresas asignadas explícitamente al operario (multi-cliente).
+    const { data: asignadas } = await supabase
+      .from("tc_operador_empresas")
+      .select("empresa:tc_empresas(id, nombre)")
+      .eq("usuario_id", uid);
+    let empresas = ((asignadas as any[]) || [])
+      .map((r) => r.empresa)
+      .filter((e: any) => e && e.id)
+      .map((e: any) => ({ id: e.id as string, nombre: (e.nombre as string) ?? "—" }));
+
+    // Sin asignación explícita → la empresa propia del perfil.
+    if (empresas.length === 0) {
+      const { data: perfil } = await supabase
+        .from("tc_usuarios")
+        .select("empresa:tc_empresas!tc_usuarios_empresa_id_fkey(id, nombre)")
+        .eq("id", uid)
+        .maybeSingle();
+      const e = (perfil as any)?.empresa;
+      if (e?.id) empresas = [{ id: e.id, nombre: e.nombre ?? "—" }];
+    }
+
+    empresas.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+    res.json({ empresas });
+  } catch (error: any) {
+    console.error("GET /api/tyrecontrol/mis-empresas error:", error);
+    res.status(500).json({ error: error?.message || "Error" });
   }
 });
 
@@ -13293,6 +14057,67 @@ function requireTyreControlAdmin(
     res.status(500).json({ error: "Error de autenticación" });
   });
 }
+
+// Crea un usuario (Auth + fila tc_usuarios), como la antigua Edge Function
+// "crear-usuario" (que no está desplegada → daba "Failed to send a request to
+// the Edge Function"). Se hace aquí con service-role. Solo admin/super-admin.
+app.post("/api/tyrecontrol/usuarios", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Sin token" });
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) return res.status(401).json({ error: "No autenticado" });
+    const callerId = userData.user.id;
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("rol, empresa_id, es_superadmin, activo")
+      .eq("id", callerId)
+      .maybeSingle();
+    if (!perfil || !perfil.activo) return res.status(403).json({ error: "Perfil no válido" });
+    const esSuper = perfil.es_superadmin === true;
+    const esAdmin = perfil.rol === "administrador";
+    if (!esSuper && !esAdmin) return res.status(403).json({ error: "Permisos insuficientes" });
+
+    const b = req.body ?? {};
+    const nombre = String(b.nombre ?? "").trim();
+    const email = String(b.email ?? "").trim().toLowerCase();
+    const password = String(b.password ?? "");
+    const rol = String(b.rol ?? "cliente");
+    const accesoApk = Boolean(b.acceso_apk ?? false);
+    const accesoPanel = Boolean(b.acceso_panel ?? true);
+    // Un admin normal solo crea en SU empresa; el super-admin en la que indique.
+    const empresaId = esSuper ? String(b.empresa_id ?? perfil.empresa_id) : perfil.empresa_id;
+
+    if (!nombre || !email || !password) return res.status(400).json({ error: "Nombre, email y contraseña son obligatorios" });
+    if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
+
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
+    if (createErr || !created.user) return res.status(400).json({ error: createErr?.message ?? "No se pudo crear el usuario" });
+
+    const { error: insErr } = await supabase.from("tc_usuarios").insert({
+      id: created.user.id,
+      empresa_id: empresaId,
+      nombre,
+      email,
+      rol,
+      acceso_apk: accesoApk,
+      acceso_panel: accesoPanel,
+      es_superadmin: false,
+      activo: true,
+    });
+    if (insErr) {
+      // rollback del usuario de auth si falla el perfil
+      await supabase.auth.admin.deleteUser(created.user.id);
+      return res.status(400).json({ error: insErr.message });
+    }
+    res.json({ ok: true, id: created.user.id });
+  } catch (error: any) {
+    console.error("POST /api/tyrecontrol/usuarios error:", error);
+    res.status(500).json({ error: error?.message || "Error interno" });
+  }
+});
 
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
@@ -13363,6 +14188,565 @@ app.post(
     }
   }
 );
+
+/* =========================================================
+   TYRECONTROL · FICHA TÉCNICA DEL VEHÍCULO
+   Subida del documento (PDF o fotos de las páginas), OCR y
+   cálculo de la configuración de ejes. La ficha del vehículo NO
+   se toca aquí: esto solo deja los datos listos para revisar.
+========================================================= */
+
+const BUCKET_DOCS = "tc-documentos";
+const fichaOcr = new OpenAiFichaTecnicaOcr();
+
+/// URL firmada (el bucket es privado: la ficha lleva VIN y titular).
+async function urlFirmadaDoc(storagePath: string, segundos = 3600): Promise<string | null> {
+  const { data } = await supabase.storage.from(BUCKET_DOCS).createSignedUrl(storagePath, segundos);
+  return data?.signedUrl ?? null;
+}
+
+/// Comprueba que el usuario puede tocar este vehículo y devuelve su empresa.
+async function vehiculoDeUsuario(vehiculoId: string): Promise<{ id: string; empresa_id: string; matricula: string; bastidor: string | null; tipo_vehiculo_id: string | null } | null> {
+  const { data } = await supabase
+    .from("tc_vehiculos")
+    .select("id, empresa_id, matricula, bastidor, tipo_vehiculo_id")
+    .eq("id", vehiculoId)
+    .maybeSingle();
+  return (data as any) ?? null;
+}
+
+// Sube la ficha técnica (PDF o imágenes de las páginas). Varias páginas en
+// una misma subida = un solo documento.
+app.post(
+  "/api/tyrecontrol/vehiculos/:id/ficha-tecnica",
+  requireTyreControlPanelUser,
+  upload.array("files", 12),
+  async (req, res) => {
+    try {
+      const vehiculoId = String(req.params.id);
+      const userId = (req as any).tyreControlUserId as string;
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
+
+      const veh = await vehiculoDeUsuario(vehiculoId);
+      if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      // Un mismo archivo subido dos veces no crea documentos duplicados.
+      const hash = crypto.createHash("sha256");
+      for (const f of files) hash.update(f.buffer);
+      const sha = hash.digest("hex");
+
+      const { data: yaExiste } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id")
+        .eq("vehiculo_id", vehiculoId)
+        .eq("hash_sha256", sha)
+        .maybeSingle();
+      if (yaExiste) {
+        return res.status(409).json({ error: "Este documento ya está subido", id: (yaExiste as any).id });
+      }
+
+      // Las páginas van juntas bajo una carpeta por documento.
+      const carpeta = `${veh.empresa_id}/${vehiculoId}/${Date.now()}`;
+      const rutas: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = (f.originalname.split(".").pop() || "bin").toLowerCase();
+        const ruta = `${carpeta}/p${String(i + 1).padStart(2, "0")}.${ext}`;
+        const { error } = await supabase.storage
+          .from(BUCKET_DOCS)
+          .upload(ruta, f.buffer, { contentType: f.mimetype, upsert: false });
+        if (error) throw new Error(error.message);
+        rutas.push(ruta);
+      }
+
+      // El nuevo documento pasa a ser el vigente; el anterior se archiva.
+      await supabase
+        .from("tc_vehiculo_documentos")
+        .update({ vigente: false })
+        .eq("vehiculo_id", vehiculoId)
+        .eq("tipo", "ficha_tecnica")
+        .eq("vigente", true);
+
+      const { data: doc, error: insErr } = await supabase
+        .from("tc_vehiculo_documentos")
+        .insert({
+          vehiculo_id: vehiculoId,
+          empresa_id: veh.empresa_id,
+          tipo: "ficha_tecnica",
+          storage_path: carpeta,
+          nombre_original: files[0].originalname,
+          mime_type: files[0].mimetype,
+          paginas: files.length,
+          tamano_bytes: files.reduce((s, f) => s + f.size, 0),
+          hash_sha256: sha,
+          ocr_estado: "pendiente",
+          subido_por: userId,
+        })
+        .select("id, paginas, created_at")
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      res.json({ ok: true, documento: doc, paginas: rutas.length });
+    } catch (e: any) {
+      console.error("POST ficha-tecnica error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo la ficha técnica" });
+    }
+  }
+);
+
+// Sube una ficha técnica SIN vehículo todavía: sirve para crear el vehículo
+// directamente desde el documento (alta rápida). El documento queda "huérfano"
+// (vehiculo_id null) hasta que /documentos/:id/aplicar lo enlaza al vehículo
+// recién creado.
+app.post(
+  "/api/tyrecontrol/documentos/nueva-ficha",
+  requireTyreControlPanelUser,
+  upload.array("files", 12),
+  async (req, res) => {
+    try {
+      const empresaId = String(req.body.empresaId || "");
+      if (!empresaId) return res.status(400).json({ error: "Falta la empresa" });
+      const userId = (req as any).tyreControlUserId as string;
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
+
+      const hash = crypto.createHash("sha256");
+      for (const f of files) hash.update(f.buffer);
+      const sha = hash.digest("hex");
+
+      const carpeta = `${empresaId}/nuevo/${Date.now()}`;
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = (f.originalname.split(".").pop() || "bin").toLowerCase();
+        const ruta = `${carpeta}/p${String(i + 1).padStart(2, "0")}.${ext}`;
+        const { error } = await supabase.storage
+          .from(BUCKET_DOCS)
+          .upload(ruta, f.buffer, { contentType: f.mimetype, upsert: false });
+        if (error) throw new Error(error.message);
+      }
+
+      const { data: doc, error: insErr } = await supabase
+        .from("tc_vehiculo_documentos")
+        .insert({
+          vehiculo_id: null,
+          empresa_id: empresaId,
+          tipo: "ficha_tecnica",
+          storage_path: carpeta,
+          nombre_original: files[0].originalname,
+          mime_type: files[0].mimetype,
+          paginas: files.length,
+          tamano_bytes: files.reduce((s, f) => s + f.size, 0),
+          hash_sha256: sha,
+          ocr_estado: "pendiente",
+          subido_por: userId,
+        })
+        .select("id, paginas, created_at")
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      res.json({ ok: true, documento: doc });
+    } catch (e: any) {
+      console.error("POST documentos/nueva-ficha error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo la ficha técnica" });
+    }
+  }
+);
+
+// Procesa el OCR del documento y devuelve los datos detectados SIN aplicarlos.
+app.post(
+  "/api/tyrecontrol/documentos/:id/ocr",
+  requireTyreControlPanelUser,
+  async (req, res) => {
+    const docId = String(req.params.id);
+    try {
+      const { data: doc } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id, vehiculo_id, storage_path, mime_type, paginas")
+        .eq("id", docId)
+        .maybeSingle();
+      if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+
+      // Documento "huérfano" (subido para crear el vehículo directamente):
+      // aún no hay vehículo con el que comparar ni tipo que sugiera la
+      // configuración, se sigue igual pero sin esas comprobaciones.
+      const vehiculoIdDoc = (doc as any).vehiculo_id as string | null;
+      const veh = vehiculoIdDoc ? await vehiculoDeUsuario(vehiculoIdDoc) : null;
+      if (vehiculoIdDoc && !veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ ocr_estado: "procesando", ocr_error: null }).eq("id", docId);
+
+      // Páginas del documento → entradas para el modelo de visión.
+      const { data: lista } = await supabase.storage
+        .from(BUCKET_DOCS).list((doc as any).storage_path, { limit: 50, sortBy: { column: "name", order: "asc" } });
+      const archivos = (lista ?? []).filter((f) => f.name && !f.name.startsWith("."));
+      if (!archivos.length) throw new Error("No se han podido leer las páginas del documento");
+
+      // El modelo lee imágenes, no PDF: si se subió un PDF se rasteriza aquí
+      // (mupdf, sin dependencias del sistema) y cada página pasa como imagen.
+      const esPdf = archivos.some((f) => f.name.toLowerCase().endsWith(".pdf"));
+      const urls: string[] = [];
+      if (esPdf) {
+        const nombrePdf = archivos.find((f) => f.name.toLowerCase().endsWith(".pdf"))!.name;
+        const { data: descarga, error: dlErr } = await supabase.storage
+          .from(BUCKET_DOCS).download(`${(doc as any).storage_path}/${nombrePdf}`);
+        if (dlErr || !descarga) throw new Error(dlErr?.message || "No se pudo descargar el PDF");
+        const buffer = Buffer.from(await descarga.arrayBuffer());
+
+        let paginas;
+        try {
+          paginas = rasterizarPdf(buffer);
+        } catch (e: any) {
+          await supabase.from("tc_vehiculo_documentos")
+            .update({ ocr_estado: "error", ocr_error: `PDF ilegible: ${e?.message}` }).eq("id", docId);
+          return res.status(422).json({
+            error: "No se ha podido leer el PDF (puede estar corrupto o protegido). Prueba a fotografiar las páginas desde la tablet.",
+          });
+        }
+        for (const p of paginas) urls.push(`data:image/png;base64,${p.png.toString("base64")}`);
+        await supabase.from("tc_vehiculo_documentos")
+          .update({ paginas: paginas.length }).eq("id", docId);
+      } else {
+        for (const f of archivos) {
+          const u = await urlFirmadaDoc(`${(doc as any).storage_path}/${f.name}`);
+          if (u) urls.push(u);
+        }
+      }
+      if (!urls.length) throw new Error("No se han podido leer las páginas del documento");
+
+      const resultado = await fichaOcr.extraer(urls);
+
+      // Configuración de ejes: se CALCULA contando neumáticos por eje, nunca
+      // se copia la nomenclatura del fabricante.
+      const { data: tipo } = veh?.tipo_vehiculo_id
+        ? await supabase.from("tc_tipos_vehiculo").select("nombre").eq("id", veh.tipo_vehiculo_id).maybeSingle()
+        : { data: null as any };
+      const calc = calcularConfiguracion(resultado, (tipo as any)?.nombre ?? null);
+      const avisos = avisosCoherencia(calc);
+
+      // Aviso bloqueante si el documento no es de este vehículo (no aplica
+      // si aún no hay vehículo: se está creando uno nuevo a partir de esto).
+      const campo = (clave: string) =>
+        resultado.campos.find((c) => (c.clave ?? "").toLowerCase() === clave)?.valor?.trim() ?? null;
+      const norm = (s: string | null) => (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const vinDoc = campo("vin"), matriculaDoc = campo("matricula");
+      const bloqueos: string[] = [];
+      if (veh) {
+        if (vinDoc && veh.bastidor && norm(vinDoc) !== norm(veh.bastidor)) {
+          bloqueos.push(`El bastidor de la ficha (${vinDoc}) no coincide con el del vehículo (${veh.bastidor}).`);
+        }
+        if (matriculaDoc && norm(matriculaDoc) !== norm(veh.matricula)) {
+          bloqueos.push(`La matrícula de la ficha (${matriculaDoc}) no coincide con la del vehículo (${veh.matricula}).`);
+        }
+      }
+
+      // ¿Existe ya esa configuración en el catálogo?
+      let configExiste = false;
+      if (calc.configuracion) {
+        const { data: cfg } = await supabase.from("tc_config_ejes")
+          .select("id").eq("nombre", calc.configuracion).maybeSingle();
+        configExiste = !!cfg;
+      }
+
+      await supabase.from("tc_vehiculo_documentos").update({
+        ocr_estado: "ok",
+        ocr_confianza: resultado.confianza,
+        ocr_datos: { ...resultado, configuracion: calc },
+      }).eq("id", docId);
+
+      res.json({
+        ok: true,
+        campos: resultado.campos,
+        ejes: calc.ejes,
+        configuracion: calc.configuracion,
+        configuracionPendiente: calc.motivoPendiente ?? null,
+        configuracionExisteEnCatalogo: configExiste,
+        configuracionConvencional: calc.configuracionConvencional,
+        observaciones: resultado.observaciones,
+        confianza: resultado.confianza,
+        avisos,
+        bloqueos,
+      });
+    } catch (e: any) {
+      console.error("POST documentos/:id/ocr error:", e);
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ ocr_estado: "error", ocr_error: String(e?.message ?? e) }).eq("id", docId);
+      res.status(500).json({ error: e?.message || "Error procesando el documento" });
+    }
+  }
+);
+
+// Aplica los cambios YA REVISADOS por el técnico. Nunca se aplica nada que
+// no haya pasado por la pantalla de revisión: aquí solo llega lo aceptado.
+app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const docId = String(req.params.id);
+    const userId = (req as any).tyreControlUserId as string;
+    const { campos, ejes, configuracion, configuracionConvencional, atributos, vehiculoId: vehiculoIdNuevo } = req.body ?? {};
+
+    const { data: doc } = await supabase
+      .from("tc_vehiculo_documentos").select("id, vehiculo_id, empresa_id").eq("id", docId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+
+    // Documento huérfano (alta directa desde ficha): el vehículo se acaba de
+    // crear y llega en el cuerpo de la petición; aquí se enlaza documento↔vehículo.
+    let vehiculoId = (doc as any).vehiculo_id as string | null;
+    const eraHuerfano = !vehiculoId;
+    if (!vehiculoId) {
+      if (!vehiculoIdNuevo) return res.status(400).json({ error: "Falta el vehículo al que aplicar la ficha" });
+      vehiculoId = String(vehiculoIdNuevo);
+    }
+
+    const veh = await vehiculoDeUsuario(vehiculoId);
+    if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+    if (veh.empresa_id !== (doc as any).empresa_id) {
+      return res.status(403).json({ error: "El vehículo no pertenece a la empresa del documento" });
+    }
+
+    const aplicado: string[] = [];
+
+    // 1) Campos del vehículo aceptados: cada clave del catálogo tiene su
+    //    columna propia y tipada (texto, entero, numérico o fecha) — no se
+    //    guarda como texto libre salvo lo que quede fuera del catálogo.
+    // La ficha tecnica vive en tc_vehiculo_atributos_tecnicos. Aqui solo
+    // quedan los campos que son columna del vehiculo porque son su identidad
+    // operativa (los usan listas, montajes, informes y la APK).
+    const COLUMNAS_TEXTO: Record<string, string> = {
+      marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
+    };
+    const COLUMNAS_ENTERO: Record<string, string> = {};
+    const COLUMNAS_NUMERICO: Record<string, string> = {};
+    const COLUMNAS_FECHA: Record<string, string> = {
+      fecha_primera_matriculacion: "fecha_matriculacion",
+    };
+    // "25/10/2017" → "2017-10-25". Una fecha en formato no ISO rompe el
+    // guardado (columna date de Postgres): mejor no aplicarla que romperlo.
+    const fechaIso = (v: string): string | null => {
+      const s = v.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+      return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
+    };
+    // De un valor como "315/70R22.5" o "18.500 kg" se queda solo con el
+    // primer número: si no hay un número reconocible, no se aplica.
+    const numero = (v: string): number | null => {
+      const m = String(v).replace(",", ".").match(/-?\d+(\.\d+)?/);
+      return m ? Number(m[0]) : null;
+    };
+    const patch: Record<string, any> = {};
+    for (const [clave, valor] of Object.entries(campos ?? {})) {
+      if (valor == null || String(valor).trim() === "") continue;
+      const texto = String(valor).trim();
+      if (COLUMNAS_TEXTO[clave]) patch[COLUMNAS_TEXTO[clave]] = texto;
+      else if (COLUMNAS_ENTERO[clave]) { const n = numero(texto); if (n != null) patch[COLUMNAS_ENTERO[clave]] = Math.round(n); }
+      else if (COLUMNAS_NUMERICO[clave]) { const n = numero(texto); if (n != null) patch[COLUMNAS_NUMERICO[clave]] = n; }
+      else if (COLUMNAS_FECHA[clave]) { const iso = fechaIso(texto); if (iso) patch[COLUMNAS_FECHA[clave]] = iso; }
+    }
+    if (configuracionConvencional) {
+      patch.config_convencional = String(configuracionConvencional).trim();
+      patch.config_convencional_origen = "documento";
+    }
+
+    // 2) Configuración de ejes: se busca en el catálogo; si no existe, se crea
+    //    con la nomenclatura de TyreControl (neumáticos por eje).
+    if (configuracion) {
+      const nombre = String(configuracion).trim();
+      let { data: cfg } = await supabase
+        .from("tc_config_ejes").select("id").eq("nombre", nombre).maybeSingle();
+      if (!cfg) {
+        const { data: creada, error } = await supabase.from("tc_config_ejes")
+          .insert({ nombre, descripcion: `Detectada de ficha técnica (${nombre})` })
+          .select("id").single();
+        if (error) throw new Error(error.message);
+        cfg = creada as any;
+        aplicado.push(`configuración ${nombre} creada en el catálogo`);
+      }
+      patch.config_ejes_id = (cfg as any).id;
+      aplicado.push(`configuración ${nombre}`);
+    }
+
+    if (Object.keys(patch).length) {
+      const { error } = await supabase.from("tc_vehiculos").update(patch).eq("id", vehiculoId);
+      if (error) throw new Error(error.message);
+      aplicado.push(`${Object.keys(patch).length} campo(s) del vehículo`);
+    }
+
+    // 3) Ejes: un registro por eje, con sus neumáticos y atributos.
+    if (Array.isArray(ejes) && ejes.length) {
+      for (const e of ejes) {
+        const fila = {
+          vehiculo_id: vehiculoId,
+          eje: Number(e.posicion),
+          ruedas: e.ruedas != null ? Number(e.ruedas) : null,
+          directriz: e.directriz === true,
+          motriz: e.motriz === true,
+          elevable: e.elevable === true,
+        };
+        const { error } = await supabase
+          .from("tc_vehiculo_ejes").upsert(fila, { onConflict: "vehiculo_id,eje" });
+        if (error) throw new Error(error.message);
+      }
+      aplicado.push(`${ejes.length} eje(s)`);
+    }
+
+    // 4) Valores de la ficha técnica ITV. Esta tabla es la fuente de la
+    //    verdad del módulo: un código solo existe aquí si trae dato real,
+    //    enlazado al maestro y con el valor normalizado por su tipo.
+    //    Todo cambio deja rastro en el historial.
+    const ignorados: string[] = [];
+    if (Array.isArray(atributos) && atributos.length) {
+      const { data: catalogoRows } = await supabase
+        .from("tc_cat_campos_ficha_tecnica")
+        .select("id, clave, codigo, descripcion, unidad, tipo_dato, activo");
+      const porClave = new Map((catalogoRows ?? []).map((c: any) => [c.clave, c]));
+      const porCodigo = new Map((catalogoRows ?? [])
+        .filter((c: any) => c.codigo)
+        .map((c: any) => [String(c.codigo).toUpperCase().trim(), c]));
+
+      const { data: previosRows } = await supabase
+        .from("tc_vehiculo_atributos_tecnicos")
+        .select("id, campo_ficha_id, valor_bruto, unidad")
+        .eq("vehiculo_id", vehiculoId);
+      const previoPorCampo = new Map((previosRows ?? [])
+        .filter((p: any) => p.campo_ficha_id)
+        .map((p: any) => [p.campo_ficha_id as string, p]));
+
+      let guardados = 0;
+      for (const a of atributos as any[]) {
+        // Regla dura: nada vacío, ni guiones, ni "N/A". El cero sí entra.
+        if (!hasRealValue(a?.valor)) { continue; }
+        const cat = (a.clave ? porClave.get(a.clave) : null)
+          ?? (a.codigo_origen ? porCodigo.get(String(a.codigo_origen).toUpperCase().trim()) : null);
+        // Un código que no está en el maestro NO se guarda solo: se
+        // devuelve para que alguien decida si merece una definición.
+        if (!cat || cat.activo === false) {
+          ignorados.push(String(a.codigo_origen ?? a.clave ?? a.etiqueta_origen ?? "?"));
+          continue;
+        }
+
+        const n = normalizarValor(String(a.valor), cat.tipo_dato, cat.unidad);
+        const previo = previoPorCampo.get(cat.id);
+        const fila: Record<string, unknown> = {
+          vehiculo_id: vehiculoId,
+          documento_id: docId,
+          campo_ficha_id: cat.id,
+          codigo_origen: cat.codigo ?? a.codigo_origen ?? null,
+          etiqueta_origen: cat.descripcion ?? a.etiqueta_origen ?? null,
+          clave_normalizada: cat.clave,
+          valor_bruto: String(a.valor).trim(),
+          valor_normalizado: n.texto,
+          valor_json: n.json,
+          valor_numero: n.numero,
+          valor_fecha: n.fecha,
+          valor_booleano: n.booleano,
+          tipo_valor: cat.tipo_dato,
+          unidad: cat.unidad ?? a.unidad ?? null,
+          confianza: a.confianza ?? null,
+          estado: "validado",
+          origen: "ocr",
+          verificado_manualmente: true, // el usuario lo ha confirmado en la revisión
+          pagina: a.pagina ?? null,
+          validado_por: userId,
+          validado_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error } = previo
+          ? await supabase.from("tc_vehiculo_atributos_tecnicos").update(fila).eq("id", previo.id)
+          : await supabase.from("tc_vehiculo_atributos_tecnicos").insert(fila);
+        if (error) throw new Error(error.message);
+
+        await supabase.from("tc_vehiculo_ficha_historial").insert({
+          atributo_id: previo?.id ?? null,
+          vehiculo_id: vehiculoId,
+          campo_ficha_id: cat.id,
+          valor_anterior: previo ? { valor: previo.valor_bruto, unidad: previo.unidad } : null,
+          valor_nuevo: { valor: fila.valor_bruto, unidad: fila.unidad },
+          motivo_cambio: "ocr",
+          cambiado_por: userId,
+          documento_id: docId,
+        });
+        guardados++;
+      }
+      if (guardados) aplicado.push(`${guardados} dato(s) de ficha técnica`);
+    }
+
+    // Enlaza el documento huérfano con el vehículo recién creado.
+    if (eraHuerfano) {
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ vehiculo_id: vehiculoId, vigente: true }).eq("id", docId);
+    }
+
+    res.json({ ok: true, aplicado, ignorados });
+  } catch (e: any) {
+    console.error("POST documentos/:id/aplicar error:", e);
+    res.status(500).json({ error: e?.message || "Error aplicando los cambios" });
+  }
+});
+
+// Documentos de un vehículo (con URL firmada de la primera página).
+// Crea las posiciones de neumático que le faltan a un tipo de vehículo a
+// partir de su configuración de ejes ("2x4x2" = 3 ejes con 2, 4 y 2 ruedas).
+// Es un cálculo, no una estimación: no interviene ningún modelo de IA.
+// Idempotente: solo añade los códigos que aún no existen, nunca borra.
+app.post("/api/tyrecontrol/tipos/:id/generar-posiciones", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const tipoId = String(req.params.id);
+    const { data: tipo } = await supabase
+      .from("tc_tipos_vehiculo").select("id, nombre, configuracion_ejes").eq("id", tipoId).maybeSingle();
+    if (!tipo) return res.status(404).json({ error: "Tipo de vehículo no encontrado" });
+
+    const generadas = generarPosiciones((tipo as any).configuracion_ejes);
+    if (!generadas.length) {
+      return res.status(422).json({
+        error: `El tipo "${(tipo as any).nombre}" no tiene una configuración de ejes válida (${(tipo as any).configuracion_ejes ?? "vacía"}). Indícala primero en Configuración.`,
+      });
+    }
+
+    const { data: existentes } = await supabase
+      .from("tc_posiciones_vehiculo").select("codigo_posicion").eq("tipo_vehiculo_id", tipoId);
+    const ya = new Set(((existentes ?? []) as any[]).map((p) => p.codigo_posicion));
+
+    const nuevas = generadas.filter((p) => !ya.has(p.codigo_posicion));
+    if (nuevas.length) {
+      const { error } = await supabase.from("tc_posiciones_vehiculo")
+        .insert(nuevas.map((p) => ({ ...p, tipo_vehiculo_id: tipoId, activo: true })));
+      if (error) throw new Error(error.message);
+    }
+
+    res.json({ ok: true, creadas: nuevas.length, total: generadas.length, yaExistian: generadas.length - nuevas.length });
+  } catch (e: any) {
+    console.error("POST tipos/:id/generar-posiciones error:", e);
+    res.status(500).json({ error: e?.message || "Error generando las posiciones" });
+  }
+});
+
+app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("tc_vehiculo_documentos")
+      .select("id, tipo, nombre_original, paginas, tamano_bytes, fecha_emision, ocr_estado, ocr_confianza, version, vigente, created_at, storage_path")
+      .eq("vehiculo_id", String(req.params.id))
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+
+    const docs = [];
+    for (const d of (data ?? []) as any[]) {
+      const { data: lista } = await supabase.storage
+        .from(BUCKET_DOCS).list(d.storage_path, { limit: 1, sortBy: { column: "name", order: "asc" } });
+      const primera = (lista ?? [])[0]?.name;
+      docs.push({
+        ...d,
+        url: primera ? await urlFirmadaDoc(`${d.storage_path}/${primera}`) : null,
+      });
+    }
+    res.json(docs);
+  } catch (e: any) {
+    console.error("GET vehiculos/:id/documentos error:", e);
+    res.status(500).json({ error: e?.message || "Error listando documentos" });
+  }
+});
 
 // KPIs / Dashboard de dirección
 app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
@@ -13553,23 +14937,16 @@ Reglas:
 - Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Extrae los datos del impagado de esta imagen:" },
-              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 400,
+      const rIa = await pedirIA({
+        operacion: "administracion.analizar-impagado",
+        proposito: "documento",
+        prompt: `${systemPrompt}\n\nExtrae los datos del impagado de esta imagen:`,
+        imagenes: [{ url: dataUrl }],
+        temperatura: 0,
+        maxTokens: 4000,
       });
 
-      const raw = response.choices[0]?.message?.content ?? "{}";
+      const raw = rIa.texto || "{}";
       const jsonTexto = limpiarJsonOpenAI(raw);
 
       let datos: any;
@@ -13633,23 +15010,16 @@ Reglas:
 - Si un dato aparece en varias capturas con valores distintos, prioriza el de "Datos Generales".
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `Extrae los datos del cliente combinando estas ${dataUrls.length} captura(s):` },
-              ...dataUrls.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "high" as const } })),
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 400,
+      const rIa = await pedirIA({
+        operacion: "administracion.analizar-cliente",
+        proposito: "documento",
+        prompt: `${systemPrompt}\n\nExtrae los datos del cliente combinando estas ${dataUrls.length} captura(s):`,
+        imagenes: dataUrls.map((url: string) => ({ url })),
+        temperatura: 0,
+        maxTokens: 4000,
       });
 
-      const raw = response.choices[0]?.message?.content ?? "{}";
+      const raw = rIa.texto || "{}";
       const jsonTexto = limpiarJsonOpenAI(raw);
 
       let datos: any;
@@ -14152,10 +15522,76 @@ const requireLicensesAdmin: express.RequestHandler = (req, res, next) => {
 mountLicenses(app, requireLicensesAdmin);
 
 /* =========================================================
+   DESCARGA DE APKS — sirve siempre la más reciente de /public
+   Ficheros: mobilink-assist-<v>.apk, tyrecontrol-<v>.apk,
+             mobilink-stockflow-<v>.apk
+========================================================= */
+
+const APK_APPS: Record<string, { prefix: string; label: string }> = {
+  assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
+  tyrecontrol: { prefix: "tyrecontrol-", label: "Mobilink TyreControl" },
+  stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+};
+
+// Devuelve el APK más reciente (mayor versión) para un prefijo dado
+function latestApkFor(prefix: string): { file: string; version: string } | null {
+  try {
+    const dir = path.join(__dirname, "../public");
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"));
+    if (!files.length) return null;
+    const withVer = files.map((f) => ({
+      file: f,
+      version: f.slice(prefix.length, -4), // entre prefijo y ".apk"
+    }));
+    // Orden por versión semántica descendente
+    withVer.sort((a, b) => {
+      const pa = a.version.split(".").map((n) => parseInt(n, 10) || 0);
+      const pb = b.version.split(".").map((n) => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
+      }
+      return 0;
+    });
+    return withVer[0];
+  } catch {
+    return null;
+  }
+}
+
+// JSON con la última versión de cada app (lo consume /descargas.html)
+app.get("/api/apps/list", (_req, res) => {
+  const out = Object.entries(APK_APPS).map(([key, { prefix, label }]) => {
+    const latest = latestApkFor(prefix);
+    return {
+      key,
+      label,
+      version: latest?.version ?? null,
+      url: latest ? `/apps/${key}` : null,
+    };
+  });
+  res.json(out);
+});
+
+// Descarga directa de la última APK de una app
+app.get("/apps/:app", (req, res) => {
+  const app0 = APK_APPS[String(req.params.app)];
+  if (!app0) return res.status(404).json({ error: "App no encontrada" });
+  const latest = latestApkFor(app0.prefix);
+  if (!latest) return res.status(404).json({ error: "Sin APK disponible" });
+  res.download(path.join(__dirname, "../public", latest.file));
+});
+
+/* =========================================================
    MOBILINK CONNECT PRO (partners bajo /api/connect/v1)
 ========================================================= */
 
 mountConnect(app, requireLicensesAdmin);
+
+// Asistente virtual de TyreControl (function calling sobre herramientas de
+// solo lectura). Ver server/tyrecontrol/asistente.ts.
+mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)

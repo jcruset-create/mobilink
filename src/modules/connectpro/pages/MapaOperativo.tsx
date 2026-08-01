@@ -5,19 +5,39 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, ErrorBanner, Badge } from "../components/ui";
-import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES } from "../types";
+import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
+
+/** De dónde sale la posición de la unidad, para saber en qué confiar. */
+const VEHICLE_SOURCE_LABELS: Record<string, string> = {
+  lite: "móvil del operario (Assist Lite)",
+  assist: "móvil del técnico (Mobilink Assist)",
+  unit: "GPS de la unidad",
+};
 
 type MapAssistance = {
   id: number; status: string; priority: string; serviceType: string; address: string;
   customerName: string; latitude: number; longitude: number;
   workshopName: string | null; assignedTechName: string | null;
+  // Unidad asignada: móvil del operario Lite, móvil del técnico de Assist o GPS de la unidad
+  vehicleLat: number | null; vehicleLng: number | null; vehicleAtMs: number | null;
+  vehicleSpeedKmh: number | null; operatorName: string | null; vehicleName: string | null;
+  vehiclePlate: string | null; vehicleSource: "lite" | "assist" | "unit" | null;
+  vehicleConnection: string | null;
 };
+/** Ruta en coche devuelta por el backend (Google Routes API v2). */
+type RutaCarretera = {
+  points: [number, number][];
+  distanceKm: number;
+  etaMinutes: number;
+  computedAtMs: number;
+};
+
 type MapWorkshop = {
   id: number; name: string; latitude: number; longitude: number; radiusKm: number;
   connectStatus: string; currentScore: number; providerName: string | null;
@@ -37,24 +57,151 @@ function zoomFactor(zoom: number): number {
   return Math.min(1, Math.max(0.35, (zoom - 4) / 7));
 }
 
+/**
+ * Punto de la asistencia: se reutiliza el marcador rojo de avería de Mobilink
+ * Assist (`public/marker-asistencia.png`, versión con transparencia del
+ * `marker_averia.png` original, que venía sobre fondo blanco opaco), de modo
+ * que el mismo hecho se dibuja igual en todo el ecosistema.
+ *
+ * Debajo del pin va el estado con el color de la leyenda, igual que la
+ * matrícula bajo la furgoneta: así el estado se lee en el propio mapa sin
+ * tener que abrir el popup ni interpretar un color suelto. Las urgentes llevan
+ * además aro rojo y signo de admiración.
+ */
 function assistanceIcon(status: string, urgent: boolean, zoom: number) {
   const color = STATUS_COLORS[status] ?? "#94a3b8";
-  const s = Math.round(18 * zoomFactor(zoom));
-  const border = Math.max(1, Math.round(3 * zoomFactor(zoom)));
+  const label = ASSISTANCE_STATUS_LABELS[status] ?? status;
+  const f = zoomFactor(zoom);
+  const s = Math.round(40 * f);          // lado del marcador (la imagen es cuadrada)
+  const dot = Math.max(7, Math.round(14 * f));
+  const font = Math.max(8, Math.round(10 * f));
+  const badgeH = Math.round(font * 1.9);
+  const w = Math.max(s, 110);
+  // La punta del pin está a ~el 90 % de la altura de la imagen: ahí va el anclaje
+  const tipY = Math.round(s * 0.9);
   return L.divIcon({
-    html: `<div style="width:${s}px;height:${s}px;border-radius:50%;background:${color};
-             border:${border}px solid ${urgent ? "#ef4444" : "#0f172a"};box-shadow:0 1px 6px rgba(0,0,0,.5)"></div>`,
-    className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+    html: `
+      <div style="text-align:center;width:${w}px">
+        <div style="position:relative;width:${s}px;height:${s}px;margin:0 auto">
+          ${urgent ? `<div style="position:absolute;inset:${Math.round(s * 0.08)}px ${Math.round(s * 0.06)}px ${Math.round(s * 0.22)}px;
+               border:${Math.max(2, Math.round(3 * f))}px solid #ef4444;border-radius:50%;opacity:.85"></div>` : ""}
+          <img src="/marker-asistencia.png" alt="" width="${s}" height="${s}"
+               style="display:block;width:${s}px;height:${s}px;max-width:none;
+               filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+          ${urgent ? `<span style="position:absolute;left:0;top:0;width:${dot}px;height:${dot}px;border-radius:50%;
+               background:#ef4444;border:${Math.max(1, Math.round(2 * f))}px solid #0f172a;color:#fff;
+               font:700 ${Math.max(8, Math.round(dot * 0.8))}px/1 system-ui;display:flex;align-items:center;
+               justify-content:center">!</span>` : ""}
+        </div>
+        <div style="display:inline-block;background:rgba(15,23,42,.92);color:${color};
+             border:1px solid ${color};font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
+             margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${urgent ? "! " : ""}${label}</div>
+      </div>`,
+    className: "",
+    iconSize: [w, s + badgeH],
+    iconAnchor: [w / 2, tipY],
+    popupAnchor: [0, -tipY],
   });
 }
 
-function workshopIcon(zoom: number) {
-  const s = Math.round(26 * zoomFactor(zoom));
+/**
+ * Antigüedad a partir de la cual la posición deja de considerarse fiable.
+ * Depende de cada cuánto reporta la fuente: el móvil del operario manda
+ * posición cada 15-60 s mientras se desplaza, mientras que un GPS de flota
+ * (Webfleet) reporta cada varios minutos, así que exigirle lo mismo marcaría
+ * como dudosas unidades que están perfectamente conectadas.
+ */
+const POSICION_VIEJA_MS: Record<string, number> = {
+  lite: 5 * 60_000,
+  assist: 10 * 60_000,
+  unit: 20 * 60_000,
+};
+
+/** ¿Hay que avisar de que la posición ya no es de fiar? */
+function posicionDesactualizada(a: MapAssistance): boolean {
+  if (a.vehicleConnection === "offline" || a.vehicleConnection === "no_connection") return true;
+  if (!a.vehicleAtMs) return true;
+  const limite = POSICION_VIEJA_MS[a.vehicleSource ?? "unit"] ?? POSICION_VIEJA_MS.unit;
+  return Date.now() - Number(a.vehicleAtMs) > limite;
+}
+
+/** Antigüedad en texto, para decirlo en vez de insinuarlo con un icono. */
+function haceCuanto(ms: number | null): string {
+  if (!ms) return "sin fecha";
+  const min = Math.round((Date.now() - Number(ms)) / 60000);
+  if (min < 1) return "hace menos de 1 min";
+  if (min < 60) return `hace ${min} min`;
+  return `hace ${Math.round(min / 60)} h`;
+}
+
+/**
+ * Unidad asignada a la asistencia, con el mismo aspecto que en «Localización
+ * de flota»: la furgoneta y, debajo, la matrícula. Si el vehículo no tiene
+ * matrícula registrada se cae al nombre de la unidad o al operario, para no
+ * dejar la etiqueta vacía.
+ *
+ * Si la última posición es antigua se atenúa y la etiqueta lo dice, para no
+ * dar por buena una posición que ya no lo es.
+ */
+function vehicleIcon(zoom: number, stale: boolean, label: string) {
+  const f = zoomFactor(zoom);
+  const w = Math.round(40 * f);
+  const h = Math.round(60 * f);
+  const font = Math.max(8, Math.round(10 * f));
+  const badgeH = Math.round(font * 1.9);
+  const texto = label.length > 14 ? `${label.slice(0, 13)}…` : label;
   return L.divIcon({
-    html: `<div style="width:${s}px;height:${s}px;display:flex;align-items:center;justify-content:center;
-             background:#0e7490;border:${Math.max(1, Math.round(2 * zoomFactor(zoom)))}px solid #67e8f9;border-radius:${Math.round(s / 4)}px;
-             font-size:${Math.round(s * 0.55)}px;box-shadow:0 1px 6px rgba(0,0,0,.5)">🔧</div>`,
-    className: "", iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+    html: `
+      <div style="text-align:center;width:${Math.max(w, 70)}px">
+        <img src="/van-icon.png" alt="" width="${w}" height="${h}"
+             style="display:block;margin:0 auto;width:${w}px;height:${h}px;max-width:none;
+             opacity:${stale ? 0.5 : 1};filter:drop-shadow(0 2px 6px rgba(0,0,0,.4))" />
+        <div style="display:inline-block;background:${stale ? "#334155" : "#1e3a5f"};
+             color:${stale ? "#cbd5e1" : "#f0c040"};font:900 ${font}px/1.5 system-ui;padding:1px 5px;
+             border-radius:4px;margin-top:2px;white-space:nowrap;border:1px solid #2d4a6a;
+             letter-spacing:.5px">${stale ? "? " : ""}${texto}</div>
+      </div>`,
+    className: "",
+    iconSize: [Math.max(w, 70), h + badgeH],
+    iconAnchor: [Math.max(w, 70) / 2, h],
+    popupAnchor: [0, -h - 4],
+  });
+}
+
+/**
+ * Taller de la red: mismo tratamiento que el punto de la asistencia pero con
+ * el marcador verde de Mobilink Assist y el nombre del taller debajo.
+ */
+// A partir de este zoom se muestra el nombre del taller; por debajo se oculta
+// para que las etiquetas no se solapen con el mapa alejado.
+const WORKSHOP_LABEL_MIN_ZOOM = 9;
+
+function workshopIcon(zoom: number, nombre: string) {
+  const f = zoomFactor(zoom);
+  const s = Math.round(40 * f);
+  const font = Math.max(8, Math.round(10 * f));
+  const showLabel = zoom >= WORKSHOP_LABEL_MIN_ZOOM;
+  const badgeH = showLabel ? Math.round(font * 1.9) : 0;
+  const w = showLabel ? Math.max(s, 110) : s;
+  const tipY = Math.round(s * 0.9);
+  const texto = nombre.length > 20 ? `${nombre.slice(0, 19)}…` : nombre;
+  const labelHtml = showLabel
+    ? `<div style="display:inline-block;background:rgba(15,23,42,.92);color:#22c55e;border:1px solid #22c55e;
+             font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
+             margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${texto}</div>`
+    : "";
+  return L.divIcon({
+    html: `
+      <div style="text-align:center;width:${w}px">
+        <img src="/marker-taller.png" alt="" width="${s}" height="${s}"
+             style="display:block;margin:0 auto;width:${s}px;height:${s}px;max-width:none;
+             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+        ${labelHtml}
+      </div>`,
+    className: "",
+    iconSize: [w, s + badgeH],
+    iconAnchor: [w / 2, tipY],
+    popupAnchor: [0, -tipY],
   });
 }
 
@@ -68,6 +215,7 @@ export default function MapaOperativo() {
   const { user } = useConnectAuth();
   const canEdit = hasRole(user, "cc_admin");
   const [data, setData] = useState<{ assistances: MapAssistance[]; workshops: MapWorkshop[] } | null>(null);
+  const [rutas, setRutas] = useState<Record<number, RutaCarretera>>({});
   const [showCoverage, setShowCoverage] = useState(false);
   const [adjustMode, setAdjustMode] = useState(false);
   const [zoom, setZoom] = useState(9);
@@ -87,10 +235,39 @@ export default function MapaOperativo() {
     } catch (e: any) { setError(e.message); load(); }
   };
 
+  /**
+   * Rutas por carretera de cada unidad en camino. Se piden aparte del mapa
+   * porque el backend las cachea: así el refresco cada 15 s no dispara una
+   * llamada facturable a Google por cada unidad.
+   */
+  const cargarRutas = useCallback(async (asistencias: MapAssistance[]) => {
+    const conUnidad = asistencias.filter((a) => a.vehicleLat != null && a.vehicleLng != null);
+    const resultados = await Promise.all(
+      conUnidad.map((a) =>
+        boFetch<{ route: RutaCarretera | null }>(`/assistances/${a.id}/route`)
+          .then((r) => [a.id, r.route] as const)
+          .catch(() => [a.id, null] as const),
+      ),
+    );
+    setRutas((previas) => {
+      const siguiente = { ...previas };
+      for (const [id, ruta] of resultados) {
+        // Si esta vez no hay ruta, se conserva la anterior: mejor una ruta de
+        // hace un minuto que volver de golpe a la línea recta.
+        if (ruta) siguiente[id] = ruta;
+      }
+      for (const id of Object.keys(siguiente)) {
+        if (!conUnidad.some((a) => String(a.id) === id)) delete siguiente[Number(id)];
+      }
+      return siguiente;
+    });
+  }, []);
+
   const load = useCallback(() => {
     boFetch<{ assistances: MapAssistance[]; workshops: MapWorkshop[] }>("/map")
-      .then(setData).catch((e) => setError(e.message));
-  }, []);
+      .then((d) => { setData(d); void cargarRutas(d.assistances); })
+      .catch((e) => setError(e.message));
+  }, [cargarRutas]);
 
   useEffect(() => {
     load();
@@ -132,7 +309,7 @@ export default function MapaOperativo() {
       )}
       {adjustMode && (
         <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-300">
-          Modo ajuste activo: arrastra el icono 🔧 de un taller hasta su ubicación real y confirma para guardar las coordenadas GPS.
+          Modo ajuste activo: arrastra el marcador verde de un taller hasta su ubicación real y confirma para guardar las coordenadas GPS.
         </div>
       )}
 
@@ -147,7 +324,7 @@ export default function MapaOperativo() {
             <span key={`w${w.id}`}>
               <Marker
                 position={[w.latitude, w.longitude]}
-                icon={workshopIcon(zoom)}
+                icon={workshopIcon(zoom, w.name)}
                 draggable={adjustMode}
                 eventHandlers={adjustMode ? {
                   dragend: (e) => {
@@ -171,18 +348,61 @@ export default function MapaOperativo() {
               )}
             </span>
           ))}
-          {data?.assistances.map((a) => (
-            <Marker key={`a${a.id}`} position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
-              <Popup>
-                <b>#{a.id} — {a.customerName}</b><br />
-                {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status} · {a.serviceType}<br />
-                {a.address}<br />
-                {a.workshopName && <>Taller: {a.workshopName}<br /></>}
-                {a.assignedTechName && <>Técnico: {a.assignedTechName}<br /></>}
-                <Link to={`/connect/asistencias/${a.id}`}>Abrir ficha</Link>
-              </Popup>
-            </Marker>
-          ))}
+          {data?.assistances.map((a) => {
+            const conUnidad = a.vehicleLat != null && a.vehicleLng != null;
+            const vieja = conUnidad && posicionDesactualizada(a);
+            const ruta = rutas[a.id];
+            return (
+              <span key={`a${a.id}`}>
+                <Marker position={[a.latitude, a.longitude]} icon={assistanceIcon(a.status, a.priority === "urgente", zoom)}>
+                  <Popup>
+                    <b>#{a.id} — {a.customerName}</b>{a.priority === "urgente" && " · URGENTE"}<br />
+                    {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status} · {a.serviceType}<br />
+                    {a.address}<br />
+                    {a.workshopName && <>Taller: {a.workshopName}<br /></>}
+                    {a.assignedTechName && <>Técnico: {a.assignedTechName}<br /></>}
+                    <Link to={`/connect/asistencias/${a.id}`}>Abrir ficha</Link>
+                  </Popup>
+                </Marker>
+                {conUnidad && (
+                  <>
+                    {/* Ruta real por carretera; si no hay, línea recta discontinua
+                        (y el popup avisa de que es una aproximación) */}
+                    {ruta ? (
+                      <Polyline
+                        positions={ruta.points}
+                        pathOptions={{ color: vieja ? "#64748b" : "#8b5cf6", weight: 4, opacity: 0.85 }}
+                      />
+                    ) : (
+                      <Polyline
+                        positions={[[a.vehicleLat!, a.vehicleLng!], [a.latitude, a.longitude]]}
+                        pathOptions={{ color: vieja ? "#64748b" : "#8b5cf6", weight: 2, dashArray: "6 6", opacity: 0.85 }}
+                      />
+                    )}
+                    <Marker
+                      position={[a.vehicleLat!, a.vehicleLng!]}
+                      icon={vehicleIcon(zoom, vieja, a.vehiclePlate ?? a.vehicleName ?? a.operatorName ?? `#${a.id}`)}
+                    >
+                      <Popup>
+                        <b>{a.vehiclePlate ?? a.vehicleName ?? "Unidad asignada"}</b>
+                        {a.vehiclePlate && a.vehicleName ? ` · ${a.vehicleName}` : ""}<br />
+                        {a.operatorName && <>Operario: {a.operatorName}<br /></>}
+                        Asistencia #{a.id} · {ASSISTANCE_STATUS_LABELS[a.status] ?? a.status}<br />
+                        {ruta
+                          ? <>Por carretera: {ruta.distanceKm} km · {ruta.etaMinutes} min<br /></>
+                          : <>Sin ruta disponible: la línea es una aproximación en recta<br /></>}
+                        {a.vehicleSpeedKmh != null && <>{Math.round(a.vehicleSpeedKmh)} km/h<br /></>}
+                        {vieja ? "⚠ Posición desactualizada" : "Posición actual"}
+                        {a.vehicleAtMs ? ` · ${haceCuanto(Number(a.vehicleAtMs))} (${fmtDateTime(Number(a.vehicleAtMs))})` : ""}
+                        {a.vehicleConnection ? ` · ${a.vehicleConnection}` : ""}<br />
+                        <span style={{ color: "#64748b" }}>Origen: {VEHICLE_SOURCE_LABELS[a.vehicleSource ?? ""] ?? "desconocido"}</span>
+                      </Popup>
+                    </Marker>
+                  </>
+                )}
+              </span>
+            );
+          })}
         </MapContainer>
       </div>
 

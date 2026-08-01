@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Descargas · Mobilink</title>
+  <link rel="icon" href="/favicon.ico" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 24px 16px 48px;
+    }
+    header { text-align: center; margin: 12px 0 28px; }
+    header img { height: 54px; }
+    header .sub { color: #94a3b8; font-size: 14px; margin-top: 8px; }
+    .grid { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
+    .card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 16px;
+      padding: 18px 18px 16px; display: flex; gap: 14px; align-items: center;
+    }
+    .icon {
+      width: 54px; height: 54px; border-radius: 14px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 26px; font-weight: 800;
+    }
+    .icon.assist { background: #1e3a8a22; color: #60a5fa; }
+    .icon.tyre { background: #7c3aed22; color: #a78bfa; }
+    .icon.stock { background: #16a34a22; color: #4ade80; }
+    .info { flex: 1; min-width: 0; }
+    .info h2 { margin: 0; font-size: 16px; }
+    .info .desc { color: #94a3b8; font-size: 13px; margin: 3px 0 0; }
+    .info .ver { color: #64748b; font-size: 12px; margin-top: 4px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #2563eb; color: #fff; text-decoration: none;
+      font-weight: 700; font-size: 14px; padding: 10px 16px; border-radius: 10px;
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(.97); }
+    .note {
+      max-width: 560px; margin-top: 26px; background: #172033;
+      border: 1px solid #334155; border-radius: 12px; padding: 14px 16px;
+      color: #94a3b8; font-size: 13px; line-height: 1.6;
+    }
+    .note b { color: #cbd5e1; }
+    footer { color: #475569; font-size: 12px; margin-top: 28px; }
+    @media (max-width: 420px) {
+      .card { flex-wrap: wrap; }
+      .btn { width: 100%; justify-content: center; margin-top: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="/logo_horizontal.png" alt="Mobilink" />
+    <div class="sub">Descarga de aplicaciones · Android</div>
+  </header>
+
+  <div class="grid" id="apps">
+    <div class="card"><div class="info"><p class="desc">Cargando aplicaciones…</p></div></div>
+  </div>
+
+  <script>
+    var META = {
+      assist: { cls: "assist", ini: "A", desc: "Asistencias en carretera para operarios." },
+      tyrecontrol: { cls: "tyre", ini: "T", desc: "Revisión de neumáticos en campo." },
+      stockflow: { cls: "stock", ini: "S", desc: "Gestión de traspasos de almacén." }
+    };
+    fetch("/api/apps/list")
+      .then(function (r) { return r.json(); })
+      .then(function (apps) {
+        var grid = document.getElementById("apps");
+        grid.innerHTML = "";
+        apps.forEach(function (a) {
+          var m = META[a.key] || { cls: "assist", ini: "?", desc: "" };
+          var card = document.createElement("div");
+          card.className = "card";
+          var btn = a.url
+            ? '<a class="btn" href="' + a.url + '">Descargar</a>'
+            : '<span class="ver">No disponible</span>';
+          card.innerHTML =
+            '<div class="icon ' + m.cls + '">' + m.ini + '</div>' +
+            '<div class="info"><h2>' + a.label + '</h2>' +
+            '<p class="desc">' + m.desc + '</p>' +
+            '<p class="ver">' + (a.version ? "Versión " + a.version : "") + '</p></div>' +
+            btn;
+          grid.appendChild(card);
+        });
+      })
+      .catch(function () {
+        document.getElementById("apps").innerHTML =
+          '<div class="card"><div class="info"><p class="desc">No se pudieron cargar las aplicaciones. Inténtalo más tarde.</p></div></div>';
+      });
+  </script>
+
+  <div class="note">
+    <b>Cómo instalar:</b> pulsa «Descargar», abre el archivo <b>.apk</b> descargado y acepta
+    «Instalar apps de origen desconocido» si el móvil lo pide. Si ya tienes una versión
+    instalada, se actualizará encima sin perder datos.
+  </div>
+
+  <footer>Mobilink Solutions · uso interno</footer>
+</body>
+</html>

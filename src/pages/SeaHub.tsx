@@ -120,7 +120,7 @@ const MODULOS: Modulo[] = [
   },
   {
     id: "connect",
-    titulo: "Connect Pro",
+    titulo: "Assist Central Pro",
     descripcion: "Asistencias de partners externos (aseguradoras, renting, grúas) hacia la red de talleres.",
     icon: "🔗",
     color: "bg-indigo-50",

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
 /// Plano del vehículo con la FOTO real de fondo y una tarjeta por posición,
@@ -13,6 +14,9 @@ class VehicleLayoutImage extends StatefulWidget {
   final Map<String, RevisionDetalleDraft> detalles;
   final Map<String, TireStatus> estados;
   final Map<String, UltimaMedicion> ultimas; // última medición conocida por posición
+  /// Valores ya resueltos por posición (revisión → neumático → catálogo /
+  /// presión objetivo del eje). Si falta la posición, se usa [detalles].
+  final Map<String, ({double? prof, double? pres})> valores;
   final String? seleccionadaId;
   final double? liveProf; // medida en curso de la rueda activa
   final double? livePres;
@@ -26,6 +30,7 @@ class VehicleLayoutImage extends StatefulWidget {
     required this.detalles,
     required this.estados,
     this.ultimas = const {},
+    this.valores = const {},
     required this.seleccionadaId,
     required this.liveProf,
     required this.livePres,
@@ -95,11 +100,17 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
     return LayoutBuilder(
       builder: (context, c) {
         // Ajustar la imagen dentro del área disponible manteniendo su aspecto:
-        // primero por ancho y, si se pasa de alto, se recorta por alto.
+        // primero por ancho y, si se pasa de alto, se encoge por alto. En un
+        // scroll (maxHeight infinito, p.ej. la ficha) se aplica un tope propio
+        // proporcional a la pantalla para que TODAS las imágenes de chasis
+        // salgan con la misma medida visual, da igual su resolución o aspecto.
+        final maxH = c.maxHeight.isFinite
+            ? c.maxHeight
+            : MediaQuery.of(context).size.height * 0.66;
         double w = c.maxWidth;
         double h = w / aspect;
-        if (c.maxHeight.isFinite && h > c.maxHeight) {
-          h = c.maxHeight;
+        if (h > maxH) {
+          h = maxH;
           w = h * aspect;
         }
         return Center(
@@ -133,9 +144,13 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
 
   Widget _cardPositioned(PosicionVehiculo p, int i, double w, double h) {
     final co = _coords(p, i);
-    final cardW = (co.w / 100 * w).clamp(108.0, 210.0);
+    // El ancho es EXACTAMENTE su porcentaje, sin suelo en píxeles: es lo único
+    // que garantiza que dos tarjetas del mismo eje no se pisen ni invadan el
+    // chasis por estrecha que sea la pantalla. Y se ancla por el centro.
+    final cardW = co.w / 100 * w;
+    final centroX = (co.x + co.w / 2) / 100 * w;
     return Positioned(
-      left: (co.x / 100 * w).clamp(0.0, w - cardW),
+      left: (centroX - cardW / 2).clamp(0.0, w - cardW),
       top: (co.y / 100 * h).clamp(0.0, h - 36),
       width: cardW,
       child: _TarjetaPosicion(
@@ -143,6 +158,7 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
         neumatico: widget.montajePorPosicion[p.id]?.neumatico,
         draft: widget.detalles[p.id],
         status: widget.estados[p.id] ?? TireStatus.pendiente,
+        valor: widget.valores[p.id],
         ultima: widget.ultimas[p.id],
         seleccionada: p.id == widget.seleccionadaId,
         liveProf: p.id == widget.seleccionadaId ? widget.liveProf : null,
@@ -158,6 +174,7 @@ class _TarjetaPosicion extends StatelessWidget {
   final Neumatico? neumatico;
   final RevisionDetalleDraft? draft;
   final TireStatus status;
+  final ({double? prof, double? pres})? valor;
   final UltimaMedicion? ultima;
   final bool seleccionada;
   final double? liveProf;
@@ -169,6 +186,7 @@ class _TarjetaPosicion extends StatelessWidget {
     required this.neumatico,
     required this.draft,
     required this.status,
+    required this.valor,
     required this.ultima,
     required this.seleccionada,
     required this.liveProf,
@@ -190,10 +208,17 @@ class _TarjetaPosicion extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Recuadro pintado entero del color del estado (nuevo / bien / justo / mal).
+    // Mientras se mide, la rueda activa manda: se queda con el marco azul.
+    final fill = seleccionada ? null : tireStatusFill(status);
     final color = seleccionada ? AppColors.tireSeleccionado : tireStatusColor(status);
+    final cTexto = fill != null ? tireStatusOnFill(status) : AppColors.textPrimary;
+    final cSuave = fill != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
+    final cTenue = fill != null ? cTexto.withValues(alpha: 0.60) : AppColors.textHint;
+    final cAcento = fill != null ? cTexto : color;
 
-    final prof = liveProf ?? draft?.profundidadMm;
-    final pres = livePres ?? draft?.presionBar;
+    final prof = liveProf ?? draft?.profundidadMm ?? valor?.prof;
+    final pres = livePres ?? draft?.presionBar ?? valor?.pres;
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
 
@@ -208,8 +233,11 @@ class _TarjetaPosicion extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
           decoration: BoxDecoration(
-            color: AppColors.surface.withValues(alpha: 0.92),
-            border: Border.all(color: color, width: seleccionada ? 3 : 2),
+            color: fill ?? AppColors.surface.withValues(alpha: 0.92),
+            border: Border.all(
+              color: fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : color,
+              width: seleccionada ? 3 : 2,
+            ),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
@@ -219,7 +247,7 @@ class _TarjetaPosicion extends StatelessWidget {
               Text(
                 p.nombre ?? p.codigoPosicion,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color),
+                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -228,7 +256,7 @@ class _TarjetaPosicion extends StatelessWidget {
                 Text(
                   neumatico!.marca ?? '—',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -236,7 +264,7 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     neumatico!.modelo!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 10, color: cSuave),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -244,9 +272,27 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     medida,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 9, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 9, color: cSuave),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                  ),
+                // Distintivos del propio neumático: recauchutado (lo dice la
+                // marca) y reesculturado (se le han cortado dibujos nuevos).
+                if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca) ||
+                    neumatico!.reesculturado ||
+                    neumatico!.giradoEnLlanta)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 3,
+                      children: [
+                        if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca))
+                          _EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
+                        if (neumatico!.reesculturado) _EtiquetaNeu(txt: 'REESC.', color: cTexto),
+                        if (neumatico!.giradoEnLlanta) _EtiquetaNeu(txt: 'GIRADO', color: cTexto),
+                      ],
+                    ),
                   ),
               ] else
                 const Text('Sin neumático', style: TextStyle(fontSize: 10, color: AppColors.textHint)),
@@ -254,19 +300,19 @@ class _TarjetaPosicion extends StatelessWidget {
               Text(
                 '$profTxt · $presTxt',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
               if (ultima != null && (ultima!.fecha != null || _ultimaMedidasTxt() != null)) ...[
                 const SizedBox(height: 2),
-                const Divider(height: 1, thickness: 0.5, color: AppColors.cardBorder),
+                Divider(height: 1, thickness: 0.5, color: fill != null ? cTexto.withValues(alpha: 0.30) : AppColors.cardBorder),
                 const SizedBox(height: 2),
                 if (ultima!.fecha != null)
                   Text(
                     'Últ. rev. ${_fmtFecha(ultima!.fecha!)}',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 9, color: AppColors.textHint),
+                    style: TextStyle(fontSize: 9, color: cTenue),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -274,7 +320,7 @@ class _TarjetaPosicion extends StatelessWidget {
                   Text(
                     _ultimaMedidasTxt()!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 9, color: AppColors.textHint),
+                    style: TextStyle(fontSize: 9, color: cTenue),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -283,6 +329,26 @@ class _TarjetaPosicion extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Etiqueta pequeña del propio neumático (recauchutado, reesculturado, girado).
+class _EtiquetaNeu extends StatelessWidget {
+  final String txt;
+  final Color color;
+  const _EtiquetaNeu({required this.txt, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+      ),
+      child: Text(txt,
+          style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color, height: 1.1)),
     );
   }
 }

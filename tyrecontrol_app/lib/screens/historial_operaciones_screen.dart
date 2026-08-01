@@ -25,6 +25,7 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _intervenciones = [];
+  List<Map<String, dynamic>> _sueltas = [];
 
   @override
   void initState() {
@@ -35,9 +36,18 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   Future<void> _cargar() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final iv = await TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId);
+      final res = await Future.wait([
+        TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId),
+        TyreControlApi.listarOperacionesVehiculo(widget.vehiculoId),
+      ]);
       if (!mounted) return;
-      setState(() => _intervenciones = iv);
+      final todas = res[1];
+      setState(() {
+        _intervenciones = res[0];
+        // Movimientos que no pertenecen a ninguna intervención (p. ej. montar
+        // desde catálogo sin cerrar sesión de cambio): antes no salían aquí.
+        _sueltas = todas.where((o) => o['intervencion_id'] == null).toList();
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -191,29 +201,44 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
-              : _intervenciones.isEmpty
+              : (_intervenciones.isEmpty && _sueltas.isEmpty)
                   ? const Center(child: Padding(padding: EdgeInsets.all(24),
-                      child: Text('Sin intervenciones registradas para este vehículo.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint))))
+                      child: Text('Sin operaciones registradas para este vehículo.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint))))
                   : RefreshIndicator(
                       onRefresh: _cargar,
-                      child: ListView.builder(
+                      child: ListView(
                         padding: const EdgeInsets.all(12),
-                        itemCount: _intervenciones.length,
-                        itemBuilder: (_, i) {
-                          final iv = _intervenciones[i];
-                          final informe = ((iv['resumen_ia'] as String?)?.isNotEmpty == true ? iv['resumen_ia'] : iv['resumen']) as String? ?? '—';
-                          return Card(
-                            color: AppColors.surface,
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
-                              title: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
-                                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                              subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
-                              trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
-                              onTap: () => _verDetalle(iv),
-                            ),
-                          );
-                        },
+                        children: [
+                          // Movimientos sueltos: montajes/cambios hechos fuera
+                          // de una intervención cerrada. Van primero porque son
+                          // los más recientes y antes no se veían.
+                          if (_sueltas.isNotEmpty) ...[
+                            const Text('MOVIMIENTOS SUELTOS',
+                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            ..._sueltas.map(_filaOperacion),
+                            const SizedBox(height: 16),
+                          ],
+                          if (_intervenciones.isNotEmpty) ...[
+                            const Text('INTERVENCIONES',
+                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            ..._intervenciones.map((iv) {
+                              final informe = ((iv['resumen_ia'] as String?)?.isNotEmpty == true ? iv['resumen_ia'] : iv['resumen']) as String? ?? '—';
+                              return Card(
+                                color: AppColors.surface,
+                                margin: const EdgeInsets.only(bottom: 8),
+                                child: ListTile(
+                                  title: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
+                                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                                  subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+                                  trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
+                                  onTap: () => _verDetalle(iv),
+                                ),
+                              );
+                            }),
+                          ],
+                        ],
                       ),
                     ),
     );
@@ -277,6 +302,12 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
     final borde = _borde(s);
     final marca = s['marca'] as String?;
     final mm = s['mm'];
+    final presion = s['presion'];
+    final distintivos = [
+      if (s['recau'] == true) 'RECAUCH.',
+      if (s['reesc'] == true) 'REESC.',
+      if (s['girado'] == true) 'GIRADO',
+    ];
     final averias = s['averias'] is List ? (s['averias'] as List).whereType<String>().toList() : const <String>[];
     return Positioned(
       left: (x / 100 * w).clamp(0.0, w - cardW),
@@ -293,7 +324,12 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
           Text(s['codigo']?.toString() ?? '—', style: TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
           Text(marca ?? 'Libre', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
           if (marca != null)
-            Text(mm != null ? '$mm mm' : '— mm', style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text('${mm != null ? '$mm mm' : '— mm'} · ${presion != null ? '$presion bar' : '— bar'}',
+                style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (marca != null && distintivos.isNotEmpty)
+            Text(distintivos.join(' · '),
+                style: const TextStyle(fontSize: 6.5, fontWeight: FontWeight.w800, color: AppColors.info),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           if (widget.conAveria && averias.isNotEmpty)
             Text('⚠ ${averias.join(' · ')}', style: const TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: AppColors.danger), maxLines: 2, overflow: TextOverflow.ellipsis),
         ]),
@@ -302,19 +338,35 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
   }
 
   Widget _listaFallback() {
+    if (widget.items.isEmpty) {
+      return const Text('No se guardó el estado previo (intervención anterior a esta función).',
+          style: TextStyle(fontSize: 11, color: AppColors.textHint));
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       for (final s in widget.items)
         Padding(
           padding: const EdgeInsets.only(bottom: 2),
-          child: Text(
-            '${s['codigo'] ?? '—'}: ${s['marca'] ?? 'Libre'}${s['medida'] != null ? ' ${s['medida']}' : ''}'
-            '${s['mm'] != null ? ' · ${s['mm']} mm' : ''}'
-            '${widget.conAveria && s['averias'] is List && (s['averias'] as List).isNotEmpty ? '  ⚠ ${(s['averias'] as List).join(' · ')}' : ''}',
-            style: TextStyle(
-              fontSize: 11,
-              color: _borde(s) == AppColors.cardBorder ? AppColors.textSecondary : _borde(s),
-            ),
-          ),
+          child: Builder(builder: (_) {
+            final dist = [
+              if (s['recau'] == true) 'RECAUCH.',
+              if (s['reesc'] == true) 'REESC.',
+              if (s['girado'] == true) 'GIRADO',
+            ].join(' · ');
+            final averias = widget.conAveria && s['averias'] is List
+                ? (s['averias'] as List).join(' · ')
+                : '';
+            return Text(
+              '${s['codigo'] ?? '—'}: ${s['marca'] ?? 'Libre'}${s['medida'] != null ? ' ${s['medida']}' : ''}'
+              '${s['mm'] != null ? ' · ${s['mm']} mm' : ''}'
+              '${s['presion'] != null ? ' · ${s['presion']} bar' : ''}'
+              '${dist.isNotEmpty ? '  $dist' : ''}'
+              '${averias.isNotEmpty ? '  ⚠ $averias' : ''}',
+              style: TextStyle(
+                fontSize: 11,
+                color: _borde(s) == AppColors.cardBorder ? AppColors.textSecondary : _borde(s),
+              ),
+            );
+          }),
         ),
     ]);
   }
@@ -322,6 +374,8 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
   @override
   Widget build(BuildContext context) {
     final url = widget.imagen;
+    // Sin posiciones no tiene sentido pintar el chasis vacío: mejor el aviso.
+    if (widget.items.isEmpty) return _listaFallback();
     if (url == null || url.isEmpty || _aspect == null) return _listaFallback();
     return LayoutBuilder(builder: (ctx, c) {
       final w = c.maxWidth;
