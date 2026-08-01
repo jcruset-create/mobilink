@@ -101,7 +101,7 @@ Implementado:
 - Desactivar acceso ya existía (botón Activo/Inactivo) y varios usuarios por
   empresa también: no hay restricción que lo impida.
 
-### Fase 2b — Ficha de vehículo en solo lectura
+### Fase 2b — Ficha de vehículo en solo lectura — HECHO
 
 Hoy "Mis vehículos" es una tabla plana sin enlace: el cliente no puede abrir
 ningún vehículo. La ficha (`VehiculoDetalle`: plano del chasis con los
@@ -121,6 +121,21 @@ administrador.
 - **Prueba de aceptación**: como cliente, abrir la ficha, comprobar que no hay
   botones de escritura, y forzar un `update` de vehículo por consola con su
   sesión → rechazado por RLS.
+
+Al implementarlo resultó que `VehiculoDetalle` **ya estaba preparado**: calcula
+`esCliente` y pasa `puedeEditar={!esCliente}` a ficha técnica, ITV y plan de
+mantenimiento, oculta Webfleet y limita la calibración al super-admin. Lo que
+faltaba era solo acceso y navegación:
+
+- La ruta `vehiculos/:id` sale del bloque de administrador a uno propio con
+  `roles={["administrador", "cliente"]}`. Se listan los dos a propósito:
+  dejarla abierta a todos habría dado al OPERADOR permiso de edición sobre
+  ficha técnica, ITV y plan, que hoy no tiene desde el panel.
+- Las filas de "Mis vehículos" enlazan a la ficha.
+- Dentro de la ficha, "← Vehículos" lleva a "Mis vehículos" si es cliente (esa
+  lista es de administrador), y el enlace a la ficha del neumático no se
+  ofrece: `/neumaticos/:id` es pantalla de administrador y el botón "Ver ficha"
+  del plano habría quedado muerto.
 
 ### Fase 3 — Bienvenida y a prueba de directores de flota
 
@@ -159,7 +174,7 @@ administrador.
 |---|---|---|
 | ~~1 Curar visibilidad~~ | HECHO | ~~Cliente ve costes y productividad interna~~ |
 | ~~2 Invitación~~ | HECHO | ~~Contraseñas conocidas por el admin~~ |
-| 2b Ficha vehículo solo lectura | Medio día | El cliente ve la lista pero no puede abrir nada |
+| ~~2b Ficha vehículo solo lectura~~ | HECHO | ~~El cliente ve la lista pero no puede abrir nada~~ |
 | 3 Aterrizaje | Horas | Primera impresión pobre |
 | 4 Auditoría | 1 día | Solo importa con varios clientes |
 

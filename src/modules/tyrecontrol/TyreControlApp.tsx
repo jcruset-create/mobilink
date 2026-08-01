@@ -61,6 +61,15 @@ export default function TyreControlApp() {
             <Route path="perfil" element={<Perfil />} />
             <Route path="ayuda" element={<Ayuda />} />
             {/* Montajes/Operaciones: admin y cliente (la pantalla ajusta acciones por rol) */}
+            {/* La ficha del vehículo la comparten admin y cliente: la propia
+                pantalla desactiva toda edición con `esCliente` y la RLS impide
+                leer un vehículo de otra empresa aunque se teclee el id a mano.
+                Se listan los dos roles a propósito: dejarla abierta a todos
+                daría al OPERADOR permiso de edición sobre ficha técnica, ITV y
+                plan de mantenimiento, que hoy no tiene desde el panel. */}
+            <Route element={<RoleRoute roles={["administrador", "cliente"]} />}>
+              <Route path="vehiculos/:id" element={<VehiculoDetalle />} />
+            </Route>
             <Route path="montajes" element={<MontajesActuales />} />
             <Route path="operaciones" element={<Operaciones />} />
             <Route path="revision-vehiculo" element={<RevisionVehiculo />} />
@@ -103,7 +112,6 @@ export default function TyreControlApp() {
               <Route path="delegaciones" element={<Delegaciones />} />
               <Route path="usuarios" element={<Usuarios />} />
               <Route path="vehiculos" element={<Vehiculos />} />
-              <Route path="vehiculos/:id" element={<VehiculoDetalle />} />
               <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
               <Route path="planificacion" element={<PlanificacionRevisiones />} />
               <Route path="incidencias" element={<Incidencias />} />
