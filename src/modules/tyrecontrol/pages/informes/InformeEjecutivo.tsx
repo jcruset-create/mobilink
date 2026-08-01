@@ -36,17 +36,83 @@ const ETIQUETA_NIVEL: Record<NivelDesgaste, string> = {
   critico: "Crítico", bajo: "Bajo", medio: "Medio", bueno: "Bueno", excelente: "Excelente",
 };
 
-// Las bandas de mm son una escala ORDINAL (el orden importa, la identidad no),
-// así que van en un solo tono con luminosidad creciente. Un arcoíris aquí
-// sugeriría cinco categorías independientes que no existen.
-// El color va atado al NOMBRE de la banda, no a su posición en el array: la
-// RPC omite las bandas sin neumáticos, así que indexar por posición haría que
-// "8-10" heredase el tono de otra banda y la rampa dejaría de significar nada.
-const BANDAS = ["<4", "4-6", "6-8", "8-10", "10-12", ">=12"] as const;
-const RAMPA_BANDA: Record<string, string> = {
-  "<4": "#0369a1", "4-6": "#0284c7", "6-8": "#0ea5e9",
-  "8-10": "#38bdf8", "10-12": "#7dd3fc", ">=12": "#bae6fd",
+// "Estado del banco de goma": bandas, etiquetas y colores del informe mensual
+// clásico (rojo → ámbar → amarillo → verdes), que es el formato que los
+// clientes ya conocen. Aquí el color SÍ transporta significado de estado, así
+// que cada tramo lleva siempre su etiqueta y su cifra al lado — nunca se
+// comunica solo con el color.
+// El color va atado al NOMBRE de la banda, no a su posición: la RPC omite las
+// bandas sin neumáticos y con índices se correría la escala.
+// Los tramos son cerrados por arriba, como en el informe original: "mayor de
+// 4 mm y hasta 6 mm" = (4,6], de modo que un 6,0 exacto cae en 4-6.
+const BANDAS = ["<=4", "4-6", "6-8", "8-10", "10-12", ">12"] as const;
+const BANDA_INFO: Record<string, { etiqueta: string; color: string }> = {
+  "<=4":   { etiqueta: "Menos de 4 mm",                 color: "#e5322e" },
+  "4-6":   { etiqueta: "mayor de 4 mm y hasta 6 mm",    color: "#efa508" },
+  "6-8":   { etiqueta: "mayor de 6 mm y hasta 8 mm",    color: "#f6d96d" },
+  "8-10":  { etiqueta: "mayor de 8 mm y hasta 10 mm",   color: "#cde0b2" },
+  "10-12": { etiqueta: "mayor de 10 mm y hasta 12 mm",  color: "#8fbf6b" },
+  ">12":   { etiqueta: "mayor de 12 mm",                color: "#4a7d2a" },
 };
+
+/** Tarta plana con porcentaje junto a cada sector, al estilo del informe. */
+function TartaBandas({ items }: { items: { banda: string; n: number }[] }) {
+  const total = items.reduce((s, x) => s + x.n, 0);
+  if (total === 0) return <p className="text-sm text-slate-500">Sin datos.</p>;
+  const size = 260, cx = size / 2, cy = size / 2, r = size / 2 - 34;
+  let ang = -Math.PI / 2; // arranca a las 12, como el original
+  const sectores = items.filter((x) => x.n > 0).map((x) => {
+    const frac = x.n / total;
+    const a0 = ang, a1 = ang + frac * 2 * Math.PI;
+    ang = a1;
+    const p = (a: number, rad: number) => `${cx + rad * Math.cos(a)},${cy + rad * Math.sin(a)}`;
+    const grande = frac > 0.5 ? 1 : 0;
+    const am = (a0 + a1) / 2;
+    return {
+      banda: x.banda,
+      pct: frac * 100,
+      d: `M${cx},${cy} L${p(a0, r)} A${r},${r} 0 ${grande} 1 ${p(a1, r)} Z`,
+      // Etiqueta fuera del sector, anclada según el lado.
+      lx: cx + (r + 16) * Math.cos(am),
+      ly: cy + (r + 16) * Math.sin(am),
+      izquierda: Math.cos(am) < 0,
+    };
+  });
+  // Anticolisión de etiquetas: dos sectores pequeños contiguos ponen sus
+  // porcentajes casi a la misma altura y se leen como una sola cifra
+  // ("25%"+"12,5%" parecía "50%"). Se separan verticalmente por lado.
+  for (const lado of [true, false]) {
+    const grupo = sectores.filter((s) => s.izquierda === lado).sort((a, b) => a.ly - b.ly);
+    for (let i = 1; i < grupo.length; i++) {
+      if (grupo[i].ly - grupo[i - 1].ly < 14) grupo[i].ly = grupo[i - 1].ly + 14;
+    }
+  }
+  return (
+    // Margen lateral en el viewBox: sin él, una etiqueta del lado izquierdo se
+    // recorta por el borde y "12,50%" se lee como "50%" — un recorte que
+    // convierte la cifra en otra distinta.
+    <svg viewBox={`-52 0 ${size + 104} ${size}`} className="h-auto w-full max-w-[360px]" role="img">
+      {sectores.map((s) => (
+        <path key={s.banda} d={s.d} fill={BANDA_INFO[s.banda]?.color ?? "#64748b"} stroke="#1e293b" strokeWidth={1.5}>
+          <title>{`${BANDA_INFO[s.banda]?.etiqueta ?? s.banda}: ${s.pct.toFixed(2)}%`}</title>
+        </path>
+      ))}
+      {sectores.map((s) => (
+        <text
+          key={`t-${s.banda}`}
+          x={s.lx}
+          y={s.ly}
+          textAnchor={s.izquierda ? "end" : "start"}
+          dominantBaseline="middle"
+          className="fill-slate-200"
+          style={{ fontSize: 11, fontWeight: 600 }}
+        >
+          {`${s.pct.toFixed(2).replace(".", ",")}%`}
+        </text>
+      ))}
+    </svg>
+  );
+}
 
 const SEMAFORO: Record<Semaforo, { label: string; punto: string; color: string }> = {
   intervenir: { label: "Intervenir", punto: "🔴", color: "text-rose-400" },
@@ -223,7 +289,7 @@ export default function InformeEjecutivo() {
   // Se pintan siempre las seis bandas, con cero donde no hay: un histograma al
   // que le faltan columnas no se puede comparar con el del mes pasado.
   const bandas = BANDAS.map((b) => ({ banda: b, n: d.bandas.find((x) => x.banda === b)?.n ?? 0 }));
-  const maxBanda = Math.max(1, ...bandas.map((b) => b.n));
+  const totalBandas = bandas.reduce((s, b) => s + b.n, 0);
   const porSemaforo = (s: Semaforo) => d.vehiculos.filter((v) => v.semaforo === s).length;
 
   return (
@@ -300,20 +366,41 @@ export default function InformeEjecutivo() {
             : <Donut segmentos={segmentos} />}
         </Seccion>
 
-        <Seccion titulo="Distribución de profundidades" sub="Bandas absolutas en mm. La escala es ordinal: el tono aclara según sube la profundidad.">
-          <div className="flex h-[150px] items-end gap-2">
-            {d.estadistica.n === 0 && <p className="text-sm text-slate-500">Sin datos.</p>}
-            {d.estadistica.n > 0 && bandas.map((b) => (
-              <div key={b.banda} className="flex flex-1 flex-col items-center justify-end gap-1">
-                <span className="text-[11px] font-semibold text-slate-200">{b.n}</span>
-                <div
-                  className="w-full rounded-t"
-                  style={{ height: `${(b.n / maxBanda) * 100}px`, background: RAMPA_BANDA[b.banda], minHeight: b.n > 0 ? 3 : 0 }}
-                />
-                <span className="text-[10px] text-slate-400">{b.banda}</span>
+        <Seccion titulo="Estado del banco de goma" sub="Profundidades de los neumáticos montados, en los tramos y colores del informe mensual.">
+          {d.estadistica.n === 0 && <p className="text-sm text-slate-500">Sin datos.</p>}
+          {d.estadistica.n > 0 && (
+            <div className="flex flex-wrap items-center gap-6">
+              <TartaBandas items={bandas} />
+              <div className="min-w-[260px] flex-1 overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead className="text-slate-400">
+                    <tr className="border-b border-slate-700 text-left">
+                      <th className="py-1.5">Profundidad Neumáticos</th>
+                      <th className="px-3 text-right">nº de Neumáticos</th>
+                      <th className="pl-3 text-right">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bandas.map((b) => (
+                      <tr key={b.banda} className="border-b border-slate-700/50">
+                        <td className="whitespace-nowrap py-1.5">
+                          <span className="flex items-center gap-2">
+                            {/* El color acompaña a la etiqueta, nunca la sustituye. */}
+                            <span className="inline-block h-3 w-3 shrink-0 rounded-sm" style={{ background: BANDA_INFO[b.banda].color }} />
+                            <span className="text-slate-300">{BANDA_INFO[b.banda].etiqueta}</span>
+                          </span>
+                        </td>
+                        <td className="px-3 text-right font-semibold text-slate-100">{nf(b.n)}</td>
+                        <td className="pl-3 text-right text-slate-300">
+                          {(totalBandas > 0 ? (b.n / totalBandas) * 100 : 0).toFixed(2).replace(".", ",")}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
           {d.estadistica.n > 0 && (
             <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-700 pt-3 text-[11px] sm:grid-cols-6">
               {[
@@ -331,6 +418,89 @@ export default function InformeEjecutivo() {
           )}
         </Seccion>
       </div>
+
+      {/* ── Serie histórica del banco de goma ── */}
+      <Seccion
+        titulo="Serie histórica del banco de goma"
+        sub="Reparto porcentual de las mediciones de cada mes. Un mes sin columna de datos es un mes sin revisiones."
+      >
+        {(() => {
+          const meses = d.evolucion_bandas ?? [];
+          const conDatos = meses.some((m) => m.total > 0);
+          if (!conDatos) return <p className="text-sm text-slate-500">Sin mediciones en los últimos 12 meses.</p>;
+          const pct = (n: number, total: number) =>
+            total > 0 ? `${((n / total) * 100).toFixed(2).replace(".", ",")}%` : "";
+          const cabMes = (mes: string) => {
+            const [y, m] = mes.split("-");
+            const nombre = new Date(Number(y), Number(m) - 1, 1)
+              .toLocaleDateString("es-ES", { month: "long" });
+            return { nombre: nombre.toUpperCase(), anyo: y };
+          };
+          const filaExtra = [
+            { k: "reesculturados" as const, etiqueta: "Reesculturadas", color: "#4472c4" },
+            { k: "recauchutados" as const, etiqueta: "Recauchutadas", color: "#ed7d31" },
+            { k: "rees_y_recau" as const, etiqueta: "Reesculturadas y recauchutadas", color: "#d93025" },
+          ];
+          return (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-[12px]">
+                <thead className="text-slate-400">
+                  <tr className="border-b border-slate-700 text-left">
+                    <th className="py-1.5 pr-2">Profundidad Neumáticos</th>
+                    {meses.map((m) => {
+                      const c = cabMes(m.mes);
+                      return (
+                        <th key={m.mes} className="px-1 text-center font-semibold">
+                          <div>{c.nombre}</div>
+                          <div className="font-normal text-slate-500">{c.anyo}</div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {BANDAS.map((b) => (
+                    <tr key={b} className="border-b border-slate-700/50">
+                      <td className="whitespace-nowrap py-1.5 pr-2">
+                        <span className="flex items-center gap-2">
+                          <span className="inline-block h-3 w-3 shrink-0 rounded-sm" style={{ background: BANDA_INFO[b].color }} />
+                          <span className="text-slate-300">{BANDA_INFO[b].etiqueta}</span>
+                        </span>
+                      </td>
+                      {meses.map((m) => (
+                        <td key={m.mes} className="px-1 text-center text-slate-200">
+                          {pct(m.bandas?.[b] ?? 0, m.total)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {/* Bloque reesculturadas / recauchutadas, como en el informe. */}
+                  <tr>
+                    <td colSpan={1 + meses.length} className="pt-3 pb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                      Reesculturadas y Recauchutadas
+                    </td>
+                  </tr>
+                  {filaExtra.map((f) => (
+                    <tr key={f.k} className="border-b border-slate-700/50">
+                      <td className="whitespace-nowrap py-1.5 pr-2">
+                        <span className="flex items-center gap-2">
+                          <span className="inline-block h-3 w-3 shrink-0 rounded-sm" style={{ background: f.color }} />
+                          <span className="text-slate-300">{f.etiqueta}</span>
+                        </span>
+                      </td>
+                      {meses.map((m) => (
+                        <td key={m.mes} className="px-1 text-center text-slate-200">
+                          {pct(m[f.k] ?? 0, m.total)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
+      </Seccion>
 
       {/* ── Evolución mensual: una magnitud por gráfico, nunca doble eje ── */}
       <div className="grid gap-4 lg:grid-cols-2">
