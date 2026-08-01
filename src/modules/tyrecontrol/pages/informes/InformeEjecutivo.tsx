@@ -276,6 +276,20 @@ function conclusiones(d: Datos): string[] {
     out.push(`El eje ${ejeMax.eje} acumula ${plural(ejeMax.criticos, "neumático", "neumáticos")} en estado crítico, más que ningún otro.`);
   }
 
+  // Media por eje: solo se señala si la diferencia entre ejes es real (≥1 mm);
+  // por debajo de eso es ruido de medición y no merece una conclusión.
+  const ejesConMedia = d.por_eje.filter((e) => e.prof_media != null && e.unidades >= 2);
+  if (ejesConMedia.length >= 2) {
+    const orden = [...ejesConMedia].sort((x, y) => (x.prof_media ?? 0) - (y.prof_media ?? 0));
+    const peor = orden[0], mejor = orden[orden.length - 1];
+    if ((mejor.prof_media ?? 0) - (peor.prof_media ?? 0) >= 1) {
+      out.push(
+        `El eje ${peor.eje} presenta la menor profundidad media (${nf(peor.prof_media, 1)} mm, frente a ` +
+        `${nf(mejor.prof_media, 1)} mm del eje ${mejor.eje}): es donde antes tocará renovar.`,
+      );
+    }
+  }
+
   if (p.vencidos > 0 || p.dias_30 > 0) {
     out.push(`Según el ritmo de desgaste medido, ${plural(p.vencidos + p.dias_30, "neumático alcanza", "neumáticos alcanzan")} el mínimo en los próximos 30 días (${p.vencidos} ya lo ${p.vencidos === 1 ? "ha" : "han"} alcanzado).`);
   }
@@ -640,16 +654,44 @@ export default function InformeEjecutivo() {
         </Seccion>
 
         <Seccion
-          titulo="Por eje"
+          titulo="Profundidad media por eje"
           sub="Los ejes se identifican por su número. El sistema no registra cuál es el motriz, así que no se etiquetan como dirección o tracción."
         >
-          <BarList
-            items={d.por_eje.map((e) => ({ etiqueta: `Eje ${e.eje} · ${e.unidades} ud · ${nf(e.prof_media, 1)} mm media`, valor: e.criticos }))}
-            color="#f43f5e"
-            formato={(n) => `${n} críticos`}
-          />
+          {d.por_eje.length === 0 && <p className="text-sm text-slate-500">Sin datos.</p>}
+          <div className="flex flex-col gap-2.5">
+            {d.por_eje.map((e) => {
+              // Escala fija de 0 a 15 mm (dibujo típico de camión nuevo):
+              // comparable entre meses. Con el máximo del propio mes, un mes
+              // malo estiraría sus barras y parecería igual de sano.
+              const pct = e.prof_media != null ? Math.min(100, (e.prof_media / 15) * 100) : 0;
+              return (
+                <div key={e.eje}>
+                  <div className="mb-0.5 flex items-baseline justify-between text-[12px]">
+                    <span className="text-slate-300">
+                      Eje {e.eje} <span className="text-slate-500">· {e.unidades} ud</span>
+                      {e.criticos > 0 && (
+                        <span className="ml-2 font-bold text-rose-400">{e.criticos} bajo mínimo</span>
+                      )}
+                    </span>
+                    <span className="font-semibold text-slate-100">
+                      {e.prof_media != null ? `${nf(e.prof_media, 1)} mm` : "—"}
+                    </span>
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded bg-slate-900">
+                    <div
+                      className="h-full rounded"
+                      // La barra es la MEDIA del eje: si además hay críticos, se
+                      // avisa en texto — la media puede ser buena con una rueda al
+                      // límite, y eso la barra sola no lo enseña.
+                      style={{ width: `${pct}%`, background: e.criticos > 0 ? "#fb923c" : "#38bdf8" }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
           {d.por_eje.every((e) => e.criticos === 0) && d.por_eje.length > 0 && (
-            <p className="mt-2 text-[12px] text-emerald-400">Ningún eje tiene neumáticos por debajo del mínimo.</p>
+            <p className="mt-2.5 text-[12px] text-emerald-400">Ningún eje tiene neumáticos por debajo del mínimo.</p>
           )}
         </Seccion>
       </div>
