@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { TyreAuthProvider } from "./contexts/TyreAuthContext";
-import { ProtectedRoute, RoleRoute } from "./components/Guards";
+import { ProtectedRoute, RoleRoute, InicioSegunRol } from "./components/Guards";
 import TyreLayout from "./layouts/TyreLayout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -56,7 +56,7 @@ export default function TyreControlApp() {
         <Route path="login" element={<Login />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<TyreLayout />}>
-            <Route index element={<Navigate to="/tyrecontrol/dashboard" replace />} />
+            <Route index element={<InicioSegunRol />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="perfil" element={<Perfil />} />
             <Route path="ayuda" element={<Ayuda />} />

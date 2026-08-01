@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import { rutaInicio } from "../components/Guards";
 
 export default function Login() {
-  const { user, loading } = useTyreAuth();
+  const { user, perfil, loading } = useTyreAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
@@ -20,8 +21,10 @@ export default function Login() {
   }, []);
 
   useEffect(() => {
-    if (!loading && user) navigate("/tyrecontrol/dashboard", { replace: true });
-  }, [user, loading, navigate]);
+    // Se espera al perfil: sin él no se sabe el rol y un cliente acabaría en
+    // el dashboard del taller antes de que la redirección correcta llegase.
+    if (!loading && user && perfil) navigate(rutaInicio(perfil), { replace: true });
+  }, [user, perfil, loading, navigate]);
 
   async function enviarEnlace() {
     if (!email.trim()) return;
