@@ -49,8 +49,19 @@ async function cargarPantallas(userId: string): Promise<string[] | null> {
       .eq("user_id", userId)
       .eq("modulo", "tyrecontrol")
       .maybeSingle();
-    if (error) return null;
-    return (data?.pantallas as string[] | null) ?? null;
+    if (!error && Array.isArray(data?.pantallas)) return data.pantallas as string[];
+  } catch {
+    // Si la tabla de usuarios unificados no está, se sigue con la nativa.
+  }
+  try {
+    // Clientes creados desde este panel: solo existen en tc_usuarios, así que
+    // sus permisos viven en tc_permisos_cliente. Sin filas = sin restricción.
+    const { data, error } = await supabase
+      .from("tc_permisos_cliente")
+      .select("pantalla, puede_ver")
+      .eq("usuario_id", userId);
+    if (error || !data || data.length === 0) return null;
+    return data.filter((f: any) => f.puede_ver).map((f: any) => String(f.pantalla));
   } catch {
     return null;
   }

@@ -7,7 +7,7 @@ import { DashboardEjecutivo } from "../components/informes/DashboardEjecutivo";
 // Landing tras el login: dashboard ejecutivo con KPIs reales (mismos datos
 // y filtros que la sección Informes). El detalle por informe vive en /informes.
 export default function Dashboard() {
-  const { perfil } = useTyreAuth();
+  const { perfil, pantallas } = useTyreAuth();
   const { filtros, setFiltros, esCliente, empresas } = useFiltrosInformes();
 
   // Este dashboard está pensado para el taller (operaciones, técnicos, stock).
@@ -15,7 +15,10 @@ export default function Dashboard() {
   // ejecutivo. Se redirige AQUÍ y no solo en el login porque el enlace del
   // email aterriza en /dashboard: si no, el cliente vería esta pantalla cada
   // vez que entrase desde su correo.
-  if (esCliente) return <Navigate to="/tyrecontrol/informes/ejecutivo" replace />;
+  // Si a este cliente se le han limitado las pantallas y no tiene Informes, se
+  // queda en el dashboard: redirigirle allí le dejaría en "no tienes acceso".
+  const puedeInformes = pantallas === null || pantallas.includes("informes");
+  if (esCliente && puedeInformes) return <Navigate to="/tyrecontrol/informes/ejecutivo" replace />;
 
   return (
     <div>
