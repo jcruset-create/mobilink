@@ -55,63 +55,117 @@ const BANDA_INFO: Record<string, { etiqueta: string; color: string }> = {
   ">12":   { etiqueta: "mayor de 12 mm",                color: "#4a7d2a" },
 };
 
-/** Tarta plana con porcentaje junto a cada sector, al estilo del informe. */
+/** Oscurece un color hex — es el tono de las paredes laterales de la tarta 3D. */
+function sombra(hex: string, f = 0.6): string {
+  const n = parseInt(hex.slice(1), 16);
+  const canal = (x: number) => Math.round(x * f).toString(16).padStart(2, "0");
+  return `#${canal((n >> 16) & 255)}${canal((n >> 8) & 255)}${canal(n & 255)}`;
+}
+
+/**
+ * Tarta 3D al estilo del informe mensual clásico (la de Excel): elipse
+ * achatada, canto inferior en el mismo color oscurecido, porcentajes fuera y
+ * arranque a las 12 en sentido horario.
+ *
+ * El 3D aquí es decorativo a propósito — la petición es que el informe se vea
+ * EXACTAMENTE como el que los clientes llevan años recibiendo. Las cifras
+ * exactas van al lado en la tabla, así que la perspectiva no le quita
+ * precisión a nada.
+ */
 function TartaBandas({ items }: { items: { banda: string; n: number }[] }) {
   const total = items.reduce((s, x) => s + x.n, 0);
   if (total === 0) return <p className="text-sm text-slate-500">Sin datos.</p>;
-  const size = 260, cx = size / 2, cy = size / 2, r = size / 2 - 34;
-  let ang = -Math.PI / 2; // arranca a las 12, como el original
+
+  // Elipse achatada (ry/rx ≈ 0,62, como Excel) + profundidad del canto.
+  const cx = 230, cy = 138, rx = 150, ry = 93, h = 34;
+  const px = (a: number) => cx + rx * Math.cos(a);
+  const py = (a: number) => cy + ry * Math.sin(a);
+
+  const TAU = 2 * Math.PI;
+  let ang = -Math.PI / 2; // a las 12, sentido horario (en pantalla, y crece hacia abajo)
   const sectores = items.filter((x) => x.n > 0).map((x) => {
     const frac = x.n / total;
-    const a0 = ang, a1 = ang + frac * 2 * Math.PI;
+    const a0 = ang, a1 = ang + frac * TAU;
     ang = a1;
-    const p = (a: number, rad: number) => `${cx + rad * Math.cos(a)},${cy + rad * Math.sin(a)}`;
-    const grande = frac > 0.5 ? 1 : 0;
-    const am = (a0 + a1) / 2;
-    return {
-      banda: x.banda,
-      pct: frac * 100,
-      d: `M${cx},${cy} L${p(a0, r)} A${r},${r} 0 ${grande} 1 ${p(a1, r)} Z`,
-      // Etiqueta fuera del sector, anclada según el lado.
-      lx: cx + (r + 16) * Math.cos(am),
-      ly: cy + (r + 16) * Math.sin(am),
-      izquierda: Math.cos(am) < 0,
-    };
+    return { banda: x.banda, frac, a0, a1, am: (a0 + a1) / 2 };
   });
-  // Anticolisión de etiquetas: dos sectores pequeños contiguos ponen sus
-  // porcentajes casi a la misma altura y se leen como una sola cifra
-  // ("25%"+"12,5%" parecía "50%"). Se separan verticalmente por lado.
-  for (const lado of [true, false]) {
-    const grupo = sectores.filter((s) => s.izquierda === lado).sort((a, b) => a.ly - b.ly);
-    for (let i = 1; i < grupo.length; i++) {
-      if (grupo[i].ly - grupo[i - 1].ly < 14) grupo[i].ly = grupo[i - 1].ly + 14;
+
+  // Canto: solo la mitad delantera de la elipse (sin(a) > 0). Cada sector
+  // aporta el trozo de su arco que cae en esa mitad; puede partirse en dos
+  // tramos si el sector cruza las 3 o las 9. Sin las paredes el disco parece
+  // flotar; con paredes también detrás, se verían a través del borde superior.
+  const paredes: { banda: string; d: string }[] = [];
+  for (const s of sectores) {
+    // Normalizado a [0, 2π): la mitad visible es (0, π) y su copia (2π, 3π).
+    const b0 = ((s.a0 % TAU) + TAU) % TAU;
+    const b1 = b0 + (s.a1 - s.a0);
+    for (const [v0, v1] of [[0, Math.PI], [TAU, TAU + Math.PI]]) {
+      const c0 = Math.max(b0, v0), c1 = Math.min(b1, v1);
+      if (c1 - c0 < 0.004) continue;
+      paredes.push({
+        banda: s.banda,
+        d: `M${px(c0)},${py(c0)} A${rx},${ry} 0 0 1 ${px(c1)},${py(c1)} ` +
+           `L${px(c1)},${py(c1) + h} A${rx},${ry} 0 0 0 ${px(c0)},${py(c0) + h} Z`,
+      });
     }
   }
+
+  const etiquetas = sectores.map((s) => ({
+    banda: s.banda,
+    pct: s.frac * 100,
+    lx: cx + (rx + 16) * Math.cos(s.am),
+    // Las etiquetas de la mitad delantera bajan con el canto para no pisarlo.
+    ly: cy + (ry + 14) * Math.sin(s.am) + (Math.sin(s.am) > 0.2 ? h + 6 : 0),
+    izquierda: Math.cos(s.am) < -0.08,
+  }));
+  // Anticolisión: dos sectores pequeños contiguos ponen sus porcentajes casi a
+  // la misma altura y "25%"+"12,5%" se lee como una sola cifra.
+  for (const lado of [true, false]) {
+    const grupo = etiquetas.filter((e) => e.izquierda === lado).sort((a, b) => a.ly - b.ly);
+    for (let i = 1; i < grupo.length; i++) {
+      if (grupo[i].ly - grupo[i - 1].ly < 15) grupo[i].ly = grupo[i - 1].ly + 15;
+    }
+  }
+
+  const cara = (s: (typeof sectores)[number]) =>
+    s.frac >= 0.9995
+      ? "" // círculo completo: se pinta como <ellipse>, un arco degeneraría
+      : `M${cx},${cy} L${px(s.a0)},${py(s.a0)} ` +
+        `A${rx},${ry} 0 ${s.frac > 0.5 ? 1 : 0} 1 ${px(s.a1)},${py(s.a1)} Z`;
+
   return (
-    // Margen lateral en el viewBox: sin él, una etiqueta del lado izquierdo se
-    // recorta por el borde y "12,50%" se lee como "50%" — un recorte que
-    // convierte la cifra en otra distinta.
-    <svg viewBox={`-52 0 ${size + 104} ${size}`} className="h-auto w-full max-w-[360px]" role="img">
-      {sectores.map((s) => (
-        <path key={s.banda} d={s.d} fill={BANDA_INFO[s.banda]?.color ?? "#64748b"} stroke="#1e293b" strokeWidth={1.5}>
-          <title>{`${BANDA_INFO[s.banda]?.etiqueta ?? s.banda}: ${s.pct.toFixed(2)}%`}</title>
-        </path>
+    <svg viewBox="0 0 460 302" className="h-auto w-full max-w-[430px]" role="img">
+      {/* 1º los cantos (quedan detrás), 2º las caras, 3º las cifras. */}
+      {paredes.map((w, i) => (
+        <path key={`w${i}`} d={w.d} fill={sombra(BANDA_INFO[w.banda]?.color ?? "#64748b")} />
       ))}
-      {sectores.map((s) => (
-        <text
-          key={`t-${s.banda}`}
-          x={s.lx}
-          y={s.ly}
-          textAnchor={s.izquierda ? "end" : "start"}
-          dominantBaseline="middle"
-          className="fill-slate-200"
-          style={{ fontSize: 11, fontWeight: 600 }}
-        >
-          {`${s.pct.toFixed(2).replace(".", ",")}%`}
+      {sectores.map((s) =>
+        s.frac >= 0.9995 ? (
+          <ellipse key={s.banda} cx={cx} cy={cy} rx={rx} ry={ry}
+            fill={BANDA_INFO[s.banda]?.color ?? "#64748b"} stroke="#ffffff" strokeWidth={1.5} />
+        ) : (
+          <path key={s.banda} d={cara(s)} fill={BANDA_INFO[s.banda]?.color ?? "#64748b"}
+            stroke="#ffffff" strokeWidth={1.5} strokeLinejoin="round">
+            <title>{`${BANDA_INFO[s.banda]?.etiqueta ?? s.banda}: ${(s.frac * 100).toFixed(2)}%`}</title>
+          </path>
+        ),
+      )}
+      {etiquetas.map((e) => (
+        <text key={`t-${e.banda}`} x={e.lx} y={e.ly}
+          textAnchor={e.izquierda ? "end" : Math.abs(e.lx - cx) < 30 ? "middle" : "start"}
+          dominantBaseline="middle" fill="#cbd5e1" style={{ fontSize: 12, fontWeight: 600 }}>
+          {`${e.pct.toFixed(2).replace(".", ",")}%`}
         </text>
       ))}
     </svg>
   );
+}
+
+/** Texto negro o blanco según la luminosidad del fondo de la celda. */
+function tintaSobre(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.55 ? "#1f2937" : "#ffffff";
 }
 
 const SEMAFORO: Record<Semaforo, { label: string; punto: string; color: string }> = {
@@ -358,7 +412,7 @@ export default function InformeEjecutivo() {
         </div>
       </Seccion>
 
-      {/* ── Estado del banco + distribución ── */}
+      {/* ── Estado del banco + estadística ── */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Seccion titulo="Estado del banco de neumáticos" sub="Cada neumático montado, clasificado por su última medición frente al umbral de su medida.">
           {totalNiveles === 0
@@ -366,58 +420,81 @@ export default function InformeEjecutivo() {
             : <Donut segmentos={segmentos} />}
         </Seccion>
 
-        <Seccion titulo="Estado del banco de goma" sub="Profundidades de los neumáticos montados, en los tramos y colores del informe mensual.">
+        <Seccion titulo="Estadística de profundidades" sub="Sobre la última medición de cada neumático montado.">
+          {d.estadistica.n === 0
+            ? <p className="text-sm text-slate-500">Sin datos.</p>
+            : (
+              <dl className="grid grid-cols-3 gap-3 text-[12px]">
+                {[
+                  ["Media", `${nf(d.estadistica.media, 1)} mm`], ["Mediana", `${nf(d.estadistica.mediana, 1)} mm`],
+                  ["P25", `${nf(d.estadistica.p25, 1)} mm`], ["P75", `${nf(d.estadistica.p75, 1)} mm`],
+                  ["Desviación", nf(d.estadistica.desviacion, 1)],
+                  ["CV", d.estadistica.coef_variacion != null ? `${nf(d.estadistica.coef_variacion, 0)}%` : "—"],
+                ].map(([k, v]) => (
+                  <div key={k} className="rounded-lg bg-slate-900 p-3">
+                    <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{k}</dt>
+                    <dd className="mt-0.5 text-lg font-black text-slate-100">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+        </Seccion>
+      </div>
+
+      {/* ── Banco de goma: a lo ancho, tarta 3D + tabla como el informe ── */}
+      <Seccion titulo="Estado del banco de goma" sub="Profundidades de los neumáticos montados, en el formato del informe mensual.">
           {d.estadistica.n === 0 && <p className="text-sm text-slate-500">Sin datos.</p>}
           {d.estadistica.n > 0 && (
-            <div className="flex flex-wrap items-center gap-6">
-              <TartaBandas items={bandas} />
-              <div className="min-w-[260px] flex-1 overflow-x-auto">
-                <table className="w-full text-[12px]">
-                  <thead className="text-slate-400">
-                    <tr className="border-b border-slate-700 text-left">
-                      <th className="py-1.5">Profundidad Neumáticos</th>
-                      <th className="px-3 text-right">nº de Neumáticos</th>
-                      <th className="pl-3 text-right">%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+            <div>
+              <h3 className="mb-1 text-center text-[15px] font-semibold uppercase tracking-wide text-slate-300">
+                Estado banco de goma
+              </h3>
+              <div className="flex flex-wrap items-center justify-center gap-6">
+                <div className="min-w-[300px] max-w-[440px] flex-1">
+                  <TartaBandas items={bandas} />
+                  {/* Leyenda bajo la tarta, como en el original. */}
+                  <div className="mx-auto mt-1 grid max-w-[420px] grid-cols-2 gap-x-4 gap-y-1">
                     {bandas.map((b) => (
-                      <tr key={b.banda} className="border-b border-slate-700/50">
-                        <td className="whitespace-nowrap py-1.5">
-                          <span className="flex items-center gap-2">
-                            {/* El color acompaña a la etiqueta, nunca la sustituye. */}
-                            <span className="inline-block h-3 w-3 shrink-0 rounded-sm" style={{ background: BANDA_INFO[b.banda].color }} />
-                            <span className="text-slate-300">{BANDA_INFO[b.banda].etiqueta}</span>
-                          </span>
-                        </td>
-                        <td className="px-3 text-right font-semibold text-slate-100">{nf(b.n)}</td>
-                        <td className="pl-3 text-right text-slate-300">
-                          {(totalBandas > 0 ? (b.n / totalBandas) * 100 : 0).toFixed(2).replace(".", ",")}%
-                        </td>
-                      </tr>
+                      <span key={b.banda} className="flex items-center gap-1.5 text-[10.5px] text-slate-300">
+                        <span className="inline-block h-2.5 w-2.5 shrink-0" style={{ background: BANDA_INFO[b.banda].color }} />
+                        {BANDA_INFO[b.banda].etiqueta}
+                      </span>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </div>
+                <div className="min-w-[340px] flex-1 overflow-x-auto">
+                  <table className="w-full border-collapse text-[12px]">
+                    <thead>
+                      <tr className="text-left text-slate-300">
+                        <th className="border border-slate-600 px-2 py-1.5 font-semibold">Profundidad Neumáticos</th>
+                        <th className="border border-slate-600 px-2 py-1.5 text-right font-semibold">nº de Neumáticos</th>
+                        <th className="border border-slate-600 px-2 py-1.5 text-right font-semibold">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bandas.map((b) => (
+                        <tr key={b.banda}>
+                          {/* Celda coloreada con el tramo, como el informe; la
+                              tinta cambia a blanco sobre fondos oscuros. */}
+                          <td
+                            className="whitespace-nowrap border border-slate-600 px-2 py-1"
+                            style={{ background: BANDA_INFO[b.banda].color, color: tintaSobre(BANDA_INFO[b.banda].color) }}
+                          >
+                            {BANDA_INFO[b.banda].etiqueta}
+                          </td>
+                          <td className="border border-slate-600 px-2 py-1 text-right font-semibold text-slate-100">{nf(b.n)}</td>
+                          <td className="border border-slate-600 px-2 py-1 text-right text-slate-200">
+                            {(totalBandas > 0 ? (b.n / totalBandas) * 100 : 0).toFixed(2).replace(".", ",")}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
-          {d.estadistica.n > 0 && (
-            <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-700 pt-3 text-[11px] sm:grid-cols-6">
-              {[
-                ["Media", nf(d.estadistica.media, 1)], ["Mediana", nf(d.estadistica.mediana, 1)],
-                ["P25", nf(d.estadistica.p25, 1)], ["P75", nf(d.estadistica.p75, 1)],
-                ["Desv.", nf(d.estadistica.desviacion, 1)],
-                ["CV", d.estadistica.coef_variacion != null ? `${nf(d.estadistica.coef_variacion, 0)}%` : "—"],
-              ].map(([k, v]) => (
-                <div key={k}>
-                  <dt className="text-slate-500">{k}</dt>
-                  <dd className="font-bold text-slate-200">{v}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
         </Seccion>
-      </div>
 
       {/* ── Serie histórica del banco de goma ── */}
       <Seccion
