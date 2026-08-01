@@ -4646,9 +4646,51 @@ app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), asy
     const to = Date.now();
     const from = to - dias * 24 * 3600 * 1000;
     const rango = webfleetRange(from, to);
-    const atMs = req.query.at ? new Date(String(req.query.at)).getTime() : null;
+    // "a las 10:00" es hora de España, no UTC: si el parámetro no trae zona se
+    // interpreta en Europe/Madrid (en verano son 2 horas, que en carretera son
+    // más de 150 km de diferencia). Con Z o desfase explícito se respeta.
+    const ZONA_ES = "Europe/Madrid";
+    const desfaseZona = (ts: number) => {
+      const p = Object.fromEntries(
+        new Intl.DateTimeFormat("en-US", {
+          timeZone: ZONA_ES, hour12: false, year: "numeric", month: "2-digit",
+          day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+        }).formatToParts(new Date(ts)).map((x) => [x.type, x.value])
+      ) as Record<string, string>;
+      return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ts;
+    };
+    const parseFecha = (s: string): number => {
+      const txt = s.trim();
+      if (/(Z|[+-]\d{2}:?\d{2})$/i.test(txt)) return new Date(txt).getTime();
+      let m = txt.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T ]+(\d{1,2})[:.](\d{2}))?/);
+      let Y: number, M: number, D: number, h: number, mi: number;
+      if (m) { [, D, M, Y, h, mi] = m.map(Number) as any; }
+      else {
+        m = txt.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ]+(\d{1,2})[:.](\d{2}))?/);
+        if (!m) return NaN;
+        [, Y, M, D, h, mi] = m.map(Number) as any;
+      }
+      const supuesto = Date.UTC(Y, M - 1, D, h || 0, mi || 0);
+      return supuesto - desfaseZona(supuesto);
+    };
+
+    const atMs = req.query.at ? parseFecha(String(req.query.at)) : null;
     if (req.query.at && !Number.isFinite(atMs as number)) {
-      return res.status(400).json({ error: "Parámetro at no es una fecha válida (ISO 8601)" });
+      return res.status(400).json({
+        error: "Parámetro at no válido. Formatos: 29/07/2026 10:00 · 2026-07-29 10:00 · 2026-07-29T08:00:00Z",
+      });
+    }
+    if (atMs != null && atMs > to) {
+      return res.status(400).json({
+        error: "La fecha pedida está en el futuro: Webfleet no puede saber los km de una fecha que no ha llegado.",
+        at: new Date(atMs).toISOString(), ahora: new Date(to).toISOString(),
+      });
+    }
+    if (atMs != null && atMs < from) {
+      return res.status(400).json({
+        error: `La fecha pedida queda fuera del rango consultado (${dias} días). Repite con un dias mayor.`,
+        at: new Date(atMs).toISOString(), desde: new Date(from).toISOString(),
+      });
     }
 
     const RE_ODO = /odo|mileage|kilomet|milage/i;
@@ -4725,6 +4767,7 @@ app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), asy
     const kmSolicitado = atMs
       ? {
           at: new Date(atMs).toISOString(),
+          atLocal: new Intl.DateTimeFormat("es-ES", { timeZone: ZONA_ES, dateStyle: "short", timeStyle: "short" }).format(new Date(atMs)) + ` (${ZONA_ES})`,
           porLibroDeRuta: filasLibro.length ? kmEn(filasLibro, atMs, odometroActualKm) : null,
           porViajes: viajes.datos?.length ? kmEn(viajes.datos, atMs, odometroActualKm) : null,
         }

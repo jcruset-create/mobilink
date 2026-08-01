@@ -96,6 +96,35 @@ const rango = (desdeMs, hastaMs) => ({
 const ODO = /odo|mileage|kilomet|km|milage|distance/i;
 const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
 
+// ── Fechas en hora local española ───────────────────────────────────────────
+// Un "a las 10:00" es hora de España, no UTC: en verano se van dos horas, que
+// en carretera son 150 km de diferencia. Se aceptan 29/07/2026 10:00,
+// 2026-07-29 10:00 y el ISO con Z o desfase explícito (ese se respeta).
+const ZONA = "Europe/Madrid";
+function desfaseZona(ts) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: ZONA, hour12: false, year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(new Date(ts)).map((x) => [x.type, x.value])
+  );
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ts;
+}
+function parseFecha(s) {
+  const txt = String(s).trim().replace(",", ".");
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(txt)) return { ms: new Date(txt).getTime(), zona: "tal cual" };
+  let m = txt.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T ]+(\d{1,2})[:.](\d{2}))?/);
+  let Y, M, D, h, mi;
+  if (m) { [, D, M, Y, h, mi] = m.map(Number); }
+  else {
+    m = txt.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ]+(\d{1,2})[:.](\d{2}))?/);
+    if (!m) return { ms: NaN };
+    [, Y, M, D, h, mi] = m.map(Number);
+  }
+  const supuesto = Date.UTC(Y, M - 1, D, h || 0, mi || 0);
+  return { ms: supuesto - desfaseZona(supuesto), zona: ZONA };
+}
+
 function informar(titulo, res) {
   console.log(`\n── ${titulo} ${"─".repeat(Math.max(0, 60 - titulo.length))}`);
   if (res.error) { console.log(`  fallo de red: ${res.error}`); return null; }
@@ -234,11 +263,17 @@ const viajes = informar("showTripReportExtern (comparación, vía 1)",
 
 // Km en el instante pedido.
 if (at) {
-  const tsMs = new Date(at).getTime();
+  const { ms: tsMs, zona } = parseFecha(at);
   if (!Number.isFinite(tsMs)) {
     console.log(`\n--at no es una fecha válida: ${at}`);
+    console.log(`   formatos: 29/07/2026 10:00 · 2026-07-29 10:00 · 2026-07-29T08:00:00Z`);
+  } else if (tsMs > Date.now()) {
+    console.log(`\n⚠ ${at} está en el FUTURO: Webfleet no puede saber los km de una fecha que no ha llegado.`);
+  } else if (tsMs < Date.now() - dias * 24 * 3600 * 1000) {
+    console.log(`\n⚠ ${at} queda fuera del rango consultado (${dias} días): repite con --dias mayor.`);
   } else {
-    console.log(`\n══ Km del vehículo ${objectno} el ${new Date(tsMs).toISOString()} ══`);
+    const local = new Intl.DateTimeFormat("es-ES", { timeZone: ZONA, dateStyle: "short", timeStyle: "short" }).format(new Date(tsMs));
+    console.log(`\n══ Km del vehículo ${objectno} el ${local} (${zona}) = ${new Date(tsMs).toISOString()} ══`);
     for (const [etiqueta, filas, ancla] of [["libro de ruta", filasLibro, null],
                                             ["viajes", viajes, odometroActualKm]]) {
       if (!filas?.length) { console.log(`  ${etiqueta}: sin datos`); continue; }
