@@ -14083,15 +14083,25 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     const b = req.body ?? {};
     const nombre = String(b.nombre ?? "").trim();
     const email = String(b.email ?? "").trim().toLowerCase();
-    const password = String(b.password ?? "");
     const rol = String(b.rol ?? "cliente");
     const accesoApk = Boolean(b.acceso_apk ?? false);
     const accesoPanel = Boolean(b.acceso_panel ?? true);
     // Un admin normal solo crea en SU empresa; el super-admin en la que indique.
     const empresaId = esSuper ? String(b.empresa_id ?? perfil.empresa_id) : perfil.empresa_id;
 
-    if (!nombre || !email || !password) return res.status(400).json({ error: "Nombre, email y contraseña son obligatorios" });
+    if (!nombre || !email) return res.status(400).json({ error: "Nombre y email son obligatorios" });
     if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
+
+    // La contraseña solo hace falta para entrar en la APK (allí es el PIN). En
+    // el panel se entra con enlace por email, así que obligar a un admin a
+    // inventar una contraseña para un cliente creaba una credencial que nadie
+    // usaría y que el admin conocería. Si no viene, se pone una aleatoria que
+    // nadie sabe: la cuenta solo es accesible por enlace.
+    const passwordPedida = String(b.password ?? "");
+    if (accesoApk && passwordPedida.length < 4) {
+      return res.status(400).json({ error: "Un usuario con acceso a la APK necesita un PIN de al menos 4 caracteres" });
+    }
+    const password = passwordPedida || crypto.randomBytes(24).toString("base64url");
 
     const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
     if (createErr || !created.user) return res.status(400).json({ error: createErr?.message ?? "No se pudo crear el usuario" });
@@ -14118,6 +14128,80 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     res.status(500).json({ error: error?.message || "Error interno" });
   }
 });
+
+/**
+ * Genera un enlace de acceso de un solo uso para un usuario del panel.
+ *
+ * Por qué existe: el panel se entra con enlace mágico por email
+ * (signInWithOtp), no con contraseña. Para invitar a un cliente hay dos
+ * caminos y aquí se eligen los dos:
+ *   · El cliente puede pedirse su propio enlace desde la pantalla de login.
+ *   · El administrador puede generar el enlace aquí y pasárselo por el canal
+ *     que ya usa con él (WhatsApp, su email corporativo).
+ *
+ * Se usa generateLink y NO inviteUserByEmail a propósito: generateLink
+ * devuelve el enlace sin depender del envío de correo de Supabase, que en el
+ * plan por defecto está muy limitado y no sirve para producción. Quien manda
+ * el enlace es el administrador, y así el flujo no falla en silencio.
+ *
+ * El enlace es una credencial de un solo uso: NO se registra en los logs.
+ */
+app.post(
+  "/api/tyrecontrol/usuarios/:id/enlace-acceso",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const admin = (req as any).tcAdmin as { id: string; rol: string; es_superadmin: boolean };
+
+      const { data: objetivo } = await supabase
+        .from("tc_usuarios")
+        .select("id, email, nombre, activo, acceso_panel, empresa_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+
+      // Un admin de empresa solo genera enlaces de SU empresa; el super-admin,
+      // de cualquiera. Sin esto, un admin podría suplantar a un cliente ajeno.
+      if (!admin.es_superadmin) {
+        const { data: yo } = await supabase
+          .from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle();
+        if (!yo?.empresa_id || yo.empresa_id !== objetivo.empresa_id) {
+          return res.status(403).json({ error: "Ese usuario no es de tu empresa" });
+        }
+      }
+
+      if (!objetivo.activo) return res.status(400).json({ error: "El usuario está desactivado" });
+      if (!objetivo.acceso_panel) return res.status(400).json({ error: "Ese usuario no tiene acceso al panel" });
+      if (!objetivo.email) return res.status(400).json({ error: "El usuario no tiene email" });
+
+      const base = String(req.body?.origen ?? "").trim();
+      // Solo se acepta un origen http(s) para no fabricar enlaces hacia
+      // esquemas raros; el destino real lo valida además Supabase con su
+      // lista de Redirect URLs.
+      const redirectTo = /^https?:\/\//i.test(base)
+        ? `${base.replace(/\/$/, "")}/tyrecontrol/dashboard`
+        : undefined;
+
+      const { data, error } = await supabase.auth.admin.generateLink({
+        type: "magiclink",
+        email: objetivo.email,
+        options: redirectTo ? { redirectTo } : undefined,
+      });
+      if (error) return res.status(400).json({ error: error.message });
+
+      const enlace = (data as any)?.properties?.action_link as string | undefined;
+      if (!enlace) return res.status(500).json({ error: "Supabase no devolvió el enlace" });
+
+      res.json({ ok: true, enlace, email: objetivo.email });
+    } catch (error: any) {
+      console.error("POST /api/tyrecontrol/usuarios/:id/enlace-acceso error:", error?.message);
+      res.status(500).json({ error: error?.message || "Error generando el enlace" });
+    }
+  },
+);
 
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con

@@ -61,7 +61,7 @@ cuela. Eso es este prompt.
 
 ## Huecos a cubrir
 
-### Fase 1 — Curar lo que ve el cliente (la más importante y la más barata)
+### Fase 1 — Curar lo que ve el cliente — HECHO
 
 Hoy el cliente que entra en Informes ve las 12 pestañas, incluidas
 **Productividad** (técnicos de Mobilink), **Económico** y **Rankings**
@@ -78,17 +78,28 @@ Hoy el cliente que entra en Informes ve las 12 pestañas, incluidas
 - **Prueba de aceptación**: entrar como usuario ENCATRANS e intentar abrir por
   URL directa `/tyrecontrol/informes/productividad` → bloqueado.
 
-### Fase 2 — Alta digna: invitación en vez de contraseña dictada
+### Fase 2 — Alta digna: invitación en vez de contraseña dictada — HECHO
 
-Hoy el alta pide que el administrador escriba la contraseña del cliente (y por
-tanto la conoce). Para un usuario interno vale; para el director de flota de un
-cliente, no.
+Corrección sobre lo que suponía este documento: **el panel no usa contraseña**.
+Se entra con enlace mágico por email (`signInWithOtp` en `Login.tsx`). La
+contraseña que pedía el alta solo sirve como PIN de la APK, así que para un
+cliente era una credencial que nadie iba a usar y que el admin conocía.
 
-- Botón "Invitar cliente" en Usuarios: pide email + empresa, crea el usuario
-  con `inviteUserByEmail` (o enlace de recuperación como invitación) y el
-  cliente fija su contraseña en su primer acceso.
-- Reenviar invitación y desactivar acceso desde la misma ficha.
-- Varios usuarios por empresa cliente (ENCATRANS puede querer 2-3).
+Implementado:
+
+- El alta **solo pide contraseña si se marca acceso APK** (allí es el PIN). Sin
+  APK, el servidor genera una aleatoria que nadie conoce: a la cuenta solo se
+  entra por enlace.
+- Ficha de usuario con bloque "Acceso al panel": botón que genera un **enlace
+  de acceso de un solo uso** (`POST /usuarios/:id/enlace-acceso`) para pasárselo
+  al cliente por el canal habitual. El bloque del PIN solo sale si usa APK.
+- Se usa `generateLink` y **no** `inviteUserByEmail`: el envío de correo de
+  Supabase en el plan por defecto está muy limitado y fallaría en silencio.
+  Quien manda el enlace es el administrador.
+- Un admin de empresa solo genera enlaces de usuarios de SU empresa; el
+  super-admin, de cualquiera. El enlace nunca se escribe en los logs.
+- Desactivar acceso ya existía (botón Activo/Inactivo) y varios usuarios por
+  empresa también: no hay restricción que lo impida.
 
 ### Fase 2b — Ficha de vehículo en solo lectura
 
@@ -146,8 +157,8 @@ administrador.
 
 | Fase | Esfuerzo | Riesgo si no se hace |
 |---|---|---|
-| 1 Curar visibilidad | Medio día | Cliente ve costes y productividad interna |
-| 2 Invitación | Medio día | Contraseñas conocidas por el admin |
+| ~~1 Curar visibilidad~~ | HECHO | ~~Cliente ve costes y productividad interna~~ |
+| ~~2 Invitación~~ | HECHO | ~~Contraseñas conocidas por el admin~~ |
 | 2b Ficha vehículo solo lectura | Medio día | El cliente ve la lista pero no puede abrir nada |
 | 3 Aterrizaje | Horas | Primera impresión pobre |
 | 4 Auditoría | 1 día | Solo importa con varios clientes |

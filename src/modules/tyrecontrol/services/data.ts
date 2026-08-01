@@ -116,7 +116,9 @@ export async function listarUsuarios(empresaId?: string): Promise<Perfil[]> {
 export type NuevoUsuario = {
   nombre: string;
   email: string;
-  password: string;
+  /** Solo para usuarios de APK (allí es el PIN). En el panel se entra por
+   *  enlace de email, así que para un cliente se deja vacío. */
+  password?: string;
   rol: Rol;
   acceso_apk: boolean;
   acceso_panel: boolean;
@@ -329,6 +331,27 @@ export async function eliminarUsuario(id: string): Promise<void> {
 }
 
 /// Cambia la contraseña/PIN de un usuario (vía backend, service-role).
+/**
+ * Enlace de acceso de un solo uso para que un usuario entre al panel.
+ * El backend lo genera con service-role; aquí solo se pide y se devuelve.
+ * Es una credencial: no guardarlo ni registrarlo en ningún sitio.
+ */
+export async function generarEnlaceAcceso(id: string): Promise<{ enlace: string; email: string }> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}/enlace-acceso`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    // El origen lo pone el navegador: así el enlace lleva de vuelta al mismo
+    // panel desde el que se generó (producción o preview), sin cablearlo.
+    body: JSON.stringify({ origen: window.location.origin }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error generando el enlace");
+  return { enlace: String((j as any).enlace), email: String((j as any).email ?? "") };
+}
+
 export async function cambiarPasswordUsuario(id: string, password: string): Promise<void> {
   const { data: sess } = await supabase.auth.getSession();
   const token = sess.session?.access_token;

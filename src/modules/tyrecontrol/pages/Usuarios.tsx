@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas,
   listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario,
+  generarEnlaceAcceso,
 } from "../services/data";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { Modal, inputCls } from "../components/ui";
@@ -30,16 +31,20 @@ export default function Usuarios() {
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, []);
 
   async function crear() {
-    if (!form.nombre.trim() || !form.email.trim() || !form.password.trim()) { setMsg("Nombre, email y contraseña obligatorios"); return; }
+    if (!form.nombre.trim() || !form.email.trim()) { setMsg("Nombre y email obligatorios"); return; }
+    // El PIN solo es necesario para la APK: al panel se entra con enlace por
+    // email, así que a un cliente no se le inventa ninguna contraseña.
+    if (form.acceso_apk && form.password.trim().length < 4) { setMsg("Un usuario de APK necesita un PIN de al menos 4 caracteres"); return; }
     if (esSuper && !form.empresa_id) { setMsg("Selecciona una empresa"); return; }
     try {
       await crearUsuario({
-        nombre: form.nombre, email: form.email, password: form.password,
+        nombre: form.nombre, email: form.email,
+        password: form.acceso_apk ? form.password : undefined,
         rol: form.rol, acceso_apk: form.acceso_apk, acceso_panel: form.acceso_panel,
         empresa_id: esSuper ? form.empresa_id : undefined,
       });
       setForm({ ...EMPTY });
-      setMsg("✔ Usuario creado");
+      setMsg("✔ Usuario creado. Ábrelo y pulsa «Enlace de acceso» para invitarle.");
       await cargar();
     } catch (e: any) { setMsg(e?.message || "Error creando usuario"); }
   }
@@ -70,7 +75,9 @@ export default function Usuarios() {
         <div className="grid gap-2 sm:grid-cols-3">
           <input className={inp} placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} />
           <input className={inp} placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <input className={inp} type="password" placeholder="Contraseña" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          {form.acceso_apk
+            ? <input className={inp} type="password" placeholder="PIN de la APK" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            : <div className="flex items-center rounded-lg border border-dashed border-slate-600 px-3 py-2 text-[11px] text-slate-500">Sin contraseña: entra con enlace por email</div>}
           <select className={inp} value={form.rol} onChange={(e) => setForm({ ...form, rol: e.target.value as Rol })}>
             {(Object.keys(ROL_LABELS) as Rol[]).map((r) => <option key={r} value={r}>{ROL_LABELS[r]}</option>)}
           </select>
@@ -122,7 +129,9 @@ export default function Usuarios() {
                 </td>
                 <td className="px-4 py-2">
                   <div className="flex gap-2 text-[12px]">
-                    <button onClick={() => setFicha(u)} className="font-bold text-sky-300 hover:underline">Editar</button>
+                    <button onClick={() => setFicha(u)} className="font-bold text-sky-300 hover:underline">
+                      {u.acceso_panel ? "Editar / invitar" : "Editar"}
+                    </button>
                     <button
                       disabled={u.es_superadmin || u.id === perfil?.id}
                       onClick={() => void eliminar(u)}
@@ -168,6 +177,31 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   const [nuevoPin, setNuevoPin] = useState("");
   const [cambiandoPin, setCambiandoPin] = useState(false);
   const [pinMsg, setPinMsg] = useState("");
+  const [enlace, setEnlace] = useState("");
+  const [generando, setGenerando] = useState(false);
+  const [enlaceMsg, setEnlaceMsg] = useState("");
+  const [copiado, setCopiado] = useState(false);
+
+  async function pedirEnlace() {
+    setGenerando(true); setEnlaceMsg(""); setEnlace(""); setCopiado(false);
+    try {
+      const r = await generarEnlaceAcceso(usuario.id);
+      setEnlace(r.enlace);
+    } catch (e: any) { setEnlaceMsg(e?.message || "Error generando el enlace"); }
+    finally { setGenerando(false); }
+  }
+
+  async function copiar() {
+    try {
+      await navigator.clipboard.writeText(enlace);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2500);
+    } catch {
+      // Sin permiso de portapapeles (http, navegador antiguo): el enlace ya
+      // está visible y seleccionable, así que no se bloquea nada.
+      setEnlaceMsg("No he podido copiarlo: selecciónalo y cópialo a mano.");
+    }
+  }
 
   async function cambiarPin() {
     if (nuevoPin.trim().length < 4) { setPinMsg("El PIN/contraseña debe tener al menos 4 caracteres"); return; }
@@ -233,11 +267,50 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
           <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>
         </div>
 
-        {/* Cambiar contraseña / PIN de la APK */}
+        {/* Invitación al panel: enlace de un solo uso */}
+        {accesoPanel && (
+          <div className="rounded-lg bg-slate-800 p-3">
+            <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Acceso al panel</div>
+            <div className="mb-2 text-[11px] text-slate-500">
+              Al panel se entra con un enlace por email, sin contraseña. Genera aquí un enlace y
+              pásaselo a {usuario.nombre} por el canal que uses con él; o dile que entre en el panel
+              y pulse «Enviar enlace de acceso» con su email ({usuario.email}).
+            </div>
+            <button
+              onClick={() => void pedirEnlace()}
+              disabled={generando}
+              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              {generando ? "Generando…" : "Generar enlace de acceso"}
+            </button>
+            {enlace && (
+              <div className="mt-2">
+                <textarea
+                  readOnly
+                  value={enlace}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="h-16 w-full resize-none rounded-lg border border-slate-600 bg-slate-900 p-2 text-[11px] text-slate-300"
+                />
+                <div className="mt-1 flex items-center gap-2">
+                  <button onClick={() => void copiar()} className="rounded-lg border border-slate-600 px-3 py-1 text-[12px] text-slate-200">
+                    {copiado ? "✔ Copiado" : "Copiar enlace"}
+                  </button>
+                  <span className="text-[11px] text-amber-300">
+                    Caduca y sirve una sola vez. Es una credencial: no lo publiques.
+                  </span>
+                </div>
+              </div>
+            )}
+            {enlaceMsg && <div className="mt-1 text-[12px] text-rose-300">{enlaceMsg}</div>}
+          </div>
+        )}
+
+        {/* PIN de la APK: solo tiene sentido para quien entra en la APK */}
+        {accesoApk && (
         <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Contraseña</div>
+          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">PIN de la APK</div>
           <div className="mb-2 text-[11px] text-slate-500">
-            Es la contraseña con la que entra este usuario (en la APK, el PIN). Escribe la nueva y pulsa cambiar.
+            Es el PIN con el que este usuario entra en la APK. Escribe el nuevo y pulsa cambiar.
           </div>
           <div className="flex items-center gap-2">
             <input
@@ -259,6 +332,7 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
           </div>
           {pinMsg && <div className={`mt-1 text-[12px] ${pinMsg.startsWith("✔") ? "text-emerald-400" : "text-rose-300"}`}>{pinMsg}</div>}
         </div>
+        )}
 
         {esSuper && (
           <div className="rounded-lg bg-slate-800 p-3">
