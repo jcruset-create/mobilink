@@ -109,14 +109,19 @@ clas as (
       when t.profundidad_mm <= t.avisomm + 5            then 'bueno'
       else 'excelente'
     end as nivel,
-    -- Bandas absolutas en mm, para el histograma clásico del informe.
+    -- Bandas absolutas en mm del informe "Estado del banco de goma".
+    -- Los cortes son CERRADOS por arriba —(4,6], (6,8]…— porque así están
+    -- definidos los tramos del informe ("mayor de 4 mm y hasta 6 mm"). No es
+    -- un detalle menor: las lecturas de sonda caen mucho en valores enteros y
+    -- medios, así que un 6,0 exacto es frecuente y con cortes abiertos se
+    -- contaría en el tramo siguiente, descuadrando la tabla.
     case
-      when t.profundidad_mm <  4  then '<4'
-      when t.profundidad_mm <  6  then '4-6'
-      when t.profundidad_mm <  8  then '6-8'
-      when t.profundidad_mm < 10  then '8-10'
-      when t.profundidad_mm < 12  then '10-12'
-      else '>=12'
+      when t.profundidad_mm <=  4  then '<=4'
+      when t.profundidad_mm <=  6  then '4-6'
+      when t.profundidad_mm <=  8  then '6-8'
+      when t.profundidad_mm <= 10  then '8-10'
+      when t.profundidad_mm <= 12  then '10-12'
+      else '>12'
     end as banda
   from ultu t
 ),
@@ -196,6 +201,41 @@ meses as (
   from generate_series(date_trunc('month', now()) - interval '11 months',
                        date_trunc('month', now()), interval '1 month') gs
 ),
+-- Serie histórica del banco de goma: reparto por banda de cada mes, más el
+-- porcentaje de reesculturados y recauchutados. Cada mes cuenta SUS
+-- mediciones (lo que se midió ese mes), que es como lo presenta el informe
+-- mensual clásico: la columna de marzo es la foto de marzo.
+evol_bandas as (
+  select m.mes,
+    count(d.profundidad_mm) as total,
+    count(*) filter (where d.profundidad_mm <=  4) as b1,
+    count(*) filter (where d.profundidad_mm >  4 and d.profundidad_mm <=  6) as b2,
+    count(*) filter (where d.profundidad_mm >  6 and d.profundidad_mm <=  8) as b3,
+    count(*) filter (where d.profundidad_mm >  8 and d.profundidad_mm <= 10) as b4,
+    count(*) filter (where d.profundidad_mm > 10 and d.profundidad_mm <= 12) as b5,
+    count(*) filter (where d.profundidad_mm > 12) as b6,
+    count(*) filter (where n.reesculturado) as rees,
+    count(*) filter (where mr.es_recau) as recau,
+    count(*) filter (where n.reesculturado and mr.es_recau) as rees_y_recau
+  from meses m
+  left join revisiones_vehiculo r
+    on r.estado_revision <> 'anulada'
+   and r.fecha_revision between m.ini and m.fin
+   and (p_empresa is null or r.empresa_id = p_empresa)
+  left join revisiones_neumaticos_detalle d
+    on d.revision_id = r.id and d.profundidad_mm is not null
+  left join tc_neumaticos n on n.id = d.neumatico_id
+  -- Recauchutado = la marca está marcada como tal en el catálogo (INSA...),
+  -- mismo criterio que el informe de montaje y el asistente.
+  left join lateral (
+    select exists (
+      select 1 from tc_cat_marcas_neumatico ma
+      where ma.es_recauchutado and coalesce(ma.activo, true)
+        and upper(trim(ma.nombre)) = upper(trim(coalesce(n.marca, '')))
+    ) as es_recau
+  ) mr on true
+  group by m.mes
+),
 evol as (
   select m.mes,
     (select count(*) from revisiones_vehiculo r
@@ -261,7 +301,7 @@ select jsonb_build_object(
     select coalesce(jsonb_agg(jsonb_build_object('banda', banda, 'n', n) order by orden), '[]'::jsonb)
     from (
       select banda, count(*) as n,
-        case banda when '<4' then 1 when '4-6' then 2 when '6-8' then 3
+        case banda when '<=4' then 1 when '4-6' then 2 when '6-8' then 3
                    when '8-10' then 4 when '10-12' then 5 else 6 end as orden
       from clas group by banda) x),
 
@@ -281,6 +321,17 @@ select jsonb_build_object(
       'coef_variacion', case when avg(profundidad_mm) > 0
         then round((coalesce(stddev_samp(profundidad_mm), 0) / avg(profundidad_mm) * 100)::numeric, 1) end
     ) from clas),
+
+  -- Serie histórica del banco de goma (12 meses)
+  'evolucion_bandas', (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'mes', mes, 'total', total,
+      'bandas', jsonb_build_object(
+        '<=4', b1, '4-6', b2, '6-8', b3, '8-10', b4, '10-12', b5, '>12', b6),
+      'reesculturados', rees,
+      'recauchutados', recau,
+      'rees_y_recau', rees_y_recau) order by mes), '[]'::jsonb)
+    from evol_bandas),
 
   -- 6. Evolución mensual
   'evolucion', (

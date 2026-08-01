@@ -191,6 +191,15 @@ export interface InformeEjecutivo {
     desviacion: number | null; coef_variacion: number | null;
   };
   evolucion: { mes: string; revisiones: number; prof_media: number | null; bajo_legal: number }[];
+  /** Serie histórica del banco de goma: mediciones de CADA mes por banda. */
+  evolucion_bandas: {
+    mes: string;
+    total: number;
+    bandas: Record<string, number>;
+    reesculturados: number;
+    recauchutados: number;
+    rees_y_recau: number;
+  }[];
   por_medida: { medida: string; unidades: number; prof_media: number | null; criticos: number }[];
   por_marca: { marca: string; unidades: number; prof_media: number | null; criticos: number; reesculturados: number }[];
   por_base: {
