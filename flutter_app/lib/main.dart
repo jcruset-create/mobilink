@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
 import 'screens/assistances_screen.dart';
@@ -11,6 +12,11 @@ final exteriorMode = ValueNotifier<bool>(false);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // La app se usa siempre en vertical: bloqueamos la orientación
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
   await OfflineStore.init(); // base de datos local (modo offline)
   final prefs = await SharedPreferences.getInstance();
   exteriorMode.value = prefs.getBool('exteriorMode') ?? false;
