@@ -52,6 +52,33 @@ interface ResolvedCredentials {
   aadTenantId: string;
 }
 
+/** Pedido de venta de BC con líneas, para la bandeja de WorkPlanner (API v2.0). */
+export interface BcSalesOrder {
+  id: string;
+  number: string;
+  customerNumber?: string;
+  customerName?: string;
+  shipToAddressLine1?: string;
+  requestedDeliveryDate?: string;
+  status?: string;
+  lastModifiedDateTime?: string;
+  externalDocumentNumber?: string;
+  salesOrderLines?: BcSalesOrderLine[];
+}
+
+export interface BcSalesOrderLine {
+  id: string;
+  sequence?: number;
+  lineType?: string;
+  lineObjectNumber?: string;
+  description?: string;
+  quantity?: number;
+  unitOfMeasureCode?: string;
+  unitPrice?: number;
+  discountPercent?: number;
+  netAmount?: number;
+}
+
 /** Artículo de BC con los campos de control del catálogo (API estándar v2.0). */
 export interface BcCatalogItem {
   id: string;
@@ -446,6 +473,48 @@ export class BusinessCentralConnector implements IErpConnector {
       ? `&$filter=lastModifiedDateTime gt ${opts.modifiedSince.toISOString()}`
       : "";
     return this.bcList<BcCatalogItem>(ctx, `items?${select}${filter}`);
+  }
+
+  // ── Pedidos de venta hacia WorkPlanner (SPEC §2) ────────────────────────────
+  /**
+   * Lectura de pedidos de venta con sus líneas ($expand) para la bandeja de
+   * WorkPlanner. `modifiedSince` habilita el incremental.
+   *
+   * Con la API estándar no existe el campo 'Send to WorkPlanner' (extensión AL,
+   * It.4): hasta entonces bajan todos los pedidos no facturados y es WorkPlanner
+   * quien decide cuáles planificar.
+   */
+  async getSalesOrdersForSync(
+    ctx: OperationContext,
+    opts: { modifiedSince?: Date } = {}
+  ): Promise<BcSalesOrder[]> {
+    if (await this.useSimulation(ctx)) {
+      return [
+        {
+          id: "sim-order-1",
+          number: "PV-SIM-001",
+          customerNumber: "10000",
+          customerName: "Cliente simulado SL",
+          shipToAddressLine1: "Polígono simulado, nave 1",
+          requestedDeliveryDate: "2026-08-15",
+          status: "Open",
+          lastModifiedDateTime: "2026-01-01T00:00:00Z",
+          externalDocumentNumber: "",
+          salesOrderLines: [
+            { id: "sim-line-1", sequence: 10000, lineType: "Item", lineObjectNumber: "SIM-PASTILLAS", description: "Pastillas de freno (simulado)", quantity: 2, unitOfMeasureCode: "UDS", unitPrice: 82.5, discountPercent: 0, netAmount: 165 },
+            { id: "sim-line-2", sequence: 20000, lineType: "Item", lineObjectNumber: "SIM-MO", description: "Mano de obra (simulado)", quantity: 1.5, unitOfMeasureCode: "HORA", unitPrice: 45, discountPercent: 0, netAmount: 67.5 },
+          ],
+        },
+      ];
+    }
+
+    const select =
+      "$select=id,number,customerNumber,customerName,shipToAddressLine1,requestedDeliveryDate,status,lastModifiedDateTime,externalDocumentNumber";
+    const expand = "$expand=salesOrderLines";
+    const filter = opts.modifiedSince
+      ? `&$filter=lastModifiedDateTime gt ${opts.modifiedSince.toISOString()}`
+      : "";
+    return this.bcList<BcSalesOrder>(ctx, `salesOrders?${select}&${expand}${filter}`);
   }
 
   // ── Escritura: presupuesto de venta (núcleo de la primera entrega) ───────────

@@ -21,6 +21,7 @@ import { sendCommunication } from "../application/services/CommunicationService.
 import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
 import { runCatalogSync, getCatalogStatus } from "../application/services/CatalogSyncService.ts";
+import { runSalesOrderSync } from "../application/services/SalesOrderSyncService.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
@@ -44,6 +45,10 @@ import {
   upsertMapping,
   deleteMapping,
   listCatalog,
+  listWpOrders,
+  getWpOrderWithLines,
+  updateWpOrderPlanning,
+  getSyncState,
 } from "../infrastructure/repositories.ts";
 
 function tenantOf(req: Request): string | undefined {
@@ -387,6 +392,74 @@ export function createIntegrationHubRouter(): Router {
       if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
       const result = await runCatalogSync({ tenantId, full: Boolean(req.body?.full) });
       res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Pedidos BC → WorkPlanner (SPEC §2) ─────────────────────────────────────
+  // Bandeja local de pedidos sincronizados. Lo consume la UI de WorkPlanner.
+  router.get("/erp/sales-orders", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const [orders, state] = await Promise.all([
+        listWpOrders({
+          tenantId,
+          wpStatus: req.query.estado as string | undefined,
+          search: req.query.search as string | undefined,
+          limit: req.query.limit ? Number(req.query.limit) : undefined,
+        }),
+        getSyncState(tenantId, "sales_orders"),
+      ]);
+      res.json({
+        tenantId,
+        lastSyncMs: state?.last_sync_ms ? Number(state.last_sync_ms) : null,
+        syncStatus: state?.status ?? null,
+        orders,
+      });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.get("/erp/sales-orders/:id", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const data = await getWpOrderWithLines(tenantId, Number(req.params.id));
+      if (!data) return res.status(404).json({ error: "not_found" });
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Planificación local (estado WP, técnicos, fechas). Nunca viaja a BC.
+  router.patch("/erp/sales-orders/:id/planning", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const updated = await updateWpOrderPlanning({
+        tenantId,
+        id: Number(req.params.id),
+        wpStatus: req.body?.wpStatus,
+        planning: req.body?.planning,
+      });
+      if (!updated) return res.status(404).json({ error: "not_found_or_cancelled" });
+      res.json(updated);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Sincronización bajo demanda. body: { full?: boolean }
+  router.post("/admin/sales-orders/sync", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      res.json(await runSalesOrderSync({ tenantId, full: Boolean(req.body?.full) }));
     } catch (err) {
       sendError(res, err);
     }
