@@ -90,14 +90,24 @@ export async function runOperation<T>(
       }
 
       // Sin más reintentos o error no recuperable → estado final.
-      const finalStatus: OperationStatus = ie.retryable ? "MANUAL_REVIEW" : "FAILED";
+      //
+      // MANUAL_REVIEW no es sólo "se agotaron los reintentos": un mapeo que falta o
+      // unas credenciales caducadas los arregla una persona y la operación se relanza.
+      // FAILED queda para lo que no tiene arreglo por esa vía (datos inválidos, etc.),
+      // que es como los documenta domain/errors.ts.
+      const revisableAMano = ie.kind === "MAPPING" || ie.kind === "AUTH";
+      const finalStatus: OperationStatus = ie.retryable || revisableAMano ? "MANUAL_REVIEW" : "FAILED";
       const failed = await updateOperationStatus(op.id, finalStatus, {
         errorCode: ie.code,
         errorMessage: ie.message,
         completed: true,
       });
       await logger.error(
-        ie.retryable ? "Agotados los reintentos → revisión manual" : "Operación fallida",
+        ie.retryable
+          ? "Agotados los reintentos → revisión manual"
+          : revisableAMano
+            ? "Requiere intervención manual (mapeo o credenciales) → revisión manual"
+            : "Operación fallida",
         finalStatus
       );
       throw new OperationFailedError(failed, ie);
