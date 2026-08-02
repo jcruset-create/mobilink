@@ -95,7 +95,7 @@ export async function runOperation<T>(
       // unas credenciales caducadas los arregla una persona y la operación se relanza.
       // FAILED queda para lo que no tiene arreglo por esa vía (datos inválidos, etc.),
       // que es como los documenta domain/errors.ts.
-      const revisableAMano = ie.kind === "MAPPING" || ie.kind === "AUTH";
+      const revisableAMano = ie.kind === "MAPPING" || ie.kind === "AUTH" || ie.kind === "BLOCKED";
       const finalStatus: OperationStatus = ie.retryable || revisableAMano ? "MANUAL_REVIEW" : "FAILED";
       const failed = await updateOperationStatus(op.id, finalStatus, {
         errorCode: ie.code,

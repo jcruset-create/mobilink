@@ -22,6 +22,7 @@ import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
 import { runCatalogSync, getCatalogStatus } from "../application/services/CatalogSyncService.ts";
 import { runSalesOrderSync } from "../application/services/SalesOrderSyncService.ts";
+import { registerExecution, confirmReturn } from "../application/services/ExecutionReturnService.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
@@ -448,6 +449,36 @@ export function createIntegrationHubRouter(): Router {
       });
       if (!updated) return res.status(404).json({ error: "not_found_or_cancelled" });
       res.json(updated);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Ejecución del parte: consumos y líneas añadidas en campo. Local, no toca BC.
+  router.post("/erp/sales-orders/:id/execution", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const result = await registerExecution({
+        tenantId,
+        wpOrderId: Number(req.params.id),
+        lines: req.body?.lines,
+        extraLines: req.body?.extraLines,
+        usuario: req.body?.usuario,
+      });
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Confirmar el parte: empuja a BC lo pendiente (operación auditada y reintentable).
+  router.post("/erp/sales-orders/:id/confirm-return", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const result = await confirmReturn({ tenantId, wpOrderId: Number(req.params.id) });
+      res.status(201).json(result);
     } catch (err) {
       sendError(res, err);
     }

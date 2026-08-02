@@ -30,6 +30,7 @@ import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
 import { sendCommunication } from "../application/services/CommunicationService.ts";
 import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
+import { confirmReturn } from "../application/services/ExecutionReturnService.ts";
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const BATCH_SIZE = 5;
@@ -43,6 +44,10 @@ type RetryHandler = (op: OperationRow, payload: any) => Promise<unknown>;
 const HANDLERS: Record<string, RetryHandler> = {
   ERP_CREATE_SALES_QUOTE: (op, p) =>
     createQuoteFromWorkOrder({ ...p, tenantId: op.tenant_id, correlationId: op.correlation_id }),
+
+  // Idempotente: las líneas ya devueltas se omiten, así que reintentar es seguro.
+  ERP_RETURN_EXECUTION: (op, p) =>
+    confirmReturn({ tenantId: op.tenant_id, wpOrderId: p?.wpOrderId, correlationId: op.correlation_id }),
 
   TECH_IDENTIFY_VEHICLE: (op, p) =>
     identifyVehicle(op.tenant_id, p ?? {}, { correlationId: op.correlation_id }),

@@ -899,6 +899,88 @@ export async function updateWpOrderPlanning(params: {
   return rows[0] ?? null;
 }
 
+// ── Ejecución del parte y devolución a BC (SPEC §3, It.3) ───────────────────
+
+/** Registra consumo sobre una línea venida de BC y la marca en ejecución. */
+export async function setLineConsumption(params: {
+  tenantId: string;
+  lineId: number;
+  qtyConsumida: number;
+}) {
+  const { rows } = await pool.query(
+    `UPDATE wp_order_lines
+        SET qty_consumida = $3,
+            en_ejecucion = true,
+            estado_sync = CASE WHEN estado_sync = 'returned' THEN 'pending_return' ELSE estado_sync END,
+            updated_at_ms = $4
+      WHERE tenant_id = $1 AND id = $2
+      RETURNING *`,
+    [params.tenantId, params.lineId, params.qtyConsumida, now()]
+  );
+  return rows[0] ?? null;
+}
+
+/** Línea añadida en campo (origen 'wp'): producto/servicio del catálogo controlado. */
+export async function addWpLine(params: {
+  tenantId: string;
+  wpOrderId: number;
+  bcItemNumber: string;
+  tipo?: string;
+  descripcion?: string;
+  qty: number;
+  um?: string;
+  usuario?: string;
+}) {
+  const ts = now();
+  const { rows } = await pool.query(
+    `INSERT INTO wp_order_lines
+       (wp_order_id, tenant_id, bc_line_id, origen, estado_sync, tipo, bc_item_number,
+        descripcion, qty_prevista, qty_consumida, um, en_ejecucion, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,NULL,'wp','pending_return',$3,$4,$5,$6,$6,$7,true,$8,$8)
+     RETURNING *`,
+    [
+      params.wpOrderId,
+      params.tenantId,
+      params.tipo ?? "Item",
+      params.bcItemNumber,
+      params.descripcion ?? "",
+      params.qty,
+      params.um ?? null,
+      ts,
+    ]
+  );
+  return rows[0];
+}
+
+export async function getCatalogItemByNumber(tenantId: string, bcNumber: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM wp_catalog WHERE tenant_id = $1 AND bc_number = $2`,
+    [tenantId, bcNumber]
+  );
+  return rows[0] ?? null;
+}
+
+/** Marca el resultado de la devolución de una línea. */
+export async function setLineReturnResult(params: {
+  tenantId: string;
+  lineId: number;
+  estadoSync: "returned" | "rejected" | "pending_return";
+  bcLineId?: string;
+  bcLineNo?: number;
+  aviso?: string | null;
+}) {
+  await pool.query(
+    `UPDATE wp_order_lines
+        SET estado_sync = $3,
+            bc_line_id = COALESCE($4, bc_line_id),
+            bc_line_no = COALESCE($5, bc_line_no),
+            aviso_divergencia = $6,
+            updated_at_ms = $7
+      WHERE tenant_id = $1 AND id = $2`,
+    [params.tenantId, params.lineId, params.estadoSync, params.bcLineId ?? null, params.bcLineNo ?? null, params.aviso ?? null, now()]
+  );
+}
+
 /** Tenants con el conector BC habilitado — los que entran en la sync programada. */
 export async function tenantsWithEnabledConnector(connectorKey: string): Promise<string[]> {
   const { rows } = await pool.query(
