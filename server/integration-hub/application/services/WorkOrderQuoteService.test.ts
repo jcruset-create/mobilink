@@ -91,8 +91,9 @@ describe("previewQuoteFromWorkOrder", () => {
     expect(preview.listo).toBe(true);
   });
 
-  it("excluye los trabajos cancelados, que no se facturan", async () => {
-    trabajoRows.push({ ...trabajoRows[0], id: 2, trabajoPlantilla: "OTRO", status: "cancelado" });
+  it("excluye los trabajos no realizados, que no se facturan", async () => {
+    trabajoRows.push({ ...trabajoRows[0], id: 2, trabajoPlantilla: "OTRO", status: "no_realizado" });
+    trabajoRows.push({ ...trabajoRows[0], id: 3, trabajoPlantilla: "TERCERO", status: "cancelado" });
 
     const preview = await previewQuoteFromWorkOrder({ tenantId: TENANT, otfId: 548 });
 
