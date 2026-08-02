@@ -35,6 +35,9 @@ import {
   upsertConnectorConfig,
   listConnectorConfigs,
   updateOperationStatus,
+  listMappings,
+  upsertMapping,
+  deleteMapping,
 } from "../infrastructure/repositories.ts";
 
 function tenantOf(req: Request): string | undefined {
@@ -305,6 +308,73 @@ export function createIntegrationHubRouter(): Router {
         return res.json({ key, ...result });
       }
       return res.status(400).json({ error: "unsupported_connector", key });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Administración: mapeos Mobilink ↔ sistema externo (§4.3) ──────────────
+  router.get("/admin/mappings", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const mappings = await listMappings({
+        tenantId,
+        entityType: req.query.entityType as string | undefined,
+        system: req.query.system as string | undefined,
+        search: req.query.search as string | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+      });
+      res.json({ tenantId, mappings });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Alta/actualización. Acepta uno o varios de golpe, para poder cargar el maestro
+  // completo de clientes o artículos sin una llamada por fila.
+  router.post("/admin/mappings", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+
+      const body = req.body ?? {};
+      const entradas = Array.isArray(body.mappings) ? body.mappings : [body];
+      const guardados = [];
+      for (const [i, m] of entradas.entries()) {
+        if (!m?.entityType || !m?.system || !m?.externalCode || !m?.mobilinkId) {
+          throw IntegrationError.validation(
+            "MAPPING_INCOMPLETE",
+            `Mapeo ${i}: se requieren entityType, system, externalCode y mobilinkId`
+          );
+        }
+        guardados.push(
+          await upsertMapping({
+            tenantId,
+            entityType: m.entityType,
+            system: m.system,
+            externalCode: String(m.externalCode),
+            mobilinkId: String(m.mobilinkId),
+            metadata: m.metadata,
+          })
+        );
+      }
+      res.status(201).json({ guardados: guardados.length, mappings: guardados });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.delete("/admin/mappings/:id", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const borrado = await deleteMapping(tenantId, Number(req.params.id));
+      if (!borrado) return res.status(404).json({ error: "not_found" });
+      res.json({ ok: true });
     } catch (err) {
       sendError(res, err);
     }
