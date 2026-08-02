@@ -59,13 +59,26 @@ ${text || "(sin texto: analiza las imágenes)"}`,
     return {};
   }
 
+  const cleaned = r.texto.replace(/```json\r?\n?/g, "").replace(/```\r?\n?/g, "").trim();
   try {
-    const cleaned = r.texto.replace(/```json\r?\n?/g, "").replace(/```\r?\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (err: any) {
-    console.error("[IA] extractJson: respuesta no JSON");
-    if (opts.strict) throw new Error("el modelo respondió algo que no es JSON");
+  } catch {
+    // A veces el modelo envuelve el JSON en prosa: rescatamos el primer bloque {...}
+    const bloque = cleaned.match(/\{[\s\S]*\}/);
+    if (bloque) {
+      try {
+        const parsed = JSON.parse(bloque[0]);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch { /* cae al error de abajo */ }
+    }
+    console.error("[IA] extractJson: respuesta no JSON:", cleaned.slice(0, 300));
+    if (opts.strict) {
+      const truncada = cleaned.length > 0 && !cleaned.trimEnd().endsWith("}");
+      throw new Error(truncada
+        ? "la respuesta del modelo llegó cortada (subir maxTokens)"
+        : "el modelo respondió algo que no es JSON");
+    }
     return {};
   }
 }
