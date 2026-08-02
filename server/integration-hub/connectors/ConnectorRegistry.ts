@@ -20,6 +20,10 @@ import { BusinessCentralConnector, type BusinessCentralConfig } from "./erp/busi
 import { AutodataConnector, type AutodataConfig } from "./technical/autodata/AutodataConnector.ts";
 import { TecDocConnector, type TecDocConfig } from "./technical/tecdoc/TecDocConnector.ts";
 import {
+  MobilinkHistoricoConnector,
+  type MobilinkHistoricoConfig,
+} from "./technical/mobilink-historico/MobilinkHistoricoConnector.ts";
+import {
   RecambistaGenericoConnector,
   type RecambistaGenericoConfig,
 } from "./suppliers/recambista-generico/RecambistaGenericoConnector.ts";
@@ -92,6 +96,7 @@ export function knownErpConnectorKeys(): string[] {
 const TECHNICAL_FACTORIES: Record<string, (config: any) => ITechnicalConnector> = {
   autodata: (config: AutodataConfig) => new AutodataConnector(config),
   tecdoc: (config: TecDocConfig) => new TecDocConnector(config),
+  "mobilink-historico": (config: MobilinkHistoricoConfig) => new MobilinkHistoricoConnector(config),
 };
 
 /**
@@ -99,13 +104,14 @@ const TECHNICAL_FACTORIES: Record<string, (config: any) => ITechnicalConnector> 
  * Autodata para tiempos/mantenimiento/medidas. Se puede sobreescribir por config.
  */
 const TECHNICAL_CAPABILITY_PREFERENCE: Record<string, string[]> = {
-  identifyVehicle: ["tecdoc", "autodata"],
+  // El histórico propio va primero: son datos reales del taller, no simulación.
+  identifyVehicle: ["mobilink-historico", "tecdoc", "autodata"],
   getTechnicalSpecifications: ["autodata", "tecdoc"],
   getCompatibleParts: ["tecdoc", "autodata"],
   getOeReferences: ["tecdoc", "autodata"],
   getRepairTimes: ["autodata", "tecdoc"],
   getMaintenancePlan: ["autodata", "tecdoc"],
-  getTyreSpecifications: ["autodata", "tecdoc"],
+  getTyreSpecifications: ["mobilink-historico", "autodata", "tecdoc"],
 };
 
 export function knownTechnicalConnectorKeys(): string[] {

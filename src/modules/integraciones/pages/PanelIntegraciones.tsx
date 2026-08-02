@@ -30,6 +30,13 @@ const CONNECTOR_META: Record<string, { nombre: string; kind: ConnectorKind; desc
     descripcion: "Datos técnicos: tiempos de reparación, mantenimiento, medidas. Config: baseUrl.",
     secretos: ["api_key"],
   },
+  "mobilink-historico": {
+    nombre: "Histórico de Mobilink",
+    kind: "technical",
+    descripcion:
+      "Identifica el vehículo con los datos propios del taller (asistencias y OT): marca, modelo, VIN y medida de neumático. Sin credenciales ni coste. Config: {\"maxAntiguedadDias\": 365}.",
+    secretos: [],
+  },
   tecdoc: {
     nombre: "TecDoc",
     kind: "technical",
