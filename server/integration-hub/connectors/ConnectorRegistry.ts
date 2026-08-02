@@ -40,6 +40,8 @@ export interface ResolvedConnector<T> {
   connector: T;
   /** true si no había config en BD y se usa el conector por defecto en simulación. */
   usingDefault: boolean;
+  /** Config guardada del conector. La necesitan servicios como el Mapping Engine. */
+  config: Record<string, unknown>;
 }
 
 export async function resolveErpConnector(tenantId: string): Promise<ResolvedConnector<IErpConnector>> {
@@ -49,6 +51,7 @@ export async function resolveErpConnector(tenantId: string): Promise<ResolvedCon
       key: DEFAULT_ERP_KEY,
       connector: ERP_FACTORIES[DEFAULT_ERP_KEY]({}),
       usingDefault: true,
+      config: {},
     };
   }
   const factory = ERP_FACTORIES[cfg.connector_key];
@@ -62,6 +65,7 @@ export async function resolveErpConnector(tenantId: string): Promise<ResolvedCon
     key: cfg.connector_key,
     connector: factory(cfg.config ?? {}),
     usingDefault: false,
+    config: (cfg.config ?? {}) as Record<string, unknown>,
   };
 }
 

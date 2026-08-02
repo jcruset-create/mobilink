@@ -430,3 +430,122 @@ export async function listConnectorConfigs(tenantId: string) {
   );
   return rows;
 }
+
+// ── Mapeos entre identificadores de Mobilink y de sistemas externos (§4.3) ──
+
+export type MappingEntityType = "customer" | "product" | "vehicle" | "warehouse";
+
+export interface MappingRow {
+  id: number;
+  tenant_id: string;
+  entity_type: string;
+  system: string;
+  external_code: string;
+  mobilink_id: string;
+  metadata: Record<string, unknown> | null;
+}
+
+/** Mobilink → sistema externo. Es la dirección que usa la creación de documentos. */
+export async function findExternalCode(params: {
+  tenantId: string;
+  entityType: MappingEntityType;
+  system: string;
+  mobilinkId: string;
+}): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT external_code FROM integration_mappings
+      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3 AND mobilink_id = $4
+      LIMIT 1`,
+    [params.tenantId, params.entityType, params.system, params.mobilinkId]
+  );
+  return rows[0]?.external_code ?? null;
+}
+
+/** Sistema externo → Mobilink. Para importaciones y webhooks entrantes. */
+export async function findMobilinkId(params: {
+  tenantId: string;
+  entityType: MappingEntityType;
+  system: string;
+  externalCode: string;
+}): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT mobilink_id FROM integration_mappings
+      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3 AND external_code = $4
+      LIMIT 1`,
+    [params.tenantId, params.entityType, params.system, params.externalCode]
+  );
+  return rows[0]?.mobilink_id ?? null;
+}
+
+export async function upsertMapping(params: {
+  tenantId: string;
+  entityType: MappingEntityType;
+  system: string;
+  externalCode: string;
+  mobilinkId: string;
+  metadata?: Record<string, unknown>;
+}): Promise<MappingRow> {
+  const ts = now();
+  const { rows } = await pool.query(
+    `INSERT INTO integration_mappings
+       (tenant_id, entity_type, system, external_code, mobilink_id, metadata, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+     ON CONFLICT (tenant_id, entity_type, system, external_code)
+     DO UPDATE SET mobilink_id = EXCLUDED.mobilink_id,
+                   metadata = EXCLUDED.metadata,
+                   updated_at_ms = $7
+     RETURNING *`,
+    [
+      params.tenantId,
+      params.entityType,
+      params.system,
+      params.externalCode,
+      params.mobilinkId,
+      params.metadata ? JSON.stringify(params.metadata) : null,
+      ts,
+    ]
+  );
+  return rows[0];
+}
+
+export async function listMappings(filters: {
+  tenantId: string;
+  entityType?: string;
+  system?: string;
+  search?: string;
+  limit?: number;
+}): Promise<MappingRow[]> {
+  const where: string[] = ["tenant_id = $1"];
+  const values: unknown[] = [filters.tenantId];
+
+  if (filters.entityType) {
+    values.push(filters.entityType);
+    where.push(`entity_type = $${values.length}`);
+  }
+  if (filters.system) {
+    values.push(filters.system);
+    where.push(`system = $${values.length}`);
+  }
+  if (filters.search) {
+    values.push(`%${filters.search}%`);
+    where.push(`(external_code ILIKE $${values.length} OR mobilink_id ILIKE $${values.length})`);
+  }
+  values.push(Math.min(filters.limit ?? 200, 1000));
+
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_mappings
+      WHERE ${where.join(" AND ")}
+      ORDER BY entity_type, mobilink_id
+      LIMIT $${values.length}`,
+    values
+  );
+  return rows;
+}
+
+export async function deleteMapping(tenantId: string, id: number): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM integration_mappings WHERE tenant_id = $1 AND id = $2`,
+    [tenantId, id]
+  );
+  return (rowCount ?? 0) > 0;
+}
