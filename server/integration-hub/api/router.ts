@@ -20,6 +20,7 @@ import { processNonConformity } from "../application/services/ChecklistAutomatio
 import { sendCommunication } from "../application/services/CommunicationService.ts";
 import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
+import { runCatalogSync, getCatalogStatus } from "../application/services/CatalogSyncService.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
@@ -42,6 +43,7 @@ import {
   listMappings,
   upsertMapping,
   deleteMapping,
+  listCatalog,
 } from "../infrastructure/repositories.ts";
 
 function tenantOf(req: Request): string | undefined {
@@ -342,6 +344,49 @@ export function createIntegrationHubRouter(): Router {
         return res.json({ key, ...result });
       }
       return res.status(400).json({ error: "unsupported_connector", key });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Catálogo controlado de WorkPlanner (SPEC §4) ───────────────────────────
+  // Lectura de negocio: lo consume la UI de WorkPlanner (artículos usables en campo).
+  router.get("/catalog", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const items = await listCatalog({
+        tenantId,
+        soloActivos: req.query.todos !== "1",
+        categoria: req.query.categoria as string | undefined,
+        search: req.query.search as string | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+      });
+      res.json({ tenantId, items });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.get("/admin/catalog/status", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      res.json(await getCatalogStatus(tenantId));
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Sincronización bajo demanda. body: { full?: boolean }
+  router.post("/admin/catalog/sync", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const result = await runCatalogSync({ tenantId, full: Boolean(req.body?.full) });
+      res.json(result);
     } catch (err) {
       sendError(res, err);
     }
