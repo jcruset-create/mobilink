@@ -163,6 +163,15 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
         return salida;
       } catch (e: any) {
         ultimoError = String(e?.message ?? e);
+        // Los modelos razonadores (gpt-5*, o*) rechazan 'temperature' con 400.
+        // Se quita el parámetro y se repite, en vez de tumbar la petición.
+        if (Number(e?.status ?? e?.response?.status) === 400
+            && cuerpo.temperature != null
+            && /temperature/i.test(ultimoError)) {
+          delete cuerpo.temperature;
+          intento--;
+          continue;
+        }
         // Solo se reintenta (y solo se cae al respaldo) ante fallos técnicos:
         // un error de esquema o de petición no mejora repitiéndolo.
         if (!esErrorTecnico(e)) break;
