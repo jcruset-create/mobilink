@@ -10,6 +10,10 @@
 
 import express, { type Request, type Response, type Router } from "express";
 import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteService.ts";
+import {
+  previewQuoteFromWorkOrder,
+  createQuoteFromWorkOrderId,
+} from "../application/services/WorkOrderQuoteService.ts";
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
@@ -120,6 +124,36 @@ export function createIntegrationHubRouter(): Router {
         reference,
         currency,
         lines,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Presupuesto a partir de una OT real de Mobilink (tabla otf).
+  // El preview no toca el ERP: dice qué se enviaría y qué falta por mapear.
+  router.get("/erp/work-orders/:otfId/quote-preview", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const preview = await previewQuoteFromWorkOrder({
+        tenantId: tenantId ?? "",
+        otfId: Number(req.params.otfId),
+      });
+      res.json(preview);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.post("/erp/work-orders/:otfId/sales-quote", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const result = await createQuoteFromWorkOrderId({
+        tenantId: tenantId ?? "",
+        otfId: Number(req.params.otfId),
+        permitirSinMapear: Boolean(req.body?.permitirSinMapear),
+        currency: req.body?.currency,
       });
       res.status(201).json(result);
     } catch (err) {
