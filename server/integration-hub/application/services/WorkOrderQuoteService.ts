@@ -64,8 +64,21 @@ interface TrabajoRow {
   status: string;
 }
 
-/** Estados de línea que no se facturan: no tiene sentido presupuestarlos. */
-const ESTADOS_EXCLUIDOS = new Set(["cancelado", "cancelada", "anulado", "anulada"]);
+/**
+ * Estados de línea que no se facturan.
+ *
+ * 'no_realizado' es el estado real que usa la pantalla de OT para un trabajo que no
+ * se llegó a hacer; presupuestarlo seria cobrar por algo no ejecutado. Los demás se
+ * mantienen por si otros flujos usan esa nomenclatura.
+ */
+const ESTADOS_EXCLUIDOS = new Set([
+  "no_realizado",
+  "no realizado",
+  "cancelado",
+  "cancelada",
+  "anulado",
+  "anulada",
+]);
 
 async function cargarOtf(otfId: number): Promise<{ otf: OtfRow; trabajos: TrabajoRow[] }> {
   const { rows } = await pool.query(`SELECT * FROM otf WHERE id = $1`, [otfId]);
