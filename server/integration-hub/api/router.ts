@@ -41,13 +41,33 @@ function tenantOf(req: Request): string | undefined {
   return (req.header("x-tenant-id") || req.body?.tenantId || req.query?.tenantId) as string | undefined;
 }
 
-/** Guard ligero para endpoints de administración (config, reprocesar). */
+/**
+ * Guard ligero para endpoints de administración (config, reprocesar).
+ *
+ * La cabecera llega percent-encoded desde el front (`makeAdminHeaders` en
+ * src/modules/adminHeaders.ts aplica encodeURIComponent), igual que en el resto
+ * del monolito: por eso se decodifica antes de comparar, como hace
+ * getRoleFromRequest() en server/index.ts.
+ *
+ * Se acepta tanto ADMIN_TOKEN como ADMIN_PASSWORD: el login clásico guarda la
+ * contraseña de admin en 'sea-admin-token', y el resto de la app ya le concede
+ * rol 'admin' con ella. Sin esto, el panel de integraciones daba 401 aunque el
+ * usuario estuviese correctamente autenticado como administrador.
+ */
 function requireAdmin(req: Request, res: Response): boolean {
-  const expected = process.env.ADMIN_TOKEN;
-  // Si no hay ADMIN_TOKEN configurado, no bloqueamos (entorno de desarrollo).
-  if (!expected) return true;
-  const got = req.header("x-admin-token");
-  if (got !== expected) {
+  const accepted = [process.env.ADMIN_TOKEN, process.env.ADMIN_PASSWORD].filter(Boolean) as string[];
+  // Si no hay ninguna credencial configurada, no bloqueamos (entorno de desarrollo).
+  if (accepted.length === 0) return true;
+
+  const raw = req.header("x-admin-token") ?? String(req.query?.token ?? "");
+  let got = raw;
+  try {
+    got = decodeURIComponent(raw);
+  } catch {
+    got = raw;
+  }
+
+  if (!accepted.includes(got) && !accepted.includes(raw)) {
     res.status(401).json({ error: "unauthorized" });
     return false;
   }
