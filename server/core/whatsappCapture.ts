@@ -130,7 +130,9 @@ kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lis
     system,
     text: `Mensajes de la sesión:\n${lines.join("\n")}`,
     images: imageUrls,
-    maxTokens: 900,
+    // Holgura para modelos razonadores: gastan salida en razonar antes de
+    // emitir el JSON; con 900 la respuesta llegaba cortada.
+    maxTokens: 3000,
     // El motivo del fallo acaba en ai_error, visible en el backoffice.
     strict: true,
   });
