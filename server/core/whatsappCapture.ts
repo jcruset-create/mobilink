@@ -78,7 +78,10 @@ export async function analyzeCaptureSession(sessionId: number): Promise<Record<s
       ? new Date(m.received_at).toLocaleTimeString("es-ES", { hour12: false, timeZone: "Europe/Madrid" })
       : "";
     const ts = hora ? ` ${hora}` : "";
-    const url = m.media_stored_url || m.media_url;
+    // Solo la copia almacenada (Supabase, pública): la URL original de Twilio
+    // exige Basic Auth, OpenAI no puede descargarla y tumba todo el análisis.
+    const url = m.media_stored_url
+      || (m.media_url && !/\btwilio\.com\//i.test(m.media_url) ? m.media_url : null);
     if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO${ts}] ${m.text_content}`);
     else if (m.message_type === "location") lines.push(`[UBICACION${ts}] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
     else if (m.message_type === "contact") lines.push(`[CONTACTO${ts}] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
@@ -128,6 +131,8 @@ kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lis
     text: `Mensajes de la sesión:\n${lines.join("\n")}`,
     images: imageUrls,
     maxTokens: 900,
+    // El motivo del fallo acaba en ai_error, visible en el backoffice.
+    strict: true,
   });
 }
 
@@ -148,9 +153,9 @@ export async function saveCaptureAnalysis(sessionId: number): Promise<Record<str
   try {
     suggestions = await analyzeCaptureSession(sessionId);
     if (Object.keys(suggestions).length === 0) {
-      // extractJson devuelve {} tanto si el modelo falla como si no hay clave:
-      // para el operador ambas cosas son "no hubo análisis".
-      failure = "La IA no devolvió datos (fallo del modelo, sin clave de IA o sesión sin contenido analizable).";
+      // Con strict, los fallos del proveedor llegan por el catch con su motivo;
+      // aquí solo queda el caso de una sesión sin nada que extraer.
+      failure = "La IA no encontró ningún dato en los mensajes de la sesión.";
     }
   } catch (e: any) {
     failure = `Error analizando con IA: ${e?.message ?? e}`;
