@@ -30,11 +30,21 @@ type OrderLine = {
   bc_item_number: string | null;
   descripcion: string;
   qty_prevista: string | number | null;
+  qty_consumida: string | number | null;
   um: string | null;
   precio_bc: string | number | null;
   importe_bc: string | number | null;
   origen: string;
+  estado_sync: string;
   aviso_divergencia: string | null;
+};
+
+type CatalogItem = { bc_number: string; descripcion: string; um_base: string | null };
+
+const SYNC_BADGE: Record<string, { label: string; clase: string }> = {
+  pending_return: { label: "Pendiente de enviar", clase: "bg-amber-500/15 text-amber-300" },
+  returned: { label: "En BC", clase: "bg-emerald-500/15 text-emerald-300" },
+  rejected: { label: "Rechazada por BC", clase: "bg-rose-500/15 text-rose-300" },
 };
 
 const WP_STATUS_META: Record<string, { label: string; clase: string }> = {
@@ -74,6 +84,235 @@ async function hubApi<T>(path: string, init?: RequestInit): Promise<T> {
 function fmtFecha(ms: number | null): string {
   if (!ms) return "—";
   return new Date(Number(ms)).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Parte de trabajo sobre las líneas del pedido: consumo real por línea, añadir
+ * artículos del catálogo controlado, y confirmar la devolución a BC.
+ *
+ * Registrar es local (funciona sin BC); confirmar empuja al ERP y cada línea
+ * enseña su estado (pendiente / en BC / rechazada) para que el reproceso sea
+ * transparente: lo devuelto nunca se reenvía.
+ */
+function ParteDeTrabajo({
+  sel,
+  onChanged,
+  onError,
+}: {
+  sel: { order: OrderRow; lines: OrderLine[] };
+  onChanged: () => void;
+  onError: (msg: string | null) => void;
+}) {
+  const [consumos, setConsumos] = useState<Record<number, string>>({});
+  const [busquedaCat, setBusquedaCat] = useState("");
+  const [sugerencias, setSugerencias] = useState<CatalogItem[]>([]);
+  const [extraQty, setExtraQty] = useState("1");
+  const [extraItem, setExtraItem] = useState<CatalogItem | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const [confirmando, setConfirmando] = useState(false);
+  const [resultado, setResultado] = useState<string | null>(null);
+
+  useEffect(() => {
+    setConsumos({});
+    setResultado(null);
+    setExtraItem(null);
+    setBusquedaCat("");
+  }, [sel.order.id]);
+
+  // Autocompletar contra el catálogo controlado (solo activos).
+  useEffect(() => {
+    if (busquedaCat.trim().length < 2) {
+      setSugerencias([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const data = await hubApi<{ items: CatalogItem[] }>(
+          `/api/v1/catalog?search=${encodeURIComponent(busquedaCat.trim())}&limit=8`
+        );
+        setSugerencias(data.items);
+      } catch {
+        setSugerencias([]);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [busquedaCat]);
+
+  const hayCambios = Object.keys(consumos).length > 0 || extraItem != null;
+
+  const registrar = async () => {
+    setGuardando(true);
+    onError(null);
+    try {
+      const lines = Object.entries(consumos)
+        .filter(([, v]) => v !== "" && Number.isFinite(Number(v)))
+        .map(([id, v]) => ({ lineId: Number(id), qtyConsumida: Number(v) }));
+      const extraLines = extraItem
+        ? [{ bcItemNumber: extraItem.bc_number, qty: Number(extraQty) || 1 }]
+        : [];
+      await hubApi(`/api/v1/erp/sales-orders/${sel.order.id}/execution`, {
+        method: "POST",
+        body: JSON.stringify({ lines, extraLines }),
+      });
+      setConsumos({});
+      setExtraItem(null);
+      setBusquedaCat("");
+      setExtraQty("1");
+      onChanged();
+    } catch (e: any) {
+      onError(e.message);
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const confirmar = async () => {
+    setConfirmando(true);
+    onError(null);
+    setResultado(null);
+    try {
+      const r = await hubApi<{ enviadas: number; actualizadas: number; omitidas: number; simulated: boolean }>(
+        `/api/v1/erp/sales-orders/${sel.order.id}/confirm-return`,
+        { method: "POST", body: "{}" }
+      );
+      setResultado(
+        `Enviado a Business Central: ${r.enviadas} líneas nuevas, ${r.actualizadas} cantidades actualizadas.` +
+          (r.simulated ? " (SIMULACIÓN: no existe en BC)" : "")
+      );
+      onChanged();
+    } catch (e: any) {
+      onError(e.message);
+      onChanged(); // los estados por línea (rechazadas) ya han cambiado
+    } finally {
+      setConfirmando(false);
+    }
+  };
+
+  const pendientes = sel.lines.filter(
+    (l) => l.estado_sync === "pending_return" || l.estado_sync === "rejected" ||
+      (l.qty_consumida != null && Number(l.qty_consumida) !== Number(l.qty_prevista ?? 0) && l.estado_sync !== "returned")
+  ).length;
+
+  return (
+    <div>
+      <table className="w-full text-left text-xs">
+        <thead className="text-slate-500">
+          <tr>
+            <th className="py-1">Artículo</th>
+            <th className="py-1">Descripción</th>
+            <th className="py-1 text-right">Prevista</th>
+            <th className="py-1 text-right">Consumida</th>
+            <th className="py-1">Sync</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sel.lines.map((l) => {
+            const badge = l.origen === "wp" || l.estado_sync !== "synced" ? SYNC_BADGE[l.estado_sync] : null;
+            return (
+              <tr key={l.id} className="border-t border-slate-800">
+                <td className="py-1.5 font-mono text-slate-300">
+                  {l.bc_item_number ?? "—"}
+                  {l.origen === "wp" && <span className="ml-1 text-[9px] text-sky-400">CAMPO</span>}
+                </td>
+                <td className="py-1.5">
+                  {l.descripcion}
+                  {l.aviso_divergencia && (
+                    <div className="text-[10px] text-amber-400">⚠ {l.aviso_divergencia}</div>
+                  )}
+                </td>
+                <td className="py-1.5 text-right">
+                  {l.qty_prevista != null ? Number(l.qty_prevista) : "—"} {l.um ?? ""}
+                </td>
+                <td className="py-1.5 text-right">
+                  <input
+                    value={consumos[l.id] ?? (l.qty_consumida != null ? String(Number(l.qty_consumida)) : "")}
+                    onChange={(e) => setConsumos((c) => ({ ...c, [l.id]: e.target.value }))}
+                    placeholder="—"
+                    inputMode="decimal"
+                    className="w-16 rounded border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-right text-xs text-slate-200"
+                  />
+                </td>
+                <td className="py-1.5">
+                  {badge && (
+                    <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${badge.clase}`}>{badge.label}</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {/* Añadir artículo del catálogo controlado */}
+      <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/50 p-2">
+        <div className="mb-1 text-[10px] font-bold uppercase text-slate-500">Añadir del catálogo</div>
+        {extraItem ? (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="font-mono text-sky-300">{extraItem.bc_number}</span>
+            <span className="flex-1">{extraItem.descripcion}</span>
+            <input
+              value={extraQty}
+              onChange={(e) => setExtraQty(e.target.value)}
+              inputMode="decimal"
+              className="w-16 rounded border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-right text-xs text-slate-200"
+            />
+            <span className="text-slate-500">{extraItem.um_base ?? ""}</span>
+            <button onClick={() => setExtraItem(null)} className="text-slate-400 hover:text-slate-200">✕</button>
+          </div>
+        ) : (
+          <div className="relative">
+            <input
+              value={busquedaCat}
+              onChange={(e) => setBusquedaCat(e.target.value)}
+              placeholder="Buscar artículo o servicio…"
+              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
+            />
+            {sugerencias.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 shadow-xl">
+                {sugerencias.map((s) => (
+                  <button
+                    key={s.bc_number}
+                    onClick={() => {
+                      setExtraItem(s);
+                      setSugerencias([]);
+                    }}
+                    className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-slate-800"
+                  >
+                    <span className="font-mono text-sky-300">{s.bc_number}</span>
+                    <span className="flex-1 truncate">{s.descripcion}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="mt-1 text-[10px] text-slate-500">
+              Sólo artículos del catálogo sincronizado. Un material que no aparezca debe solicitarse
+              como alta en Business Central.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {resultado && <div className="mt-2 rounded-lg bg-emerald-500/10 p-2 text-xs text-emerald-300">{resultado}</div>}
+
+      <div className="mt-3 flex gap-2">
+        <button
+          onClick={registrar}
+          disabled={guardando || !hayCambios}
+          className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-600 disabled:opacity-40"
+        >
+          {guardando ? "Guardando…" : "Registrar ejecución"}
+        </button>
+        <button
+          onClick={confirmar}
+          disabled={confirmando || pendientes === 0}
+          title={pendientes === 0 ? "No hay cambios pendientes de enviar" : `${pendientes} línea(s) pendientes`}
+          className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-40"
+        >
+          {confirmando ? "Enviando a BC…" : "Confirmar y enviar a BC"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function PedidosErpPage() {
@@ -247,35 +486,7 @@ export default function PedidosErpPage() {
                 )}
               </div>
 
-              <table className="w-full text-left text-xs">
-                <thead className="text-slate-500">
-                  <tr>
-                    <th className="py-1">Artículo</th>
-                    <th className="py-1">Descripción</th>
-                    <th className="py-1 text-right">Cant.</th>
-                    <th className="py-1 text-right">Precio BC</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sel.lines.map((l) => (
-                    <tr key={l.id} className="border-t border-slate-800">
-                      <td className="py-1.5 font-mono text-slate-300">{l.bc_item_number ?? "—"}</td>
-                      <td className="py-1.5">
-                        {l.descripcion}
-                        {l.aviso_divergencia && (
-                          <div className="text-[10px] text-amber-400">⚠ {l.aviso_divergencia}</div>
-                        )}
-                      </td>
-                      <td className="py-1.5 text-right">
-                        {l.qty_prevista != null ? Number(l.qty_prevista) : "—"} {l.um ?? ""}
-                      </td>
-                      <td className="py-1.5 text-right">
-                        {l.precio_bc != null ? `${Number(l.precio_bc).toFixed(2)} €` : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <ParteDeTrabajo sel={sel} onChanged={() => void abrir(sel.order.id)} onError={setError} />
               <p className="mt-3 text-[10px] text-slate-500">
                 Precios e impuestos los fija Business Central. La planificación (técnicos, fechas) es local
                 y no viaja al ERP.

@@ -517,6 +517,74 @@ export class BusinessCentralConnector implements IErpConnector {
     return this.bcList<BcSalesOrder>(ctx, `salesOrders?${select}&${expand}${filter}`);
   }
 
+  // ── Devolución de ejecución al pedido (SPEC §3, It.3) ───────────────────────
+  /** Estado actual del pedido en BC (para el caso 9: ¿aún admite cambios?). */
+  async getSalesOrderStatus(ctx: OperationContext, bcOrderId: string): Promise<string | null> {
+    if (await this.useSimulation(ctx)) return "Open";
+    try {
+      const data = await this.bcRequest<{ status?: string }>(
+        ctx,
+        `${this.config.baseUrl}/salesOrders(${bcOrderId})?$select=status`,
+        undefined,
+        `salesOrders(${bcOrderId})`
+      );
+      return data.status ?? null;
+    } catch (e) {
+      if (e instanceof IntegrationError && e.kind === "NOT_FOUND") return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Actualiza la cantidad de una línea existente (consumo distinto del previsto).
+   * Se lee primero la línea para usar su etag real: no pisar cambios de BC.
+   */
+  async updateSalesOrderLineQuantity(
+    ctx: OperationContext,
+    bcOrderId: string,
+    bcLineId: string,
+    quantity: number
+  ): Promise<void> {
+    if (await this.useSimulation(ctx)) return;
+    const lineUrl = `${this.config.baseUrl}/salesOrders(${bcOrderId})/salesOrderLines(${bcLineId})`;
+    const line = await this.bcRequest<any>(ctx, lineUrl, undefined, "salesOrderLine");
+    await this.bcRequest(ctx, lineUrl, {
+      method: "PATCH",
+      headers: { "If-Match": line["@odata.etag"] || "*" },
+      body: JSON.stringify({ quantity }),
+    });
+  }
+
+  /**
+   * Añade una línea al pedido (producto/servicio consumido en campo, casos 3-4).
+   * Sin precio: BC aplica tarifa, descuentos e IVA del cliente (decisión §6).
+   */
+  async createSalesOrderLine(
+    ctx: OperationContext,
+    bcOrderId: string,
+    line: { lineType: string; itemNumber: string; quantity: number; description?: string }
+  ): Promise<{ bcLineId: string; bcLineNo?: number }> {
+    if (await this.useSimulation(ctx)) {
+      return { bcLineId: `sim-added-${line.itemNumber}`, bcLineNo: 90000 };
+    }
+    const created = await this.bcRequest<any>(
+      ctx,
+      `${this.config.baseUrl}/salesOrders(${bcOrderId})/salesOrderLines`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          lineType: line.lineType,
+          lineObjectNumber: line.itemNumber,
+          quantity: line.quantity,
+          // La descripción de BC se respeta salvo que el parte aporte algo más útil.
+          ...(line.description ? { description: line.description.slice(0, 100) } : {}),
+        }),
+      },
+      "salesOrderLines"
+    );
+    return { bcLineId: created.id, bcLineNo: created.sequence };
+  }
+
   // ── Escritura: presupuesto de venta (núcleo de la primera entrega) ───────────
   async createSalesQuote(ctx: OperationContext, input: CreateSalesQuoteInput): Promise<SalesQuoteResult> {
     const currency = input.currency || this.defaultCurrency;
