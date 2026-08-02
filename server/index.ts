@@ -11987,7 +11987,13 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
   }
 }
 
-async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<string, any>> {
+// Resultado explícito: quien llama necesita poder distinguir "no hay datos"
+// de "la llamada falló", para no dejar la sesión analizando eternamente.
+type CaptureAnalysis =
+  | { ok: true; suggestions: Record<string, any> }
+  | { ok: false; error: string };
+
+async function analyzeCaptureSesionWithAI(sessionId: number): Promise<CaptureAnalysis> {
   const result = await db.query(
     `SELECT message_type, text_content, latitude, longitude, address,
             contact_name, contact_phone, media_stored_url, media_url, transcript, received_at
@@ -11997,7 +12003,7 @@ async function analyzeCaptureSesionWithAI(sessionId: number): Promise<Record<str
     [sessionId]
   );
   const messages = result.rows;
-  if (!messages.length) return {};
+  if (!messages.length) return { ok: false, error: "La sesión no tiene mensajes que analizar." };
 
   // Build context for AI — text lines + image URLs for vision
   const lines: string[] = [];
@@ -12088,10 +12094,100 @@ Campos a extraer (null si no disponible):
     });
     const raw = response.choices[0]?.message?.content ?? "{}";
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
+    let parsed: Record<string, any>;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      console.error("analyzeCaptureSesionWithAI: respuesta no es JSON válido:", cleaned.slice(0, 500));
+      return { ok: false, error: "La IA devolvió una respuesta que no se pudo interpretar." };
+    }
+    if (!parsed || typeof parsed !== "object" || Object.keys(parsed).length === 0) {
+      return { ok: false, error: "La IA no encontró ningún dato en los mensajes." };
+    }
+    return { ok: true, suggestions: parsed };
+  } catch (e: any) {
     console.error("analyzeCaptureSesionWithAI error:", e);
-    return {};
+    // Mensaje legible para el backoffice: el operador tiene que poder ver
+    // qué ha fallado sin abrir los logs de Render.
+    const detail =
+      e?.status === 401 ? "clave de OpenAI inválida o ausente"
+      : e?.status === 429 ? "límite de cuota o de peticiones de OpenAI"
+      : e?.code === "ETIMEDOUT" || e?.code === "ECONNRESET" ? "tiempo de espera agotado"
+      : e?.message ?? String(e);
+    return { ok: false, error: `Error analizando con IA: ${detail}` };
+  }
+}
+
+// Lanza el análisis y persiste su resultado. Centralizado aquí para que el
+// cierre de sesión y el reintento manual se comporten igual.
+async function runCaptureAnalysis(sessionId: number): Promise<void> {
+  await db.query(
+    `UPDATE whatsapp_capture_sessions
+     SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+     WHERE id = $1`,
+    [sessionId, Date.now()]
+  );
+  const outcome = await analyzeCaptureSesionWithAI(sessionId).catch(
+    (e: any): CaptureAnalysis => ({
+      ok: false,
+      error: e?.message ?? "Error inesperado analizando la captura.",
+    })
+  );
+  if (outcome.ok) {
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_suggestions = $2, ai_status = 'done', ai_error = NULL
+       WHERE id = $1`,
+      [sessionId, JSON.stringify(outcome.suggestions)]
+    );
+    console.log(`WhatsApp capture session #${sessionId} AI analysis complete`);
+  } else {
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'error', ai_error = $2
+       WHERE id = $1`,
+      [sessionId, outcome.error]
+    );
+    console.error(`WhatsApp capture session #${sessionId} AI analysis failed: ${outcome.error}`);
+  }
+}
+
+// Pasado este tiempo damos un análisis 'pending' por perdido.
+const AI_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
+
+// Corrige el estado de sesiones que quedaron en el aire. Muta `session` además
+// de persistir, para que la respuesta en curso ya salga con el estado bueno.
+async function reconcileCaptureAiStatus(session: any): Promise<void> {
+  if (session.status !== "CLOSED") return;
+
+  // Sesiones anteriores a la existencia de ai_status: lo derivamos de lo guardado.
+  if (!session.ai_status) {
+    if (session.ai_suggestions) {
+      session.ai_status = "done";
+      session.ai_error = null;
+    } else {
+      session.ai_status = "error";
+      session.ai_error = "El análisis no llegó a completarse. Pulsa «Reintentar análisis».";
+    }
+    await db.query(
+      `UPDATE whatsapp_capture_sessions SET ai_status = $2, ai_error = $3 WHERE id = $1`,
+      [session.id, session.ai_status, session.ai_error]
+    );
+    return;
+  }
+
+  // Análisis colgado: si el proceso se reinició mientras corría (Render duerme
+  // el servicio), la promesa en memoria se perdió y nadie lo va a terminar.
+  if (session.ai_status === "pending") {
+    const started = session.ai_started_at ? Number(session.ai_started_at) : null;
+    if (!started || Date.now() - started > AI_ANALYSIS_TIMEOUT_MS) {
+      session.ai_status = "error";
+      session.ai_error = "El análisis se interrumpió antes de terminar. Pulsa «Reintentar análisis».";
+      await db.query(
+        `UPDATE whatsapp_capture_sessions SET ai_status = 'error', ai_error = $2 WHERE id = $1`,
+        [session.id, session.ai_error]
+      );
+    }
   }
 }
 
@@ -12147,8 +12243,10 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
     );
     if (!sessionResult.rows.length) return res.json(null);
     const session = sessionResult.rows[0];
+    await reconcileCaptureAiStatus(session);
     session.started_at = session.started_at ? Number(session.started_at) : null;
     session.ended_at = session.ended_at ? Number(session.ended_at) : null;
+    session.ai_started_at = session.ai_started_at ? Number(session.ai_started_at) : null;
     if (session.ai_suggestions) {
       try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
     }
@@ -12279,16 +12377,15 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       }
     }
 
-    // Run AI analysis asynchronously — don't block the response
-    analyzeCaptureSesionWithAI(id).then(async (suggestions) => {
-      if (Object.keys(suggestions).length > 0) {
-        await db.query(
-          `UPDATE whatsapp_capture_sessions SET ai_suggestions = $2 WHERE id = $1`,
-          [id, JSON.stringify(suggestions)]
-        );
-        console.log(`WhatsApp capture session #${id} AI analysis complete`);
-      }
-    }).catch((e) => console.error("AI analysis error:", e));
+    // Marcamos 'pending' de forma síncrona para que la respuesta del cierre ya
+    // lleve el estado correcto; el análisis en sí corre en segundo plano.
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+       WHERE id = $1`,
+      [id, now]
+    );
+    runCaptureAnalysis(id).catch((e) => console.error("AI analysis error:", e));
 
     const updated = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
     return res.json(updated.rows[0]);
@@ -12314,7 +12411,8 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
 
     const result = await db.query(
       `UPDATE whatsapp_capture_sessions
-       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL
+       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL,
+           ai_status = NULL, ai_error = NULL, ai_started_at = NULL
        WHERE id = $1
        RETURNING *`,
       [id]
@@ -12327,6 +12425,37 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions/:id/reopen error:", error);
     return res.status(500).json({ error: "Error reabriendo sesión" });
+  }
+});
+
+// POST relanzar el análisis IA de una sesión ya cerrada, sin tener que
+// reabrirla y volver a cerrarla (que borraría los mensajes del contexto).
+app.post("/api/whatsapp-capture/sessions/:id/reanalyze", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const session = await db.query(
+      `SELECT id, status, ai_status FROM whatsapp_capture_sessions WHERE id = $1`,
+      [id]
+    );
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
+    if (session.rows[0].status !== "CLOSED") {
+      return res.status(400).json({ error: "La captura sigue abierta. Ciérrala para analizarla." });
+    }
+    if (session.rows[0].ai_status === "pending") {
+      return res.status(409).json({ error: "Ya hay un análisis en curso." });
+    }
+
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+       WHERE id = $1`,
+      [id, Date.now()]
+    );
+    runCaptureAnalysis(id).catch((e) => console.error("AI reanalysis error:", e));
+    return res.json({ ok: true, ai_status: "pending" });
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions/:id/reanalyze error:", error);
+    return res.status(500).json({ error: "Error relanzando el análisis" });
   }
 });
 
