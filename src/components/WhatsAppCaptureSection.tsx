@@ -222,8 +222,8 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "municipio", label: "Municipio" },
   { key: "provincia", label: "Provincia" },
   { key: "tipoAveria", label: "Tipo avería" },
-  { key: "descripcionAveria", label: "Descripción avería", applyKey: "notes" },
-  { key: "resumen", label: "Resumen" },
+  { key: "descripcionAveria", label: "Descripción avería", applyKey: "descripcionAveria" },
+  { key: "resumen", label: "Resumen (a observaciones)", applyKey: "notesAppend" },
 ];
 
 type Props = {

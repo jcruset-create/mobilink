@@ -13101,6 +13101,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       latitude: "latitude",
       longitude: "longitude",
       vehicleDescription: '"vehicleDescription"',
+      descripcionAveria: '"descripcionAveria"',
       notes: "notes",
     };
 
