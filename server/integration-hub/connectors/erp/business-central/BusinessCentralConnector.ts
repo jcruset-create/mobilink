@@ -38,12 +38,50 @@ export interface BusinessCentralConfig {
   aadTenantId?: string;
   /** Moneda por defecto si la línea/petición no la especifica. */
   defaultCurrency?: string;
+  /** Timeout por petición en ms (por defecto 30 s). */
+  timeoutMs?: number;
+  /** Reintentos ante 429/5xx/red antes de rendirse y dejarlo en manos del worker. */
+  maxRetries?: number;
+  /** Tamaño de página pedido a BC (cabecera Prefer). */
+  pageSize?: number;
 }
 
 interface ResolvedCredentials {
   clientId: string;
   clientSecret: string;
   aadTenantId: string;
+}
+
+/**
+ * Caché de tokens de aplicación, compartida por instancias del conector.
+ *
+ * Sin esto se pedía un token nuevo a Entra ID en CADA llamada: crear un presupuesto
+ * de 20 líneas suponía 21 tokens, con el riesgo real de throttling en Entra ID.
+ * La clave incluye el tenant de Mobilink porque cada uno puede tener credenciales
+ * distintas para el mismo Business Central.
+ */
+const tokenCache = new Map<string, { token: string; expiresAtMs: number }>();
+
+/** Margen de seguridad para no usar un token a punto de caducar. */
+const TOKEN_SAFETY_MARGIN_MS = 60_000;
+
+/** Vacía la caché de tokens (tests, o rotación de secreto en caliente). */
+export function clearBusinessCentralTokenCache(): void {
+  tokenCache.clear();
+}
+
+/** Espera pasiva entre reintentos. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Escapa un literal de cadena OData: la comilla simple se duplica.
+ * `encodeURIComponent` NO vale aquí — un código de artículo con apóstrofo
+ * (habitual en descripciones) rompía el $filter y devolvía un 400.
+ */
+function odataLiteral(value: string): string {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 export class BusinessCentralConnector implements IErpConnector {
@@ -92,12 +130,32 @@ export class BusinessCentralConnector implements IErpConnector {
     return creds === null;
   }
 
+  private get timeoutMs(): number {
+    return this.config.timeoutMs ?? 30_000;
+  }
+
+  private get maxRetries(): number {
+    return this.config.maxRetries ?? 3;
+  }
+
   // ── OAuth2 client credentials ──────────────────────────────────────────────
-  private async getAccessToken(ctx: OperationContext): Promise<string> {
+  /** Token cacheado hasta poco antes de su caducidad real. */
+  private async getAccessToken(ctx: OperationContext, forceRefresh = false): Promise<string> {
     const creds = await this.resolveCredentials(ctx);
     if (!creds) {
       throw IntegrationError.auth("BC_NO_CREDENTIALS", "Credenciales de Business Central no configuradas");
     }
+    const cacheKey = `${ctx.tenantId}|${creds.aadTenantId}|${creds.clientId}`;
+    if (!forceRefresh) {
+      const hit = tokenCache.get(cacheKey);
+      if (hit && hit.expiresAtMs > Date.now()) return hit.token;
+    }
+    const token = await this.requestNewToken(creds);
+    tokenCache.set(cacheKey, token);
+    return token.token;
+  }
+
+  private async requestNewToken(creds: ResolvedCredentials): Promise<{ token: string; expiresAtMs: number }> {
     const tokenUrl = `https://login.microsoftonline.com/${creds.aadTenantId}/oauth2/v2.0/token`;
     const body = new URLSearchParams({
       grant_type: "client_credentials",
@@ -119,41 +177,131 @@ export class BusinessCentralConnector implements IErpConnector {
       const text = await res.text().catch(() => "");
       throw IntegrationError.auth("BC_TOKEN_FAILED", `Fallo obteniendo token de BC (${res.status})`, text);
     }
-    const json = (await res.json()) as { access_token?: string };
+    const json = (await res.json()) as { access_token?: string; expires_in?: number };
     if (!json.access_token) {
       throw IntegrationError.auth("BC_TOKEN_EMPTY", "Azure AD no devolvió access_token");
     }
-    return json.access_token;
+    const ttlMs = Number(json.expires_in ?? 3600) * 1000;
+    return {
+      token: json.access_token,
+      expiresAtMs: Date.now() + Math.max(ttlMs - TOKEN_SAFETY_MARGIN_MS, 0),
+    };
+  }
+
+  /**
+   * Petición a una URL absoluta de BC con token cacheado, timeout y reintentos.
+   *
+   * Reintenta ante 429 (respetando Retry-After), 5xx y fallos de red. Ante un 401
+   * refresca el token una vez: puede ser simplemente que el token cacheado se haya
+   * invalidado en el lado de Microsoft antes de su caducidad nominal.
+   */
+  private async bcRequest<T>(ctx: OperationContext, url: string, init?: RequestInit, describe = url): Promise<T> {
+    let tokenRefreshed = false;
+
+    for (let attempt = 0; ; attempt++) {
+      const token = await this.getAccessToken(ctx, tokenRefreshed);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          ...init,
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            Prefer: `odata.maxpagesize=${this.config.pageSize ?? 100}`,
+            ...(init?.headers ?? {}),
+          },
+        });
+      } catch (e: any) {
+        clearTimeout(timer);
+        const abortado = e?.name === "AbortError";
+        if (attempt < this.maxRetries) {
+          await sleep(this.backoffMs(attempt));
+          continue;
+        }
+        throw IntegrationError.transient(
+          abortado ? "BC_TIMEOUT" : "BC_NETWORK",
+          abortado
+            ? `Business Central no respondió en ${this.timeoutMs} ms`
+            : "Business Central no responde",
+          e
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+
+      // 401: reintenta una sola vez con token nuevo antes de darlo por malo.
+      if (res.status === 401 && !tokenRefreshed) {
+        tokenRefreshed = true;
+        continue;
+      }
+
+      if (res.status === 429 || res.status >= 500) {
+        if (attempt < this.maxRetries) {
+          const retryAfter = Number(res.headers.get("retry-after"));
+          await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : this.backoffMs(attempt));
+          continue;
+        }
+        throw IntegrationError.transient(
+          res.status === 429 ? "BC_RATE_LIMITED" : "BC_5XX",
+          res.status === 429
+            ? "Business Central está limitando las peticiones (429)"
+            : `Business Central error ${res.status}`
+        );
+      }
+
+      if (res.status === 401 || res.status === 403) {
+        const text = await res.text().catch(() => "");
+        throw IntegrationError.auth(
+          "BC_FORBIDDEN",
+          "Business Central rechaza las credenciales: revisa que la aplicación esté dada de alta y habilitada en BC con su conjunto de permisos",
+          text
+        );
+      }
+      if (res.status === 404) {
+        throw IntegrationError.notFound("BC_NOT_FOUND", `Recurso no encontrado: ${describe}`);
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw IntegrationError.permanent("BC_ERROR", `Business Central error ${res.status}`, text);
+      }
+      return (await res.json()) as T;
+    }
+  }
+
+  /** Backoff exponencial con tope, para no castigar a un BC que ya va justo. */
+  private backoffMs(attempt: number): number {
+    return Math.min(1000 * 2 ** attempt, 8000);
+  }
+
+  private companyUrl(pathAndQuery: string): string {
+    return `${this.config.baseUrl}/companies(${this.config.companyId})/${pathAndQuery}`;
   }
 
   private async bcFetch<T>(ctx: OperationContext, pathAndQuery: string, init?: RequestInit): Promise<T> {
-    const token = await this.getAccessToken(ctx);
-    const url = `${this.config.baseUrl}/companies(${this.config.companyId})/${pathAndQuery}`;
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          ...(init?.headers ?? {}),
-        },
-      });
-    } catch (e) {
-      throw IntegrationError.transient("BC_NETWORK", "Business Central no responde", e);
+    return this.bcRequest<T>(ctx, this.companyUrl(pathAndQuery), init, pathAndQuery);
+  }
+
+  /**
+   * Lectura de una colección siguiendo la paginación de OData.
+   *
+   * Sin esto sólo se veía la primera página: un cliente con 500 artículos
+   * devolvía los primeros y el resto simplemente no existía para Mobilink.
+   */
+  private async bcList<T>(ctx: OperationContext, pathAndQuery: string): Promise<T[]> {
+    const out: T[] = [];
+    let url: string | undefined = this.companyUrl(pathAndQuery);
+    // Tope de seguridad: evita un bucle infinito si BC devolviera un nextLink cíclico.
+    for (let page = 0; url && page < 100; page++) {
+      const data: { value?: T[]; "@odata.nextLink"?: string } = await this.bcRequest(ctx, url, undefined, pathAndQuery);
+      out.push(...(data.value ?? []));
+      url = data["@odata.nextLink"];
     }
-    if (res.status >= 500) {
-      throw IntegrationError.transient("BC_5XX", `Business Central error ${res.status}`);
-    }
-    if (res.status === 404) {
-      throw IntegrationError.notFound("BC_NOT_FOUND", `Recurso no encontrado: ${pathAndQuery}`);
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw IntegrationError.permanent("BC_ERROR", `Business Central error ${res.status}`, text);
-    }
-    return (await res.json()) as T;
+    return out;
   }
 
   // ── testConnection ──────────────────────────────────────────────────────────
@@ -172,15 +320,15 @@ export class BusinessCentralConnector implements IErpConnector {
   // ── Lecturas ────────────────────────────────────────────────────────────────
   async getCustomers(ctx: OperationContext): Promise<MobilinkCustomer[]> {
     if (await this.useSimulation(ctx)) return [];
-    const data = await this.bcFetch<{ value: any[] }>(ctx, "customers");
-    return data.value.map((c) => this.mapCustomer(c));
+    const rows = await this.bcList<any>(ctx, "customers");
+    return rows.map((c) => this.mapCustomer(c));
   }
 
   async getCustomer(ctx: OperationContext, externalCustomerId: string): Promise<MobilinkCustomer | null> {
     if (await this.useSimulation(ctx)) {
       return { externalId: externalCustomerId, name: `Cliente simulado ${externalCustomerId}` };
     }
-    const q = `customers?$filter=number eq '${encodeURIComponent(externalCustomerId)}'`;
+    const q = `customers?$filter=number eq ${odataLiteral(externalCustomerId)}`;
     const data = await this.bcFetch<{ value: any[] }>(ctx, q);
     const c = data.value[0];
     return c ? this.mapCustomer(c) : null;
@@ -188,8 +336,8 @@ export class BusinessCentralConnector implements IErpConnector {
 
   async getProducts(ctx: OperationContext): Promise<MobilinkProduct[]> {
     if (await this.useSimulation(ctx)) return [];
-    const data = await this.bcFetch<{ value: any[] }>(ctx, "items");
-    return data.value.map((i) => this.mapProduct(i));
+    const rows = await this.bcList<any>(ctx, "items");
+    return rows.map((i) => this.mapProduct(i));
   }
 
   async getPrices(
@@ -204,11 +352,10 @@ export class BusinessCentralConnector implements IErpConnector {
         currency: this.defaultCurrency,
       }));
     }
+    const items = await this.fetchItemsByNumber(ctx, externalProductIds, "number,unitPrice");
     const out: MobilinkPrice[] = [];
     for (const id of externalProductIds) {
-      const q = `items?$filter=number eq '${encodeURIComponent(id)}'&$select=number,unitPrice`;
-      const data = await this.bcFetch<{ value: any[] }>(ctx, q);
-      const item = data.value[0];
+      const item = items.get(id);
       if (item) {
         out.push({
           externalProductId: id,
@@ -220,18 +367,42 @@ export class BusinessCentralConnector implements IErpConnector {
     return out;
   }
 
+  /**
+   * Lee varios artículos por su número en pocas peticiones.
+   *
+   * Antes se hacía una llamada por artículo: un presupuesto de 20 líneas eran
+   * 20 viajes a BC. Se agrupan en lotes con `or` porque la API v2.0 no admite `in`.
+   */
+  private async fetchItemsByNumber(
+    ctx: OperationContext,
+    externalProductIds: string[],
+    select: string
+  ): Promise<Map<string, any>> {
+    const found = new Map<string, any>();
+    const unicos = [...new Set(externalProductIds)];
+    const LOTE = 15; // suficientemente corto para no pasarse de longitud de URL
+
+    for (let i = 0; i < unicos.length; i += LOTE) {
+      const lote = unicos.slice(i, i + LOTE);
+      const filtro = lote.map((id) => `number eq ${odataLiteral(id)}`).join(" or ");
+      const rows = await this.bcList<any>(
+        ctx,
+        `items?$filter=${encodeURIComponent(filtro)}&$select=${encodeURIComponent(select)}`
+      );
+      for (const row of rows) found.set(row.number, row);
+    }
+    return found;
+  }
+
   async getStock(ctx: OperationContext, externalProductIds: string[]): Promise<MobilinkStock[]> {
     if (await this.useSimulation(ctx)) {
       return externalProductIds.map((id) => ({ externalProductId: id, available: 0 }));
     }
-    const out: MobilinkStock[] = [];
-    for (const id of externalProductIds) {
-      const q = `items?$filter=number eq '${encodeURIComponent(id)}'&$select=number,inventory`;
-      const data = await this.bcFetch<{ value: any[] }>(ctx, q);
-      const item = data.value[0];
-      out.push({ externalProductId: id, available: Number(item?.inventory ?? 0) });
-    }
-    return out;
+    const items = await this.fetchItemsByNumber(ctx, externalProductIds, "number,inventory");
+    return externalProductIds.map((id) => ({
+      externalProductId: id,
+      available: Number(items.get(id)?.inventory ?? 0),
+    }));
   }
 
   // ── Escritura: presupuesto de venta (núcleo de la primera entrega) ───────────
@@ -343,13 +514,16 @@ export class BusinessCentralConnector implements IErpConnector {
     if (!customer.externalId) {
       throw IntegrationError.validation("BC_UPDATE_NO_ID", "updateCustomer requiere externalId");
     }
-    const q = `customers?$filter=number eq '${encodeURIComponent(customer.externalId)}'`;
+    const q = `customers?$filter=number eq ${odataLiteral(customer.externalId)}`;
     const found = await this.bcFetch<{ value: any[] }>(ctx, q);
     const bc = found.value[0];
     if (!bc) throw IntegrationError.notFound("BC_CUSTOMER_NOT_FOUND", `Cliente ${customer.externalId} no existe en BC`);
+    // Concurrencia optimista: con el etag leído, si alguien ha tocado el cliente en BC
+    // entre la lectura y la escritura, BC rechaza el PATCH en vez de pisar su cambio.
+    const etag = bc["@odata.etag"];
     const updated = await this.bcFetch<any>(ctx, `customers(${bc.id})`, {
       method: "PATCH",
-      headers: { "If-Match": "*" },
+      headers: { "If-Match": etag || "*" },
       body: JSON.stringify({ displayName: customer.name, email: customer.email, phoneNumber: customer.phone }),
     });
     return this.mapCustomer(updated);
