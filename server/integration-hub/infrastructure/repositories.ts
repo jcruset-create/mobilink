@@ -680,6 +680,225 @@ export async function upsertSyncState(params: {
   );
 }
 
+// ── Pedidos BC → órdenes de trabajo WorkPlanner (SPEC §2) ───────────────────
+
+export interface WpOrderUpsert {
+  tenantId: string;
+  bcOrderId: string;
+  bcNumber: string;
+  customerNumber?: string;
+  customerName?: string;
+  shipToAddress?: string;
+  requestedDate?: string;
+  bcStatus?: string;
+  bcLastModifiedMs?: number;
+  externalDocumentNumber?: string;
+  syncRunId: string;
+}
+
+/**
+ * Inserta o actualiza la cabecera. La planificación local (wp_status, planning)
+ * NUNCA se toca desde la sincronización: pertenece a WorkPlanner.
+ */
+export async function upsertWpOrder(order: WpOrderUpsert) {
+  const ts = now();
+  const { rows } = await pool.query(
+    `INSERT INTO wp_orders
+       (tenant_id, bc_order_id, bc_number, customer_number, customer_name, ship_to_address,
+        requested_date, bc_status, bc_last_modified_ms, external_document_number,
+        sync_run_id, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
+     ON CONFLICT (tenant_id, bc_order_id)
+     DO UPDATE SET bc_number = EXCLUDED.bc_number,
+                   customer_number = EXCLUDED.customer_number,
+                   customer_name = EXCLUDED.customer_name,
+                   ship_to_address = EXCLUDED.ship_to_address,
+                   requested_date = EXCLUDED.requested_date,
+                   bc_status = EXCLUDED.bc_status,
+                   bc_last_modified_ms = EXCLUDED.bc_last_modified_ms,
+                   external_document_number = EXCLUDED.external_document_number,
+                   sync_run_id = EXCLUDED.sync_run_id,
+                   updated_at_ms = $12
+     RETURNING *`,
+    [
+      order.tenantId,
+      order.bcOrderId,
+      order.bcNumber,
+      order.customerNumber ?? null,
+      order.customerName ?? "",
+      order.shipToAddress ?? null,
+      order.requestedDate ?? null,
+      order.bcStatus ?? null,
+      order.bcLastModifiedMs ?? null,
+      order.externalDocumentNumber ?? null,
+      order.syncRunId,
+      ts,
+    ]
+  );
+  return rows[0];
+}
+
+export interface WpOrderLineUpsert {
+  wpOrderId: number;
+  tenantId: string;
+  bcLineId: string;
+  bcLineNo?: number;
+  tipo?: string;
+  bcItemNumber?: string;
+  descripcion?: string;
+  qtyPrevista?: number;
+  um?: string;
+  precioBc?: number;
+  descuentoBc?: number;
+  importeBc?: number;
+}
+
+/**
+ * Inserta o actualiza una línea venida de BC.
+ *
+ * Regla §2.2: una línea EN EJECUCIÓN no se pisa — se anota la divergencia y la
+ * resuelve una persona. Devuelve si hubo divergencia para que el servicio la loguee.
+ */
+export async function upsertWpOrderLine(line: WpOrderLineUpsert): Promise<{ row: any; divergencia: boolean }> {
+  const ts = now();
+  const { rows: existing } = await pool.query(
+    `SELECT * FROM wp_order_lines WHERE tenant_id = $1 AND bc_line_id = $2`,
+    [line.tenantId, line.bcLineId]
+  );
+  const previa = existing[0];
+
+  if (previa?.en_ejecucion) {
+    const cambio =
+      Number(previa.qty_prevista) !== Number(line.qtyPrevista ?? 0) ||
+      previa.bc_item_number !== (line.bcItemNumber ?? null);
+    if (cambio) {
+      const { rows } = await pool.query(
+        `UPDATE wp_order_lines
+            SET aviso_divergencia = $3, updated_at_ms = $4
+          WHERE tenant_id = $1 AND bc_line_id = $2
+          RETURNING *`,
+        [
+          line.tenantId,
+          line.bcLineId,
+          `La línea cambió en BC durante la ejecución (cantidad/artículo). Revisar antes de devolver.`,
+          ts,
+        ]
+      );
+      return { row: rows[0], divergencia: true };
+    }
+    return { row: previa, divergencia: false };
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO wp_order_lines
+       (wp_order_id, tenant_id, bc_line_id, bc_line_no, origen, estado_sync, tipo,
+        bc_item_number, descripcion, qty_prevista, um, precio_bc, descuento_bc,
+        importe_bc, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,'bc','synced',$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+     ON CONFLICT (tenant_id, bc_line_id)
+     DO UPDATE SET bc_line_no = EXCLUDED.bc_line_no,
+                   tipo = EXCLUDED.tipo,
+                   bc_item_number = EXCLUDED.bc_item_number,
+                   descripcion = EXCLUDED.descripcion,
+                   qty_prevista = EXCLUDED.qty_prevista,
+                   um = EXCLUDED.um,
+                   precio_bc = EXCLUDED.precio_bc,
+                   descuento_bc = EXCLUDED.descuento_bc,
+                   importe_bc = EXCLUDED.importe_bc,
+                   updated_at_ms = $13
+     RETURNING *`,
+    [
+      line.wpOrderId,
+      line.tenantId,
+      line.bcLineId,
+      line.bcLineNo ?? null,
+      line.tipo ?? null,
+      line.bcItemNumber ?? null,
+      line.descripcion ?? "",
+      line.qtyPrevista ?? null,
+      line.um ?? null,
+      line.precioBc ?? null,
+      line.descuentoBc ?? null,
+      line.importeBc ?? null,
+      ts,
+    ]
+  );
+  return { row: rows[0], divergencia: false };
+}
+
+export async function markWpOrderCancelledByErp(tenantId: string, bcOrderId: string) {
+  await pool.query(
+    `UPDATE wp_orders
+        SET wp_status = 'cancelada_por_erp', updated_at_ms = $3
+      WHERE tenant_id = $1 AND bc_order_id = $2 AND wp_status <> 'cancelada_por_erp'`,
+    [tenantId, bcOrderId, now()]
+  );
+}
+
+export async function listWpOrders(filters: {
+  tenantId: string;
+  wpStatus?: string;
+  search?: string;
+  limit?: number;
+}) {
+  const where: string[] = ["o.tenant_id = $1"];
+  const values: unknown[] = [filters.tenantId];
+  if (filters.wpStatus) {
+    values.push(filters.wpStatus);
+    where.push(`o.wp_status = $${values.length}`);
+  }
+  if (filters.search) {
+    values.push(`%${filters.search}%`);
+    where.push(`(o.bc_number ILIKE $${values.length} OR o.customer_name ILIKE $${values.length})`);
+  }
+  values.push(Math.min(filters.limit ?? 100, 500));
+  const { rows } = await pool.query(
+    `SELECT o.*,
+            (SELECT COUNT(*)::int FROM wp_order_lines l WHERE l.wp_order_id = o.id) AS num_lineas
+       FROM wp_orders o
+      WHERE ${where.join(" AND ")}
+      ORDER BY o.updated_at_ms DESC
+      LIMIT $${values.length}`,
+    values
+  );
+  return rows;
+}
+
+export async function getWpOrderWithLines(tenantId: string, id: number) {
+  const { rows } = await pool.query(`SELECT * FROM wp_orders WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
+  const order = rows[0];
+  if (!order) return null;
+  const { rows: lines } = await pool.query(
+    `SELECT * FROM wp_order_lines WHERE wp_order_id = $1 ORDER BY bc_line_no ASC NULLS LAST, id ASC`,
+    [order.id]
+  );
+  return { order, lines };
+}
+
+const WP_STATUSES = ["nueva", "planificada", "en_curso", "finalizada"] as const;
+
+/** Actualiza estado y/o planificación local. La sync jamás pasa por aquí. */
+export async function updateWpOrderPlanning(params: {
+  tenantId: string;
+  id: number;
+  wpStatus?: string;
+  planning?: Record<string, unknown>;
+}) {
+  if (params.wpStatus && !WP_STATUSES.includes(params.wpStatus as any)) {
+    throw new Error(`Estado de WorkPlanner no válido: ${params.wpStatus}`);
+  }
+  const { rows } = await pool.query(
+    `UPDATE wp_orders
+        SET wp_status = COALESCE($3, wp_status),
+            planning = COALESCE($4, planning),
+            updated_at_ms = $5
+      WHERE tenant_id = $1 AND id = $2 AND wp_status <> 'cancelada_por_erp'
+      RETURNING *`,
+    [params.tenantId, params.id, params.wpStatus ?? null, params.planning ? JSON.stringify(params.planning) : null, now()]
+  );
+  return rows[0] ?? null;
+}
+
 /** Tenants con el conector BC habilitado — los que entran en la sync programada. */
 export async function tenantsWithEnabledConnector(connectorKey: string): Promise<string[]> {
   const { rows } = await pool.query(

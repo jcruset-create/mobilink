@@ -15,6 +15,7 @@ import {
   stopIntegrationWorker,
 } from "./workers/IntegrationWorker.ts";
 import { runCatalogSync } from "./application/services/CatalogSyncService.ts";
+import { runSalesOrderSync } from "./application/services/SalesOrderSyncService.ts";
 import { tenantsWithEnabledConnector } from "./infrastructure/repositories.ts";
 
 export { initIntegrationHub, stopIntegrationWorker };
@@ -22,31 +23,46 @@ export { initIntegrationHub, stopIntegrationWorker };
 /** Horas entre sincronizaciones automáticas de catálogo. 0 desactiva la programación. */
 const CATALOG_SYNC_HOURS = Number(process.env.IH_CATALOG_SYNC_HOURS ?? 24);
 
+/** Minutos entre sincronizaciones de pedidos BC → WorkPlanner. 0 desactiva. */
+const ORDERS_SYNC_MINUTES = Number(process.env.IH_ORDERS_SYNC_MINUTES ?? 5);
+
 let catalogTimer: ReturnType<typeof setInterval> | null = null;
+let ordersTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Sincronización de catálogo para todos los tenants con BC habilitado.
  * Cada tenant es independiente: el fallo de uno no detiene a los demás
  * (queda registrado en integration_sync_state y en el panel de operaciones).
  */
-async function runCatalogSyncForAllTenants(): Promise<void> {
+async function forEachBcTenant(label: string, fn: (tenantId: string) => Promise<string>): Promise<void> {
   let tenants: string[] = [];
   try {
     tenants = await tenantsWithEnabledConnector("business-central");
   } catch (e) {
-    console.error("[integration-hub] no se pudieron listar tenants para la sync de catálogo:", e);
+    console.error(`[integration-hub] no se pudieron listar tenants para ${label}:`, e);
     return;
   }
   for (const tenantId of tenants) {
     try {
-      const r = await runCatalogSync({ tenantId });
-      console.log(
-        `[integration-hub] catálogo ${tenantId}: ${r.mode}, ${r.recibidos} recibidos, ${r.activos} activos`
-      );
+      console.log(`[integration-hub] ${label} ${tenantId}: ${await fn(tenantId)}`);
     } catch (e: any) {
-      console.error(`[integration-hub] sync de catálogo fallida para ${tenantId}:`, e?.message ?? e);
+      console.error(`[integration-hub] ${label} fallida para ${tenantId}:`, e?.message ?? e);
     }
   }
+}
+
+function runCatalogSyncForAllTenants(): Promise<void> {
+  return forEachBcTenant("catálogo", async (tenantId) => {
+    const r = await runCatalogSync({ tenantId });
+    return `${r.mode}, ${r.recibidos} recibidos, ${r.activos} activos`;
+  });
+}
+
+function runOrdersSyncForAllTenants(): Promise<void> {
+  return forEachBcTenant("pedidos", async (tenantId) => {
+    const r = await runSalesOrderSync({ tenantId });
+    return `${r.mode}, ${r.pedidos} pedidos, ${r.lineas} líneas`;
+  });
 }
 
 /** Arranca el worker de reprocesos y, si procede, la sync programada de catálogo. */
@@ -57,6 +73,11 @@ export function startIntegrationWorker(): void {
     // Primera pasada al arrancar, con retardo corto para no competir con el boot.
     setTimeout(() => void runCatalogSyncForAllTenants(), 60_000);
     console.log(`Mobilink Integration Hub: sync de catálogo cada ${CATALOG_SYNC_HOURS} h`);
+  }
+  if (ORDERS_SYNC_MINUTES > 0 && !ordersTimer) {
+    ordersTimer = setInterval(() => void runOrdersSyncForAllTenants(), ORDERS_SYNC_MINUTES * 60_000);
+    setTimeout(() => void runOrdersSyncForAllTenants(), 90_000);
+    console.log(`Mobilink Integration Hub: sync de pedidos cada ${ORDERS_SYNC_MINUTES} min`);
   }
 }
 

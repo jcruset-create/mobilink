@@ -214,6 +214,59 @@ export async function initIntegrationHub(): Promise<void> {
       ON wp_catalog(tenant_id, activo, categoria);
   `);
 
+  // ── Pedidos de venta de BC → órdenes de trabajo de WorkPlanner (SPEC §2) ───
+  // El pedido nace en BC (maestro). Aquí se refleja para planificar y ejecutar;
+  // la planificación (técnicos, fechas, vehículos) es local y NUNCA viaja a BC.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wp_orders (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      bc_order_id TEXT NOT NULL,          -- GUID del pedido en BC
+      bc_number TEXT NOT NULL,            -- nº de documento (PV-...)
+      customer_number TEXT,
+      customer_name TEXT NOT NULL DEFAULT '',
+      ship_to_address TEXT,
+      requested_date TEXT,                -- fecha solicitada (ISO date de BC)
+      bc_status TEXT,                     -- Draft | Open | Released ...
+      bc_last_modified_ms BIGINT,
+      wp_status TEXT NOT NULL DEFAULT 'nueva',
+        -- 'nueva' | 'planificada' | 'en_curso' | 'finalizada' | 'cancelada_por_erp'
+      planning JSONB,                     -- técnicos, fechas, vehículos (local)
+      external_document_number TEXT,
+      sync_run_id TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (tenant_id, bc_order_id)
+    );
+    CREATE INDEX IF NOT EXISTS wp_orders_status_idx ON wp_orders(tenant_id, wp_status);
+
+    CREATE TABLE IF NOT EXISTS wp_order_lines (
+      id SERIAL PRIMARY KEY,
+      wp_order_id INTEGER NOT NULL REFERENCES wp_orders(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      bc_line_id TEXT,                    -- GUID de la línea en BC
+      bc_line_no INTEGER,                 -- sequence de BC
+      origen TEXT NOT NULL DEFAULT 'bc',  -- 'bc' | 'wp' (añadida en campo, It.3)
+      estado_sync TEXT NOT NULL DEFAULT 'synced',
+        -- 'synced' | 'pending_return' | 'returned' | 'rejected' | 'conflict'
+      tipo TEXT,                          -- Item | Resource | Comment...
+      bc_item_number TEXT,
+      descripcion TEXT NOT NULL DEFAULT '',
+      qty_prevista NUMERIC(12,4),
+      qty_consumida NUMERIC(12,4),
+      um TEXT,
+      precio_bc NUMERIC(12,4),
+      descuento_bc NUMERIC(7,4),
+      importe_bc NUMERIC(14,4),
+      en_ejecucion BOOLEAN NOT NULL DEFAULT false,  -- protege la línea de re-sync (§2.2)
+      aviso_divergencia TEXT,             -- 'la línea cambió en BC durante la ejecución'
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (tenant_id, bc_line_id)
+    );
+    CREATE INDEX IF NOT EXISTS wp_order_lines_order_idx ON wp_order_lines(wp_order_id);
+  `);
+
   // ── Marcas de agua de sincronización incremental ───────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS integration_sync_state (
