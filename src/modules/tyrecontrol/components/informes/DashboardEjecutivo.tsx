@@ -4,6 +4,7 @@ import { obtenerKpis, obtenerEstadoFlota, inventarioPor } from "../../services/i
 import type { KpisInformes, EstadoFlota, DimensionTotal, FiltrosInformes } from "../../types/informes";
 import { KpiCard } from "./KpiCard";
 import { Donut, BarList } from "./charts";
+import { useTyreAuth } from "../../contexts/TyreAuthContext";
 
 function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) {
   return (
@@ -18,6 +19,11 @@ function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) 
 // resueltos, para poder usarse tanto en la landing (Dashboard) como en la
 // sección Informes sin duplicar lógica.
 export function DashboardEjecutivo({ filtros }: { filtros: FiltrosInformes }) {
+  // Un cliente no ve la plantilla de Mobilink. Además, tecnicos_activos se
+  // cuenta en GLOBAL en la RPC (todos los técnicos con acceso APK, sin filtro
+  // de empresa), así que para un cliente ni siquiera sería "su" dato.
+  const { perfil } = useTyreAuth();
+  const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
   const navigate = useNavigate();
   const [kpis, setKpis] = useState<KpisInformes | null>(null);
   const [flota, setFlota] = useState<EstadoFlota | null>(null);
@@ -63,7 +69,7 @@ export function DashboardEjecutivo({ filtros }: { filtros: FiltrosInformes }) {
           <KpiCard title="Próximos a sustituir" value={kpis.neumaticos_proximos} tono={kpis.neumaticos_proximos > 0 ? "warn" : "ok"} hint="≤ 3,0 mm" onClick={irAlertas} />
           <KpiCard title="En reparación" value={kpis.neumaticos_reparacion} />
           <KpiCard title="Descartados" value={kpis.neumaticos_descartados} />
-          <KpiCard title="Técnicos activos" value={kpis.tecnicos_activos} />
+          {!esCliente && <KpiCard title="Técnicos activos" value={kpis.tecnicos_activos} />}
         </div>
       </Seccion>
 

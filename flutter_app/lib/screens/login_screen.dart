@@ -32,10 +32,26 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _loading = true; _error = null; });
 
     try {
-      await ApiService.login(name, pin);
+      final data = await ApiService.login(name, pin);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('techName', name);
       await prefs.setString('code', pin);
+
+      // Multi-taller: guardar empresa y taller del operario (si los trae).
+      final empresa = data['empresa'];
+      final taller = data['taller'];
+      await prefs.setString(
+        'empresaNombre',
+        (empresa is Map ? empresa['nombre'] as String? : null) ?? '',
+      );
+      await prefs.setString(
+        'tallerNombre',
+        (taller is Map ? taller['nombre'] as String? : null) ?? '',
+      );
+      await prefs.setInt(
+        'tallerId',
+        (taller is Map ? (taller['id'] as num?)?.toInt() : null) ?? 0,
+      );
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(

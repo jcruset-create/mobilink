@@ -41,13 +41,19 @@ export const NAV: NavItem[] = [
   { key: "mis-delegaciones", path: "mis-delegaciones", label: "Mis delegaciones", icon: MapPin, roles: ["cliente"] },
   { key: "mis-vehiculos", path: "mis-vehiculos", label: "Mis vehículos", icon: Truck, roles: ["cliente"] },
   { key: "mis-neumaticos", path: "mis-neumaticos", label: "Mis neumáticos", icon: CircleDot, roles: ["cliente"] },
-  { key: "montajes-cliente", path: "montajes", label: "Montajes actuales", icon: Wrench, roles: ["cliente"] },
-  { key: "operaciones-cliente", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["cliente"] },
+  // El cliente tiene sus propias entradas, así que se nombran en su idioma:
+  // "montaje" y "operación" son vocabulario de taller, no de un responsable
+  // de flota que entra a ver cómo están sus autobuses.
+  { key: "montajes-cliente", path: "montajes", label: "Neumáticos montados", icon: Wrench, roles: ["cliente"] },
+  { key: "operaciones-cliente", path: "operaciones", label: "Trabajos realizados", icon: ClipboardList, roles: ["cliente"] },
   { key: "informes-cliente", path: "informes", label: "Informes", icon: BarChart3, roles: ["cliente"] },
   // Todos
   { key: "ayuda", path: "ayuda", label: "Ayuda / Manual", icon: HelpCircle },
   { key: "perfil", path: "perfil", label: "Perfil", icon: User },
 ];
+
+/** Pantallas que nunca se filtran por permisos. */
+export const SIEMPRE_VISIBLES = ["dashboard", "ayuda", "perfil"];
 
 export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean, pantallas?: string[] | null): boolean {
   if (item.superadminOnly) return esSuperadmin;
@@ -61,7 +67,9 @@ export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: bo
   }
   // Gating por pantallas (usuarios unificados): se compara por path;
   // null = todas las del rol; el super-admin no se filtra.
-  if (!esSuperadmin && pantallas && item.path !== "dashboard" && item.path !== "ayuda" && !pantallas.includes(item.path)) {
+  // Dashboard, Ayuda y Perfil no se filtran nunca: dejar a alguien sin su
+  // propia ficha o sin la ayuda no es restringir, es dejarle atrapado.
+  if (!esSuperadmin && pantallas && !SIEMPRE_VISIBLES.includes(item.path) && !pantallas.includes(item.path)) {
     return false;
   }
   return true;

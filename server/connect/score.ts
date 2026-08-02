@@ -227,7 +227,7 @@ export async function notifySlaEvents(
             "slaRiskNotifiedAtMs", "slaBreachNotifiedAtMs"
        FROM connect_assistances
       WHERE "slaDeadlineAtMs" IS NOT NULL
-        AND status NOT IN ('finished','cancelled','draft','arrived','in_progress')
+        AND status NOT IN ('finished','at_workshop','returning_to_workshop','cancelled','draft','arrived','in_progress')
         AND ("slaBreachNotifiedAtMs" IS NULL OR "slaRiskNotifiedAtMs" IS NULL)
         AND "slaDeadlineAtMs" < $1`,
     [riskAt],

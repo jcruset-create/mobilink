@@ -13,6 +13,7 @@ import db from "../db.ts";
 import { enqueueWebhookEvent } from "./webhooks.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
+import { notifyLiteWorkshop } from "./litePush.ts";
 
 // ---------------------------------------------------------------------------
 // Máquina de estados
@@ -20,7 +21,8 @@ import { createAlert } from "./alerts.ts";
 
 export const CONNECT_STATUSES = [
   "draft", "pending", "searching", "awaiting_acceptance", "assigned", "technician_assigned",
-  "en_route", "arrived", "in_progress", "finished", "cancelled", "no_coverage", "assignment_failed",
+  "en_route", "arrived", "in_progress", "finished", "returning_to_workshop", "at_workshop",
+  "cancelled", "no_coverage", "assignment_failed",
 ] as const;
 export type ConnectStatus = (typeof CONNECT_STATUSES)[number];
 
@@ -34,7 +36,10 @@ const TRANSITIONS: Record<string, ConnectStatus[]> = {
   en_route: ["arrived", "in_progress", "cancelled"],
   arrived: ["in_progress", "finished", "cancelled"],
   in_progress: ["finished", "cancelled"],
-  finished: [],
+  // Cierre del ciclo operativo: la unidad puede regresar al taller o no hacerlo
+  finished: ["returning_to_workshop"],
+  returning_to_workshop: ["at_workshop"],
+  at_workshop: [],
   cancelled: [],
   no_coverage: ["searching", "cancelled"],
   assignment_failed: ["searching", "cancelled"],
@@ -48,8 +53,8 @@ const CORE_STATUS_MAP: Record<string, ConnectStatus> = {
   en_punto: "arrived",
   inicio_reparacion: "in_progress",
   finalizada: "finished",
-  en_camino_base: "finished",
-  llegada_taller: "finished",
+  en_camino_base: "returning_to_workshop",
+  llegada_taller: "at_workshop",
   redirigida: "in_progress",
   cancelada: "cancelled",
 };
@@ -94,6 +99,16 @@ export async function transition(
     });
   }
   publish({ kind: "status", assistanceId, status: toStatus });
+
+  // Informe de cierre: se genera al finalizar y se rehace al cerrar el ciclo
+  // en el taller, para que recoja también la vuelta. En segundo plano: que
+  // un fallo del PDF nunca bloquee el cambio de estado.
+  if (toStatus === "finished" || toStatus === "at_workshop") {
+    void import("./report.ts")
+      .then(({ generarYGuardarInforme }) => generarYGuardarInforme(assistanceId))
+      .catch((err) => console.error("[Connect] informe:", err?.message));
+  }
+
   if (toStatus === "assignment_failed" || toStatus === "no_coverage") {
     await createAlert({
       type: toStatus,
@@ -135,6 +150,40 @@ export interface CreateAssistanceInput {
   slaMinutes?: number | null;
 }
 
+/**
+ * Nº de expediente automático y correlativo por año: `AS-2026-00042`.
+ * El INSERT … ON CONFLICT DO UPDATE es atómico, así que dos altas simultáneas
+ * nunca reciben el mismo número. La primera vez del año el contador arranca por
+ * encima del mayor número ya usado, por si se han migrado expedientes.
+ */
+export async function nextExpedientNumber(atMs = Date.now()): Promise<string> {
+  const year = new Date(atMs).getFullYear();
+  const scope = `expedient:${year}`;
+  const prefix = `AS-${year}-`;
+
+  const exists = await db.query(`SELECT 1 FROM connect_counters WHERE scope = $1`, [scope]);
+  if (!exists.rows[0]) {
+    const max = await db.query(
+      `SELECT COALESCE(MAX(NULLIF(replace("expedientNumber", $1, ''), '')::INTEGER), 0) AS m
+         FROM connect_assistances
+        WHERE "expedientNumber" ~ ('^' || $1 || '[0-9]+$')`,
+      [prefix],
+    );
+    await db.query(
+      `INSERT INTO connect_counters (scope, value) VALUES ($1, $2) ON CONFLICT (scope) DO NOTHING`,
+      [scope, Number(max.rows[0]?.m ?? 0)],
+    );
+  }
+
+  const r = await db.query(
+    `INSERT INTO connect_counters (scope, value) VALUES ($1, 1)
+     ON CONFLICT (scope) DO UPDATE SET value = connect_counters.value + 1
+     RETURNING value`,
+    [scope],
+  );
+  return `${prefix}${String(r.rows[0].value).padStart(5, "0")}`;
+}
+
 export async function createAssistance(input: CreateAssistanceInput): Promise<{ row: any; duplicated: boolean }> {
   const now = Date.now();
 
@@ -148,6 +197,8 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
 
   const initialStatus = input.draft ? "draft" : "pending";
   const origin = input.origin ?? "api";
+  // Si no llega expediente (creación manual sin rellenarlo, API, import…), se genera.
+  const expedientNumber = String(input.expedientNumber ?? "").trim() || (await nextExpedientNumber(now));
   const r = await db.query(
     `INSERT INTO connect_assistances
        (uuid, "partnerId", "externalReference", "idempotencyKey", status, priority, "serviceType",
@@ -176,7 +227,7 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
       origin,
       input.controlCenterId ?? null,
       input.createdByUserId ?? null,
-      input.expedientNumber ?? null,
+      expedientNumber,
       input.clientName ?? null,
       JSON.stringify(input.requester ?? {}),
       JSON.stringify(input.locationDetails ?? {}),
@@ -237,7 +288,24 @@ export interface WorkshopCandidate {
   explanation: string;
   acceptProbability?: number; // 0..1, histórico de aceptación de ofertas
   activeLoad?: number;        // asistencias activas ahora mismo
+  // Disponibilidad real compartida con Central (null = el taller no comparte
+  // recursos y no se puede saber; se usa el proxy de carga)
+  sharedUnits?: number;
+  availableUnits?: number;
+  sharedTechs?: number;
+  availableTechs?: number;
+  effectiveAvailable?: number | null;
 }
+
+/**
+ * Estados de furgoneta en los que la unidad puede salir a una asistencia.
+ * "En base" cuenta: es el estado normal de una furgoneta parada en el taller,
+ * no un impedimento.
+ */
+const UNIT_DISPATCHABLE = ["available", "at_base"];
+
+/** Único estado de técnico realmente disponible (el resto: ocupado, vacaciones, permiso…). */
+const TECH_AVAILABLE = "disponible";
 
 /** ETA aproximada por carretera: haversine × 1,4 a 60 km/h medios + 5 min de salida. */
 function estimateEtaMinutes(distanceKm: number): number {
@@ -256,7 +324,11 @@ export async function findCandidates(
             COALESCE(a."requiresAcceptance", false) AS "requiresAcceptance",
             COALESCE(a."acceptTimeoutMin", 10) AS "acceptTimeoutMin",
             hist.accepted, hist.declined, hist."etaFactor",
-            COALESCE(load.n, 0)::int AS "activeLoad"
+            COALESCE(load.n, 0)::int AS "activeLoad",
+            COALESCE(units.shared, 0)::int AS "sharedUnits",
+            COALESCE(units.available, 0)::int AS "availableUnits",
+            COALESCE(opers.shared, 0)::int AS "sharedTechs",
+            COALESCE(opers.available, 0)::int AS "availableTechs"
        FROM connect_workshops w
        LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
        LEFT JOIN connect_provider_authorizations a
@@ -281,10 +353,26 @@ export async function findCandidates(
           WHERE ca."workshopId" = w.id
             AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')
        ) load ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS shared,
+                COUNT(*) FILTER (WHERE mu.status = ANY($2::text[]))::int AS available
+           FROM connect_mobile_units mu
+          WHERE mu."workshopId" = w.id AND mu."sharedWithCentral" = true
+       ) units ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS shared,
+                COUNT(*) FILTER (
+                  WHERE t.blocked = false AND t."currentRoadsideAssistanceId" IS NULL
+                        AND t.status = $3
+                )::int AS available
+           FROM techs t
+          WHERE w."coreWorkshopId" IS NOT NULL
+            AND t."workshopId" = w."coreWorkshopId" AND t."compartidoCentral" = true
+       ) opers ON true
       WHERE w."connectStatus" = 'active'
         AND w."networkParticipation" = true
         AND (a.id IS NULL OR a.excluded = false)`,
-    [since90],
+    [since90, UNIT_DISPATCHABLE, TECH_AVAILABLE],
   );
   const candidates: WorkshopCandidate[] = [];
   for (const w of r.rows) {
@@ -304,9 +392,32 @@ export async function findCandidates(
     const offered = (w.accepted ?? 0) + (w.declined ?? 0);
     const acceptProbability = Math.round(((Number(w.accepted ?? 0) + 0.7 * 6) / (offered + 6)) * 100) / 100;
 
-    // Fase 4 — penalización por carga: cada asistencia activa resta capacidad
+    // Disponibilidad real compartida con Central: furgonetas y técnicos.
+    const sharedUnits = Number(w.sharedUnits ?? 0);
+    const availableUnits = Number(w.availableUnits ?? 0);
+    const sharedTechs = Number(w.sharedTechs ?? 0);
+    const availableTechs = Number(w.availableTechs ?? 0);
+
+    // Capacidad efectiva = lo que realmente puede despachar. Un taller necesita
+    // furgoneta Y técnico; si comparte ambos, la capacidad es el mínimo de los
+    // dos. Si solo comparte uno, se usa ese. Si no comparte nada → null (proxy).
+    let effectiveAvailable: number | null = null;
+    if (sharedUnits > 0 && sharedTechs > 0) {
+      effectiveAvailable = Math.min(availableUnits, availableTechs);
+    } else if (sharedUnits > 0) {
+      effectiveAvailable = availableUnits;
+    } else if (sharedTechs > 0) {
+      effectiveAvailable = availableTechs;
+    }
+
+    // Un taller sin recursos libres AHORA no se oculta: el comparador es una
+    // ayuda para el operador, que tiene que ver todas las opciones de la zona
+    // y decidir (puede llamar y confirmar). Se penaliza en el score y se dice
+    // en el motivo; la asignación automática, además, lo deja para el final.
     const activeLoad = Number(w.activeLoad ?? 0);
-    const loadFactor = Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
+    const loadFactor = effectiveAvailable != null
+      ? Math.min(1, effectiveAvailable / 2) // 2+ libres → capacidad plena
+      : Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
 
     // Score = 45 % ETA + 25 % score de red + 15 % prob. aceptación + 15 % carga
     const fit = Math.max(0, 1 - etaMinutes / 90);
@@ -321,8 +432,14 @@ export async function findCandidates(
       `${Math.round(distanceKm)} km (ETA ~${etaMinutes} min${etaFactor !== 1 ? `, corregida ×${etaFactor.toFixed(1)} por historial` : ""})`,
       `score de red ${Math.round(w.currentScore)}/100`,
       `acepta el ${Math.round(acceptProbability * 100)} %`,
-      activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
-    ];
+      effectiveAvailable != null
+        ? [
+            sharedUnits > 0 ? `${availableUnits}/${sharedUnits} furgoneta(s)` : null,
+            sharedTechs > 0 ? `${availableTechs}/${sharedTechs} técnico(s)` : null,
+          ].filter(Boolean).join(" · ") + " libre(s)"
+        : activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
+      effectiveAvailable === 0 ? "⚠ sin recursos libres ahora mismo" : null,
+    ].filter(Boolean);
     candidates.push({
       workshopId: w.id,
       name: w.name,
@@ -334,10 +451,16 @@ export async function findCandidates(
       score,
       acceptProbability,
       activeLoad,
+      sharedUnits, availableUnits, sharedTechs, availableTechs, effectiveAvailable,
       explanation: `${w.name}: ${parts.join(" · ")}`,
     });
   }
-  return candidates.sort((a, b) => b.score - a.score);
+  // Primero los que pueden salir ahora; dentro de cada grupo, por score
+  return candidates.sort((a, b) => {
+    const dispA = a.effectiveAvailable === 0 ? 1 : 0;
+    const dispB = b.effectiveAvailable === 0 ? 1 : 0;
+    return dispA - dispB || b.score - a.score;
+  });
 }
 
 /** Talleres ya ofertados sin éxito para esta asistencia (no se reofertan). */
@@ -467,11 +590,19 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   const a = aRow.rows[0];
   const now = Date.now();
 
-  // Talleres externos (sin Mobilink Assist): no hay inyección al core; los
-  // estados se actualizan manualmente desde Central Pro.
-  const wsType = await db.query(`SELECT "integrationType" FROM connect_workshops WHERE id = $1`, [asg.workshopId]);
-  const isExternal = wsType.rows[0]?.integrationType === "external";
-  const coreId = isExternal ? null : await injectIntoCore(a, asg.workshopId);
+  // Solo los talleres integrados con Mobilink Assist completo reciben la
+  // asistencia inyectada en el core:
+  //   assist   → INSERT en roadside_assistances (el técnico la ve en su APK)
+  //   lite     → la gestiona la APK Mobilink Assist Lite contra Connect
+  //   external → sin digitalizar: Central actualiza los estados a mano
+  const wsType = await db.query(
+    `SELECT "integrationType", name FROM connect_workshops WHERE id = $1`,
+    [asg.workshopId],
+  );
+  const integrationType = String(wsType.rows[0]?.integrationType ?? "assist");
+  const isLite = integrationType === "lite";
+  const isExternal = integrationType === "external";
+  const coreId = isLite || isExternal ? null : await injectIntoCore(a, asg.workshopId);
   await db.query(
     `UPDATE connect_assignments SET status = 'accepted', "respondedAtMs" = $1, "respondedBy" = $2 WHERE id = $3`,
     [now, actorName, assignmentId],
@@ -512,7 +643,17 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   );
   await transition(asg.assistanceId, "assigned", "system",
     (asg.mode === "offer" ? `Aceptada por ${actorName}` : asg.explanation) +
-    (isExternal ? " · Taller externo: seguimiento manual desde Central" : ""));
+    (isExternal ? " · Taller externo: seguimiento manual desde Central" : "") +
+    (isLite ? " · Taller Mobilink Assist Lite: seguimiento desde la APK del operario" : ""));
+
+  // Aviso push a los dispositivos del taller Lite (nunca datos sensibles)
+  if (isLite) {
+    await notifyLiteWorkshop(asg.workshopId, {
+      title: "Nueva asistencia asignada",
+      body: `${a.expedientNumber ?? `#${asg.assistanceId}`} · ${a.address || "Ver detalles en la app"}`,
+      data: { type: "assistance_assigned", assistanceId: String(asg.assistanceId) },
+    }).catch((err) => console.error("[Lite] push asignación:", err?.message));
+  }
 }
 
 /** Aceptación de una oferta (portal del proveedor o aceptación telefónica del operador). */
@@ -696,8 +837,9 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
   const r = await db.query(
     `INSERT INTO roadside_assistances
        ("workshopId", status, priority, "customerName", "customerPhone", address, latitude, longitude,
-        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, "createdAtMs", "updatedAtMs")
-     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, origen,
+        "expedienteCentral", "createdAtMs", "updatedAtMs")
+     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'central', $13, $14, $14)
      RETURNING id`,
     [
       w.rows[0]?.coreWorkshopId ?? null,
@@ -712,6 +854,7 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
       description || null,
       crypto.randomUUID().replace(/-/g, ""),
       `Connect Pro · ${a.uuid}`,
+      a.expedientNumber ?? a.externalReference ?? null,
       now,
     ],
   );
@@ -734,14 +877,40 @@ function safeParse(value: unknown): any {
 
 export async function syncFromCore(): Promise<number> {
   const r = await db.query(
+    // 'finished' ya NO es terminal (queda la vuelta al taller), pero se acota a
+    // 48 h de actividad para no arrastrar indefinidamente asistencias cerradas.
     `SELECT ca.id, ca.status AS connect_status, ra.status AS core_status,
-            ra."assignedTechName", ra."cancelledAtMs"
+            ra."assignedTechName", ra."assignedVehicleName", ra."cancelledAtMs",
+            ca."assignedTechName" AS "prevTech", ca."assignedVehicleName" AS "prevVehicle",
+            rv.plate AS "vehiclePlate"
        FROM connect_assistances ca
        JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-      WHERE ca.status NOT IN ('finished', 'cancelled', 'no_coverage')`,
+       LEFT JOIN LATERAL (
+         SELECT v.plate FROM roadside_vehicles v
+          WHERE (ra."webfleetVehicleId" IS NOT NULL AND v."webfleetVehicleId" = ra."webfleetVehicleId")
+             OR (ra."assignedVehicleName" IS NOT NULL AND v.name = ra."assignedVehicleName")
+          LIMIT 1
+       ) rv ON true
+      WHERE ca.status NOT IN ('at_workshop', 'cancelled', 'no_coverage')
+        AND (ca.status <> 'finished' OR ca."updatedAtMs" > $1)`,
+    [Date.now() - 48 * 3600_000],
   );
   let changed = 0;
   for (const row of r.rows) {
+    // Trazabilidad: quién y con qué, copiado del core en cuanto se sabe
+    if (
+      (row.assignedTechName && row.assignedTechName !== row.prevTech) ||
+      (row.assignedVehicleName && row.assignedVehicleName !== row.prevVehicle)
+    ) {
+      await db.query(
+        `UPDATE connect_assistances
+            SET "assignedTechName" = COALESCE($1, "assignedTechName"),
+                "assignedVehicleName" = COALESCE($2, "assignedVehicleName"),
+                "assignedVehiclePlate" = COALESCE($3, "assignedVehiclePlate")
+          WHERE id = $4`,
+        [row.assignedTechName ?? null, row.assignedVehicleName ?? null, row.vehiclePlate ?? null, row.id],
+      ).catch((e: any) => console.error("[Connect] trazabilidad:", e?.message));
+    }
     const target = CORE_STATUS_MAP[row.core_status];
     if (!target || target === row.connect_status) continue;
     // Nunca retroceder (eventos duplicados o fuera de orden)
@@ -758,7 +927,10 @@ export async function syncFromCore(): Promise<number> {
 }
 
 async function applyForward(id: number, from: ConnectStatus, target: ConnectStatus, techName?: string) {
-  const path: ConnectStatus[] = ["assigned", "technician_assigned", "en_route", "arrived", "in_progress", "finished"];
+  const path: ConnectStatus[] = [
+    "assigned", "technician_assigned", "en_route", "arrived", "in_progress",
+    "finished", "returning_to_workshop", "at_workshop",
+  ];
   if (target === "cancelled") {
     await transition(id, "cancelled", "core", "Cancelada en el taller");
     return;

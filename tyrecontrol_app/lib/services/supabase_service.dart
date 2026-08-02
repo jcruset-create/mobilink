@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
+import '../models/cliente_activo.dart';
 
 /// Capa fina sobre supabase_flutter. No reimplementa reglas de negocio:
 /// las mismas RLS y RPCs que usa el panel web protegen y validan aqui.
@@ -20,10 +21,118 @@ class TyreControlApi {
   static User? get currentUser => _db.auth.currentUser;
   static String? get currentSessionToken => _db.auth.currentSession?.accessToken;
 
-  /// Login unificado con la app de asistencias: mismo nombre + PIN de
-  /// 4 digitos. El servidor valida el PIN contra la tabla de operarios
-  /// y sincroniza por detras el usuario Supabase; aqui solo hacemos el
-  /// signInWithPassword con el email sintetico que nos devuelve.
+  // ── Cliente activo de la sesión ──────────────────────────────
+  /// Cliente (empresa) con el que se trabaja durante la sesión. null = aún no
+  /// se ha seleccionado (obliga a pasar por la pantalla de selección).
+  static final ValueNotifier<ClienteActivo?> clienteActivo =
+      ValueNotifier<ClienteActivo?>(null);
+
+  /// true cuando ya se ha elegido cliente (o el modo admin-todos).
+  static bool get hayClienteSeleccionado => clienteActivo.value != null;
+
+  /// Empresa por la que filtrar las consultas. null si no hay cliente o si es
+  /// modo "Admin (Todos los clientes)" (en ese caso NO se filtra).
+  static String? get empresaActivaId => clienteActivo.value?.empresaId;
+
+  /// Empresas (clientes) con las que el técnico puede trabajar, para la
+  /// pantalla inicial. La autorización multi-cliente vive en la M2M
+  /// `tc_operador_empresas` (un operario puede tener varias empresas); la
+  /// empresa directa del perfil (tc_empresas por RLS) no basta. Si el operario
+  /// no tiene asignación explícita ("modo automático"), se usa lo que permita
+  /// la RLS de tc_empresas.
+  static Future<List<Map<String, dynamic>>> listarEmpresasCliente() async {
+    final uid = _db.auth.currentUser?.id;
+    if (uid == null) return [];
+
+    // Fuente principal: backend con service-role. La RLS del SaaS restringe
+    // tc_empresas al tenant del usuario, así que un técnico asignado a varios
+    // clientes (tc_operador_empresas) no puede leer sus nombres directamente.
+    try {
+      final token = currentSessionToken;
+      if (token != null) {
+        final res = await http.get(
+          Uri.parse('$kBackendUrl/api/tyrecontrol/mis-empresas'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 12));
+        if (res.statusCode == 200) {
+          final body = jsonDecode(res.body) as Map<String, dynamic>;
+          final lista = (body['empresas'] as List?) ?? const [];
+          final out = lista.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          if (out.isNotEmpty) return out;
+        }
+      }
+    } catch (_) {/* sin red / backend caído → fallback directo (RLS) */}
+
+    final porId = <String, String>{}; // id → nombre (dedup)
+
+    // Solo se muestran clientes cuyo NOMBRE se puede leer (RLS); nunca "—".
+
+    // 1) Empresas asignadas al operario (multi-cliente, tabla M2M).
+    try {
+      final asignadas = await _db
+          .from('tc_operador_empresas')
+          .select('empresa:tc_empresas(id, nombre)')
+          .eq('usuario_id', uid);
+      for (final e in (asignadas as List)) {
+        final emp = (e as Map)['empresa'];
+        final nombre = emp is Map ? emp['nombre'] as String? : null;
+        if (emp is Map && emp['id'] != null && nombre != null && nombre.isNotEmpty) {
+          porId[emp['id'] as String] = nombre;
+        }
+      }
+    } catch (_) {/* sin M2M o sin permiso: se cubre con los vehículos */}
+
+    // 2) Empresas presentes en los vehículos que el operario puede ver (misma
+    //    derivación que la pantalla de Vehículos). Solo se añade si su nombre
+    //    es legible (RLS de tc_empresas lo permite); si no, no se muestra.
+    try {
+      final vehis = await _db
+          .from('tc_vehiculos')
+          .select('empresa_id, empresa:tc_empresas(nombre)')
+          .eq('activo', true);
+      for (final v in (vehis as List)) {
+        final m = Map<String, dynamic>.from(v as Map);
+        final id = m['empresa_id'] as String?;
+        final nombre = m['empresa'] is Map ? m['empresa']['nombre'] as String? : null;
+        if (id != null && nombre != null && nombre.isNotEmpty) porId[id] = nombre;
+      }
+    } catch (_) {/* best-effort */}
+
+    // 3) Fallback total: las que permita la RLS de tc_empresas.
+    if (porId.isEmpty) {
+      final todas = await _db.from('tc_empresas').select('id, nombre').order('nombre');
+      for (final x in (todas as List)) {
+        final m = Map<String, dynamic>.from(x as Map);
+        if (m['id'] != null) porId[m['id'] as String] = (m['nombre'] as String?) ?? '—';
+      }
+    }
+
+    final out = porId.entries.map((e) => {'id': e.key, 'nombre': e.value}).toList();
+    out.sort((a, b) => (a['nombre'] as String).toLowerCase().compareTo((b['nombre'] as String).toLowerCase()));
+    return out;
+  }
+
+  /// ¿El usuario autenticado es administrador? (para mostrar "Admin (Todos los
+  /// clientes)"). Lee el perfil, que ya trae rol/es_admin/es_superadmin.
+  static Future<bool> esAdmin() async {
+    try {
+      final p = await obtenerMiPerfil();
+      if (p == null) return false;
+      final rol = (p['rol'] as String?)?.toLowerCase().trim();
+      return p['es_superadmin'] == true ||
+          p['es_admin'] == true ||
+          rol == 'administrador' ||
+          rol == 'admin';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Login de TyreControl: nombre + PIN PROPIO del usuario (independiente de
+  /// Assist). El servidor comprueba que existe un usuario de TyreControl con
+  /// ese nombre y acceso a la APK, y devuelve su email; el PIN se valida contra
+  /// Supabase Auth (la contraseña del propio usuario, que se fija/cambia desde
+  /// Usuarios). Los operarios de Assist ya NO pueden entrar aquí.
   static Future<void> signInOperario(String techName, String pin) async {
     final res = await http
         .post(
@@ -34,20 +143,31 @@ class TyreControlApi {
         .timeout(const Duration(seconds: 15));
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Operario o código incorrecto');
+      throw Exception(data['error'] ?? 'Usuario o PIN incorrectos');
     }
     final email = data['email'] as String;
 
-    final auth = await _db.auth.signInWithPassword(email: email, password: pin);
-    if (auth.user == null) throw Exception('No se ha podido iniciar sesión');
+    try {
+      final auth = await _db.auth.signInWithPassword(email: email, password: pin);
+      if (auth.user == null) throw Exception('Usuario o PIN incorrectos');
+    } on AuthException {
+      throw Exception('Usuario o PIN incorrectos');
+    }
   }
 
-  static Future<void> signOut() => _db.auth.signOut();
+  static Future<void> signOut() async {
+    // Al cerrar sesión se olvida el cliente para obligar a re-seleccionar.
+    clienteActivo.value = null;
+    await _db.auth.signOut();
+  }
 
   static Future<Map<String, dynamic>?> obtenerMiPerfil() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return null;
-    return await _db.from('tc_usuarios').select('*, empresa:tc_empresas(*)').eq('id', uid).maybeSingle();
+    // Desambiguar el embed: hay 2 relaciones tc_usuarios↔tc_empresas (FK
+    // directa empresa_id + M2M tc_operador_empresas). Sin el nombre de la FK,
+    // PostgREST devuelve PGRST201 y la app peta al cargar el perfil.
+    return await _db.from('tc_usuarios').select('*, empresa:tc_empresas!tc_usuarios_empresa_id_fkey(*)').eq('id', uid).maybeSingle();
   }
 
   // ── Catalogo: fotos de modelo ────────────────────────────────
@@ -75,13 +195,13 @@ class TyreControlApi {
   static Future<List<Vehiculo>> buscarVehiculos(String texto) async {
     final t = texto.trim();
     if (t.isEmpty) return [];
-    final data = await _db
+    var q = _db
         .from('tc_vehiculos')
         .select('*, empresa:tc_empresas(*), tipo:tc_tipos_vehiculo(*)')
         .or('matricula.ilike.%$t%,numero_unidad.ilike.%$t%')
-        .eq('activo', true)
-        .order('matricula')
-        .limit(15);
+        .eq('activo', true);
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('matricula').limit(15);
     return (data as List).map((e) => Vehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
@@ -107,6 +227,36 @@ class TyreControlApi {
 
   /// Km actuales del vehículo según Webfleet (odómetro real). Devuelve null si
   /// no está enlazado o no hay cobertura; no bloquea la revisión.
+  /// Conducción eficiente de la flota (Webfleet): OptiDrive, ralentí, km y
+  /// excesos de velocidad, agregados en el backend.
+  ///
+  /// Combustible NO: los equipos no llevan enlace CAN/FMS, así que Webfleet
+  /// devuelve fuel_usage y co2 siempre a 0 (el backend lo indica con
+  /// combustible_disponible=false).
+  static Future<Map<String, dynamic>?> conduccionWebfleet(String empresaId, {int dias = 30}) async {
+    try {
+      final uri = Uri.parse('$kBackendUrl/api/tyrecontrol/webfleet/conduccion?empresa=$empresaId&dias=$dias');
+      final r = await http.get(uri, headers: {
+        if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
+      }).timeout(const Duration(seconds: 35));
+      if (r.statusCode != 200) {
+        final msg = () {
+          try {
+            return (jsonDecode(r.body) as Map<String, dynamic>)['error']?.toString();
+          } catch (_) {
+            return null;
+          }
+        }();
+        throw Exception(msg ?? 'Webfleet no disponible (HTTP ${r.statusCode})');
+      }
+      return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+    } on Exception {
+      rethrow;
+    } catch (e) {
+      throw Exception('$e');
+    }
+  }
+
   static Future<int?> obtenerKmWebfleet(String empresaId, String objectno) async {
     try {
       final uri = Uri.parse('$kBackendUrl/api/tyrecontrol/webfleet/odometer?empresa=$empresaId&objectno=${Uri.encodeComponent(objectno)}');
@@ -128,18 +278,57 @@ class TyreControlApi {
     } catch (_) {}
   }
 
-  /// Imagen del plano del vehículo: la del tipo si la tiene; si no, la
-  /// heredada de la configuración de ejes del vehículo. null si no hay.
+  /// Imagen del plano del vehículo, con el mismo orden que el panel web:
+  /// la de su configuración de ejes PARA SU MARCA (un 2x4 de MAN no se dibuja
+  /// como uno de Volvo), si no la genérica de la configuración, y si tampoco
+  /// la del tipo de vehículo. null si no hay ninguna.
   static Future<String?> obtenerImagenChasis(Vehiculo v) async {
     final delTipo = v.tipo?.imagenChasisUrl;
-    if (delTipo != null && delTipo.isNotEmpty) return delTipo;
     try {
-      final veh = await _db.from('tc_vehiculos').select('config_ejes_id').eq('id', v.id).maybeSingle();
+      final veh = await _db
+          .from('tc_vehiculos')
+          .select('config_ejes_id, marca, marca_id')
+          .eq('id', v.id)
+          .maybeSingle();
       final cid = veh?['config_ejes_id'];
-      if (cid == null) return null;
-      final ce = await _db.from('tc_config_ejes').select('imagen_chasis_url').eq('id', cid).maybeSingle();
-      final url = ce?['imagen_chasis_url'] as String?;
-      return (url != null && url.isNotEmpty) ? url : null;
+      if (cid != null) {
+        final url = await _imagenDeMarca(cid as String, veh?['marca_id'] as String?, veh?['marca'] as String?);
+        if (url != null && url.isNotEmpty) return url;
+
+        final ce = await _db.from('tc_config_ejes').select('imagen_chasis_url').eq('id', cid).maybeSingle();
+        final generica = ce?['imagen_chasis_url'] as String?;
+        if (generica != null && generica.isNotEmpty) return generica;
+      }
+    } catch (_) {
+      // Si falla la consulta se cae al tipo, que es lo que había antes.
+    }
+    return (delTipo != null && delTipo.isNotEmpty) ? delTipo : null;
+  }
+
+  /// Imagen propia de la marca para esa configuración. La mayoría de
+  /// vehículos guardan la marca como texto suelto y no enlazada al catálogo,
+  /// así que si no hay marca_id se busca por nombre ignorando mayúsculas.
+  static Future<String?> _imagenDeMarca(String configId, String? marcaId, String? marcaNombre) async {
+    try {
+      var id = marcaId;
+      if (id == null && marcaNombre != null && marcaNombre.trim().isNotEmpty) {
+        final m = await _db
+            .from('tc_cat_marcas_vehiculo')
+            .select('id')
+            .ilike('nombre', marcaNombre.trim())
+            .limit(1);
+        final lista = m as List;
+        if (lista.isNotEmpty) id = (lista.first as Map)['id'] as String?;
+      }
+      if (id == null) return null;
+      final r = await _db
+          .from('tc_config_ejes_marca')
+          .select('imagen_chasis_url')
+          .eq('config_ejes_id', configId)
+          .eq('marca_id', id)
+          .limit(1);
+      final lista = r as List;
+      return lista.isEmpty ? null : (lista.first as Map)['imagen_chasis_url'] as String?;
     } catch (_) {
       return null;
     }
@@ -194,6 +383,118 @@ class TyreControlApi {
         );
   }
 
+  /// Cierra la revisión con su cronometraje (Analítica de Productividad).
+  /// [finAt] es el momento en que el técnico pulsó Finalizar — importa cuando
+  /// el cierre llega por la cola offline horas después.
+  static Future<void> completarRevisionConTiempos(
+    String revisionId, {
+    String estado = 'completada',
+    DateTime? finAt,
+    String? tipoRevision,
+    int? nNeumaticos,
+    int? pausaSeg,
+    int? nPausas,
+  }) async {
+    final upd = <String, dynamic>{'estado_revision': estado};
+    if (finAt != null) {
+      upd['fin_at'] = finAt.toUtc().toIso8601String();
+      // inicio_at se fijó al crear la revisión; se lee para la duración.
+      final r = await _db.from('revisiones_vehiculo').select('inicio_at').eq('id', revisionId).maybeSingle();
+      final ini = r?['inicio_at'] != null ? DateTime.tryParse(r!['inicio_at'] as String) : null;
+      if (ini != null) {
+        final dur = finAt.toUtc().difference(ini.toUtc()).inSeconds;
+        if (dur >= 0) {
+          upd['duracion_seg'] = dur;
+          upd['trabajo_seg'] = (dur - (pausaSeg ?? 0)).clamp(0, dur);
+        }
+      }
+    }
+    if (tipoRevision != null) upd['tipo_revision'] = tipoRevision;
+    if (nNeumaticos != null) upd['n_neumaticos'] = nNeumaticos;
+    if (pausaSeg != null) upd['pausa_seg'] = pausaSeg;
+    if (nPausas != null) upd['n_pausas'] = nPausas;
+    await _db.from('revisiones_vehiculo').update(upd).eq('id', revisionId);
+  }
+
+  // ── Productividad: pausas y estadísticas ─────────────────────
+  /// Guarda una pausa terminada. Best-effort: sin red no bloquea el trabajo
+  /// (los totales de la sesión viajan igualmente en la fila padre).
+  static Future<void> registrarPausa({
+    required String contexto,
+    required String empresaId,
+    String? vehiculoId,
+    String? revisionId,
+    required String motivo,
+    String? observaciones,
+    required DateTime inicio,
+    required DateTime fin,
+  }) async {
+    try {
+      await _db.from('tc_pausas_trabajo').insert({
+        'contexto': contexto,
+        'empresa_id': empresaId,
+        'tecnico_id': _db.auth.currentUser?.id,
+        'vehiculo_id': vehiculoId,
+        'revision_id': revisionId,
+        'motivo': motivo,
+        'observaciones': observaciones,
+        'inicio_at': inicio.toUtc().toIso8601String(),
+        'fin_at': fin.toUtc().toIso8601String(),
+      });
+    } catch (_) {/* sin red o RLS: la fila padre ya lleva los totales */}
+  }
+
+  /// Estadísticas agregadas (calculadas en Postgres, nunca en memoria).
+  /// [tab] = 'revisiones' | 'operaciones'. Filtros null = sin filtrar.
+  static Future<Map<String, dynamic>> estadisticasProductividad(
+    String tab, {
+    DateTime? desde,
+    DateTime? hasta,
+    String? empresaId,
+    String? tecnicoId,
+    String? tipoVehiculoId,
+    String? tipo,
+  }) async {
+    String? d(DateTime? x) => x == null ? null : x.toIso8601String().substring(0, 10);
+    final data = await _db.rpc(
+      tab == 'operaciones' ? 'tc_prod_operaciones' : 'tc_prod_revisiones',
+      params: {
+        'p_desde': d(desde),
+        'p_hasta': d(hasta),
+        // Sin filtro explícito, manda el cliente activo de la sesión.
+        'p_empresa': empresaId ?? empresaActivaId,
+        'p_tecnico': tecnicoId,
+        'p_tipo_vehiculo': tipoVehiculoId,
+        'p_tipo': tipo,
+      },
+    );
+    return data is Map ? Map<String, dynamic>.from(data) : {};
+  }
+
+  /// Técnicos visibles (filtro de Analítica). La RLS limita el alcance.
+  static Future<List<({String id, String nombre})>> listarTecnicos() async {
+    try {
+      final data = await _db.from('tc_usuarios').select('id, nombre').eq('activo', true).order('nombre');
+      return (data as List)
+          .map((e) => (id: e['id'] as String, nombre: (e['nombre'] as String?) ?? '—'))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Tipos de vehículo (filtro de Analítica).
+  static Future<List<({String id, String nombre})>> listarTiposVehiculo() async {
+    try {
+      final data = await _db.from('tc_tipos_vehiculo').select('id, nombre').order('nombre');
+      return (data as List)
+          .map((e) => (id: e['id'] as String, nombre: (e['nombre'] as String?) ?? '—'))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   static Future<void> completarRevision(String revisionId, {String estado = 'completada'}) async {
     await _db.from('revisiones_vehiculo').update({'estado_revision': estado}).eq('id', revisionId);
   }
@@ -207,12 +508,13 @@ class TyreControlApi {
   static Future<List<RevisionVehiculo>> listarRevisionesPendientesDelTecnico() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
-    final data = await _db
+    var q = _db
         .from('revisiones_vehiculo')
         .select()
         .eq('tecnico_id', uid)
-        .eq('estado_revision', 'borrador')
-        .order('fecha_revision', ascending: false);
+        .eq('estado_revision', 'borrador');
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('fecha_revision', ascending: false);
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
@@ -222,7 +524,7 @@ class TyreControlApi {
   static Future<List<RevisionVehiculo>> listarRevisionesCompletadasDelTecnico({int limite = 30}) async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
-    final data = await _db
+    var q = _db
         .from('revisiones_vehiculo')
         .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)')
         .eq('tecnico_id', uid)
@@ -231,9 +533,9 @@ class TyreControlApi {
           'completada_con_incidencias',
           'completada_incidencia_pendiente',
           'anulada',
-        ])
-        .order('created_at', ascending: false)
-        .limit(limite);
+        ]);
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('created_at', ascending: false).limit(limite);
     return (data as List).map((e) => RevisionVehiculo.fromJson(Map<String, dynamic>.from(e))).toList();
   }
 
@@ -446,6 +748,37 @@ class TyreControlApi {
   }
 
   /// Clave normalizada marca|modelo|medida-base (ignora índice y espacios).
+  /// Monta una referencia del CATÁLOGO en una posición, SIN control de stock:
+  /// no descuenta almacén ni genera movimientos de inventario. El neumático
+  /// queda con origen 'catalogo_sin_stock' (el marcador para los informes).
+  /// Nuevo → el RPC asigna la profundidad de dibujo del catálogo; usado →
+  /// [profundidadUsado] son los mm reales medidos por el técnico.
+  static Future<void> montarDesdeCatalogo({
+    required String vehiculoId,
+    required String posicionId,
+    required String referenciaId,
+    String condicion = 'nuevo',
+    double? profundidadUsado,
+    bool forzarMedida = false,
+  }) async {
+    final datos = <String, dynamic>{};
+    if (condicion == 'usado' && profundidadUsado != null) {
+      datos['profundidad_actual_mm'] = profundidadUsado.toString();
+    }
+    await _db.rpc('tc_montar_desde_catalogo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_posicion': posicionId,
+      'p_referencia': referenciaId,
+      'p_control_individual': false,
+      'p_datos': datos,
+      'p_km': null,
+      'p_fecha': null,
+      'p_obs': 'Montaje sin control de stock (APK)',
+      'p_forzar_medida': forzarMedida,
+      'p_condicion': condicion,
+    });
+  }
+
   static String claveCatalogo(String? marca, String? modelo, String? medida) {
     final base = (medida ?? '').toUpperCase().replaceAll(RegExp(r'\s+'), '');
     final m = RegExp(r'(\d{2,3})(?:/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)').firstMatch(base);
@@ -481,7 +814,7 @@ class TyreControlApi {
   /// APK): marca, modelo, medida y specs. Solo lectura.
   static Future<List<Map<String, dynamic>>> listarCatalogoReferencias() async {
     final data = await _db.from('tc_referencias_neumatico').select(
-        'profundidad_dibujo_mm, presion_maxima_bar, carga_maxima_kg, referencia_completa, '
+        'id, profundidad_dibujo_mm, presion_maxima_bar, carga_maxima_kg, referencia_completa, '
         'modelo:tc_cat_modelos_neumatico(nombre, foto_modelo_url, marca:tc_cat_marcas_neumatico(nombre)), '
         'tyre_size:tyre_sizes(medida, indice_carga_simple, codigo_velocidad)')
         .eq('activo', true).limit(2000);
@@ -492,6 +825,7 @@ class TyreControlApi {
       final ma = mo != null && mo['marca'] is Map ? mo['marca'] as Map : null;
       final ts = r['tyre_size'] is Map ? r['tyre_size'] as Map : null;
       out.add({
+        'id': r['id'],
         'marca': ma?['nombre'],
         'modelo': mo?['nombre'],
         'medida': ts?['medida'] ?? r['referencia_completa'],
@@ -524,6 +858,118 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// Permuta dos neumáticos montados (intercambia sus posiciones). Las ruedas
+  /// no salen del vehículo: se cambian de sitio y queda registrado como
+  /// operación 'intercambio' con sus dos movimientos.
+  static Future<String> intercambiarPosiciones({
+    required String montajeAId,
+    required String montajeBId,
+    num? km,
+    String? observaciones,
+  }) async {
+    final res = await _db.rpc('tc_intercambiar_posiciones', params: {
+      'p_montaje_a': montajeAId,
+      'p_montaje_b': montajeBId,
+      'p_km': km,
+      'p_obs': observaciones ?? 'Permuta en el mismo vehículo (APK)',
+    });
+    return '$res';
+  }
+
+  /// Aplica un PLAN de permutación (varias ruedas a la vez) en una sola
+  /// transacción: o entra entero o no entra nada. [destinos] va indexado por
+  /// POSICIÓN de destino: {posicionDestinoId: montajeId}, igual que el plan de
+  /// la pantalla (una posición solo puede recibir una rueda).
+  static Future<String> permutarPlan({
+    required String vehiculoId,
+    required Map<String, String> destinos,
+    num? km,
+    String? observaciones,
+  }) async {
+    final lista = destinos.entries
+        .map((e) => {'montaje': e.value, 'posicion': e.key})
+        .toList();
+    final res = await _db.rpc('tc_permutar_plan', params: {
+      'p_vehiculo': vehiculoId,
+      'p_destinos': lista,
+      'p_km': km,
+      'p_obs': observaciones,
+    });
+    return '$res';
+  }
+
+  /// Marcas que son de recauchutado (p. ej. INSA). El dato vive en la marca,
+  /// no en el neumático: así la ficha lo enseña sin marcar rueda a rueda.
+  static Set<String>? _marcasRecau;
+  static Future<Set<String>> marcasRecauchutadas() async {
+    if (_marcasRecau != null) return _marcasRecau!;
+    try {
+      final data = await _db.from('tc_cat_marcas_neumatico')
+          .select('nombre').eq('es_recauchutado', true).eq('activo', true);
+      _marcasRecau = (data as List)
+          .map((e) => ((e as Map)['nombre'] as String? ?? '').trim().toUpperCase())
+          .where((e) => e.isNotEmpty)
+          .toSet();
+    } catch (_) {
+      _marcasRecau = <String>{}; // sin red o columna aún sin migrar
+    }
+    return _marcasRecau!;
+  }
+
+  static bool esMarcaRecauchutada(String? marca) {
+    if (marca == null || marca.trim().isEmpty) return false;
+    return (_marcasRecau ?? const <String>{}).contains(marca.trim().toUpperCase());
+  }
+
+  /// Aplica un PLAN DE TRABAJO completo (movimientos + reesculturados + giros
+  /// + reparaciones) en una sola transacción.
+  static Future<String> aplicarPlanTrabajo({
+    required String vehiculoId,
+    required List<Map<String, dynamic>> acciones,
+    num? km,
+    String? observaciones,
+  }) async {
+    final res = await _db.rpc('tc_aplicar_plan_trabajo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_acciones': acciones,
+      'p_km': km,
+      'p_obs': observaciones,
+    });
+    return '$res';
+  }
+
+  /// Mueve un neumático montado a una posición LIBRE del mismo vehículo
+  /// (operación 'cambio_posicion'). Si el destino está ocupado, la función de
+  /// BD lo rechaza: en ese caso hay que usar [intercambiarPosiciones].
+  static Future<String> cambiarPosicion({
+    required String montajeId,
+    required String posicionDestinoId,
+    num? km,
+    String? observaciones,
+  }) async {
+    final res = await _db.rpc('tc_cambiar_posicion', params: {
+      'p_montaje': montajeId,
+      'p_posicion_destino': posicionDestinoId,
+      'p_km': km,
+      'p_obs': observaciones ?? 'Cambio de posición en el mismo vehículo (APK)',
+    });
+    return '$res';
+  }
+
+  /// TODAS las operaciones de un vehículo (montajes, sustituciones, cambios de
+  /// posición…), estén o no agrupadas en una intervención. Los montajes sueltos
+  /// (p. ej. montar desde catálogo sin cerrar intervención) no tienen
+  /// intervencion_id, así que sin esto no aparecían en ningún sitio.
+  static Future<List<Map<String, dynamic>>> listarOperacionesVehiculo(String vehiculoId) async {
+    final data = await _db.from('operaciones_neumaticos').select(
+        'id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, intervencion_id, observaciones, '
+        'posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), '
+        'posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), '
+        'neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)')
+        .eq('vehiculo_id', vehiculoId).order('created_at', ascending: false).limit(500);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   /// Cierra la intervención de cambio (agrupa operaciones + informe con IA)
   /// llamando al backend. Best-effort: si falla, no bloquea el flujo.
   ///
@@ -536,6 +982,8 @@ class TyreControlApi {
     List<Map<String, dynamic>>? montajeAntes,
     List<Map<String, dynamic>>? incidencias,
     String? imagenChasis,
+    int? pausaSeg,
+    int? nPausas,
   }) async {
     try {
       await http.post(
@@ -549,6 +997,12 @@ class TyreControlApi {
         body: jsonEncode({
           'vehiculoId': vehiculoId,
           'desde': desde.toUtc().toIso8601String(),
+          // Cronometraje: la sesión de cambio va de abrir la pantalla a pulsar
+          // Finalizar; el servidor calcula duración y tiempo efectivo.
+          'inicioAt': desde.toUtc().toIso8601String(),
+          'finAt': DateTime.now().toUtc().toIso8601String(),
+          if (pausaSeg != null) 'pausaSeg': pausaSeg,
+          if (nPausas != null) 'nPausas': nPausas,
           if (montajeAntes != null) 'montajeAntes': montajeAntes,
           if (incidencias != null) 'incidencias': incidencias,
           if (imagenChasis != null) 'imagenChasis': imagenChasis,
@@ -611,6 +1065,7 @@ class TyreControlApi {
   static Future<List<Incidencia>> listarIncidencias({List<String> estados = const []}) async {
     var q = _db.from('tc_incidencias').select(
         '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje), problemas:tc_incidencia_problemas(id, tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))');
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
     if (estados.isNotEmpty) q = q.inFilter('estado', estados);
     final data = await q.order('detectada_at', ascending: false);
     final lista = (data as List)
@@ -692,10 +1147,12 @@ class TyreControlApi {
   /// Refresca el contador de pendientes (no solucionadas/canceladas).
   static Future<int> contarIncidenciasPendientes() async {
     try {
-      final data = await _db
+      var q = _db
           .from('tc_incidencias')
           .select('id')
           .not('estado', 'in', '(solucionada,cancelada,no_procede)');
+      if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+      final data = await q;
       final n = (data as List).length;
       incidenciasPendientesCount.value = n;
       return n;
@@ -724,11 +1181,13 @@ class TyreControlApi {
   /// Vehículos activos con cliente (empresa) y base (delegación) para la
   /// planificación. Ligero: solo los campos que la lista necesita.
   static Future<List<Map<String, dynamic>>> listarVehiculosPlanificacion() async {
-    final data = await _db
+    var q = _db
         .from('tc_vehiculos')
         .select(
             'id, matricula, numero_unidad, empresa_id, delegacion_id, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)')
         .eq('activo', true);
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q;
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
@@ -755,11 +1214,12 @@ class TyreControlApi {
   /// Todos los vehículos (activos e inactivos, como el panel) con los joins
   /// que la tabla necesita: empresa, delegación, tipo y config de ejes.
   static Future<List<Map<String, dynamic>>> listarVehiculosCompleto() async {
-    final data = await _db
+    var q = _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)')
-        .order('matricula');
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)');
+    if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+    final data = await q.order('matricula');
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
@@ -768,7 +1228,7 @@ class TyreControlApi {
     final data = await _db
         .from('tc_vehiculos')
         .select(
-            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion)')
+            '*, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(*), config_ejes:tc_config_ejes(nombre, descripcion, imagen_chasis_url)')
         .eq('id', id)
         .maybeSingle();
     return data == null ? null : Map<String, dynamic>.from(data);

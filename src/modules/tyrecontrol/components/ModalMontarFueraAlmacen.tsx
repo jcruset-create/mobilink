@@ -1,23 +1,61 @@
-import { useState } from "react";
-import { montarFueraAlmacen } from "../services/data";
+import { useEffect, useMemo, useState } from "react";
+import { montarFueraAlmacen, listarReferenciasNeumatico, listarMotivosFueraAlmacen } from "../services/data";
+import { mismaMedida } from "../services/medidas";
+import type { ReferenciaNeumatico, MotivoFueraAlmacen } from "../types";
 import { Modal, Field, inputCls } from "./ui";
 
 interface Props {
   posicionNombre: string;
   vehiculoId: string;
   posicionId: string;
+  /** Medida que el vehículo tiene configurada en esta posición, para filtrar el catálogo. */
+  medidaVehiculo?: string | null;
   onClose: () => void;
   onDone: () => void;
 }
 
-export default function ModalMontarFueraAlmacen({ posicionNombre, vehiculoId, posicionId, onClose, onDone }: Props) {
+export default function ModalMontarFueraAlmacen({ posicionNombre, vehiculoId, posicionId, medidaVehiculo, onClose, onDone }: Props) {
   const [motivo, setMotivo] = useState("");
+  const [motivoOtro, setMotivoOtro] = useState(false);
   const [controlIndividual, setControlIndividual] = useState(true);
-  const [datos, setDatos] = useState({ marca: "", modelo: "", medida: "", indice_carga: "", indice_velocidad: "", dot: "", numero_serie: "", rfid_epc: "" });
+  const [datos, setDatos] = useState({ marca: "", modelo: "", medida: medidaVehiculo ?? "", indice_carga: "", indice_velocidad: "", dot: "", numero_serie: "", rfid_epc: "" });
   const [km, setKm] = useState("");
   const [obs, setObs] = useState("");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // Catálogo completo de referencias: aunque el neumático no venga del almacén,
+  // casi siempre es un modelo que ya está en el catálogo, así que se puede
+  // elegir en vez de teclear marca/modelo/medida a mano.
+  const [refs, setRefs] = useState<ReferenciaNeumatico[]>([]);
+  const [refId, setRefId] = useState("");
+  const [verTodasMedidas, setVerTodasMedidas] = useState(false);
+  useEffect(() => { listarReferenciasNeumatico().then(setRefs).catch(() => setRefs([])); }, []);
+
+  // Motivos habituales, mantenidos en Configuración → Motivos fuera de almacén.
+  const [motivos, setMotivos] = useState<MotivoFueraAlmacen[]>([]);
+  useEffect(() => { listarMotivosFueraAlmacen().then(setMotivos).catch(() => setMotivos([])); }, []);
+
+  const compatibles = useMemo(() => {
+    const lista = medidaVehiculo && !verTodasMedidas
+      ? refs.filter((r) => mismaMedida(r.tyre_size?.medida, medidaVehiculo))
+      : refs;
+    return [...lista].sort((a, b) => etiquetaRef(a).localeCompare(etiquetaRef(b)));
+  }, [refs, medidaVehiculo, verTodasMedidas]);
+
+  function elegirRef(id: string) {
+    setRefId(id);
+    const r = refs.find((x) => x.id === id);
+    if (!r) return;
+    setDatos((d) => ({
+      ...d,
+      marca: r.modelo?.marca?.nombre ?? d.marca,
+      modelo: r.modelo?.nombre ?? d.modelo,
+      medida: r.tyre_size?.medida ?? d.medida,
+      indice_carga: r.tyre_size?.indice_carga_simple ?? d.indice_carga,
+      indice_velocidad: r.tyre_size?.codigo_velocidad ?? d.indice_velocidad,
+    }));
+  }
 
   async function confirmar() {
     if (!motivo.trim()) { setMsg("El motivo es obligatorio"); return; }
@@ -43,7 +81,52 @@ export default function ModalMontarFueraAlmacen({ posicionNombre, vehiculoId, po
           Neumático no procedente del almacén (cliente lo aporta, urgencia, carga inicial…). No descuenta stock y queda auditado.
           Si no tienes permiso, quedará pendiente de autorización de un administrador.
         </div>
-        <Field label="Motivo *"><input className={inputCls} value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="Ej. neumático aportado por el cliente" /></Field>
+        <Field label="Motivo *">
+          {motivos.length > 0 && (
+            <select
+              className={inputCls}
+              value={motivoOtro ? "__otro__" : motivo}
+              onChange={(e) => {
+                const v = e.target.value;
+                setMsg("");
+                if (v === "__otro__") { setMotivoOtro(true); setMotivo(""); }
+                else { setMotivoOtro(false); setMotivo(v); }
+              }}
+            >
+              <option value="">Selecciona…</option>
+              {motivos.map((m) => <option key={m.id} value={m.motivo}>{m.motivo}</option>)}
+              <option value="__otro__">Otro (escribirlo)…</option>
+            </select>
+          )}
+          {(motivoOtro || motivos.length === 0) && (
+            <input
+              className={`${inputCls} ${motivos.length > 0 ? "mt-1" : ""}`}
+              value={motivo}
+              onChange={(e) => { setMotivo(e.target.value); setMsg(""); }}
+              placeholder="Ej. neumático aportado por el cliente"
+              autoFocus={motivoOtro}
+            />
+          )}
+          <div className="mt-1 text-[11px] text-slate-500">Los motivos habituales se mantienen en Configuración → Motivos fuera de almacén.</div>
+        </Field>
+
+        <Field label="Elegir del catálogo">
+          <select className={inputCls} value={refId} onChange={(e) => elegirRef(e.target.value)}>
+            <option value="">— escribir los datos a mano —</option>
+            {compatibles.map((r) => <option key={r.id} value={r.id}>{etiquetaRef(r)}</option>)}
+          </select>
+        </Field>
+        {medidaVehiculo && (
+          <label className="flex items-center gap-1 text-[11px] text-slate-400">
+            <input type="checkbox" checked={verTodasMedidas} onChange={(e) => { setVerTodasMedidas(e.target.checked); setRefId(""); }} />
+            Ver todas las medidas (por defecto solo {medidaVehiculo})
+          </label>
+        )}
+        {medidaVehiculo && !verTodasMedidas && compatibles.length === 0 && refs.length > 0 && (
+          <div className="text-[11px] text-amber-300">
+            El catálogo no tiene ninguna referencia de la medida {medidaVehiculo}. Marca «ver todas» o escribe los datos a mano.
+          </div>
+        )}
 
         <label className="flex items-center gap-2 text-sm text-slate-200">
           <input type="checkbox" checked={controlIndividual} onChange={(e) => setControlIndividual(e.target.checked)} />
@@ -55,6 +138,7 @@ export default function ModalMontarFueraAlmacen({ posicionNombre, vehiculoId, po
           <Field label="Modelo"><input className={inputCls} value={datos.modelo} onChange={(e) => setDatos({ ...datos, modelo: e.target.value })} /></Field>
           <Field label="Medida *"><input className={inputCls} value={datos.medida} onChange={(e) => setDatos({ ...datos, medida: e.target.value })} /></Field>
           <Field label="Índice carga"><input className={inputCls} value={datos.indice_carga} onChange={(e) => setDatos({ ...datos, indice_carga: e.target.value })} /></Field>
+          <Field label="Índice velocidad"><input className={inputCls} value={datos.indice_velocidad} onChange={(e) => setDatos({ ...datos, indice_velocidad: e.target.value })} /></Field>
           {controlIndividual && (
             <>
               <Field label="DOT"><input className={inputCls} value={datos.dot} onChange={(e) => setDatos({ ...datos, dot: e.target.value })} /></Field>
@@ -72,4 +156,13 @@ export default function ModalMontarFueraAlmacen({ posicionNombre, vehiculoId, po
       </div>
     </Modal>
   );
+}
+
+/** "Hankook DL51 · 315/80R22.5 156/150L" */
+function etiquetaRef(r: ReferenciaNeumatico): string {
+  const marca = r.modelo?.marca?.nombre ?? "";
+  const modelo = r.modelo?.nombre ?? "";
+  const medida = r.tyre_size?.medida ?? "";
+  const indices = [r.tyre_size?.indice_carga_simple, r.tyre_size?.codigo_velocidad].filter(Boolean).join("");
+  return `${`${marca} ${modelo}`.trim()} · ${medida}${indices ? ` ${indices}` : ""}`;
 }

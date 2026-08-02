@@ -277,6 +277,20 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "esRemolque" BOOLEAN NOT NULL DEFAULT false;
 
     ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "origen" TEXT NOT NULL DEFAULT 'taller';
+
+    -- Nº de expediente que asigna Central a las asistencias que vienen de la red
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
+
+    -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "descripcionAveria" TEXT;
 
     ALTER TABLE roadside_assistances
@@ -382,6 +396,62 @@ export async function initDb() {
 
     CREATE INDEX IF NOT EXISTS roadside_vehicles_active_idx
       ON roadside_vehicles(active);
+  `);
+
+  // ── Multi-taller Assist ──
+  // Una empresa (= licencia) puede tener varios talleres. Cada taller ve solo
+  // sus propias asistencias, pero puede ver el estado + ubicación + técnico de
+  // las unidades móviles de los demás talleres de la MISMA empresa.
+  // `licenseId` es el id de la fila `licenses` (empresa). Sin FK dura para no
+  // acoplar el orden de init entre db.ts y el módulo de licencias; se indexa.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assist_talleres (
+      id SERIAL PRIMARY KEY,
+      "licenseId" INTEGER,
+      nombre TEXT NOT NULL,
+      direccion TEXT,
+      telefono TEXT,
+      "codigoInterno" TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assist_talleres_license_idx
+      ON assist_talleres("licenseId");
+    CREATE INDEX IF NOT EXISTS assist_talleres_activo_idx
+      ON assist_talleres(activo);
+
+    -- El técnico pertenece a un taller (Assist multi-taller).
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    -- Taller real (assist_talleres.id) al que pertenece cada asistencia y cada
+    -- unidad móvil. Convive con el "workshopId" TEXT existente hasta migrar.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    CREATE INDEX IF NOT EXISTS roadside_assistances_taller_idx
+      ON roadside_assistances("tallerId");
+    CREATE INDEX IF NOT EXISTS roadside_vehicles_taller_idx
+      ON roadside_vehicles("tallerId");
+    CREATE INDEX IF NOT EXISTS techs_taller_idx
+      ON techs("tallerId");
+
+    -- Aislamiento del panel web por taller: mapea el usuario del hub (Supabase
+    -- auth user id) a su taller. "esAdmin" = ve todos los talleres (selector).
+    -- Se combina con app_usuarios.es_superadmin (que también da acceso total).
+    CREATE TABLE IF NOT EXISTS assist_panel_users (
+      "userId" TEXT PRIMARY KEY,
+      username TEXT,
+      "tallerId" INTEGER,
+      "esAdmin" BOOLEAN NOT NULL DEFAULT false,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assist_panel_users_taller_idx
+      ON assist_panel_users("tallerId");
   `);
 
   // ── Órdenes de Trabajo de Flota (OTF) ──
@@ -619,6 +689,16 @@ export async function initDb() {
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_status TEXT;
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_error TEXT;
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_started_at BIGINT;
+
+    -- Un único número de WhatsApp para todo el ecosistema: la sesión de
+    -- captura puede pertenecer a una asistencia del core (job_id), a una de
+    -- Central Pro (connect_assistance_id) o a un alta que aún no existe
+    -- (ambas a null; se vincula al crear la asistencia).
+    ALTER TABLE whatsapp_capture_sessions ALTER COLUMN job_id DROP NOT NULL;
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS connect_assistance_id INTEGER;
+    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
+    CREATE INDEX IF NOT EXISTS wcs_connect_idx
+      ON whatsapp_capture_sessions(connect_assistance_id);
 
     CREATE TABLE IF NOT EXISTS whatsapp_capture_messages (
       id SERIAL PRIMARY KEY,

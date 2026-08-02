@@ -1,0 +1,117 @@
+# Compila la APK de Mobilink TyreControl y la publica:
+#  - como artifact del run (pestaña Actions)
+#  - como GitHub Release "tyrecontrol-vX.Y.Z+N", para descargarla
+#    directamente desde el navegador de la tablet e instalarla.
+name: Build TyreControl APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tyrecontrol_app/**"
+      - ".github/workflows/build-tyrecontrol-apk.yml"
+
+permissions:
+  contents: write # crear el release con la APK
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # secrets no está disponible en los `if:` de los steps; via env sí.
+      KS_B64: ${{ secrets.MOBILINK_KEYSTORE_BASE64 }}
+      KS_PASS: ${{ secrets.MOBILINK_KEYSTORE_PASSWORD }}
+    defaults:
+      run:
+        working-directory: tyrecontrol_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.35.4"
+          cache: true
+
+      - name: Version de la app
+        id: ver
+        run: echo "version=$(grep '^version:' pubspec.yaml | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      - run: flutter analyze --no-fatal-infos
+
+      # Firma estable si el secret existe: mismas claves en todas las builds,
+      # asi cada APK se instala encima de la anterior sin desinstalar. Si el
+      # secret no esta, se firma con la clave debug del runner (cada build
+      # tendria firma distinta y Android pediria desinstalar entre versiones).
+      # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir
+      # "el secret no existe" de "existe pero está mal pegado", sin exponer la
+      # clave (GitHub además enmascara el valor en los logs).
+      - name: Estado de los secrets de firma
+        run: |
+          echo "MOBILINK_KEYSTORE_BASE64: ${#KS_B64} caracteres (se esperan ~3536)"
+          echo "MOBILINK_KEYSTORE_PASSWORD: ${#KS_PASS} caracteres (se esperan 20)"
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::El secret MOBILINK_KEYSTORE_BASE64 llega vacío." \
+                 "Comprueba que está en Settings → Secrets and variables → Actions," \
+                 "pestaña Secrets (no Variables), como 'Repository secret', y que el" \
+                 "nombre coincide exactamente."
+          fi
+
+      - name: Preparar keystore de firma
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          echo "$KS_B64" | base64 -d > /tmp/mobilink.keystore
+          # Un base64 cortado al pegar produce un fichero corrupto que Gradle
+          # rechaza mucho más tarde con un error críptico.
+          keytool -list -keystore /tmp/mobilink.keystore -storepass "$KS_PASS" >/dev/null
+          echo "Keystore válido y contraseña correcta."
+
+      - name: Build APK
+        run: flutter build apk --release
+        env:
+          MOBILINK_KEYSTORE_PATH: ${{ env.KS_B64 != '' && '/tmp/mobilink.keystore' || '' }}
+          MOBILINK_KEYSTORE_PASSWORD: ${{ env.KS_PASS }}
+          MOBILINK_KEY_ALIAS: mobilink
+
+      # Sin esto, un secret mal pegado produce un build VERDE con un APK que no
+      # se puede instalar encima del anterior — el fallo aparecería en la tablet,
+      # no aquí. Se comprueba el certificado real del APK ya construido.
+      - name: Comprobar que la APK va firmada con la clave de Mobilink
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          CERTS=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$CERTS"
+          if echo "$CERTS" | grep -q "CN=Android Debug"; then
+            echo "::error::La APK está firmada con la clave de DEBUG pese a existir el secret." \
+                 "Revisa MOBILINK_KEYSTORE_BASE64 y MOBILINK_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+      - name: Renombrar APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk
+          "build/app/outputs/flutter-apk/mobilink-tyrecontrol-${{ steps.ver.outputs.version }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobilink-tyrecontrol-${{ steps.ver.outputs.version }}
+          path: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
+
+      # Solo se publica release si la APK va firmada con la clave estable. Una
+      # release que no se puede instalar encima de la anterior es peor que no
+      # tener release: el artifact del run sigue disponible para depurar.
+      - name: Publicar release con la APK
+        if: ${{ env.KS_B64 != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: tyrecontrol-v${{ steps.ver.outputs.version }}
+          name: Mobilink TyreControl ${{ steps.ver.outputs.version }}
+          body: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
+          files: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk

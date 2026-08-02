@@ -6,22 +6,27 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { boFetch } from "../services/api";
+import { abrirInforme } from "../services/informe";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { Card, Badge, Button, ErrorBanner } from "../components/ui";
 import AsignacionTab from "../components/AsignacionTab";
 import ComunicacionesTab from "../components/ComunicacionesTab";
+import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
+import BackOfficeTab from "../components/BackOfficeTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 type Detail = {
   id: number; uuid: string; status: string; priority: string; serviceType: string;
   expedientNumber: string | null; externalReference: string | null; clientName: string | null;
   partnerName: string | null; workshopName: string | null; workshopPhone: string | null;
-  providerName: string | null; assignedTechName: string | null; coreStatus: string | null;
+  providerName: string | null; coreStatus: string | null;
   customerName: string; customerPhone: string; requester: string; locationDetails: string;
   address: string; latitude: number | null; longitude: number | null;
   vehicle: string; description: string | null; origin: string; createdByName: string | null;
   slaMinutes: number | null; slaDeadlineAtMs: number | null; cancelReason: string | null;
   assignmentExplanation: string | null; createdAtMs: number;
+  reportUrl: string | null; reportAtMs: number | null;
+  assignedTechName: string | null; assignedVehicleName: string | null; assignedVehiclePlate: string | null;
   estimatedCost: number | null; finalCost: number | null; costCurrency: string; costDetail: string | null;
 };
 
@@ -39,7 +44,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Asignación", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -78,7 +83,7 @@ export default function FichaAsistencia() {
   const requester = parse(a.requester);
   const vehicle = parse(a.vehicle);
   const loc = parse(a.locationDetails);
-  const slaRisk = a.slaDeadlineAtMs && !["finished", "cancelled"].includes(a.status)
+  const slaRisk = a.slaDeadlineAtMs && !["finished", "returning_to_workshop", "at_workshop", "cancelled"].includes(a.status)
     ? a.slaDeadlineAtMs - Date.now() : null;
 
   return (
@@ -120,23 +125,34 @@ export default function FichaAsistencia() {
                   Reasignar
                 </Button>
               )}
-              {/* Taller externo (sin Mobilink Assist): avance manual de estados */}
-              {!a.coreStatus && ["assigned", "technician_assigned", "en_route", "arrived", "in_progress"].includes(a.status) && (
+              {/* Taller sin integración directa (externo o Lite sin conexión):
+                  avance manual de estados desde Central, siempre auditado */}
+              {!a.coreStatus && ["assigned", "technician_assigned", "en_route", "arrived", "in_progress", "finished", "returning_to_workshop"].includes(a.status) && (
                 ({
                   assigned: ["technician_assigned", "en_route"],
                   technician_assigned: ["en_route", "arrived"],
                   en_route: ["arrived"],
                   arrived: ["in_progress", "finished"],
                   in_progress: ["finished"],
+                  finished: ["returning_to_workshop"],
+                  returning_to_workshop: ["at_workshop"],
                 }[a.status] ?? []).map((next) => (
                   <Button key={next} variant="ghost" disabled={busy}
-                    title="Actualización manual (taller externo)"
+                    title="Actualización manual desde Central (queda auditada)"
                     onClick={() => action("manual-status", { status: next })}>
                     → {ASSISTANCE_STATUS_LABELS[next]}
                   </Button>
                 ))
               )}
-              {!["finished", "cancelled"].includes(a.status) && (
+              {["finished", "returning_to_workshop", "at_workshop"].includes(a.status) && (
+                <Button
+                  variant="ghost" disabled={busy}
+                  onClick={() => abrirInforme(a.id).catch((e: any) => setError(e.message))}
+                >
+                  {a.reportUrl ? "Ver informe" : "Generar informe"}
+                </Button>
+              )}
+              {!["finished", "returning_to_workshop", "at_workshop", "cancelled"].includes(a.status) && (
                 <Button variant="danger" onClick={cancelar} disabled={busy}>Cancelar</Button>
               )}
             </div>
@@ -146,7 +162,10 @@ export default function FichaAsistencia() {
           <span>Cliente: <b className="text-slate-200">{a.clientName ?? a.partnerName ?? "—"}</b></span>
           <span>Proveedor: <b className="text-slate-200">{a.providerName ?? "—"}</b></span>
           <span>Taller: <b className="text-slate-200">{a.workshopName ?? "—"}</b></span>
-          <span>Técnico: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
+          <span>Operario: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
+          <span>Furgoneta: <b className="text-slate-200">
+            {[a.assignedVehicleName, a.assignedVehiclePlate].filter(Boolean).join(" · ") || "—"}
+          </b></span>
           <span>Creada: <b className="text-slate-200">{fmtDateTime(a.createdAtMs)}</b>{a.createdByName ? ` por ${a.createdByName}` : ""}</span>
         </div>
       </Card>
@@ -181,6 +200,12 @@ export default function FichaAsistencia() {
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
         )}
+        {tab === "Back office" && (
+          <BackOfficeTab assistanceId={a.id} canOperate={canOperate} />
+        )}
+        {tab === "Seguimiento" && (
+          <SeguimientoLiteTab assistanceId={a.id} canOperate={canOperate} onChanged={load} />
+        )}
         {tab === "Comunicaciones" && (
           <ComunicacionesTab assistanceId={a.id} canOperate={canOperate} />
         )}
@@ -189,7 +214,7 @@ export default function FichaAsistencia() {
             <Row label="Coste estimado" value={a.estimatedCost != null ? `${a.estimatedCost.toFixed(2)} ${a.costCurrency}` : "Sin tarifa aplicable"} />
             <Row label="Detalle del cálculo" value={a.costDetail} />
             <Row label="Coste final" value={a.finalCost != null ? `${a.finalCost.toFixed(2)} ${a.costCurrency}` : "Pendiente de cierre"} />
-            {canOperate && ["finished", "arrived", "in_progress"].includes(a.status) && (
+            {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
               <div className="mt-3">
                 <Button
                   variant="ghost" disabled={busy}

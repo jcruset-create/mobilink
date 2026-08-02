@@ -5,8 +5,8 @@
  */
 
 import {
-  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2, Warehouse,
-  Truck, AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
+  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
+  AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
   Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
@@ -28,9 +28,9 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "asistencias", path: "asistencias", label: "Asistencias", icon: ClipboardList, minRole: "analyst" },
   { key: "ofertas", path: "ofertas", label: "Ofertas", icon: Handshake, minRole: "provider_user" },
   { key: "mapa", path: "mapa", label: "Mapa operativo", icon: Map, minRole: "operator" },
+  // Empresas → Talleres → Unidades y Operarios: una sola entrada; las vistas
+  // transversales /talleres y /unidades siguen accesibles por URL directa.
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
-  { key: "talleres", path: "talleres", label: "Talleres", icon: Warehouse, minRole: "analyst" },
-  { key: "unidades", path: "unidades", label: "Unidades móviles", icon: Truck, minRole: "operator" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },
   { key: "sla", path: "sla", label: "SLA y alertas", icon: BellRing, minRole: "operator" },
   { key: "clientes", path: "clientes", label: "Clientes", icon: Contact, minRole: "operator" },

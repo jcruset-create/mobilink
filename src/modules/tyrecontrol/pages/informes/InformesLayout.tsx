@@ -18,17 +18,24 @@ export function useInformesFiltros(): Ctx {
   return c;
 }
 
+// `interna: true` marca los informes que un CLIENTE no debe ver: Económico y
+// Rankings enseñan costes de compra; Productividad, los tiempos de los
+// técnicos de Mobilink; Operaciones e Historial neumático usan formato y
+// códigos internos. Ocultar la pestaña no basta: las rutas de estos informes
+// están además bajo RoleRoute administrador en TyreControlApp.tsx — si se
+// añade un informe interno aquí, hay que añadirlo TAMBIÉN allí.
 const TABS = [
+  { to: "/tyrecontrol/informes/ejecutivo", label: "Ejecutivo" },
   { to: "/tyrecontrol/informes/alertas", label: "Alertas" },
   { to: "/tyrecontrol/informes/estado-flota", label: "Estado de flota" },
   { to: "/tyrecontrol/informes/inventario", label: "Neumáticos controlados" },
-  { to: "/tyrecontrol/informes/economico", label: "Económico" },
-  { to: "/tyrecontrol/informes/rankings", label: "Rankings" },
+  { to: "/tyrecontrol/informes/economico", label: "Económico", interna: true },
+  { to: "/tyrecontrol/informes/rankings", label: "Rankings", interna: true },
   { to: "/tyrecontrol/informes/desgaste", label: "Desgaste" },
   { to: "/tyrecontrol/informes/presiones", label: "Presiones" },
-  { to: "/tyrecontrol/informes/productividad", label: "Productividad" },
-  { to: "/tyrecontrol/informes/operaciones-informe", label: "Operaciones" },
-  { to: "/tyrecontrol/informes/historial-neumatico", label: "Historial neumático" },
+  { to: "/tyrecontrol/informes/productividad", label: "Productividad", interna: true },
+  { to: "/tyrecontrol/informes/operaciones-informe", label: "Operaciones", interna: true },
+  { to: "/tyrecontrol/informes/historial-neumatico", label: "Historial neumático", interna: true },
   { to: "/tyrecontrol/informes/historial-vehiculo", label: "Historial vehículo" },
 ];
 
@@ -43,7 +50,7 @@ export default function InformesLayout() {
       </div>
 
       <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-700">
-        {TABS.map((t) => (
+        {TABS.filter((t) => !esCliente || !t.interna).map((t) => (
           <NavLink
             key={t.to}
             to={t.to}

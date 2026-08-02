@@ -2,9 +2,10 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Menu, LogOut, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
-import { NAV, navVisible } from "../config/navigation";
+import { NAV, navVisible, SIEMPRE_VISIBLES } from "../config/navigation";
 import { ROL_LABELS } from "../types";
 import AlertasWebfleet from "../components/AlertasWebfleet";
+import AsistenteChat from "../components/AsistenteChat";
 
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
@@ -20,7 +21,7 @@ export default function TyreLayout() {
   const bloqueada =
     !esSuperadmin &&
     pantallas !== null &&
-    pantallaActual !== "dashboard" &&
+    !SIEMPRE_VISIBLES.includes(pantallaActual) &&
     !pantallas.includes(pantallaActual);
 
   async function handleSignOut() {
@@ -102,6 +103,9 @@ export default function TyreLayout() {
           )}
         </main>
       </div>
+
+      {/* Asistente: acompaña a todo el módulo, sin ocupar sitio en las pantallas. */}
+      <AsistenteChat />
     </div>
   );
 }
