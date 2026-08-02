@@ -52,6 +52,19 @@ interface ResolvedCredentials {
   aadTenantId: string;
 }
 
+/** Artículo de BC con los campos de control del catálogo (API estándar v2.0). */
+export interface BcCatalogItem {
+  id: string;
+  number: string;
+  displayName: string;
+  type?: string;
+  itemCategoryCode?: string;
+  baseUnitOfMeasureCode?: string;
+  unitPrice?: number;
+  blocked?: boolean;
+  lastModifiedDateTime?: string;
+}
+
 /**
  * Caché de tokens de aplicación, compartida por instancias del conector.
  *
@@ -403,6 +416,36 @@ export class BusinessCentralConnector implements IErpConnector {
       externalProductId: id,
       available: Number(items.get(id)?.inventory ?? 0),
     }));
+  }
+
+  // ── Catálogo controlado (SPEC WorkPlanner §4) ───────────────────────────────
+  /**
+   * Lectura de artículos para el catálogo de WorkPlanner, con los campos de control
+   * que getProducts no expone (blocked, categoría, lastModifiedDateTime).
+   *
+   * `modifiedSince` habilita el incremental. Con la API estándar v2.0 no existe el
+   * campo 'Available In WorkPlanner' (llega con la extensión AL, It.4): hasta
+   * entonces el filtro es blocked + categorías permitidas, aplicado por el servicio.
+   */
+  async getCatalogItems(
+    ctx: OperationContext,
+    opts: { modifiedSince?: Date } = {}
+  ): Promise<BcCatalogItem[]> {
+    if (await this.useSimulation(ctx)) {
+      // Conjunto determinista para poder rodar el circuito completo sin BC real.
+      return [
+        { id: "sim-1", number: "SIM-PASTILLAS", displayName: "Pastillas de freno (simulado)", type: "Inventory", itemCategoryCode: "FRENOS", baseUnitOfMeasureCode: "UDS", unitPrice: 82.5, blocked: false, lastModifiedDateTime: "2026-01-01T00:00:00Z" },
+        { id: "sim-2", number: "SIM-MO", displayName: "Mano de obra (simulado)", type: "Service", itemCategoryCode: "SERVICIOS", baseUnitOfMeasureCode: "HORA", unitPrice: 45, blocked: false, lastModifiedDateTime: "2026-01-01T00:00:00Z" },
+        { id: "sim-3", number: "SIM-BLOQUEADO", displayName: "Artículo bloqueado (simulado)", type: "Inventory", itemCategoryCode: "FRENOS", baseUnitOfMeasureCode: "UDS", unitPrice: 10, blocked: true, lastModifiedDateTime: "2026-01-01T00:00:00Z" },
+      ];
+    }
+
+    const select =
+      "$select=id,number,displayName,type,itemCategoryCode,baseUnitOfMeasureCode,unitPrice,blocked,lastModifiedDateTime";
+    const filter = opts.modifiedSince
+      ? `&$filter=lastModifiedDateTime gt ${opts.modifiedSince.toISOString()}`
+      : "";
+    return this.bcList<BcCatalogItem>(ctx, `items?${select}${filter}`);
   }
 
   // ── Escritura: presupuesto de venta (núcleo de la primera entrega) ───────────

@@ -187,6 +187,47 @@ export async function initIntegrationHub(): Promise<void> {
     ALTER TABLE integration_checklist_runs ADD COLUMN IF NOT EXISTS purchase_order_number TEXT;
   `);
 
+  // ── Catálogo controlado de WorkPlanner (SPEC_WORKPLANNER_BC §4) ────────────
+  // Copia local de los artículos/servicios de BC aptos para trabajos de campo.
+  // BC es el maestro: aquí nunca se crea un producto, sólo se refleja.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wp_catalog (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      bc_item_id TEXT,                    -- GUID del item en BC (para PATCH)
+      bc_number TEXT NOT NULL,            -- nº de artículo (clave de negocio)
+      tipo TEXT,                          -- Inventory | Service | ...
+      descripcion TEXT NOT NULL DEFAULT '',
+      um_base TEXT,
+      categoria TEXT,
+      precio_orientativo NUMERIC(12,2),
+      precio_orientativo_ms BIGINT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      motivo_inactivo TEXT,               -- 'bloqueado' | 'fuera_de_filtro' | 'huerfano'
+      bc_last_modified_ms BIGINT,
+      sync_run_id TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (tenant_id, bc_number)
+    );
+    CREATE INDEX IF NOT EXISTS wp_catalog_lookup_idx
+      ON wp_catalog(tenant_id, activo, categoria);
+  `);
+
+  // ── Marcas de agua de sincronización incremental ───────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integration_sync_state (
+      tenant_id TEXT NOT NULL,
+      entity TEXT NOT NULL,               -- 'catalog' | 'sales_orders' ...
+      last_sync_ms BIGINT,
+      last_full_sync_ms BIGINT,
+      status TEXT,                        -- 'ok' | 'error'
+      detail TEXT,
+      updated_at_ms BIGINT NOT NULL,
+      PRIMARY KEY (tenant_id, entity)
+    );
+  `);
+
   // ── Contador diario para CorrelationId (COR-YYYYMMDD-NNNNNN) ───────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS integration_correlation_counters (

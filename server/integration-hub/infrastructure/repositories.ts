@@ -549,3 +549,143 @@ export async function deleteMapping(tenantId: string, id: number): Promise<boole
   );
   return (rowCount ?? 0) > 0;
 }
+
+// ── Catálogo controlado de WorkPlanner (SPEC §4) ────────────────────────────
+
+export interface CatalogItemUpsert {
+  tenantId: string;
+  bcItemId: string;
+  bcNumber: string;
+  tipo?: string;
+  descripcion: string;
+  umBase?: string;
+  categoria?: string;
+  precioOrientativo?: number;
+  activo: boolean;
+  motivoInactivo?: string;
+  bcLastModifiedMs?: number;
+  syncRunId: string;
+}
+
+export async function upsertCatalogItem(item: CatalogItemUpsert) {
+  const ts = now();
+  const { rows } = await pool.query(
+    `INSERT INTO wp_catalog
+       (tenant_id, bc_item_id, bc_number, tipo, descripcion, um_base, categoria,
+        precio_orientativo, precio_orientativo_ms, activo, motivo_inactivo,
+        bc_last_modified_ms, sync_run_id, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
+     ON CONFLICT (tenant_id, bc_number)
+     DO UPDATE SET bc_item_id = EXCLUDED.bc_item_id,
+                   tipo = EXCLUDED.tipo,
+                   descripcion = EXCLUDED.descripcion,
+                   um_base = EXCLUDED.um_base,
+                   categoria = EXCLUDED.categoria,
+                   precio_orientativo = EXCLUDED.precio_orientativo,
+                   precio_orientativo_ms = EXCLUDED.precio_orientativo_ms,
+                   activo = EXCLUDED.activo,
+                   motivo_inactivo = EXCLUDED.motivo_inactivo,
+                   bc_last_modified_ms = EXCLUDED.bc_last_modified_ms,
+                   sync_run_id = EXCLUDED.sync_run_id,
+                   updated_at_ms = $14
+     RETURNING *`,
+    [
+      item.tenantId,
+      item.bcItemId,
+      item.bcNumber,
+      item.tipo ?? null,
+      item.descripcion,
+      item.umBase ?? null,
+      item.categoria ?? null,
+      item.precioOrientativo ?? null,
+      item.precioOrientativo != null ? ts : null,
+      item.activo,
+      item.motivoInactivo ?? null,
+      item.bcLastModifiedMs ?? null,
+      item.syncRunId,
+      ts,
+    ]
+  );
+  return rows[0];
+}
+
+export async function listCatalog(filters: {
+  tenantId: string;
+  soloActivos?: boolean;
+  categoria?: string;
+  search?: string;
+  limit?: number;
+}) {
+  const where: string[] = ["tenant_id = $1"];
+  const values: unknown[] = [filters.tenantId];
+  if (filters.soloActivos) where.push("activo = true");
+  if (filters.categoria) {
+    values.push(filters.categoria);
+    where.push(`categoria = $${values.length}`);
+  }
+  if (filters.search) {
+    values.push(`%${filters.search}%`);
+    where.push(`(bc_number ILIKE $${values.length} OR descripcion ILIKE $${values.length})`);
+  }
+  values.push(Math.min(filters.limit ?? 200, 1000));
+  const { rows } = await pool.query(
+    `SELECT * FROM wp_catalog WHERE ${where.join(" AND ")} ORDER BY bc_number LIMIT $${values.length}`,
+    values
+  );
+  return rows;
+}
+
+/**
+ * Desactiva los artículos que NO aparecen en la pasada full indicada.
+ * Es la conciliación de huérfanos (§4.3): un artículo borrado en BC no llega
+ * nunca por el incremental, así que sólo una pasada completa lo detecta.
+ */
+export async function deactivateCatalogOrphans(tenantId: string, fullSyncRunId: string): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE wp_catalog
+        SET activo = false, motivo_inactivo = 'huerfano', updated_at_ms = $3
+      WHERE tenant_id = $1 AND activo = true AND sync_run_id <> $2`,
+    [tenantId, fullSyncRunId, now()]
+  );
+  return rowCount ?? 0;
+}
+
+export async function getSyncState(tenantId: string, entity: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_sync_state WHERE tenant_id = $1 AND entity = $2`,
+    [tenantId, entity]
+  );
+  return rows[0] ?? null;
+}
+
+export async function upsertSyncState(params: {
+  tenantId: string;
+  entity: string;
+  lastSyncMs?: number;
+  lastFullSyncMs?: number;
+  status: string;
+  detail?: string;
+}) {
+  const ts = now();
+  await pool.query(
+    `INSERT INTO integration_sync_state (tenant_id, entity, last_sync_ms, last_full_sync_ms, status, detail, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (tenant_id, entity)
+     DO UPDATE SET last_sync_ms = COALESCE(EXCLUDED.last_sync_ms, integration_sync_state.last_sync_ms),
+                   last_full_sync_ms = COALESCE(EXCLUDED.last_full_sync_ms, integration_sync_state.last_full_sync_ms),
+                   status = EXCLUDED.status,
+                   detail = EXCLUDED.detail,
+                   updated_at_ms = $7`,
+    [params.tenantId, params.entity, params.lastSyncMs ?? null, params.lastFullSyncMs ?? null, params.status, params.detail ?? null, ts]
+  );
+}
+
+/** Tenants con el conector BC habilitado — los que entran en la sync programada. */
+export async function tenantsWithEnabledConnector(connectorKey: string): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT tenant_id FROM integration_connector_configs
+      WHERE connector_key = $1 AND enabled = true`,
+    [connectorKey]
+  );
+  return rows.map((r) => r.tenant_id);
+}
