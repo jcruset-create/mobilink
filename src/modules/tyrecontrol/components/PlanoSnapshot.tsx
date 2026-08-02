@@ -22,7 +22,12 @@ export default function PlanoSnapshot({ titulo, snap, imagen, cambiadas, conAver
         <>
           <div className="truncate text-slate-100">{s.marca}</div>
           <div className="truncate text-slate-400">{s.medida ?? ""}</div>
-          <div className="truncate text-slate-400">{s.mm != null ? `${s.mm} mm` : "— mm"}{s.presion != null ? ` · ${s.presion} bar` : ""}</div>
+          <div className="truncate text-slate-400">{s.mm != null ? `${s.mm} mm` : "— mm"}{s.presion != null ? ` · ${s.presion} bar` : " · — bar"}</div>
+          {(s.recau || s.reesc || s.girado) && (
+            <div className="truncate font-semibold text-sky-300">
+              {[s.recau ? "RECAUCH." : null, s.reesc ? "REESC." : null, s.girado ? "GIRADO" : null].filter(Boolean).join(" · ")}
+            </div>
+          )}
         </>
       ) : <div className="text-slate-500">Libre</div>}
       {conAveria && s.averias && s.averias.length ? <div className="mt-0.5 truncate font-semibold text-red-400">⚠ {s.averias.join(" · ")}</div> : null}
@@ -48,7 +53,7 @@ export default function PlanoSnapshot({ titulo, snap, imagen, cambiadas, conAver
           {(() => {
             const lado = (c?: string | null) => /IZQ|_I$|IZQUIER/i.test(c ?? "") ? "izq" : "der";
             const ejes = Array.from(new Set(items.map((s) => s.eje ?? 99))).sort((a, b) => a - b);
-            if (!ejes.length) return <div className="text-[12px] text-slate-500">Sin datos.</div>;
+            if (!ejes.length) return <div className="text-[12px] text-slate-500">No se guardó el estado previo (intervención anterior a esta función).</div>;
             return ejes.map((e) => {
               const izq = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "izq");
               const der = items.find((s) => (s.eje ?? 99) === e && lado(s.codigo) === "der");

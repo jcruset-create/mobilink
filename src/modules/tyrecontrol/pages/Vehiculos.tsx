@@ -4,11 +4,13 @@ import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
   listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
+  listarMarcasVehiculo, aplicarFichaTecnica,
 } from "../services/data";
 import ModalNuevaMedida from "../components/ModalNuevaMedida";
+import CrearVehiculoDesdeFicha, { type PendienteFicha } from "../components/CrearVehiculoDesdeFicha";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
-  ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje,
+  ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje, MarcaVehiculo,
   EstadoWebfleet, VehiculoWebfleetEstado, RevisionEstado,
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
@@ -52,6 +54,10 @@ export default function Vehiculos() {
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [delegaciones, setDelegaciones] = useState<Delegacion[]>([]);
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
+  // Catálogo de marcas de vehículo: el desplegable de MARCA se filtra por el
+  // tipo elegido (tractora → MAN/Scania…, semirremolque → Krone/Schmitz…).
+  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
+  const [marcaLibre, setMarcaLibre] = useState(false);
   const [configEjes, setConfigEjes] = useState<ConfigEjes[]>([]);
   const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
@@ -65,8 +71,37 @@ export default function Vehiculos() {
   const [fTipo, setFTipo] = useState("");
   const [fEstado, setFEstado] = useState<"todos" | "activos" | "inactivos">("todos");
 
+  // Filtro fijado: para trabajar un rato con un solo cliente sin que se pierda
+  // el filtro al ir y volver de una ficha. Se guarda en el navegador, así que
+  // aguanta también un F5.
+  const CLAVE_FIJADO = "tc.vehiculos.filtroFijado";
+  const [fijado, setFijado] = useState(false);
+  useEffect(() => {
+    try {
+      const g = localStorage.getItem(CLAVE_FIJADO);
+      if (!g) return;
+      const f = JSON.parse(g) as { empresa?: string; dele?: string; tipo?: string; estado?: string };
+      setFEmpresa(f.empresa ?? ""); setFDele(f.dele ?? ""); setFTipo(f.tipo ?? "");
+      setFEstado((f.estado as any) ?? "todos");
+      setFijado(true);
+    } catch { /* si el guardado está corrupto, se empieza sin filtro */ }
+  }, []);
+  // Mientras está fijado, cualquier cambio de filtro se guarda: el candado
+  // conserva el cliente, no impide cambiarlo.
+  useEffect(() => {
+    if (!fijado) return;
+    localStorage.setItem(CLAVE_FIJADO, JSON.stringify({ empresa: fEmpresa, dele: fDele, tipo: fTipo, estado: fEstado }));
+  }, [fijado, fEmpresa, fDele, fTipo, fEstado]);
+
+  function alternarFijado() {
+    if (fijado) { localStorage.removeItem(CLAVE_FIJADO); setFijado(false); return; }
+    setFijado(true);
+  }
+
   const [modal, setModal] = useState<null | ModalState>(null);
   const [saving, setSaving] = useState(false);
+  const [crearDesdeFicha, setCrearDesdeFicha] = useState(false);
+  const [pendienteFicha, setPendienteFicha] = useState<PendienteFicha | null>(null);
 
   // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
@@ -104,6 +139,7 @@ export default function Vehiculos() {
     await refrescarWebfleet();
   }
   useEffect(() => { void cargar(); }, []);
+  useEffect(() => { listarMarcasVehiculo().then(setMarcasVeh).catch(() => setMarcasVeh([])); }, []);
 
   async function sincronizar() {
     setSincronizando(true); setMsg("");
@@ -134,7 +170,7 @@ export default function Vehiculos() {
     return { en_base, pend_base, venc_base, en_ruta, sin_conexion };
   }, [items, estados, revEstados]);
 
-  const visibles = useMemo(() => {
+  const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase();
     return items.filter((v) => {
       if (fEmpresa && v.empresa_id !== fEmpresa) return false;
@@ -151,6 +187,48 @@ export default function Vehiculos() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, revEstados]);
+
+  // ── Orden por columna ──────────────────────────────────────────────
+  // Se pulsa la cabecera: primera vez ascendente, segunda descendente.
+  type Columna = "empresa" | "matricula" | "unidad" | "delegacion" | "marca" | "config" | "medida" | "km" | "estado";
+  const [orden, setOrden] = useState<{ col: Columna; asc: boolean }>({ col: "matricula", asc: true });
+
+  function ordenarPor(col: Columna) {
+    setOrden((o) => (o.col === col ? { col, asc: !o.asc } : { col, asc: true }));
+  }
+
+  const visibles = useMemo(() => {
+    const medidaDe = (v: Vehiculo) =>
+      v.medidas_por_eje ? "por eje" : (medidas.find((m) => m.id === v.medida_id)?.valor ?? "");
+    // El nº de unidad es un número escrito como texto ("1096"): ordenarlo
+    // como texto pondría el 1000 antes que el 674.
+    const comoNumero = (s: string) => {
+      const n = Number(String(s).replace(/[^\d.-]/g, ""));
+      return Number.isFinite(n) && String(s).trim() !== "" ? n : null;
+    };
+    const valor = (v: Vehiculo): string | number => {
+      switch (orden.col) {
+        case "empresa": return v.empresa?.nombre ?? "";
+        case "matricula": return v.matricula ?? "";
+        case "unidad": return comoNumero(v.numero_unidad ?? "") ?? (v.numero_unidad ?? "");
+        case "delegacion": return v.delegacion?.nombre ?? "";
+        case "marca": return v.marca ?? "";
+        case "config": return v.config_ejes?.nombre ?? "";
+        case "medida": return medidaDe(v);
+        case "km": return Number(v.km_actual) || 0;
+        case "estado": return v.activo ? "Activo" : "Inactivo";
+      }
+    };
+    const signo = orden.asc ? 1 : -1;
+    return [...filtrados].sort((a, b) => {
+      const va = valor(a), vb = valor(b);
+      // Lo que no tiene dato siempre al final, se ordene como se ordene.
+      const vacioA = va === "" || va == null, vacioB = vb === "" || vb == null;
+      if (vacioA !== vacioB) return vacioA ? 1 : -1;
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * signo;
+      return String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" }) * signo;
+    });
+  }, [filtrados, orden, medidas]);
 
   const delegacionesForm = useMemo(
     () => delegaciones.filter((d) => !modal?.draft.empresa_id || d.empresa_id === modal.draft.empresa_id),
@@ -207,12 +285,26 @@ export default function Vehiculos() {
     setSaving(true);
     try {
       let vehiculoId = modal.id;
+      const esNuevo = !vehiculoId;
       if (vehiculoId) await actualizarVehiculo(vehiculoId, d);
       else vehiculoId = await crearVehiculo(d);
       if (d.medidas_por_eje && vehiculoId) {
         await guardarEjesVehiculo(vehiculoId, modal.ejes);
       }
-      setModal(null); setMsg("✔ Guardado"); await cargar();
+      let avisoFicha = "";
+      if (esNuevo && vehiculoId && pendienteFicha) {
+        try {
+          await aplicarFichaTecnica(pendienteFicha.docId, {
+            ejes: pendienteFicha.ejes,
+            configuracion: pendienteFicha.configuracion,
+            atributos: pendienteFicha.atributos,
+            vehiculoId,
+          });
+        } catch (e: any) {
+          avisoFicha = ` (el vehículo se creó, pero no se pudieron guardar todos los datos de la ficha: ${e?.message || "error"})`;
+        }
+      }
+      setModal(null); setPendienteFicha(null); setMsg(`✔ Guardado${avisoFicha}`); await cargar();
     } catch (e: any) {
       setMsg(/duplicate|unique/i.test(e?.message || "") ? "Ya existe un vehículo con esa matrícula en la empresa." : (e?.message || "Error"));
     } finally { setSaving(false); }
@@ -241,7 +333,7 @@ export default function Vehiculos() {
           <button onClick={sincronizar} disabled={sincronizando} className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
             {sincronizando ? "Sincronizando…" : "↻ Sincronizar Webfleet"}
           </button>
-          <button onClick={() => setModal({ id: null, draft: { ...VACIO }, ejes: [] })} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
+          <button onClick={() => { setPendienteFicha(null); setModal({ id: null, draft: { ...VACIO }, ejes: [] }); }} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
         </div>
       </div>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
@@ -266,6 +358,15 @@ export default function Vehiculos() {
       {/* Filtros */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input className={`${inputCls} max-w-[200px]`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button
+          onClick={alternarFijado}
+          title={fijado
+            ? "El filtro se mantiene al cambiar de pantalla y al recargar. Pulsa para soltarlo."
+            : "Fija el filtro actual para trabajar solo con este cliente sin que se pierda al ir y volver."}
+          className={`rounded-lg border px-2 py-1.5 text-[12px] font-bold ${
+            fijado ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-slate-600 text-slate-300 hover:bg-slate-700"}`}>
+          {fijado ? "🔒 Fijado" : "🔓 Fijar"}
+        </button>
         <select className={`${inputCls} w-auto`} value={fEmpresa} onChange={(e) => { setFEmpresa(e.target.value); setFDele(""); }}>
           <option value="">Todas las empresas</option>
           {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
@@ -282,13 +383,30 @@ export default function Vehiculos() {
           <option value="todos">Todos</option><option value="activos">Activos</option><option value="inactivos">Inactivos</option>
         </select>
         <span className="text-xs text-slate-500">{visibles.length} vehículo(s)</span>
+        {fijado && (
+          <span className="text-[11px] text-amber-300">
+            Filtro fijado{fEmpresa ? `: ${empresas.find((e) => e.id === fEmpresa)?.nombre ?? ""}` : ""} · se mantiene al salir y volver
+          </span>
+        )}
       </div>
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Empresa</th><th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Delegación</th>
-          <th className={thCls}>Marca</th><th className={thCls}>Config.</th><th className={thCls}>Medida</th>
-          <th className={thCls}>Km</th><th className={thCls}>Webfleet</th><th className={thCls}>Estado</th><th className={thCls}>Acciones</th>
+          {([
+            ["empresa", "Empresa"], ["matricula", "Matrícula"], ["unidad", "Nº unidad"], ["delegacion", "Delegación"],
+            ["marca", "Marca"], ["config", "Config."], ["medida", "Medida"], ["km", "Km"],
+          ] as [Columna, string][]).map(([col, label]) => (
+            <th key={col} className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
+              onClick={() => ordenarPor(col)} title={`Ordenar por ${label.toLowerCase()}`}>
+              {label}{orden.col === col && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
+            </th>
+          ))}
+          <th className={thCls}>Webfleet</th>
+          <th className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
+            onClick={() => ordenarPor("estado")} title="Ordenar por estado">
+            Estado{orden.col === "estado" && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
+          </th>
+          <th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
@@ -346,11 +464,22 @@ export default function Vehiculos() {
       </TableWrap>
 
       {modal && (
-        <Modal title={modal.id ? "Editar vehículo" : "Nuevo vehículo"} onClose={() => setModal(null)}
+        <Modal title={modal.id ? "Editar vehículo" : "Nuevo vehículo"} onClose={() => { setModal(null); setPendienteFicha(null); }}
           footer={<div className="flex justify-end gap-2">
-            <button onClick={() => setModal(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={() => { setModal(null); setPendienteFicha(null); }} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
             <button onClick={guardar} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Guardando…" : "Guardar"}</button>
           </div>}>
+          {!modal.id && (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-sky-700/50 bg-sky-950/30 p-2">
+              <button type="button" onClick={() => setCrearDesdeFicha(true)} disabled={!modal.draft.empresa_id}
+                className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
+                📎 Crear desde ficha técnica (PDF/foto)
+              </button>
+              <span className="text-[11px] text-slate-400">
+                {modal.draft.empresa_id ? (pendienteFicha ? "Datos de la ficha listos para guardar." : "Rellena el resto a mano o adjunta la ficha.") : "Elige antes la empresa."}
+              </span>
+            </div>
+          )}
           <div className="grid gap-2 sm:grid-cols-2">
             <Field label="Empresa *">
               <select className={inputCls} value={modal.draft.empresa_id} onChange={(e) => set({ empresa_id: e.target.value, delegacion_id: null })}>
@@ -367,12 +496,51 @@ export default function Vehiculos() {
             <TextField label="Matrícula *" value={modal.draft.matricula ?? ""} onChange={(v) => set({ matricula: v })} />
             <TextField label="Nº de unidad (flota)" value={modal.draft.numero_unidad ?? ""} onChange={(v) => set({ numero_unidad: v })} />
             <Field label="Tipo de vehículo">
-              <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => set({ tipo_vehiculo_id: e.target.value || null })}>
+              <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => { setMarcaLibre(false); set({ tipo_vehiculo_id: e.target.value || null }); }}>
                 <option value="">—</option>
                 {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
               </select>
             </Field>
-            <TextField label="Marca" value={modal.draft.marca ?? ""} onChange={(v) => set({ marca: v })} />
+            <Field label="Marca">
+              {(() => {
+                const tipoId = modal.draft.tipo_vehiculo_id ?? "";
+                const delTipo = tipoId ? marcasVeh.filter((m) => m.tipo_ids.includes(tipoId)) : [];
+                const actual = modal.draft.marca ?? "";
+                // Sin tipo elegido, o si la marca guardada no está en el
+                // catálogo, se escribe a mano para no bloquear el alta.
+                const enCatalogo = delTipo.some((m) => m.nombre === actual);
+                if (marcaLibre || !tipoId || (actual && !enCatalogo && delTipo.length === 0)) {
+                  return (
+                    <div className="flex gap-2">
+                      <input className={inputCls} value={actual} onChange={(e) => set({ marca: e.target.value })}
+                        placeholder={tipoId ? "Marca…" : "Elige antes el tipo de vehículo"} />
+                      {tipoId && (
+                        <button type="button" onClick={() => setMarcaLibre(false)}
+                          className="rounded border border-slate-600 px-2 text-[11px] text-slate-300">lista</button>
+                      )}
+                    </div>
+                  );
+                }
+                return (
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const logo = delTipo.find((m) => m.nombre === actual)?.logo_url;
+                      return logo ? <img src={logo} alt={actual} className="h-7 w-10 rounded border border-slate-700 bg-slate-950 object-contain" /> : null;
+                    })()}
+                    <select className={inputCls} value={enCatalogo ? actual : ""}
+                      onChange={(e) => {
+                        if (e.target.value === "__otra__") { setMarcaLibre(true); set({ marca: "" }); return; }
+                        set({ marca: e.target.value });
+                      }}>
+                      <option value="">—</option>
+                      {actual && !enCatalogo && <option value={actual}>{actual} (fuera de catálogo)</option>}
+                      {delTipo.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
+                      <option value="__otra__">Otra…</option>
+                    </select>
+                  </div>
+                );
+              })()}
+            </Field>
             <TextField label="Modelo" value={modal.draft.modelo ?? ""} onChange={(v) => set({ modelo: v })} />
             <TextField label="Bastidor" value={modal.draft.bastidor ?? ""} onChange={(v) => set({ bastidor: v })} />
 
@@ -467,6 +635,21 @@ export default function Vehiculos() {
 
       {modalMedida && (
         <ModalNuevaMedida onClose={() => setModalMedida(null)} onCreated={medidaCreada} />
+      )}
+
+      {crearDesdeFicha && modal && (
+        <CrearVehiculoDesdeFicha
+          empresaId={modal.draft.empresa_id}
+          tipos={tipos}
+          configEjes={configEjes}
+          matriculasExistentes={new Set(items.map((v) => v.matricula.toUpperCase()))}
+          onClose={() => setCrearDesdeFicha(false)}
+          onListo={(draft, pendiente) => {
+            setModal({ ...modal, draft: { ...modal.draft, ...draft } });
+            setPendienteFicha(pendiente);
+            setCrearDesdeFicha(false);
+          }}
+        />
       )}
 
       {/* Popup de detalle del estado Webfleet */}

@@ -26,7 +26,9 @@ import {
   Map,
   List,
   Menu,
+  Wifi,
   Truck,
+  Store,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
@@ -435,7 +437,7 @@ export default function RoadsideAssistanceView({
   });
 
   // ── Historial ───────────────────────────────────────────────────────────────
-  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null };
+  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null; origen: "central" | "taller" };
   const [historialItems, setHistorialItems] = useState<HistorialItem[]>([]);
   const [historialTotal, setHistorialTotal] = useState(0);
   const [historialPage, setHistorialPage] = useState(1);
@@ -932,6 +934,18 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <Map className="h-4 w-4 shrink-0" /> Mapa flota
+          </a>
+          <a
+            href="/asistencias/central"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Wifi className="h-4 w-4 shrink-0" /> Central
+          </a>
+          <a
+            href="/asistencias/talleres"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Store className="h-4 w-4 shrink-0" /> Talleres
           </a>
           <button
             type="button"
@@ -1498,6 +1512,15 @@ export default function RoadsideAssistanceView({
                               Urgente
                             </span>
                           )}
+                          {assistance.origen === "central" ? (
+                            <span className="shrink-0 rounded-md border border-indigo-400/50 bg-indigo-500/20 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-indigo-200">
+                              ● Vía Central{assistance.expedienteCentral ? ` · Exp. ${assistance.expedienteCentral}` : ""}
+                            </span>
+                          ) : (
+                            <span className="shrink-0 rounded-md border border-teal-400/40 bg-teal-500/15 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-teal-200">
+                              ● Taller directo
+                            </span>
+                          )}
                         </div>
                         <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
@@ -1889,6 +1912,7 @@ export default function RoadsideAssistanceView({
                           <th className="px-3 py-2 text-left">Matrícula</th>
                           <th className="px-3 py-2 text-left">Cliente</th>
                           <th className="px-3 py-2 text-left">Operario</th>
+                          <th className="px-3 py-2 text-left">Origen</th>
                           <th className="px-3 py-2 text-left">Estado</th>
                           <th className="px-3 py-2 text-left"></th>
                         </tr>
@@ -1903,6 +1927,17 @@ export default function RoadsideAssistanceView({
                             <td className="px-3 py-2 font-bold text-slate-100">{item.plate || "—"}</td>
                             <td className="px-3 py-2 text-slate-300 max-w-[140px] truncate">{item.customerName || "—"}</td>
                             <td className="px-3 py-2 text-slate-400">{item.assignedTechName || "—"}</td>
+                            <td className="px-3 py-2">
+                              {item.origen === "central" ? (
+                                <span className="rounded-md border border-indigo-400/50 bg-indigo-500/20 px-2 py-0.5 text-[10px] font-bold uppercase text-indigo-200">
+                                  Central
+                                </span>
+                              ) : (
+                                <span className="rounded-md border border-teal-400/40 bg-teal-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-teal-200">
+                                  Taller
+                                </span>
+                              )}
+                            </td>
                             <td className="px-3 py-2">
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${STATUS_BADGES[item.status]}`}>
                                 {ROADSIDE_ASSISTANCE_STATUS_LABELS[item.status]}

@@ -8,10 +8,12 @@
 -- lo devuelve como usado. Requiere: tyrecontrol_stock_usado.sql.
 -- ============================================================
 
--- Permitir el origen 'catalogo_sin_stock'.
+-- Permitir el origen 'catalogo_sin_stock' (nuevo) y 'catalogo_usado' (usado).
+-- Se distingue el usado para que el plano NO lo pinte como neumático nuevo
+-- (verde brillante) y lo evalúe por su profundidad real como cualquier usado.
 alter table tc_neumaticos drop constraint if exists chk_tc_neu_origen;
 alter table tc_neumaticos add constraint chk_tc_neu_origen check (
-  origen is null or origen in ('almacen_generico','almacen_usado','catalogo_sin_stock','alta_individual','carga_inicial','montaje_directo_cliente','importacion_excel','manual')
+  origen is null or origen in ('almacen_generico','almacen_usado','catalogo_sin_stock','catalogo_usado','alta_individual','carga_inicial','montaje_directo_cliente','importacion_excel','manual')
 );
 
 create or replace function tc_montar_desde_catalogo(
@@ -94,7 +96,8 @@ begin
     estado, vehiculo_id, posicion_id, activo
   ) values (
     v_empresa, v_numero, v_numero, null,
-    p_control_individual, not p_control_individual, 'catalogo_sin_stock',
+    p_control_individual, not p_control_individual,
+    case when p_condicion = 'usado' then 'catalogo_usado' else 'catalogo_sin_stock' end,
     v_ref.marca_nombre, v_ref.modelo_nombre, v_ref.medida, v_ic, v_ref.codigo_velocidad,
     case when p_control_individual then p_datos->>'dot' else null end,
     case when p_control_individual then p_datos->>'numero_serie' else null end,

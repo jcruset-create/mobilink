@@ -8,9 +8,12 @@ import { ConnectAuthProvider, ConnectAccessGate, useConnectAuth } from "./contex
 import ConnectLayout from "./layouts/ConnectLayout";
 import Dashboard from "./pages/Dashboard";
 import Asistencias from "./pages/Asistencias";
+import ColasOperativas from "./pages/ColasOperativas";
 import NuevaAsistencia from "./pages/NuevaAsistencia";
 import FichaAsistencia from "./pages/FichaAsistencia";
 import Empresas from "./pages/Empresas";
+import FichaEmpresa from "./pages/FichaEmpresa";
+import FichaTaller from "./pages/FichaTaller";
 import Talleres from "./pages/Talleres";
 import Integraciones from "./pages/Integraciones";
 import Usuarios from "./pages/Usuarios";
@@ -47,6 +50,10 @@ export default function ConnectProApp() {
             <Route index element={<Home />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="asistencias" element={<Asistencias />} />
+            <Route path="colas" element={<ColasOperativas />} />
+            <Route path="colas/:cola" element={<ColasOperativas />} />
+            {/* La antigua vista de activas es ahora una pestaña más */}
+            <Route path="activas" element={<Navigate to="/connect/colas/activas" replace />} />
             <Route path="asistencias/:id" element={<FichaAsistencia />} />
             <Route path="nueva" element={<NuevaAsistencia />} />
             <Route path="ofertas" element={<Ofertas />} />
@@ -61,6 +68,9 @@ export default function ConnectProApp() {
             <Route path="informes" element={<Informes />} />
             <Route path="inteligencia" element={<Inteligencia />} />
             <Route path="empresas" element={<Empresas />} />
+            <Route path="empresas/:id" element={<FichaEmpresa />} />
+            <Route path="empresas/:id/talleres/:wid" element={<FichaTaller />} />
+            {/* Vistas transversales: fuera del menú, pero las URLs siguen vivas */}
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />
             <Route path="usuarios" element={<Usuarios />} />

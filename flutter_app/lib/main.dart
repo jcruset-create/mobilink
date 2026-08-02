@@ -12,7 +12,7 @@ final exteriorMode = ValueNotifier<bool>(false);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // La app se usa siempre en vertical: bloqueamos la orientación
+  // La app funciona siempre en vertical (nunca horizontal)
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,

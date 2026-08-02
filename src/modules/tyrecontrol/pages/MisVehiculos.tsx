@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { listarVehiculos } from "../services/data";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import type { Vehiculo } from "../types";
@@ -6,6 +7,7 @@ import { Badge, TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 
 export default function MisVehiculos() {
   const { perfil } = useTyreAuth();
+  const navigate = useNavigate();
   const [items, setItems] = useState<Vehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -22,7 +24,8 @@ export default function MisVehiculos() {
 
   return (
     <div>
-      <h1 className="mb-3 text-lg font-black">Mis vehículos</h1>
+      <h1 className="mb-1 text-lg font-black">Mis vehículos</h1>
+      <p className="mb-3 text-sm text-slate-400">Pulsa una fila para ver la ficha del vehículo: plano, profundidades y presiones.</p>
       <input className={`${inputCls} mb-3 max-w-xs`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
       <TableWrap>
         <thead className="bg-slate-900"><tr>
@@ -33,7 +36,11 @@ export default function MisVehiculos() {
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Cargando…</td></tr>
           : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Sin vehículos.</td></tr>
           : visibles.map((v) => (
-            <tr key={v.id} className="border-t border-slate-700/60">
+            <tr
+              key={v.id}
+              onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)}
+              className="cursor-pointer border-t border-slate-700/60 hover:bg-slate-800/60"
+            >
               <td className={tdCls + " font-bold"}>{v.matricula}</td>
               <td className={tdCls + " text-slate-400"}>{v.numero_unidad ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.delegacion?.nombre ?? "—"}</td>

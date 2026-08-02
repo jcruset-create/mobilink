@@ -212,6 +212,7 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "empresa", label: "Empresa" },
   { key: "contactoNombre", label: "Contacto / Conductor", applyKey: "conductorNombre" },
   { key: "contactoTelefono", label: "Contacto teléfono", applyKey: "customerPhone" },
+  { key: "conductorTelefono", label: "Teléfono del conductor", applyKey: "customerPhone" },
   { key: "plate", label: "Matrícula camión", applyKey: "plate" },
   { key: "plateRemolque", label: "Matrícula remolque", applyKey: "plateRemolque" },
   { key: "vehicleBrand", label: "Marca vehículo" },
@@ -237,6 +238,8 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [applyingField, setApplyingField] = useState<string | null>(null);
+  const [applyingExtra, setApplyingExtra] = useState<number | null>(null);
+  const [appliedExtras, setAppliedExtras] = useState<Set<number>>(new Set());
   const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set());
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -380,6 +383,31 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
       onAssistanceUpdated?.();
     } finally {
       setApplyingField(null);
+    }
+  }
+
+  /**
+   * Datos sueltos leídos (casi siempre en una foto) que no tienen campo
+   * propio: se añaden a las observaciones sin borrar lo que ya hubiera.
+   */
+  async function addDetectedToNotes(index: number, campo: string, valor: string) {
+    if (!session) return;
+    setApplyingExtra(index);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/whatsapp-capture/sessions/${session.id}/apply`, {
+        method: "POST",
+        headers: getAdminHeaders(),
+        body: JSON.stringify({ field: "notesAppend", value: `${campo}: ${valor}` }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        setError(d.error ?? "Error añadiendo el dato");
+        return;
+      }
+      setAppliedExtras((prev) => new Set([...prev, index]));
+      onAssistanceUpdated?.();
+    } finally {
+      setApplyingExtra(null);
     }
   }
 
@@ -687,6 +715,37 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
             {suggestions.resumen && (
               <div className="mb-3 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-sm text-blue-800">
                 {suggestions.resumen}
+              </div>
+            )}
+
+            {/* Datos leídos en fotos o documentos que no tienen campo propio */}
+            {Array.isArray(suggestions.datosDetectados) && suggestions.datosDetectados.length > 0 && (
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <div className="mb-1.5 text-xs font-bold text-amber-800">
+                  Otros datos leídos en las fotos ({suggestions.datosDetectados.length})
+                </div>
+                <div className="space-y-1.5">
+                  {suggestions.datosDetectados.map((d, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm">
+                      <span className="min-w-0 flex-1 text-slate-700">
+                        <b className="text-slate-900">{d.campo}:</b> {d.valor}
+                        {d.origen && <span className="ml-1 text-xs text-slate-400">({d.origen})</span>}
+                      </span>
+                      {appliedExtras.has(i) ? (
+                        <span className="shrink-0 text-xs font-bold text-emerald-600">✓ Añadido</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => addDetectedToNotes(i, d.campo, d.valor)}
+                          disabled={applyingExtra === i}
+                          className="shrink-0 rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-black text-white hover:bg-amber-700 disabled:opacity-50"
+                        >
+                          {applyingExtra === i ? "…" : "Añadir a observaciones"}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

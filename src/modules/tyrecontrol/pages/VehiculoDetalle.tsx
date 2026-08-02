@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo } from "../services/data";
 import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -8,6 +8,8 @@ import { resumenOperaciones } from "../services/resumenOperaciones";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
+import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
+import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -39,11 +41,27 @@ export default function VehiculoDetalle() {
   const [modalOps, setModalOps] = useState(false);
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
+  const [recargarItv, setRecargarItv] = useState(0); // fuerza recarga del bloque ITV al aplicar una ficha
+  // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
+  // MAN no se dibuja como uno de Volvo). Si no hay, manda la de la config.
+  const [imagenMarca, setImagenMarca] = useState<string | null>(null);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
     setV(veh);
-    if (veh?.tipo_vehiculo_id) setPosiciones(await listarPosiciones(veh.tipo_vehiculo_id));
+    if (veh?.tipo_vehiculo_id) {
+      let pos = await listarPosiciones(veh.tipo_vehiculo_id);
+      // Si el tipo aún no tiene posiciones, se calculan solas a partir de su
+      // configuración de ejes ("2x4x2" = 8 ruedas) en vez de dejar el plano
+      // vacío hasta que alguien las cree a mano.
+      if (pos.length === 0) {
+        try {
+          await generarPosicionesDeTipo(veh.tipo_vehiculo_id);
+          pos = await listarPosiciones(veh.tipo_vehiculo_id);
+        } catch { /* configuración inválida: se avisa en el bloque de posiciones */ }
+      }
+      setPosiciones(pos);
+    }
     setMontajes(await listarMontajesVehiculo(id));
 
     // Catálogos para traducir medida_id / tipo_llanta_id a etiquetas legibles.
@@ -55,6 +73,9 @@ export default function VehiculoDetalle() {
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
+    setImagenMarca(
+      await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
+    );
   }
 
   async function abrirIntervencion(interv: Intervencion) {
@@ -93,32 +114,39 @@ export default function VehiculoDetalle() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
-        <button onClick={() => navigate("/tyrecontrol/vehiculos")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Vehículos</button>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => navigate(esCliente ? "/tyrecontrol/mis-vehiculos" : "/tyrecontrol/vehiculos")}
+          className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200"
+        >
+          ← {esCliente ? "Mis vehículos" : "Vehículos"}
+        </button>
         <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
+        <span className="ml-2 text-lg font-black text-slate-100">
+          {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
+        </span>
+        <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        {/* Datos generales */}
-        <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
-            {dato("Nº de unidad", v.numero_unidad)}
-            {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
-            {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
-            {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
-          </div>
-        </div>
-
-        {/* Kilometraje */}
-        <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Kilometraje</div>
-          <div className="text-3xl font-black">{Number(v.km_actual).toLocaleString("es-ES")} <span className="text-sm font-normal text-slate-400">km</span></div>
-          <div className="mt-1 text-xs text-slate-500">Origen: {ORIGEN_KM_LABELS[v.origen_km]}</div>
+      {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
+      <div className="rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
+          {dato("Nº de unidad", v.numero_unidad)}
+          {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
+          {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
+          {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
         </div>
       </div>
+
+      {/* Ficha técnica (documento + OCR): justo debajo de los datos generales,
+          que es de donde salen esos datos. */}
+      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={() => { void cargar(); setRecargarItv((n) => n + 1); }} />
+
+      {/* Ficha técnica ITV: solo los códigos que tienen dato real. */}
+      <FichaTecnicaItv key={recargarItv} vehiculoId={v.id} puedeEditar={!esCliente} onCambio={cargar} />
 
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
       {!esCliente && (
@@ -160,7 +188,7 @@ export default function VehiculoDetalle() {
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
         <VehicleLayoutImage
           tipo={v.tipo}
-          imagenFallback={v.config_ejes?.imagen_chasis_url ?? null}
+          imagenConfig={imagenMarca ?? v.config_ejes?.imagen_chasis_url ?? null}
           posiciones={posiciones}
           vehiculoId={v.id}
           empresaId={v.empresa_id}
@@ -168,15 +196,30 @@ export default function VehiculoDetalle() {
           medidaPorPosicionId={medidaPorPosicionId}
           editable={!esCliente}
           puedeCalibrar={!!perfil?.es_superadmin}
-          onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
+          onFicha={esCliente ? undefined : (nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
           onChanged={cargar}
           onTipoChanged={cargar}
+          onOperaciones={() => setModalOps(true)}
         />
       </div>
 
       {/* Estructura de posiciones */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Estructura de posiciones ({posiciones.length})</div>
+        {/* Las posiciones salen del TIPO de vehículo: si no tiene los mismos
+            ejes que la configuración, aparecen ruedas que no existen. */}
+        {(() => {
+          const ejesConfig = v.config_ejes?.nombre ? v.config_ejes.nombre.split(/x/i).filter((s) => s.trim() !== "").length : 0;
+          const ejesTipo = v.tipo?.numero_ejes ?? 0;
+          if (!ejesConfig || !ejesTipo || ejesConfig === ejesTipo) return null;
+          return (
+            <div className="mb-2 rounded border border-rose-500/50 bg-rose-950/40 p-2 text-[12px] text-rose-200">
+              El tipo «{v.tipo?.descripcion ?? v.tipo?.nombre}» tiene {ejesTipo} ejes, pero la configuración
+              {" "}{v.config_ejes?.nombre} son {ejesConfig}: por eso salen {posiciones.length} posiciones.
+              Cambia el tipo del vehículo por uno de {ejesConfig} ejes.
+            </div>
+          );
+        })()}
         {posiciones.length === 0 ? (
           <div className="text-sm text-slate-500">
             {v.tipo_vehiculo_id ? "Este tipo de vehículo no tiene posiciones definidas." : "Asigna un tipo de vehículo para ver sus posiciones."}

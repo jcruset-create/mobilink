@@ -15,13 +15,85 @@ import {
   findCandidates, offerToWorkshop, acceptAssignment, rejectAssignment, withdrawAndReassign,
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
+import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
+import {
+  WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
+} from "./liteRules.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
+import { drivingRoute } from "./routing.ts";
+import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
+import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
+import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
+import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
+import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
+import {
+  activeCaptureSession, captureMessages, saveCaptureAnalysis, normalize as normalizeCapture,
+} from "../core/whatsappCapture.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
+}
+
+/**
+ * Archiva lo recibido por WhatsApp en la asistencia de Central Pro: las fotos,
+ * audios y documentos pasan a ser evidencias, y los textos y ubicaciones se
+ * añaden como comunicaciones. Es idempotente: reabrir y volver a cerrar una
+ * sesión no duplica nada.
+ */
+async function archivarCaptura(sessionId: number, assistanceId: number): Promise<void> {
+  const mensajes = await captureMessages(sessionId);
+  const now = Date.now();
+  const ws = await db.query(`SELECT "workshopId" FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const workshopId = ws.rows[0]?.workshopId ?? null;
+
+  for (const m of mensajes) {
+    const url = m.media_stored_url || m.media_url;
+    if (url && ["image", "video", "audio", "document"].includes(m.message_type)) {
+      await db.query(
+        `INSERT INTO connect_assistance_files
+           ("assistanceId", "workshopId", category, url, "fileName", "mimeType", "deviceTsMs", "createdAtMs")
+         SELECT $1, $2, 'other', $3, $4, $5, $6, $7
+          WHERE NOT EXISTS (SELECT 1 FROM connect_assistance_files WHERE "assistanceId" = $1 AND url = $3)`,
+        [
+          assistanceId, workshopId, url,
+          `WhatsApp ${m.message_type} ${new Date(m.received_at).toLocaleTimeString("es-ES")}`,
+          m.message_type === "image" ? "image/jpeg" : null, m.received_at, now,
+        ],
+      ).catch((e: any) => console.error("[Connect] archivar evidencia:", e?.message));
+    }
+
+    const texto =
+      m.message_type === "text" ? m.text_content :
+      m.message_type === "location" ? `Ubicación: ${m.address ?? `${m.latitude}, ${m.longitude}`}` :
+      m.message_type === "contact" ? `Contacto: ${m.contact_name ?? ""} ${m.contact_phone ?? ""}`.trim() :
+      m.message_type === "audio" && m.transcript ? `Audio: ${m.transcript}` : null;
+    if (texto) {
+      await db.query(
+        `INSERT INTO connect_communications ("assistanceId", channel, direction, body, "byName", "createdAtMs")
+         SELECT $1, 'whatsapp', 'inbound', $2, $3, $4
+          WHERE NOT EXISTS (
+            SELECT 1 FROM connect_communications
+             WHERE "assistanceId" = $1 AND body = $2 AND channel = 'whatsapp')`,
+        [assistanceId, String(texto).slice(0, 2000), m.from_phone ?? "WhatsApp", m.received_at],
+      ).catch((e: any) => console.error("[Connect] archivar mensaje:", e?.message));
+    }
+  }
+}
+
+/** Código corto e irrepetible que el taller Lite teclea en la APK (p. ej. TALLERSUR-7431). */
+async function generateLiteCode(name: string): Promise<string> {
+  const base = String(name || "taller")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "TALLER";
+  for (let i = 0; i < 20; i++) {
+    const code = `${base}-${crypto.randomInt(1000, 9999)}`;
+    const hit = await db.query(`SELECT 1 FROM connect_workshops WHERE "liteCode" = $1`, [code]);
+    if (!hit.rows[0]) return code;
+  }
+  return `${base}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
 export function createConnectBackofficeRouter(): Router {
@@ -47,7 +119,7 @@ export function createConnectBackofficeRouter(): Router {
       db.query(`SELECT status, COUNT(*)::int AS n FROM connect_assistances GROUP BY status`),
       db.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'finished')::int AS finished,
+           COUNT(*) FILTER (WHERE status IN ('finished','at_workshop'))::int AS finished,
            COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
            COUNT(*)::int AS created
          FROM connect_assistances WHERE "createdAtMs" >= $1`,
@@ -225,7 +297,7 @@ export function createConnectBackofficeRouter(): Router {
               (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'accepted') AS accepted,
               (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'rejected') AS rejected,
               (SELECT COUNT(*)::int FROM connect_assignments a WHERE a."workshopId" = w.id AND a."sentAtMs" >= $1 AND a.status = 'expired') AS expired,
-              (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca."createdAtMs" >= $1 AND ca.status = 'finished') AS finished,
+              (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca."createdAtMs" >= $1 AND ca.status IN ('finished','at_workshop')) AS finished,
               (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')) AS active,
               (SELECT COUNT(*)::int FROM connect_incidents i WHERE i."workshopId" = w.id AND i."createdAtMs" >= $1) AS incidents,
               (SELECT AVG((a."respondedAtMs" - a."sentAtMs") / 60000.0)
@@ -256,7 +328,7 @@ export function createConnectBackofficeRouter(): Router {
       db.query(
         `SELECT to_char(to_timestamp("createdAtMs" / 1000), 'YYYY-MM-DD') AS day,
                 COUNT(*)::int AS created,
-                COUNT(*) FILTER (WHERE status = 'finished')::int AS finished,
+                COUNT(*) FILTER (WHERE status IN ('finished','at_workshop'))::int AS finished,
                 COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled
            FROM connect_assistances
           WHERE "createdAtMs" >= $1 AND status <> 'draft'
@@ -294,34 +366,54 @@ export function createConnectBackofficeRouter(): Router {
            SELECT "acceptDeadlineMs" FROM connect_assignments
             WHERE "assistanceId" = ca.id AND status = 'sent' ORDER BY id DESC LIMIT 1
          ) asg ON true
-        WHERE ca.status NOT IN ('finished', 'cancelled')
+        WHERE ca.status NOT IN ('finished', 'at_workshop', 'cancelled')
         ORDER BY ca.priority = 'urgente' DESC, ca."createdAtMs" ASC`,
     );
 
-    const pending: any[] = [], assigning: any[] = [], active: any[] = [], attention: any[] = [];
+    const colas: Record<Cola, any[]> = { pending: [], assigning: [], active: [], attention: [] };
     for (const a of r.rows) {
-      const slaRisk = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) - now < 15 * 60_000;
-      const slaBreached = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) < now;
-      const row = { ...a, slaRisk, slaBreached };
-      if (["assignment_failed", "no_coverage"].includes(a.status) || slaBreached) attention.push(row);
-      else if (["draft", "pending"].includes(a.status)) pending.push(row);
-      else if (["searching", "awaiting_acceptance"].includes(a.status)) assigning.push(row);
-      else active.push(row);
+      const { cola, slaRisk, slaBreached } = clasificarCola(a, now);
+      colas[cola].push({ ...a, cola, slaRisk, slaBreached });
     }
-    res.json({ generated_at: now, pending, assigning, active, attention });
+    res.json({ generated_at: now, ...colas });
   });
 
   // Mapa operativo: asistencias activas + talleres + posición de técnicos
   router.get("/map", ...requireConnectRole("operator"), async (_req, res) => {
     const [assistances, workshops] = await Promise.all([
       db.query(
+        // La posición de la unidad asignada puede venir de tres sitios, según
+        // el producto del taller: el móvil del operario Lite, el móvil del
+        // técnico de Mobilink Assist (core) o el GPS de la unidad (Webfleet).
         `SELECT ca.id, ca.status, ca.priority, ca."serviceType", ca.address, ca."customerName",
                 ca.latitude, ca.longitude, w.name AS "workshopName", ra."assignedTechName",
-                ra."webfleetVehicleId"
+                ra."webfleetVehicleId",
+                COALESCE(ca."operatorLat", ra."operatorLat", mu.latitude)               AS "vehicleLat",
+                COALESCE(ca."operatorLng", ra."operatorLng", mu.longitude)              AS "vehicleLng",
+                COALESCE(ca."operatorLocationAtMs", ra."operatorLocationAtMs", mu."lastReportAtMs") AS "vehicleAtMs",
+                ca."operatorSpeedKmh"                                                   AS "vehicleSpeedKmh",
+                COALESCE(ca."liteUserName", ra."assignedTechName")                      AS "operatorName",
+                COALESCE(ra."assignedVehicleName", mu.name)                             AS "vehicleName",
+                COALESCE(mu.plate, rv.plate)                                            AS "vehiclePlate",
+                mu."connectionStatus"                                                   AS "vehicleConnection",
+                CASE
+                  WHEN ca."operatorLat" IS NOT NULL THEN 'lite'
+                  WHEN ra."operatorLat" IS NOT NULL THEN 'assist'
+                  WHEN mu.latitude IS NOT NULL THEN 'unit'
+                END                                                                     AS "vehicleSource"
            FROM connect_assistances ca
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-          WHERE ca.status NOT IN ('finished', 'cancelled', 'draft')
+           LEFT JOIN connect_mobile_units mu ON mu."activeAssistanceId" = ca.id
+           -- Matrícula del vehículo del core: por id de Webfleet o por nombre.
+           -- LATERAL con LIMIT 1 para que un nombre repetido no duplique filas.
+           LEFT JOIN LATERAL (
+             SELECT v.plate FROM roadside_vehicles v
+              WHERE (ra."webfleetVehicleId" IS NOT NULL AND v."webfleetVehicleId" = ra."webfleetVehicleId")
+                 OR (ra."assignedVehicleName" IS NOT NULL AND v.name = ra."assignedVehicleName")
+              LIMIT 1
+           ) rv ON true
+          WHERE ca.status NOT IN ('finished', 'at_workshop', 'cancelled', 'draft')
             AND ca.latitude IS NOT NULL`,
       ),
       db.query(
@@ -332,6 +424,35 @@ export function createConnectBackofficeRouter(): Router {
       ),
     ]);
     res.json({ assistances: assistances.rows, workshops: workshops.rows });
+  });
+
+  /**
+   * Ruta por carretera de la unidad asignada hasta el punto de la asistencia.
+   * Devuelve `route: null` cuando no hay clave de Google o no hay ruta: el mapa
+   * cae a la línea recta y lo dice, en vez de fingir un trazado.
+   */
+  router.get("/assistances/:id/route", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const r = await db.query(
+      `SELECT ca.latitude, ca.longitude,
+              COALESCE(ca."operatorLat", ra."operatorLat", mu.latitude)  AS "vehicleLat",
+              COALESCE(ca."operatorLng", ra."operatorLng", mu.longitude) AS "vehicleLng"
+         FROM connect_assistances ca
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+         LEFT JOIN connect_mobile_units mu ON mu."activeAssistanceId" = ca.id
+        WHERE ca.id = $1`,
+      [id],
+    );
+    const a = r.rows[0];
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (a.latitude == null || a.vehicleLat == null) return res.json({ route: null });
+
+    const route = await drivingRoute(
+      id,
+      { lat: Number(a.vehicleLat), lng: Number(a.vehicleLng) },
+      { lat: Number(a.latitude), lng: Number(a.longitude) },
+    );
+    res.json({ route });
   });
 
   // ── Empresas proveedoras ──────────────────────────────────
@@ -363,40 +484,275 @@ export function createConnectBackofficeRouter(): Router {
 
   router.patch("/providers/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
     const id = Number(req.params.id);
-    const { name, contactEmail, contactPhone, status, notes } = req.body ?? {};
+    const b = req.body ?? {};
     const r = await db.query(
       `UPDATE connect_provider_companies
           SET name = COALESCE($1, name), "contactEmail" = COALESCE($2, "contactEmail"),
               "contactPhone" = COALESCE($3, "contactPhone"), status = COALESCE($4, status),
-              notes = COALESCE($5, notes), "updatedAtMs" = $6
-        WHERE id = $7 AND "deletedAtMs" IS NULL RETURNING *`,
-      [name ?? null, contactEmail ?? null, contactPhone ?? null, status ?? null, notes ?? null, Date.now(), id],
+              notes = COALESCE($5, notes),
+              "legalName" = COALESCE($6, "legalName"), "taxId" = COALESCE($7, "taxId"),
+              address = COALESCE($8, address), city = COALESCE($9, city),
+              "postalCode" = COALESCE($10, "postalCode"), province = COALESCE($11, province),
+              web = COALESCE($12, web), "billingEmail" = COALESCE($13, "billingEmail"),
+              "updatedAtMs" = $14
+        WHERE id = $15 AND "deletedAtMs" IS NULL RETURNING *`,
+      [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.status ?? null, b.notes ?? null,
+       b.legalName ?? null, b.taxId ?? null, b.address ?? null, b.city ?? null,
+       b.postalCode ?? null, b.province ?? null, b.web ?? null, b.billingEmail ?? null,
+       Date.now(), id],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
     await auditConnect({ req, action: "provider.updated", resourceType: "provider", resourceId: id, detail: req.body });
     res.json(r.rows[0]);
   });
 
-  router.get("/providers/:id/branches", ...requireConnectRole("analyst"), async (req, res) => {
+  /**
+   * Ficha completa de la empresa: datos, autorización vigente, talleres con
+   * su producto, resumen de unidades y operarios, KPIs y facturación del mes.
+   */
+  router.get("/providers/:id", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    const p = await db.query(
+      `SELECT * FROM connect_provider_companies WHERE id = $1 AND "deletedAtMs" IS NULL`, [id],
+    );
+    if (!p.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
+
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const since30 = Date.now() - 30 * 24 * 3600_000;
+    const [auth, workshops, units, stats, billing, incidents] = await Promise.all([
+      db.query(
+        `SELECT a.*, (SELECT COUNT(*)::int FROM connect_tariff_lines tl
+                       WHERE tl."authorizationId" = a.id AND tl.active) AS "tariffLines"
+           FROM connect_provider_authorizations a
+          WHERE a."providerCompanyId" = $1 AND a."branchId" IS NULL
+          ORDER BY a.id DESC LIMIT 1`,
+        [id],
+      ),
+      db.query(
+        `SELECT w.*,
+                (SELECT COUNT(*)::int FROM connect_mobile_units mu WHERE mu."workshopId" = w.id) AS units,
+                (SELECT COUNT(*)::int FROM connect_lite_users lu WHERE lu."workshopId" = w.id AND lu.active) AS "liteUsers",
+                (SELECT COUNT(*)::int FROM connect_assistances ca
+                  WHERE ca."workshopId" = w.id
+                    AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress','returning_to_workshop')) AS "activeAssistances"
+           FROM connect_workshops w WHERE w."providerCompanyId" = $1 ORDER BY w.name`,
+        [id],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status IN ('available','at_base'))::int AS available,
+                COUNT(*) FILTER (WHERE "connectionStatus" = 'offline')::int AS offline
+           FROM connect_mobile_units WHERE "providerCompanyId" = $1`,
+        [id],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS services,
+                COUNT(*) FILTER (WHERE ca.status IN ('finished','at_workshop'))::int AS finished,
+                COUNT(*) FILTER (WHERE ca."slaDeadlineAtMs" IS NOT NULL) ::int AS "withSla"
+           FROM connect_assistances ca
+           JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE w."providerCompanyId" = $1 AND ca."createdAtMs" > $2`,
+        [id, since30],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS services,
+                COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) AS amount,
+                COUNT(*) FILTER (WHERE ca."invoicedAtMs" IS NOT NULL)::int AS invoiced
+           FROM connect_assistances ca
+           JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE w."providerCompanyId" = $1 AND ca.status IN ('finished','at_workshop')
+            AND ca."createdAtMs" >= $2`,
+        [id, monthStart],
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS open FROM connect_incidents
+          WHERE "providerCompanyId" = $1 AND status NOT IN ('resolved','closed')`,
+        [id],
+      ),
+    ]);
+
+    const scores = workshops.rows.map((w: any) => Number(w.currentScore)).filter((s: number) => Number.isFinite(s));
+    res.json({
+      provider: p.rows[0],
+      authorization: auth.rows[0] ?? null,
+      workshops: workshops.rows,
+      summary: {
+        units: units.rows[0],
+        last30d: stats.rows[0],
+        billingMonth: billing.rows[0],
+        openIncidents: incidents.rows[0].open,
+        avgScore: scores.length ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length) : null,
+      },
+    });
+  });
+
+  /** Ficha de un taller (cabecera de la página de taller). */
+  router.get("/workshops/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(
-      `SELECT * FROM connect_branches WHERE "providerCompanyId" = $1 AND "deletedAtMs" IS NULL ORDER BY name`,
+      `SELECT w.*, pc.name AS "providerName"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+        WHERE w.id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    res.json(r.rows[0]);
+  });
+
+  /** Unidades móviles de un taller (misma forma que /mobile-units). */
+  router.get("/workshops/:id/mobile-units", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT mu.*, pc.name AS "providerName", ca."expedientNumber"
+         FROM connect_mobile_units mu
+         LEFT JOIN connect_provider_companies pc ON pc.id = mu."providerCompanyId"
+         LEFT JOIN connect_assistances ca ON ca.id = mu."activeAssistanceId"
+        WHERE mu."workshopId" = $1
+        ORDER BY mu.name`,
       [Number(req.params.id)],
     );
     res.json({ data: r.rows });
   });
 
-  router.post("/providers/:id/branches", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const { name, address, latitude, longitude, phone } = req.body ?? {};
-    if (!name?.trim()) return err(res, 422, "validation_failed", "El nombre es obligatorio");
+  /** Mover una unidad a otro taller (o quitarla de uno). */
+  router.patch("/mobile-units/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const workshopId = req.body?.workshopId != null ? Number(req.body.workshopId) : null;
+    if (workshopId != null) {
+      const w = await db.query(`SELECT id FROM connect_workshops WHERE id = $1`, [workshopId]);
+      if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    }
+    const r = await db.query(
+      `UPDATE connect_mobile_units SET "workshopId" = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING *`,
+      [workshopId, Date.now(), id],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
+    await auditConnect({ req, action: "unit.workshop_changed", resourceType: "mobile_unit", resourceId: id, detail: { workshopId } });
+    res.json(r.rows[0]);
+  });
+
+  /**
+   * Operarios del taller, unificados: los `techs` reales de Mobilink Assist
+   * (mismo id y estado en vivo), los usuarios Lite o los contactos manuales.
+   */
+  router.get("/workshops/:id/operators", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const w = await db.query(
+      `SELECT "integrationType", "coreWorkshopId" FROM connect_workshops WHERE id = $1`, [id],
+    );
+    if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    const { integrationType, coreWorkshopId } = w.rows[0];
+
+    const operators: any[] = [];
+
+    if (integrationType === "assist" && coreWorkshopId) {
+      const techs = await db.query(
+        `SELECT t.id, t.name, t.phone, t.status, t.blocked, t."roadsideCapable", t.es_supervisor,
+                t."currentRoadsideAssistanceId", ra."trackingToken",
+                ca.id AS "connectAssistanceId", ca."expedientNumber"
+           FROM techs t
+           LEFT JOIN roadside_assistances ra ON ra.id = t."currentRoadsideAssistanceId"
+           LEFT JOIN connect_assistances ca ON ca."coreAssistanceId" = t."currentRoadsideAssistanceId"
+          WHERE t."workshopId" = $1 AND t."compartidoCentral" = true
+          ORDER BY t.name`,
+        [String(coreWorkshopId)],
+      );
+      for (const t of techs.rows) {
+        operators.push({
+          source: "assist", id: t.id, name: t.name, phone: t.phone,
+          role: t.es_supervisor ? "Supervisor" : t.roadsideCapable ? "Operario de carretera" : "Operario de taller",
+          status: t.blocked ? "blocked" : t.currentRoadsideAssistanceId ? "on_assistance" : t.status,
+          expedientNumber: t.expedientNumber ?? null,
+          connectAssistanceId: t.connectAssistanceId ?? null,
+        });
+      }
+    }
+
+    if (integrationType === "lite") {
+      const lite = await db.query(
+        `SELECT u.id, u.name, u.phone, u.email, u.role, u.active, u."lastLoginAtMs",
+                (SELECT COUNT(*)::int FROM connect_lite_devices d
+                  WHERE d."userId" = u.id AND d."revokedAtMs" IS NULL) AS devices,
+                (SELECT ca."expedientNumber" FROM connect_assistances ca
+                  WHERE ca."liteUserId" = u.id
+                    AND ca.status IN ('technician_assigned','en_route','arrived','in_progress','returning_to_workshop')
+                  ORDER BY ca.id DESC LIMIT 1) AS "expedientNumber"
+           FROM connect_lite_users u WHERE u."workshopId" = $1 ORDER BY u.name`,
+        [id],
+      );
+      for (const u of lite.rows) {
+        operators.push({
+          source: "lite", id: u.id, name: u.name, phone: u.phone, email: u.email,
+          role: u.role === "workshop_admin" ? "Administrador del taller" : "Operario",
+          status: !u.active ? "blocked" : u.expedientNumber ? "on_assistance" : "libre",
+          expedientNumber: u.expedientNumber ?? null,
+          lastLoginAtMs: u.lastLoginAtMs ? Number(u.lastLoginAtMs) : null,
+          devices: u.devices,
+        });
+      }
+    }
+
+    const contacts = await db.query(
+      `SELECT id, name, phone, role, notes FROM connect_workshop_contacts
+        WHERE "workshopId" = $1 AND active ORDER BY name`,
+      [id],
+    );
+    for (const c of contacts.rows) {
+      operators.push({ source: "contact", id: c.id, name: c.name, phone: c.phone, role: c.role ?? "Contacto", notes: c.notes, status: null });
+    }
+
+    res.json({ integrationType, data: operators });
+  });
+
+  /** Contacto manual del taller (encargado, centralita, guardia…). */
+  router.post("/workshops/:id/contacts", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const name = String(req.body?.name || "").trim();
+    if (!name) return err(res, 422, "validation_failed", "El nombre es obligatorio");
     const now = Date.now();
     const r = await db.query(
-      `INSERT INTO connect_branches ("providerCompanyId", name, address, latitude, longitude, phone, "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,
-      [Number(req.params.id), name.trim(), address ?? null, latitude ?? null, longitude ?? null, phone ?? null, now],
+      `INSERT INTO connect_workshop_contacts ("workshopId", name, phone, role, notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
+      [id, name, req.body?.phone ?? null, req.body?.role ?? null, req.body?.notes ?? null, now],
     );
-    await auditConnect({ req, action: "branch.created", resourceType: "branch", resourceId: r.rows[0].id });
+    await auditConnect({ req, action: "workshop.contact_added", resourceType: "workshop", resourceId: id, detail: { name } });
     res.status(201).json(r.rows[0]);
   });
+
+  router.patch("/workshop-contacts/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE connect_workshop_contacts SET
+         name = COALESCE($1, name), phone = COALESCE($2, phone), role = COALESCE($3, role),
+         notes = COALESCE($4, notes), active = COALESCE($5, active), "updatedAtMs" = $6
+       WHERE id = $7 RETURNING *`,
+      [b.name ?? null, b.phone ?? null, b.role ?? null, b.notes ?? null,
+       typeof b.active === "boolean" ? b.active : null, Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Contacto no encontrado");
+    await auditConnect({ req, action: "workshop.contact_updated", resourceType: "workshop", resourceId: r.rows[0].workshopId, detail: b });
+    res.json(r.rows[0]);
+  });
+
+  /** Mover un operario de Assist a otro taller (por coreWorkshopId). */
+  router.patch("/techs/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const workshopId = Number(req.body?.workshopId);
+    const w = await db.query(
+      `SELECT "coreWorkshopId" FROM connect_workshops WHERE id = $1 AND "integrationType" = 'assist'`,
+      [workshopId],
+    );
+    if (!w.rows[0]?.coreWorkshopId) return err(res, 422, "validation_failed", "El taller de destino no está integrado con Mobilink Assist");
+    const r = await db.query(
+      `UPDATE techs SET "workshopId" = $1 WHERE id = $2 RETURNING id, name`,
+      [String(w.rows[0].coreWorkshopId), id],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Operario no encontrado");
+    await auditConnect({ req, action: "tech.workshop_changed", resourceType: "tech", resourceId: id, detail: { workshopId } });
+    res.json({ ok: true });
+  });
+
+  // Las delegaciones (connect_branches) han desaparecido de la interfaz:
+  // solo quedan talleres. La tabla se conserva por los datos históricos.
 
   router.get("/providers/:id/workshops", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(`SELECT * FROM connect_workshops WHERE "providerCompanyId" = $1 ORDER BY name`, [Number(req.params.id)]);
@@ -430,10 +786,15 @@ export function createConnectBackofficeRouter(): Router {
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
-        b.integrationType === "external" ? "external" : "assist",
+        WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : "assist",
         now,
       ],
     );
+    // Los talleres Lite necesitan un código corto para el login de la APK
+    if (r.rows[0].integrationType === "lite") {
+      await db.query(`UPDATE connect_workshops SET "liteCode" = $1 WHERE id = $2 AND "liteCode" IS NULL`,
+        [await generateLiteCode(r.rows[0].name), r.rows[0].id]);
+    }
     await auditConnect({ req, action: "workshop.created", resourceType: "workshop", resourceId: r.rows[0].id });
     res.status(201).json(r.rows[0]);
   });
@@ -455,15 +816,33 @@ export function createConnectBackofficeRouter(): Router {
          "networkParticipation" = COALESCE($7, "networkParticipation"),
          "networkChangedBy" = CASE WHEN $7 IS NOT NULL THEN $8 ELSE "networkChangedBy" END,
          "networkChangedAtMs" = CASE WHEN $7 IS NOT NULL THEN $9 ELSE "networkChangedAtMs" END,
+         "liteSettings" = COALESCE($11, "liteSettings"),
+         features = COALESCE($12, features),
+         "coreWorkshopId" = COALESCE($13, "coreWorkshopId"),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
        b.radiusKm != null ? Number(b.radiusKm) : null,
-       b.integrationType === "external" || b.integrationType === "assist" ? b.integrationType : null,
+       WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : null,
        typeof b.networkParticipation === "boolean" ? b.networkParticipation : null,
-       u.name, now, Number(req.params.id)],
+       u.name, now, Number(req.params.id),
+       b.liteSettings ? JSON.stringify(b.liteSettings) : null,
+       b.features ? JSON.stringify(b.features) : null,
+       b.coreWorkshopId != null ? String(b.coreWorkshopId) : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
+    if (r.rows[0].integrationType === "lite" && !r.rows[0].liteCode) {
+      const code = await generateLiteCode(r.rows[0].name);
+      await db.query(`UPDATE connect_workshops SET "liteCode" = $1 WHERE id = $2`, [code, r.rows[0].id]);
+      r.rows[0].liteCode = code;
+    }
+    if (b.integrationType) {
+      await auditConnect({
+        req, action: "workshop.tier_changed", resourceType: "workshop", resourceId: Number(req.params.id),
+        detail: { integrationType: r.rows[0].integrationType, tier: WORKSHOP_TIER[r.rows[0].integrationType] },
+      });
+    }
     if (typeof b.networkParticipation === "boolean") {
       await auditConnect({
         req, action: b.networkParticipation ? "workshop.network_enabled" : "workshop.network_disabled",
@@ -474,12 +853,259 @@ export function createConnectBackofficeRouter(): Router {
     res.json(r.rows[0]);
   });
 
+  // ── Mobilink Assist Lite: operarios, dispositivos y seguimiento ──────────
+
+  /** Operarios del taller Lite (equivalente a los técnicos de un taller FULL). */
+  router.get("/workshops/:id/lite-users", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT u.id, u.name, u.username, u.email, u.phone, u.role, u.active, u."lastLoginAtMs", u."createdAtMs",
+              (SELECT COUNT(*) FROM connect_lite_devices d WHERE d."userId" = u.id AND d."revokedAtMs" IS NULL) AS "devices"
+         FROM connect_lite_users u WHERE u."workshopId" = $1 ORDER BY u.name`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/workshops/:id/lite-users", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const workshopId = Number(req.params.id);
+    const b = req.body ?? {};
+    const name = String(b.name || "").trim();
+    const username = String(b.username || "").trim().toLowerCase();
+    const pin = String(b.pin || "").trim();
+    if (!name || !username) return err(res, 422, "validation_failed", "name y username son obligatorios");
+    if (!/^\d{4,8}$/.test(pin)) return err(res, 422, "validation_failed", "El PIN debe tener entre 4 y 8 dígitos");
+
+    const w = await db.query(`SELECT id, "integrationType", "liteCode" FROM connect_workshops WHERE id = $1`, [workshopId]);
+    if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    if (w.rows[0].integrationType !== "lite") {
+      return err(res, 409, "not_lite", "El taller no tiene Mobilink Assist Lite habilitado");
+    }
+    const salt = newPinSalt();
+    const now = Date.now();
+    try {
+      const r = await db.query(
+        `INSERT INTO connect_lite_users
+           (uuid, "workshopId", "providerCompanyId", name, username, email, phone, "pinHash", "pinSalt", role, "createdAtMs", "updatedAtMs")
+         SELECT $1, $2, w."providerCompanyId", $3, $4, $5, $6, $7, $8, $9, $10, $10
+           FROM connect_workshops w WHERE w.id = $2
+         RETURNING id, name, username, role, active, "createdAtMs"`,
+        [
+          crypto.randomUUID(), workshopId, name, username, b.email ?? null, b.phone ?? null,
+          hashPin(pin, salt), salt, b.role === "workshop_admin" ? "workshop_admin" : "operator", now,
+        ],
+      );
+      await auditConnect({ req, action: "lite.user_created", resourceType: "lite_user", resourceId: r.rows[0].id, detail: { workshopId, username } });
+      res.status(201).json({ ...r.rows[0], workshopCode: w.rows[0].liteCode });
+    } catch (e: any) {
+      if (String(e?.message).includes("duplicate")) {
+        return err(res, 409, "duplicate", "Ya existe un usuario con ese nombre de acceso en el taller");
+      }
+      throw e;
+    }
+  });
+
+  router.patch("/lite-users/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const b = req.body ?? {};
+    const pin = b.pin != null ? String(b.pin).trim() : null;
+    if (pin != null && !/^\d{4,8}$/.test(pin)) {
+      return err(res, 422, "validation_failed", "El PIN debe tener entre 4 y 8 dígitos");
+    }
+    const salt = pin != null ? newPinSalt() : null;
+    const r = await db.query(
+      `UPDATE connect_lite_users SET
+         name = COALESCE($1, name), role = COALESCE($2, role), active = COALESCE($3, active),
+         email = COALESCE($4, email), phone = COALESCE($5, phone),
+         "pinHash" = COALESCE($6, "pinHash"), "pinSalt" = COALESCE($7, "pinSalt"),
+         "updatedAtMs" = $8
+       WHERE id = $9 RETURNING id, name, username, role, active`,
+      [
+        b.name ?? null,
+        b.role === "workshop_admin" || b.role === "operator" ? b.role : null,
+        typeof b.active === "boolean" ? b.active : null,
+        b.email ?? null, b.phone ?? null,
+        pin != null && salt ? hashPin(pin, salt) : null, salt, Date.now(), id,
+      ],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Usuario no encontrado");
+    // Desactivar o cambiar el PIN cierra las sesiones abiertas
+    if (b.active === false || pin != null) {
+      await db.query(`UPDATE connect_lite_devices SET "revokedAtMs" = $1 WHERE "userId" = $2 AND "revokedAtMs" IS NULL`,
+        [Date.now(), id]);
+    }
+    await auditConnect({
+      req, action: pin != null ? "lite.user_pin_reset" : "lite.user_updated",
+      resourceType: "lite_user", resourceId: id, detail: { active: b.active, role: b.role },
+    });
+    res.json(r.rows[0]);
+  });
+
+  router.get("/workshops/:id/lite-devices", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await db.query(
+      `SELECT d.id, d."deviceId", d.platform, d."osVersion", d."appVersion",
+              d."gpsPermission", d."cameraPermission", d."notifPermission",
+              d."fcmToken" IS NOT NULL AS "pushEnabled", d."lastSeenAtMs", d."revokedAtMs", d."createdAtMs",
+              u.name AS "userName", u.id AS "userId"
+         FROM connect_lite_devices d JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."workshopId" = $1 ORDER BY d."lastSeenAtMs" DESC NULLS LAST LIMIT 100`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/lite-devices/:id/revoke", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `UPDATE connect_lite_devices SET "revokedAtMs" = $1, "fcmToken" = NULL
+        WHERE id = $2 AND "revokedAtMs" IS NULL RETURNING id`,
+      [Date.now(), Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Dispositivo no encontrado o ya revocado");
+    await auditConnect({ req, action: "lite.device_revoked", resourceType: "lite_device", resourceId: Number(req.params.id) });
+    res.json({ ok: true });
+  });
+
+  /** Todo lo que el taller ha reportado: rastro GPS, evidencias, firma y KPIs. */
+  router.get("/assistances/:id/lite", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    const a = await db.query(
+      `SELECT ca.id, ca.status, ca."liteUserId", ca."liteUserName", ca."resultCode", ca."resolutionNotes",
+              ca."odometerKm", ca."workedMinutes", ca."operatorLat", ca."operatorLng",
+              ca."operatorAccuracyM", ca."operatorSpeedKmh", ca."operatorLocationAtMs",
+              ca.latitude, ca.longitude, w.name AS "workshopName", w."integrationType",
+              w.latitude AS "workshopLat", w.longitude AS "workshopLng"
+         FROM connect_assistances ca
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+        WHERE ca.id = $1`,
+      [id],
+    );
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    const [track, files, signature, device] = await Promise.all([
+      db.query(
+        `SELECT lat, lng, "accuracyM", "speedKmh", "headingDeg", status, "deviceTsMs"
+           FROM connect_assistance_tracks WHERE "assistanceId" = $1 ORDER BY "deviceTsMs" LIMIT 2000`,
+        [id],
+      ),
+      // Fotos de la APK Lite y del técnico de Mobilink Assist, unificadas
+      evidenciasDeAsistencia(id),
+      firmaDeAsistencia(id),
+      db.query(
+        `SELECT d."lastSeenAtMs", d.platform, d."appVersion", d."gpsPermission", d."notifPermission",
+                d."fcmToken" IS NOT NULL AS "pushEnabled"
+           FROM connect_lite_devices d
+          WHERE d."userId" = (SELECT "liteUserId" FROM connect_assistances WHERE id = $1)
+            AND d."revokedAtMs" IS NULL
+          ORDER BY d."lastSeenAtMs" DESC NULLS LAST LIMIT 1`,
+        [id],
+      ),
+    ]);
+
+    const lastAtMs = a.rows[0].operatorLocationAtMs ? Number(a.rows[0].operatorLocationAtMs) : null;
+    res.json({
+      assistance: a.rows[0],
+      tier: WORKSHOP_TIER[a.rows[0].integrationType] ?? null,
+      track: track.rows.map((p: any) => ({ ...p, deviceTsMs: Number(p.deviceTsMs) })),
+      files,
+      signature,
+      device: device.rows[0] ?? null,
+      kpis: await assistanceKpis(id),
+      // "Ubicación desactualizada" es información operativa, no un color
+      locationStale: lastAtMs ? Date.now() - lastAtMs > 5 * 60_000 : null,
+      lastLocationAtMs: lastAtMs,
+    });
+  });
+
+  /** KPIs agregados del taller (sirven igual para FULL, LITE y EXTERNAL). */
+  router.get("/workshops/:id/kpis", ...requireConnectRole("analyst"), async (req, res) => {
+    const workshopId = Number(req.params.id);
+    const days = Math.min(Number(req.query.days) || 30, 365);
+    const since = Date.now() - days * 24 * 3600_000;
+
+    const rows = await db.query(
+      `SELECT ca.id, ca.status, ca."acceptedAtMs", ca."slaDeadlineAtMs", ca."resultCode"
+         FROM connect_assistances ca
+        WHERE ca."workshopId" = $1 AND ca."createdAtMs" > $2`,
+      [workshopId, since],
+    );
+    const ids = rows.rows.map((r: any) => r.id);
+    const history = ids.length
+      ? (await db.query(
+          `SELECT "assistanceId", "toStatus", "occurredAtMs" FROM connect_status_history
+            WHERE "assistanceId" = ANY($1::int[]) ORDER BY id`,
+          [ids],
+        )).rows
+      : [];
+    const corrections = ids.length
+      ? (await db.query(
+          `SELECT "resourceId", COUNT(*)::int AS n FROM connect_audit_logs
+            WHERE action = 'assistance.manual_status' AND "resourceId" = ANY($1::text[])
+            GROUP BY "resourceId"`,
+          [ids.map(String)],
+        )).rows
+      : [];
+    const rejections = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_rejections WHERE "workshopId" = $1 AND "createdAtMs" > $2`,
+      [workshopId, since],
+    );
+    const offers = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_assignments WHERE "workshopId" = $1 AND "createdAtMs" > $2`,
+      [workshopId, since],
+    );
+
+    const byAssistance = new Map<number, { toStatus: string; occurredAtMs: number }[]>();
+    for (const h of history) {
+      const list = byAssistance.get(h.assistanceId) ?? [];
+      list.push({ toStatus: h.toStatus, occurredAtMs: Number(h.occurredAtMs) });
+      byAssistance.set(h.assistanceId, list);
+    }
+    const correctionsById = new Map(corrections.map((c: any) => [Number(c.resourceId), c.n]));
+
+    const per = rows.rows.map((r: any) => {
+      const hist = byAssistance.get(r.id) ?? [];
+      return {
+        id: r.id,
+        status: r.status,
+        kpis: computeLiteKpis(hist, {
+          acceptedAtMs: r.acceptedAtMs ? Number(r.acceptedAtMs) : null,
+          slaDeadlineAtMs: r.slaDeadlineAtMs ? Number(r.slaDeadlineAtMs) : null,
+        }),
+        statusQuality: statusQualityScore(hist, correctionsById.get(r.id) ?? 0),
+      };
+    });
+
+    const avg = (pick: (x: typeof per[number]) => number | null | undefined) => {
+      const values = per.map(pick).filter((v): v is number => typeof v === "number");
+      return values.length ? Math.round(values.reduce((s, v) => s + v, 0) / values.length) : null;
+    };
+    const finished = per.filter((p) => ["finished", "at_workshop"].includes(p.status)).length;
+    const slaValues = per.map((p) => p.kpis.slaMet).filter((v): v is boolean => typeof v === "boolean");
+
+    res.json({
+      days,
+      services: per.length,
+      finished,
+      unresolved: rows.rows.filter((r: any) => r.resultCode === "not_repaired" || r.resultCode === "customer_absent").length,
+      offers: offers.rows[0].n,
+      rejections: rejections.rows[0].n,
+      rejectionRate: offers.rows[0].n ? Math.round((rejections.rows[0].n / offers.rows[0].n) * 100) : null,
+      acceptanceRate: offers.rows[0].n ? Math.round(((offers.rows[0].n - rejections.rows[0].n) / offers.rows[0].n) * 100) : null,
+      slaCompliance: slaValues.length ? Math.round((slaValues.filter(Boolean).length / slaValues.length) * 100) : null,
+      avgAcceptMin: avg((p) => p.kpis.acceptMin),
+      avgTravelMin: avg((p) => p.kpis.travelMin),
+      avgAssignToArrivalMin: avg((p) => p.kpis.assignToArrivalMin),
+      avgWorkMin: avg((p) => p.kpis.workMin),
+      avgTotalMin: avg((p) => p.kpis.totalMin),
+      avgReturnMin: avg((p) => p.kpis.returnMin),
+      avgStatusQuality: avg((p) => p.statusQuality),
+    });
+  });
+
   // Estados manuales para asistencias en talleres externos (sin Mobilink Assist)
   router.post("/assistances/:id/manual-status", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const id = Number(req.params.id);
     const target = String(req.body?.status || "");
-    const allowed = ["technician_assigned", "en_route", "arrived", "in_progress", "finished"];
+    const allowed = Object.keys(LITE_STATUS_LABELS);
     if (!allowed.includes(target)) return err(res, 422, "validation_failed", `Estado no permitido. Permitidos: ${allowed.join(", ")}`);
     const a = await db.query(
       `SELECT ca."coreAssistanceId", w."integrationType" FROM connect_assistances ca
@@ -491,7 +1117,8 @@ export function createConnectBackofficeRouter(): Router {
       return err(res, 409, "not_manual", "Esta asistencia está integrada con Mobilink Assist: los estados se sincronizan solos");
     }
     try {
-      await transition(id, target as any, "user", `Actualización manual (taller externo) por ${u.name}`);
+      const tier = WORKSHOP_TIER[a.rows[0].integrationType] ?? "EXTERNAL";
+      await transition(id, target as any, "user", `Corrección manual desde Central (taller ${tier}) por ${u.name}`);
       await auditConnect({ req, action: "assistance.manual_status", resourceType: "assistance", resourceId: id, detail: { target } });
       const r = await db.query(`SELECT * FROM connect_assistances WHERE id = $1`, [id]);
       res.json(r.rows[0]);
@@ -501,28 +1128,310 @@ export function createConnectBackofficeRouter(): Router {
     }
   });
 
+  /**
+   * Extracción por IA para el alta de asistencias: se pega la conversación de
+   * WhatsApp (o un correo) y se adjuntan capturas o fotos, y devuelve los
+   * campos del formulario. Mismo servicio que usa Mobilink Assist, con las
+   * claves de Central Pro.
+   */
+  router.post("/ai-extract", ...requireConnectRole("operator"), async (req, res) => {
+    const text = String(req.body?.text ?? "").trim();
+    const images: string[] = Array.isArray(req.body?.images)
+      ? req.body.images.filter((u: any) => typeof u === "string" && u.startsWith("data:image")).slice(0, 6)
+      : [];
+    if (!text && images.length === 0) {
+      return err(res, 422, "validation_failed", "Pega el texto o añade al menos una imagen");
+    }
+    if (!hasAi()) return err(res, 503, "ai_unavailable", "La extracción por IA no está configurada (OPENAI_API_KEY)");
+
+    const tipos = await db.query(`SELECT code, name FROM connect_service_types WHERE active ORDER BY id`);
+    const vehiculos = await db.query(`SELECT code, name FROM connect_vehicle_types WHERE active ORDER BY id`);
+
+    const system = `Eres un operador de una central de asistencia en carretera. A partir del texto y de las imágenes (capturas de WhatsApp, fotos de documentos, tarjetas, hojas de ruta) extrae los datos para dar de alta una asistencia.
+
+${AI_IMAGE_RULES}
+
+Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozcas (no inventes ni rellenes con cadenas vacías). Normaliza los teléfonos españoles a 9 dígitos y las matrículas sin espacios ni guiones. Claves posibles:
+{
+  "expedientNumber": string, "externalReference": string, "clientName": string,
+  "serviceType": string (uno de: ${tipos.rows.map((t: any) => t.code).join(", ") || "other"}),
+  "priority": "normal"|"urgente", "slaMinutes": number,
+  "customerName": string, "customerPhone": string,
+  "requesterName": string, "requesterPhone": string, "requesterEmail": string,
+  "address": string, "latitude": number, "longitude": number,
+  "road": string, "km": string, "direction": string, "placeRef": string,
+  "vehicleType": string (uno de: ${vehiculos.rows.map((v: any) => v.code).join(", ") || "car"}),
+  "make": string, "model": string, "plate": string, "vin": string, "fuel": string,
+  "weight": string, "cargo": string, "trailer": boolean, "dangerous": boolean,
+  "description": string (qué ha ocurrido y qué servicio se pide),
+  "diagnosis": string, "notes": string,
+  "datosDetectados": [{ "campo": string, "valor": string }],
+  "confidence": "high"|"medium"|"low"
+}
+
+"datosDetectados" recoge lo relevante que hayas leído y no encaje arriba (póliza, aseguradora, albarán, DNI, nº de expediente del cliente…); se volcará en las observaciones. Si no hay nada, lista vacía.`;
+
+    const data = await extractJson({ system, text, images, maxTokens: 900 });
+    await auditConnect({
+      req, action: "assistance.ai_extract", resourceType: "assistance",
+      detail: { campos: Object.keys(data).length, imagenes: images.length, conTexto: !!text },
+    });
+    res.json({ data });
+  });
+
+  // ── Back office de la asistencia ─────────────────────────────────────────
+
+  /**
+   * Datos de back office. Si la asistencia está en un taller con Mobilink
+   * Assist, son LOS MISMOS que ve y edita el back office de Assist.
+   */
+  router.get("/assistances/:id/backoffice", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await leerBackoffice(Number(req.params.id));
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada");
+    res.json({ data: r.data, origen: r.origen });
+  });
+
+  router.put("/assistances/:id/backoffice", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const data = await guardarBackoffice(id, req.body ?? {});
+    await auditConnect({
+      req, action: "assistance.backoffice_saved", resourceType: "assistance", resourceId: id,
+      detail: { campos: Object.keys(req.body ?? {}).length },
+    });
+    res.json({ data });
+  });
+
+  /** Extracción por IA con los campos del back office (texto y/o capturas). */
+  router.post("/assistances/:id/backoffice/ai-extract", ...requireConnectRole("operator"), async (req, res) => {
+    const text = String(req.body?.text ?? "").trim();
+    const images: string[] = Array.isArray(req.body?.images)
+      ? req.body.images.filter((u: any) => typeof u === "string" && u.startsWith("data:image")).slice(0, 6)
+      : [];
+    if (!text && images.length === 0) {
+      return err(res, 422, "validation_failed", "Pega el texto o añade al menos una imagen");
+    }
+    if (!hasAi()) return err(res, 503, "ai_unavailable", "La extracción por IA no está configurada (OPENAI_API_KEY)");
+
+    const data = await extractJson({ system: AI_BACKOFFICE_PROMPT, text, images, maxTokens: 900 });
+    await auditConnect({
+      req, action: "assistance.backoffice_ai_extract", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { campos: Object.keys(data).length },
+    });
+    res.json({ data });
+  });
+
+  // ── Informe de la asistencia ─────────────────────────────────────────────
+
+  /** Informe PDF de la asistencia (se abre en el navegador). */
+  router.get("/assistances/:id/report.pdf", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    try {
+      const { buffer, assistance } = await buildConnectReportPdf(id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="asistencia_${assistance.expedientNumber ?? id}.pdf"`,
+      );
+      res.send(buffer);
+    } catch (e: any) {
+      console.error("[Connect] informe:", e?.message);
+      err(res, 500, "report_failed", "No se pudo generar el informe");
+    }
+  });
+
+  /** Regenera el informe y lo archiva en la ficha. */
+  router.post("/assistances/:id/report", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const url = await generarYGuardarInforme(id);
+    if (!url) return err(res, 500, "report_failed", "No se pudo generar el informe");
+    await auditConnect({ req, action: "assistance.report_generated", resourceType: "assistance", resourceId: id });
+    res.json({ url });
+  });
+
+  // ── Colas operativas (ventanas a pantalla completa) ──────────────────────
+
+  /**
+   * Todas las asistencias en juego con la información completa: quién la
+   * atiende, con qué furgoneta, tiempos de cada estado y contacto, más la cola
+   * que le corresponde. Ordenadas cronológicamente (la más antigua primero: es
+   * la que más espera lleva).
+   *
+   * Una sola consulta sirve las cinco pestañas, resumen incluido: filtrar por
+   * cola en el servidor obligaría a repetirla al cambiar de pestaña.
+   */
+  router.get("/assistances/queues", ...requireConnectRole("operator"), async (_req, res) => {
+    const now = Date.now();
+    const r = await db.query(
+      `SELECT ca.id, ca.uuid, ca.status, ca.priority, ca."serviceType", ca.address,
+              ca."customerName", ca."customerPhone", ca."expedientNumber", ca."externalReference",
+              ca."clientName", ca.description, ca.latitude, ca.longitude, ca.origin,
+              ca."slaMinutes", ca."slaDeadlineAtMs", ca."createdAtMs", ca."updatedAtMs",
+              ca."assignedTechName", ca."assignedVehicleName", ca."assignedVehiclePlate",
+              ca."liteUserName", ca.vehicle, ca."locationDetails", ca."reportUrl",
+              ca."operatorLat", ca."operatorLng", ca."operatorLocationAtMs",
+              w.name AS "workshopName", w.phone AS "workshopPhone", w."integrationType",
+              pc.name AS "providerName", cl.name AS "clientDisplayName", p.name AS "partnerName",
+              ra."assignedTechName" AS "coreTech", ra."assignedVehicleName" AS "coreVehicle",
+              ra.status AS "coreStatus",
+              -- Evidencias de los dos orígenes: APK Lite/WhatsApp y core Assist
+              ((SELECT COUNT(*)::int FROM connect_assistance_files f
+                 WHERE f."assistanceId" = ca.id AND f."deletedAtMs" IS NULL AND f.category <> 'report')
+               + COALESCE((SELECT COUNT(*)::int FROM roadside_assistance_files rf
+                            WHERE rf."assistanceId" = ca."coreAssistanceId" AND rf.kind <> 'firma'), 0)) AS "files",
+              (SELECT json_agg(json_build_object('toStatus', h."toStatus", 'occurredAtMs', h."occurredAtMs")
+                        ORDER BY h.id)
+                 FROM connect_status_history h WHERE h."assistanceId" = ca.id) AS timeline,
+              asg."acceptDeadlineMs"
+         FROM connect_assistances ca
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
+         LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+         LEFT JOIN LATERAL (
+           SELECT "acceptDeadlineMs" FROM connect_assignments
+            WHERE "assistanceId" = ca.id AND status = 'sent' ORDER BY id DESC LIMIT 1
+         ) asg ON true
+        WHERE ca.status <> ALL ($1::text[])
+        ORDER BY ca."createdAtMs" ASC`,
+      [ESTADOS_CERRADOS],
+    );
+    const data = r.rows.map((a: any) => ({ ...a, ...clasificarCola(a, now) }));
+    res.json({ data, generatedAtMs: now });
+  });
+
+  // ── Captura de WhatsApp (mismo número de entrada que Mobilink Assist) ────
+
+  /**
+   * Sesión de captura activa y sus mensajes. La sesión puede ser de Central
+   * Pro, de una asistencia del core o de un alta que aún no existe; se
+   * devuelve siempre para que el operador vea si el número está ocupado.
+   */
+  router.get("/whatsapp-capture/active", ...requireConnectRole("operator"), async (_req, res) => {
+    const session = await activeCaptureSession();
+    if (!session) return res.json({ session: null });
+    res.json({ session: { ...session, messages: await captureMessages(session.id) } });
+  });
+
+  router.get("/whatsapp-capture/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [Number(req.params.id)]);
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+    const session = normalizeCapture(r.rows[0]);
+    res.json({ session: { ...session, messages: await captureMessages(session.id) } });
+  });
+
+  /**
+   * Abre la captura. Sin `assistanceId` queda a la espera (alta nueva): los
+   * WhatsApp entrantes se guardan y se vinculan al crear la asistencia.
+   */
+  router.post("/whatsapp-capture/start", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const assistanceId = req.body?.assistanceId != null ? Number(req.body.assistanceId) : null;
+
+    const activa = await activeCaptureSession();
+    if (activa) {
+      if (assistanceId != null && activa.connect_assistance_id === assistanceId) {
+        return res.json({ session: { ...activa, messages: await captureMessages(activa.id) } });
+      }
+      return err(res, 409, "capture_busy",
+        activa.job_id != null
+          ? "Hay una captura activa en Mobilink Assist. Ciérrala antes de empezar otra."
+          : "Ya hay una captura de WhatsApp activa. Ciérrala antes de empezar otra.");
+    }
+    if (assistanceId != null) {
+      const a = await db.query(`SELECT id FROM connect_assistances WHERE id = $1`, [assistanceId]);
+      if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    }
+
+    const now = Date.now();
+    const ins = await db.query(
+      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, status, started_at, created_by)
+       VALUES (NULL, $1, 'ACTIVE', $2, $3) RETURNING *`,
+      [assistanceId, now, u.name],
+    );
+    await auditConnect({
+      req, action: "whatsapp.capture_started", resourceType: "assistance",
+      resourceId: assistanceId ?? undefined, detail: { sessionId: ins.rows[0].id },
+    });
+    res.status(201).json({ session: { ...normalizeCapture(ins.rows[0]), messages: [] } });
+  });
+
+  /**
+   * Cierra la captura, archiva las evidencias en la asistencia (si ya existe)
+   * y lanza el análisis con IA.
+   */
+  router.post("/whatsapp-capture/:id/close", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const r = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+    if (r.rows[0].status === "CLOSED") return err(res, 409, "already_closed", "La sesión ya está cerrada");
+
+    const now = Date.now();
+    await db.query(`UPDATE whatsapp_capture_sessions SET status = 'CLOSED', ended_at = $2 WHERE id = $1`, [id, now]);
+    const assistanceId = r.rows[0].connect_assistance_id;
+    if (assistanceId) await archivarCaptura(id, Number(assistanceId));
+
+    // El análisis puede tardar unos segundos: no se bloquea la respuesta
+    saveCaptureAnalysis(id)
+      .then((s) => console.log(`[Connect] captura #${id} analizada (${Object.keys(s).length} campos)`))
+      .catch((e) => console.error("[Connect] análisis de captura:", e?.message));
+
+    await auditConnect({ req, action: "whatsapp.capture_closed", resourceType: "assistance", resourceId: assistanceId ?? undefined, detail: { sessionId: id } });
+    const upd = await db.query(`SELECT * FROM whatsapp_capture_sessions WHERE id = $1`, [id]);
+    res.json({ session: normalizeCapture(upd.rows[0]) });
+  });
+
+  /** Vincula una captura a la asistencia recién creada y archiva lo recibido. */
+  router.post("/whatsapp-capture/:id/link", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const assistanceId = Number(req.body?.assistanceId);
+    const a = await db.query(`SELECT id FROM connect_assistances WHERE id = $1`, [assistanceId]);
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    await db.query(
+      `UPDATE whatsapp_capture_sessions SET connect_assistance_id = $2 WHERE id = $1`,
+      [id, assistanceId],
+    );
+    await archivarCaptura(id, assistanceId);
+    await auditConnect({ req, action: "whatsapp.capture_linked", resourceType: "assistance", resourceId: assistanceId, detail: { sessionId: id } });
+    res.json({ ok: true });
+  });
+
+  /** Análisis con IA a demanda (sin cerrar la sesión). */
+  router.post("/whatsapp-capture/:id/analyze", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const suggestions = await saveCaptureAnalysis(id);
+    res.json({ suggestions });
+  });
+
   // ── Asistencias (lectura Sprint 1; gestión completa en S2/S3) ──
 
   router.get("/assistances", ...requireConnectRole("analyst"), async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     const status = req.query.status ? String(req.query.status) : null;
+    const workshopId = req.query.workshopId ? Number(req.query.workshopId) : null;
     const r = await db.query(
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName"
          FROM connect_assistances ca
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
-        WHERE $1::text IS NULL OR ca.status = $1
+        WHERE ($1::text IS NULL OR ca.status = $1)
+          AND ($3::int IS NULL OR ca."workshopId" = $3)
         ORDER BY ca.id DESC LIMIT $2`,
-      [status, limit],
+      [status, limit, workshopId],
     );
     res.json({ data: r.rows });
   });
 
   router.get("/assistances/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(
+      // La trazabilidad de connect_assistances manda; el core solo rellena
+      // los huecos de las asistencias antiguas, anteriores a esas columnas.
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName", w.phone AS "workshopPhone",
               pc.name AS "providerName", u.name AS "createdByName",
-              ra."assignedTechName", ra.status AS "coreStatus"
+              COALESCE(ca."assignedTechName", ca."liteUserName", ra."assignedTechName") AS "assignedTechName",
+              COALESCE(ca."assignedVehicleName", ra."assignedVehicleName") AS "assignedVehicleName",
+              ra.status AS "coreStatus"
          FROM connect_assistances ca
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
@@ -1208,9 +2117,9 @@ export function createConnectBackofficeRouter(): Router {
                 COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2 AND asg.status = 'accepted')::int AS accepted,
                 COUNT(*) FILTER (WHERE asg."sentAtMs" BETWEEN $1 AND $2 AND asg.status IN ('rejected','expired'))::int AS declined,
                 (SELECT COUNT(*)::int FROM connect_assistances ca WHERE ca."workshopId" = w.id
-                   AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status = 'finished') AS finished,
+                   AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status IN ('finished','at_workshop')) AS finished,
                 (SELECT COALESCE(SUM(COALESCE(ca."finalCost", ca."estimatedCost")), 0) FROM connect_assistances ca
-                  WHERE ca."workshopId" = w.id AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status = 'finished') AS revenue
+                  WHERE ca."workshopId" = w.id AND ca."createdAtMs" BETWEEN $1 AND $2 AND ca.status IN ('finished','at_workshop')) AS revenue
            FROM connect_workshops w
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
            LEFT JOIN connect_assignments asg ON asg."workshopId" = w.id
@@ -1242,7 +2151,7 @@ export function createConnectBackofficeRouter(): Router {
            FROM connect_assistances ca
            LEFT JOIN connect_clients c ON c.id = ca."clientId"
            LEFT JOIN connect_partners p ON p.id = ca."partnerId"
-          WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+          WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
           GROUP BY 1 ORDER BY amount DESC`,
         [from, to],
       ),
@@ -1254,7 +2163,7 @@ export function createConnectBackofficeRouter(): Router {
            FROM connect_assistances ca
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
-          WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+          WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
           GROUP BY 1 ORDER BY amount DESC`,
         [from, to],
       ),
@@ -1264,7 +2173,7 @@ export function createConnectBackofficeRouter(): Router {
                 COUNT(*) FILTER (WHERE "finalCost" IS NULL)::int AS without_final,
                 COUNT(*) FILTER (WHERE "invoicedAtMs" IS NULL)::int AS pending_invoice
            FROM connect_assistances
-          WHERE status = 'finished' AND "createdAtMs" BETWEEN $1 AND $2`,
+          WHERE status IN ('finished','at_workshop') AND "createdAtMs" BETWEEN $1 AND $2`,
         [from, to],
       ),
     ]);
@@ -1284,7 +2193,7 @@ export function createConnectBackofficeRouter(): Router {
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
-        WHERE ca.status = 'finished' AND ca."createdAtMs" BETWEEN $1 AND $2
+        WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
         ORDER BY ca.id DESC LIMIT 1000`,
       [from, to],
     );
