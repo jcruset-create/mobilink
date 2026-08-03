@@ -28,8 +28,17 @@ export async function extractJson(opts: {
   images?: string[];
   maxTokens?: number;
   model?: string;
+  /**
+   * Con `strict`, un fallo lanza Error con el motivo real (clave ausente,
+   * error del proveedor, respuesta no JSON) en vez de devolver `{}`. Para
+   * llamantes que persisten el estado del análisis y necesitan la causa.
+   */
+  strict?: boolean;
 }): Promise<Record<string, any>> {
-  if (!hasAi()) return {};
+  if (!hasAi()) {
+    if (opts.strict) throw new Error("OPENAI_API_KEY no está configurada en el servidor");
+    return {};
+  }
   const images = (opts.images ?? []).filter((u) => typeof u === "string" && u.length > 0);
   const text = (opts.text ?? "").trim();
   if (!text && images.length === 0) return {};
@@ -45,14 +54,31 @@ ${text || "(sin texto: analiza las imágenes)"}`,
     temperatura: 0.1,
     maxTokens: opts.maxTokens ?? 800,
   });
-  if (!r.ok || !r.texto) return {};
+  if (!r.ok || !r.texto) {
+    if (opts.strict) throw new Error(r.error || "el modelo no devolvió respuesta");
+    return {};
+  }
 
+  const cleaned = r.texto.replace(/```json\r?\n?/g, "").replace(/```\r?\n?/g, "").trim();
   try {
-    const cleaned = r.texto.replace(/```json\r?\n?/g, "").replace(/```\r?\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (err: any) {
-    console.error("[IA] extractJson: respuesta no JSON");
+  } catch {
+    // A veces el modelo envuelve el JSON en prosa: rescatamos el primer bloque {...}
+    const bloque = cleaned.match(/\{[\s\S]*\}/);
+    if (bloque) {
+      try {
+        const parsed = JSON.parse(bloque[0]);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch { /* cae al error de abajo */ }
+    }
+    console.error("[IA] extractJson: respuesta no JSON:", cleaned.slice(0, 300));
+    if (opts.strict) {
+      const truncada = cleaned.length > 0 && !cleaned.trimEnd().endsWith("}");
+      throw new Error(truncada
+        ? "la respuesta del modelo llegó cortada (subir maxTokens)"
+        : "el modelo respondió algo que no es JSON");
+    }
     return {};
   }
 }

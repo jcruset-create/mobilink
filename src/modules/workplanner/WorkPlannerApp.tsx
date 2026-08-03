@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
+import PedidosErpPage from "./PedidosErpPage";
 import { supabase } from "../administracion/services/supabase";
 import { APP_VERSION } from "../../version";
 
@@ -14,6 +15,7 @@ export const MODULO_WORKPLANNER = "workplanner";
 const SECCIONES = [
   { key: "operativo2", label: "Operativo 2", icon: ClipboardList, proximamente: false },
   { key: "agenda", label: "Agenda", icon: CalendarDays, proximamente: false },
+  { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
@@ -269,6 +271,7 @@ export default function WorkPlannerApp() {
               />
             }
           />
+          <Route path="pedidos" element={<PedidosErpPage />} />
           <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
           <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
           <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />

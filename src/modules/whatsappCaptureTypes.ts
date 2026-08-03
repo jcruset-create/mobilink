@@ -17,7 +17,12 @@ export type WhatsAppCaptureSession = {
   ended_at: number | null;
   created_by: string | null;
   ai_suggestions: WhatsAppAiSuggestions | null;
+  ai_status: WhatsAppAiStatus | null;
+  ai_error: string | null;
+  ai_started_at: number | null;
 };
+
+export type WhatsAppAiStatus = "pending" | "done" | "error";
 
 export type WhatsAppCaptureMessage = {
   id: number;

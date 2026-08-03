@@ -33,7 +33,7 @@ import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
-import { saveCaptureAnalysis } from "./core/whatsappCapture.ts";
+import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -13007,8 +13007,10 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
     );
     if (!sessionResult.rows.length) return res.json(null);
     const session = sessionResult.rows[0];
+    await reconcileCaptureAiStatus(session);
     session.started_at = session.started_at ? Number(session.started_at) : null;
     session.ended_at = session.ended_at ? Number(session.ended_at) : null;
+    session.ai_started_at = session.ai_started_at ? Number(session.ai_started_at) : null;
     if (session.ai_suggestions) {
       try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
     }
@@ -13159,7 +13161,15 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       }
     }
 
-    // Run AI analysis asynchronously — don't block the response
+    // Marcamos 'pending' de forma síncrona para que la respuesta del cierre ya
+    // lleve el estado correcto; el análisis corre en segundo plano y persiste
+    // done/error en la sesión (core/whatsappCapture.ts).
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+       WHERE id = $1`,
+      [id, now]
+    );
     saveCaptureAnalysis(id)
       .then((s) => console.log(`WhatsApp capture session #${id} analizada (${Object.keys(s).length} campos)`))
       .catch((e) => console.error("AI analysis error:", e));
@@ -13188,7 +13198,8 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
 
     const result = await db.query(
       `UPDATE whatsapp_capture_sessions
-       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL
+       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL,
+           ai_status = NULL, ai_error = NULL, ai_started_at = NULL
        WHERE id = $1
        RETURNING *`,
       [id]
@@ -13201,6 +13212,37 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions/:id/reopen error:", error);
     return res.status(500).json({ error: "Error reabriendo sesión" });
+  }
+});
+
+// POST relanzar el análisis IA de una sesión ya cerrada, sin tener que
+// reabrirla y volver a cerrarla (que borraría los mensajes del contexto).
+app.post("/api/whatsapp-capture/sessions/:id/reanalyze", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const session = await db.query(
+      `SELECT id, status, ai_status FROM whatsapp_capture_sessions WHERE id = $1`,
+      [id]
+    );
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
+    if (session.rows[0].status !== "CLOSED") {
+      return res.status(400).json({ error: "La captura sigue abierta. Ciérrala para analizarla." });
+    }
+    if (session.rows[0].ai_status === "pending") {
+      return res.status(409).json({ error: "Ya hay un análisis en curso." });
+    }
+
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+       WHERE id = $1`,
+      [id, Date.now()]
+    );
+    saveCaptureAnalysis(id).catch((e) => console.error("AI reanalysis error:", e));
+    return res.json({ ok: true, ai_status: "pending" });
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions/:id/reanalyze error:", error);
+    return res.status(500).json({ error: "Error relanzando el análisis" });
   }
 });
 
@@ -13230,6 +13272,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       latitude: "latitude",
       longitude: "longitude",
       vehicleDescription: '"vehicleDescription"',
+      descripcionAveria: '"descripcionAveria"',
       notes: "notes",
     };
 
@@ -14254,15 +14297,25 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     const b = req.body ?? {};
     const nombre = String(b.nombre ?? "").trim();
     const email = String(b.email ?? "").trim().toLowerCase();
-    const password = String(b.password ?? "");
     const rol = String(b.rol ?? "cliente");
     const accesoApk = Boolean(b.acceso_apk ?? false);
     const accesoPanel = Boolean(b.acceso_panel ?? true);
     // Un admin normal solo crea en SU empresa; el super-admin en la que indique.
     const empresaId = esSuper ? String(b.empresa_id ?? perfil.empresa_id) : perfil.empresa_id;
 
-    if (!nombre || !email || !password) return res.status(400).json({ error: "Nombre, email y contraseña son obligatorios" });
+    if (!nombre || !email) return res.status(400).json({ error: "Nombre y email son obligatorios" });
     if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
+
+    // La contraseña solo hace falta para entrar en la APK (allí es el PIN). En
+    // el panel se entra con enlace por email, así que obligar a un admin a
+    // inventar una contraseña para un cliente creaba una credencial que nadie
+    // usaría y que el admin conocería. Si no viene, se pone una aleatoria que
+    // nadie sabe: la cuenta solo es accesible por enlace.
+    const passwordPedida = String(b.password ?? "");
+    if (accesoApk && passwordPedida.length < 4) {
+      return res.status(400).json({ error: "Un usuario con acceso a la APK necesita un PIN de al menos 4 caracteres" });
+    }
+    const password = passwordPedida || crypto.randomBytes(24).toString("base64url");
 
     const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
     if (createErr || !created.user) return res.status(400).json({ error: createErr?.message ?? "No se pudo crear el usuario" });
@@ -14289,6 +14342,133 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     res.status(500).json({ error: error?.message || "Error interno" });
   }
 });
+
+/**
+ * Últimos accesos de los usuarios visibles para quien pregunta.
+ *
+ * `last_sign_in_at` vive en auth.users, que no es accesible desde el navegador
+ * ni con RLS: hace falta service role. Se devuelve un mapa {id: fecha} para no
+ * tener que rehacer el listado de usuarios, que sigue saliendo por Supabase.
+ *
+ * El alcance lo pone el servidor, no el cliente: un admin de empresa solo ve
+ * los de SU empresa. Aceptar una lista de ids del body sin comprobarla dejaría
+ * consultar la actividad de cualquiera.
+ */
+app.get(
+  "/api/tyrecontrol/usuarios/ultimos-accesos",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const admin = (req as any).tcAdmin as { id: string; es_superadmin: boolean };
+
+      let q = supabase.from("tc_usuarios").select("id");
+      if (!admin.es_superadmin) {
+        const { data: yo } = await supabase
+          .from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle();
+        if (!yo?.empresa_id) return res.json({ accesos: {} });
+        q = q.eq("empresa_id", yo.empresa_id);
+      }
+      const { data: visibles } = await q;
+      const permitidos = new Set((visibles ?? []).map((u: any) => u.id as string));
+      if (permitidos.size === 0) return res.json({ accesos: {} });
+
+      // listUsers pagina de 50 en 50 por defecto. Se recorre hasta agotar,
+      // con un tope por si el proyecto crece: mejor un dato incompleto que
+      // una petición que nunca termina.
+      const accesos: Record<string, string | null> = {};
+      const PAGINAS_MAX = 40;
+      for (let page = 1; page <= PAGINAS_MAX; page++) {
+        const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error) return res.status(400).json({ error: error.message });
+        const lote = data?.users ?? [];
+        for (const u of lote) {
+          if (permitidos.has(u.id)) accesos[u.id] = (u as any).last_sign_in_at ?? null;
+        }
+        if (lote.length < 1000) break;
+      }
+      res.json({ accesos });
+    } catch (error: any) {
+      console.error("GET /api/tyrecontrol/usuarios/ultimos-accesos error:", error?.message);
+      res.status(500).json({ error: error?.message || "Error consultando los accesos" });
+    }
+  },
+);
+
+/**
+ * Genera un enlace de acceso de un solo uso para un usuario del panel.
+ *
+ * Por qué existe: el panel se entra con enlace mágico por email
+ * (signInWithOtp), no con contraseña. Para invitar a un cliente hay dos
+ * caminos y aquí se eligen los dos:
+ *   · El cliente puede pedirse su propio enlace desde la pantalla de login.
+ *   · El administrador puede generar el enlace aquí y pasárselo por el canal
+ *     que ya usa con él (WhatsApp, su email corporativo).
+ *
+ * Se usa generateLink y NO inviteUserByEmail a propósito: generateLink
+ * devuelve el enlace sin depender del envío de correo de Supabase, que en el
+ * plan por defecto está muy limitado y no sirve para producción. Quien manda
+ * el enlace es el administrador, y así el flujo no falla en silencio.
+ *
+ * El enlace es una credencial de un solo uso: NO se registra en los logs.
+ */
+app.post(
+  "/api/tyrecontrol/usuarios/:id/enlace-acceso",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const admin = (req as any).tcAdmin as { id: string; rol: string; es_superadmin: boolean };
+
+      const { data: objetivo } = await supabase
+        .from("tc_usuarios")
+        .select("id, email, nombre, activo, acceso_panel, empresa_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+
+      // Un admin de empresa solo genera enlaces de SU empresa; el super-admin,
+      // de cualquiera. Sin esto, un admin podría suplantar a un cliente ajeno.
+      if (!admin.es_superadmin) {
+        const { data: yo } = await supabase
+          .from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle();
+        if (!yo?.empresa_id || yo.empresa_id !== objetivo.empresa_id) {
+          return res.status(403).json({ error: "Ese usuario no es de tu empresa" });
+        }
+      }
+
+      if (!objetivo.activo) return res.status(400).json({ error: "El usuario está desactivado" });
+      if (!objetivo.acceso_panel) return res.status(400).json({ error: "Ese usuario no tiene acceso al panel" });
+      if (!objetivo.email) return res.status(400).json({ error: "El usuario no tiene email" });
+
+      const base = String(req.body?.origen ?? "").trim();
+      // Solo se acepta un origen http(s) para no fabricar enlaces hacia
+      // esquemas raros; el destino real lo valida además Supabase con su
+      // lista de Redirect URLs.
+      const redirectTo = /^https?:\/\//i.test(base)
+        ? `${base.replace(/\/$/, "")}/tyrecontrol/dashboard`
+        : undefined;
+
+      const { data, error } = await supabase.auth.admin.generateLink({
+        type: "magiclink",
+        email: objetivo.email,
+        options: redirectTo ? { redirectTo } : undefined,
+      });
+      if (error) return res.status(400).json({ error: error.message });
+
+      const enlace = (data as any)?.properties?.action_link as string | undefined;
+      if (!enlace) return res.status(500).json({ error: "Supabase no devolvió el enlace" });
+
+      res.json({ ok: true, enlace, email: objetivo.email });
+    } catch (error: any) {
+      console.error("POST /api/tyrecontrol/usuarios/:id/enlace-acceso error:", error?.message);
+      res.status(500).json({ error: error?.message || "Error generando el enlace" });
+    }
+  },
+);
 
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con

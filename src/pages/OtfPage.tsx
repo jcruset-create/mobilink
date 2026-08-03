@@ -188,7 +188,161 @@ function NewOtfModal({ places, techs, vehicles, onClose, onCreated }: { places: 
   );
 }
 
+/**
+ * Presupuestar la OT en el ERP a través del Integration Hub.
+ *
+ * Primero enseña el preview (qué líneas se enviarían y qué falta por mapear) y sólo
+ * después permite crear: un trabajo sin mapear enviado al ERP produce un error críptico,
+ * y aquí el usuario ve exactamente qué le falta y dónde arreglarlo.
+ */
+function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) {
+  const [preview, setPreview] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [creando, setCreando] = useState(false);
+  const [resultado, setResultado] = useState<any | null>(null);
+  const [forzar, setForzar] = useState(false);
+
+  const tenant = localStorage.getItem("mobilink-tenant-id") || "default";
+  const headers = { "Content-Type": "application/json", "x-tenant-id": tenant };
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/v1/erp/work-orders/${otf.id}/quote-preview`, { headers });
+        const data = await res.json();
+        if (!vivo) return;
+        if (!res.ok) throw new Error(data?.message || data?.error || `Error ${res.status}`);
+        setPreview(data);
+      } catch (e: any) {
+        if (vivo) setError(e.message);
+      }
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, [otf.id]);
+
+  async function crear() {
+    setCreando(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/v1/erp/work-orders/${otf.id}/sales-quote`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ permitirSinMapear: forzar }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || data?.error || `Error ${res.status}`);
+      setResultado(data);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setCreando(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-lg font-black">Presupuestar en Business Central</h3>
+          <button onClick={onClose} className="rounded-lg border border-slate-200 px-2 py-1 text-sm">✕</button>
+        </div>
+
+        {error && <div className="mb-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</div>}
+
+        {resultado ? (
+          <div className="space-y-2">
+            <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
+              <div className="font-black">Presupuesto creado</div>
+              <div className="mt-1">
+                Número en Business Central: <span className="font-mono font-black">{resultado.businessCentralQuoteNumber}</span>
+              </div>
+              <div>Total: {resultado.totalAmount} {resultado.currency}</div>
+              {resultado.simulated && (
+                <div className="mt-1 font-bold text-amber-700">
+                  Atención: generado en modo simulación, no existe en Business Central.
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-slate-500">Referencia interna: {resultado.mobilinkQuoteId} · {resultado.correlationId}</div>
+            <button onClick={onClose} className="mt-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white">Cerrar</button>
+          </div>
+        ) : !preview ? (
+          <div className="py-6 text-center text-sm text-slate-500">Cargando…</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-sm">
+              <span className="text-slate-500">Cliente:</span>{" "}
+              <span className="font-black">{preview.clientName}</span>{" "}
+              <span className="font-mono text-xs text-slate-500">
+                {preview.customer.mobilinkId} → {preview.customer.externalCode}
+              </span>
+            </div>
+
+            <table className="w-full text-left text-sm">
+              <thead className="text-xs text-slate-500">
+                <tr>
+                  <th className="py-1">Trabajo</th>
+                  <th className="py-1">Código en el ERP</th>
+                  <th className="py-1">Cant.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.lines.map((l: any) => (
+                  <tr key={l.trabajoId} className="border-t border-slate-100">
+                    <td className="py-1.5">
+                      <div>{l.description}</div>
+                      {l.plate && <div className="text-xs text-slate-400">{l.plate}</div>}
+                    </td>
+                    <td className="py-1.5 font-mono text-xs">
+                      <span className={l.mapped ? "text-emerald-700" : "text-amber-700"}>{l.externalCode}</span>
+                      {!l.mapped && <div className="text-[10px] text-amber-700">sin mapear</div>}
+                    </td>
+                    <td className="py-1.5">{l.quantity}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {preview.lines.length === 0 && (
+              <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                Esta OT no tiene trabajos facturables (los no realizados se excluyen).
+              </div>
+            )}
+
+            {preview.sinMapear.length > 0 && (
+              <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="font-black">Faltan mapeos</div>
+                <div className="mt-1">{preview.sinMapear.join(", ")}</div>
+                <div className="mt-2 text-xs">
+                  Añádelos en <a href="/integraciones" target="_blank" rel="noreferrer" className="underline">Integraciones → Mapeos</a>{" "}
+                  para que el ERP reciba los códigos correctos.
+                </div>
+                <label className="mt-2 flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={forzar} onChange={(e) => setForzar(e.target.checked)} />
+                  Enviar igualmente (sólo si los códigos ya coinciden con los del ERP)
+                </label>
+              </div>
+            )}
+
+            <button
+              onClick={crear}
+              disabled={creando || preview.lines.length === 0 || (preview.sinMapear.length > 0 && !forzar)}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white disabled:opacity-40"
+            >
+              {creando ? "Creando…" : "Crear presupuesto"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
+  const [presupuestando, setPresupuestando] = useState(false);
   const [plate, setPlate] = useState("");
   const [tipo, setTipo] = useState("Tractora");
   const [trabajoPlantilla, setTP] = useState("");
@@ -220,8 +374,16 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
           >
             📄 Informe PDF
           </button>
+          <button
+            onClick={() => setPresupuestando(true)}
+            className="mt-2 ml-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50"
+          >
+            💶 Presupuestar en BC
+          </button>
         </div>
       </div>
+
+      {presupuestando && <PresupuestarModal otf={otf} onClose={() => setPresupuestando(false)} />}
 
       {/* Lista de trabajos */}
       <div className="mt-4 space-y-2">

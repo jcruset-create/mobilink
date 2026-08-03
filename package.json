@@ -22,7 +22,10 @@
     "seed": "tsx server/seed.ts",
     "backup:postgres": "tsx server/backup-postgres.ts",
     "restore:postgres": "tsx server/restore-postgres.ts",
-    "setup:buckets": "tsx scripts/setup-supabase-buckets.ts"
+    "setup:buckets": "tsx scripts/setup-supabase-buckets.ts",
+    "bc:check": "node scripts/bc-check.mjs",
+    "bc:setup": "tsx scripts/bc-setup.ts",
+    "bc:quote": "tsx scripts/bc-quote.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

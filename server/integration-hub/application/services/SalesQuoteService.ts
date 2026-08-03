@@ -11,6 +11,7 @@ import type { OperationContext } from "../../domain/identifiers.ts";
 import type { QuoteLineInput } from "../../domain/models.ts";
 import { IntegrationError } from "../../domain/errors.ts";
 import { resolveErpConnector } from "../../connectors/ConnectorRegistry.ts";
+import { resolveQuoteIds } from "./MappingService.ts";
 import { runOperation, OperationFailedError } from "./IntegrationOperationsService.ts";
 import { nextCorrelationId, nextDocumentNumber, linkDocument } from "../../infrastructure/repositories.ts";
 
@@ -75,11 +76,25 @@ export async function createQuoteFromWorkOrder(
             : `Usando conector ERP '${resolved.key}'`
         );
 
+        // Mapping Engine (§2.5): traducimos cliente y artículos ANTES de tocar el ERP,
+        // para que un mapeo ausente no deje una cabecera de documento a medias en BC.
+        const ids = await resolveQuoteIds({
+          tenantId: input.tenantId,
+          system: resolved.key,
+          strict: Boolean((resolved.config as any)?.strictMappings),
+          customerId: input.customerId,
+          productIds: input.lines.map((l) => l.externalProductId),
+        });
+        await log.info(ids.resumen);
+
         const quote = await resolved.connector.createSalesQuote(ctx, {
-          externalCustomerId: input.customerId,
+          externalCustomerId: ids.customer.externalCode,
           currency: input.currency,
           reference: input.reference ?? input.workOrderId,
-          lines: input.lines,
+          lines: input.lines.map((line, i) => ({
+            ...line,
+            externalProductId: ids.products[i].externalCode,
+          })),
         });
 
         // Documento interno de Mobilink + enlace con el documento externo.

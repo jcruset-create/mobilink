@@ -13,6 +13,22 @@ function Pantalla({ children }: { children: React.ReactNode }) {
 }
 
 /** Requiere sesión + perfil activo + acceso al panel web. */
+/**
+ * Pantalla de aterrizaje según el rol. Un cliente entra directamente a su
+ * informe ejecutivo (el estado de su flota, que es a lo que viene) en vez de
+ * al dashboard general, que está pensado para el taller.
+ */
+export function rutaInicio(perfil: { rol: Rol; es_superadmin?: boolean } | null | undefined): string {
+  const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
+  return esCliente ? "/tyrecontrol/informes/ejecutivo" : "/tyrecontrol/dashboard";
+}
+
+/** Redirige al inicio que le toca a quien ha entrado. */
+export function InicioSegunRol() {
+  const { perfil } = useTyreAuth();
+  return <Navigate to={rutaInicio(perfil)} replace />;
+}
+
 export function ProtectedRoute() {
   const { user, perfil, loading } = useTyreAuth();
   if (loading) {

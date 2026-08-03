@@ -9,6 +9,7 @@ export type IntegrationErrorKind =
   | "VALIDATION" // datos de entrada inválidos → no reintentar
   | "MAPPING" // no se pudo mapear un código externo → revisión manual
   | "AUTH" // credenciales/permisos inválidos → revisión manual
+  | "BLOCKED" // el estado del sistema externo impide continuar (p. ej. pedido ya facturado) → revisión manual
   | "NOT_FOUND" // recurso inexistente en el sistema externo
   | "PERMANENT"; // otro error no recuperable
 
@@ -43,6 +44,9 @@ export class IntegrationError extends Error {
   }
   static auth(code: string, message: string, details?: unknown) {
     return new IntegrationError({ kind: "AUTH", code, message, details });
+  }
+  static blocked(code: string, message: string, details?: unknown) {
+    return new IntegrationError({ kind: "BLOCKED", code, message, details });
   }
   static notFound(code: string, message: string, details?: unknown) {
     return new IntegrationError({ kind: "NOT_FOUND", code, message, details });

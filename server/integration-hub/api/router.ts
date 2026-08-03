@@ -10,12 +10,19 @@
 
 import express, { type Request, type Response, type Router } from "express";
 import { createQuoteFromWorkOrder } from "../application/services/SalesQuoteService.ts";
+import {
+  previewQuoteFromWorkOrder,
+  createQuoteFromWorkOrderId,
+} from "../application/services/WorkOrderQuoteService.ts";
 import { identifyVehicle, getCompatibleParts, getOeReferences } from "../application/services/TechnicalService.ts";
 import { searchOffers, createPurchaseOrder as createSupplierPurchaseOrder } from "../application/services/SupplierService.ts";
 import { processNonConformity } from "../application/services/ChecklistAutomationService.ts";
 import { sendCommunication } from "../application/services/CommunicationService.ts";
 import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
+import { runCatalogSync, getCatalogStatus } from "../application/services/CatalogSyncService.ts";
+import { runSalesOrderSync } from "../application/services/SalesOrderSyncService.ts";
+import { registerExecution, confirmReturn } from "../application/services/ExecutionReturnService.ts";
 import {
   resolveErpConnector,
   knownErpConnectorKeys,
@@ -35,19 +42,47 @@ import {
   upsertConnectorConfig,
   listConnectorConfigs,
   updateOperationStatus,
+  listMappings,
+  upsertMapping,
+  deleteMapping,
+  listCatalog,
+  listWpOrders,
+  getWpOrderWithLines,
+  updateWpOrderPlanning,
+  getSyncState,
 } from "../infrastructure/repositories.ts";
 
 function tenantOf(req: Request): string | undefined {
   return (req.header("x-tenant-id") || req.body?.tenantId || req.query?.tenantId) as string | undefined;
 }
 
-/** Guard ligero para endpoints de administración (config, reprocesar). */
+/**
+ * Guard ligero para endpoints de administración (config, reprocesar).
+ *
+ * La cabecera llega percent-encoded desde el front (`makeAdminHeaders` en
+ * src/modules/adminHeaders.ts aplica encodeURIComponent), igual que en el resto
+ * del monolito: por eso se decodifica antes de comparar, como hace
+ * getRoleFromRequest() en server/index.ts.
+ *
+ * Se acepta tanto ADMIN_TOKEN como ADMIN_PASSWORD: el login clásico guarda la
+ * contraseña de admin en 'sea-admin-token', y el resto de la app ya le concede
+ * rol 'admin' con ella. Sin esto, el panel de integraciones daba 401 aunque el
+ * usuario estuviese correctamente autenticado como administrador.
+ */
 function requireAdmin(req: Request, res: Response): boolean {
-  const expected = process.env.ADMIN_TOKEN;
-  // Si no hay ADMIN_TOKEN configurado, no bloqueamos (entorno de desarrollo).
-  if (!expected) return true;
-  const got = req.header("x-admin-token");
-  if (got !== expected) {
+  const accepted = [process.env.ADMIN_TOKEN, process.env.ADMIN_PASSWORD].filter(Boolean) as string[];
+  // Si no hay ninguna credencial configurada, no bloqueamos (entorno de desarrollo).
+  if (accepted.length === 0) return true;
+
+  const raw = req.header("x-admin-token") ?? String(req.query?.token ?? "");
+  let got = raw;
+  try {
+    got = decodeURIComponent(raw);
+  } catch {
+    got = raw;
+  }
+
+  if (!accepted.includes(got) && !accepted.includes(raw)) {
     res.status(401).json({ error: "unauthorized" });
     return false;
   }
@@ -97,6 +132,36 @@ export function createIntegrationHubRouter(): Router {
         reference,
         currency,
         lines,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Presupuesto a partir de una OT real de Mobilink (tabla otf).
+  // El preview no toca el ERP: dice qué se enviaría y qué falta por mapear.
+  router.get("/erp/work-orders/:otfId/quote-preview", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const preview = await previewQuoteFromWorkOrder({
+        tenantId: tenantId ?? "",
+        otfId: Number(req.params.otfId),
+      });
+      res.json(preview);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.post("/erp/work-orders/:otfId/sales-quote", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      const result = await createQuoteFromWorkOrderId({
+        tenantId: tenantId ?? "",
+        otfId: Number(req.params.otfId),
+        permitirSinMapear: Boolean(req.body?.permitirSinMapear),
+        currency: req.body?.currency,
       });
       res.status(201).json(result);
     } catch (err) {
@@ -285,6 +350,214 @@ export function createIntegrationHubRouter(): Router {
         return res.json({ key, ...result });
       }
       return res.status(400).json({ error: "unsupported_connector", key });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Catálogo controlado de WorkPlanner (SPEC §4) ───────────────────────────
+  // Lectura de negocio: lo consume la UI de WorkPlanner (artículos usables en campo).
+  router.get("/catalog", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const items = await listCatalog({
+        tenantId,
+        soloActivos: req.query.todos !== "1",
+        categoria: req.query.categoria as string | undefined,
+        search: req.query.search as string | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+      });
+      res.json({ tenantId, items });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.get("/admin/catalog/status", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      res.json(await getCatalogStatus(tenantId));
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Sincronización bajo demanda. body: { full?: boolean }
+  router.post("/admin/catalog/sync", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const result = await runCatalogSync({ tenantId, full: Boolean(req.body?.full) });
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Pedidos BC → WorkPlanner (SPEC §2) ─────────────────────────────────────
+  // Bandeja local de pedidos sincronizados. Lo consume la UI de WorkPlanner.
+  router.get("/erp/sales-orders", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const [orders, state] = await Promise.all([
+        listWpOrders({
+          tenantId,
+          wpStatus: req.query.estado as string | undefined,
+          search: req.query.search as string | undefined,
+          limit: req.query.limit ? Number(req.query.limit) : undefined,
+        }),
+        getSyncState(tenantId, "sales_orders"),
+      ]);
+      res.json({
+        tenantId,
+        lastSyncMs: state?.last_sync_ms ? Number(state.last_sync_ms) : null,
+        syncStatus: state?.status ?? null,
+        orders,
+      });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.get("/erp/sales-orders/:id", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const data = await getWpOrderWithLines(tenantId, Number(req.params.id));
+      if (!data) return res.status(404).json({ error: "not_found" });
+      res.json(data);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Planificación local (estado WP, técnicos, fechas). Nunca viaja a BC.
+  router.patch("/erp/sales-orders/:id/planning", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const updated = await updateWpOrderPlanning({
+        tenantId,
+        id: Number(req.params.id),
+        wpStatus: req.body?.wpStatus,
+        planning: req.body?.planning,
+      });
+      if (!updated) return res.status(404).json({ error: "not_found_or_cancelled" });
+      res.json(updated);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Ejecución del parte: consumos y líneas añadidas en campo. Local, no toca BC.
+  router.post("/erp/sales-orders/:id/execution", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const result = await registerExecution({
+        tenantId,
+        wpOrderId: Number(req.params.id),
+        lines: req.body?.lines,
+        extraLines: req.body?.extraLines,
+        usuario: req.body?.usuario,
+      });
+      res.json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Confirmar el parte: empuja a BC lo pendiente (operación auditada y reintentable).
+  router.post("/erp/sales-orders/:id/confirm-return", async (req: Request, res: Response) => {
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const result = await confirmReturn({ tenantId, wpOrderId: Number(req.params.id) });
+      res.status(201).json(result);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Sincronización bajo demanda. body: { full?: boolean }
+  router.post("/admin/sales-orders/sync", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      res.json(await runSalesOrderSync({ tenantId, full: Boolean(req.body?.full) }));
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // ── Administración: mapeos Mobilink ↔ sistema externo (§4.3) ──────────────
+  router.get("/admin/mappings", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const mappings = await listMappings({
+        tenantId,
+        entityType: req.query.entityType as string | undefined,
+        system: req.query.system as string | undefined,
+        search: req.query.search as string | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+      });
+      res.json({ tenantId, mappings });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Alta/actualización. Acepta uno o varios de golpe, para poder cargar el maestro
+  // completo de clientes o artículos sin una llamada por fila.
+  router.post("/admin/mappings", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+
+      const body = req.body ?? {};
+      const entradas = Array.isArray(body.mappings) ? body.mappings : [body];
+      const guardados = [];
+      for (const [i, m] of entradas.entries()) {
+        if (!m?.entityType || !m?.system || !m?.externalCode || !m?.mobilinkId) {
+          throw IntegrationError.validation(
+            "MAPPING_INCOMPLETE",
+            `Mapeo ${i}: se requieren entityType, system, externalCode y mobilinkId`
+          );
+        }
+        guardados.push(
+          await upsertMapping({
+            tenantId,
+            entityType: m.entityType,
+            system: m.system,
+            externalCode: String(m.externalCode),
+            mobilinkId: String(m.mobilinkId),
+            metadata: m.metadata,
+          })
+        );
+      }
+      res.status(201).json({ guardados: guardados.length, mappings: guardados });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.delete("/admin/mappings/:id", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const borrado = await deleteMapping(tenantId, Number(req.params.id));
+      if (!borrado) return res.status(404).json({ error: "not_found" });
+      res.json({ ok: true });
     } catch (err) {
       sendError(res, err);
     }

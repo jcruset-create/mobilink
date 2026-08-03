@@ -23,6 +23,9 @@ export interface CaptureSession {
   ended_at: number | null;
   created_by: string | null;
   ai_suggestions: any;
+  ai_status: "pending" | "done" | "error" | null;
+  ai_error: string | null;
+  ai_started_at: number | null;
 }
 
 /** Devuelve la sesión activa (solo puede haber una: un único número). */
@@ -41,6 +44,7 @@ export function normalize(row: any): CaptureSession {
     started_at: row.started_at ? Number(row.started_at) : 0,
     ended_at: row.ended_at ? Number(row.ended_at) : null,
     ai_suggestions: ai ?? null,
+    ai_started_at: row.ai_started_at ? Number(row.ai_started_at) : null,
   };
 }
 
@@ -74,7 +78,10 @@ export async function analyzeCaptureSession(sessionId: number): Promise<Record<s
       ? new Date(m.received_at).toLocaleTimeString("es-ES", { hour12: false, timeZone: "Europe/Madrid" })
       : "";
     const ts = hora ? ` ${hora}` : "";
-    const url = m.media_stored_url || m.media_url;
+    // Solo la copia almacenada (Supabase, pública): la URL original de Twilio
+    // exige Basic Auth, OpenAI no puede descargarla y tumba todo el análisis.
+    const url = m.media_stored_url
+      || (m.media_url && !/\btwilio\.com\//i.test(m.media_url) ? m.media_url : null);
     if (m.message_type === "text" && m.text_content) lines.push(`[TEXTO${ts}] ${m.text_content}`);
     else if (m.message_type === "location") lines.push(`[UBICACION${ts}] lat=${m.latitude} lng=${m.longitude}${m.address ? ` dir="${m.address}"` : ""}`);
     else if (m.message_type === "contact") lines.push(`[CONTACTO${ts}] nombre="${m.contact_name}" tel="${m.contact_phone}"`);
@@ -123,16 +130,92 @@ kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lis
     system,
     text: `Mensajes de la sesión:\n${lines.join("\n")}`,
     images: imageUrls,
-    maxTokens: 900,
+    // Holgura para modelos razonadores: gastan salida en razonar antes de
+    // emitir el JSON; con 900 la respuesta llegaba cortada.
+    maxTokens: 3000,
+    // El motivo del fallo acaba en ai_error, visible en el backoffice.
+    strict: true,
   });
 }
 
-/** Guarda el análisis en la sesión (se llama al cerrarla). */
+/**
+ * Guarda el análisis en la sesión (se llama al cerrarla), dejando rastro del
+ * estado en ai_status/ai_error. Antes un fallo devolvía {} sin persistir nada
+ * y la sesión quedaba "Analizando con IA…" para siempre en el backoffice.
+ */
 export async function saveCaptureAnalysis(sessionId: number): Promise<Record<string, any>> {
-  const suggestions = await analyzeCaptureSession(sessionId);
-  if (Object.keys(suggestions).length > 0) {
-    await db.query(`UPDATE whatsapp_capture_sessions SET ai_suggestions = $2 WHERE id = $1`,
-      [sessionId, JSON.stringify(suggestions)]);
+  await db.query(
+    `UPDATE whatsapp_capture_sessions
+     SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+     WHERE id = $1`,
+    [sessionId, Date.now()],
+  );
+  let suggestions: Record<string, any> = {};
+  let failure: string | null = null;
+  try {
+    suggestions = await analyzeCaptureSession(sessionId);
+    if (Object.keys(suggestions).length === 0) {
+      // Con strict, los fallos del proveedor llegan por el catch con su motivo;
+      // aquí solo queda el caso de una sesión sin nada que extraer.
+      failure = "La IA no encontró ningún dato en los mensajes de la sesión.";
+    }
+  } catch (e: any) {
+    failure = `Error analizando con IA: ${e?.message ?? e}`;
   }
+
+  if (failure) {
+    await db.query(
+      `UPDATE whatsapp_capture_sessions SET ai_status = 'error', ai_error = $2 WHERE id = $1`,
+      [sessionId, failure],
+    );
+    console.error(`WhatsApp capture session #${sessionId}: ${failure}`);
+    return {};
+  }
+  await db.query(
+    `UPDATE whatsapp_capture_sessions
+     SET ai_suggestions = $2, ai_status = 'done', ai_error = NULL
+     WHERE id = $1`,
+    [sessionId, JSON.stringify(suggestions)],
+  );
   return suggestions;
+}
+
+/** Pasado este tiempo, un análisis 'pending' se da por perdido. */
+const AI_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
+
+/**
+ * Corrige el estado de sesiones que quedaron en el aire: cerradas antes de que
+ * existiera ai_status, o con un análisis 'pending' cuya promesa murió con un
+ * reinicio del proceso (Render). Muta `session` además de persistir, para que
+ * la respuesta en curso ya salga con el estado bueno.
+ */
+export async function reconcileCaptureAiStatus(session: any): Promise<void> {
+  if (session.status !== "CLOSED") return;
+
+  if (!session.ai_status) {
+    if (session.ai_suggestions) {
+      session.ai_status = "done";
+      session.ai_error = null;
+    } else {
+      session.ai_status = "error";
+      session.ai_error = "El análisis no llegó a completarse. Pulsa «Reintentar análisis».";
+    }
+    await db.query(
+      `UPDATE whatsapp_capture_sessions SET ai_status = $2, ai_error = $3 WHERE id = $1`,
+      [session.id, session.ai_status, session.ai_error],
+    );
+    return;
+  }
+
+  if (session.ai_status === "pending") {
+    const started = session.ai_started_at ? Number(session.ai_started_at) : null;
+    if (!started || Date.now() - started > AI_ANALYSIS_TIMEOUT_MS) {
+      session.ai_status = "error";
+      session.ai_error = "El análisis se interrumpió antes de terminar. Pulsa «Reintentar análisis».";
+      await db.query(
+        `UPDATE whatsapp_capture_sessions SET ai_status = 'error', ai_error = $2 WHERE id = $1`,
+        [session.id, session.ai_error],
+      );
+    }
+  }
 }
