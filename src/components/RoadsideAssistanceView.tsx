@@ -432,9 +432,39 @@ export default function RoadsideAssistanceView({
     if (typeof window !== "undefined") {
       const t = new URLSearchParams(window.location.search).get("tab");
       if (t === "nueva" || t === "activas" || t === "cerradas" || t === "historial") return t;
+      // ?estado=en_camino abre directamente el listado filtrado por ese estado.
+      if (new URLSearchParams(window.location.search).get("estado")) return "activas";
     }
     return "nueva";
   });
+
+  // ── Filtro por estado ───────────────────────────────────────────────────────
+  // Los cuadros de contadores hacen de pestañas: pulsar uno filtra el listado
+  // por ese estado y volver a pulsarlo devuelve la vista completa (la que usa
+  // la oficina para tener la foto de la jornada).
+  const [estadoFiltro, setEstadoFiltro] = useState<RoadsideAssistanceStatus | null>(() => {
+    if (typeof window === "undefined") return null;
+    const e = new URLSearchParams(window.location.search).get("estado");
+    return e && (ROADSIDE_ASSISTANCE_STATUS_FLOW as string[]).includes(e)
+      ? (e as RoadsideAssistanceStatus)
+      : null;
+  });
+
+  // El estado seleccionado viaja en la URL para poder compartirla y recargar
+  // sin perderlo. Se usa replaceState para no llenar el historial del navegador.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (estadoFiltro && panelTab === "activas") params.set("estado", estadoFiltro);
+    else params.delete("estado");
+    const qs = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+  }, [estadoFiltro, panelTab]);
+
+  const seleccionarEstado = (status: RoadsideAssistanceStatus) => {
+    setEstadoFiltro((prev) => (prev === status ? null : status));
+    setPanelTab("activas");
+  };
 
   // ── Historial ───────────────────────────────────────────────────────────────
   type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null; origen: "central" | "taller" };
@@ -565,6 +595,21 @@ export default function RoadsideAssistanceView({
       count: assistances.filter((item) => item.status === status).length,
     }));
   }, [assistances]);
+
+  // Listado del panel "Activas": todas las activas, o solo las del estado
+  // seleccionado. Al filtrar se busca sobre TODAS las asistencias, no solo las
+  // activas: "En taller ✓" es un estado cerrado y su contador debe cuadrar con
+  // las filas que se ven al pulsarlo.
+  const listaVisible = useMemo(
+    () =>
+      estadoFiltro
+        ? assistances.filter((item) => item.status === estadoFiltro)
+        : activeAssistances,
+    [assistances, activeAssistances, estadoFiltro]
+  );
+  // Un estado cerrado se pinta con la tarjeta compacta de cerradas: no tiene
+  // sentido ofrecer "siguiente estado" en una asistencia ya terminada.
+  const filtroEsCerrado = estadoFiltro != null && isClosed(estadoFiltro);
 
   const activeVehicles = useMemo(
     () =>
@@ -902,7 +947,12 @@ export default function RoadsideAssistanceView({
             <button
               key={tab}
               type="button"
-              onClick={() => setPanelTab(tab as PanelTab)}
+              onClick={() => {
+                setPanelTab(tab as PanelTab);
+                // Entrar por "Activas" desde el menú significa "todas": se
+                // quita el filtro de estado que hubiera puesto.
+                if (tab === "activas") setEstadoFiltro(null);
+              }}
               className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium transition-colors ${
                 panelTab === tab
                   ? "bg-red-600 text-white"
@@ -1032,19 +1082,49 @@ export default function RoadsideAssistanceView({
         </header>
 
         <main className="flex-1 space-y-4 overflow-auto p-4">
-          <section className="grid grid-cols-4 gap-2 sm:grid-cols-8">
-            {statusCounts.map(({ status, count }) => (
-              <div
-                key={status}
-                className={`rounded-lg border px-2 py-1.5 ${STATUS_BADGES[status]}`}
-              >
-                <div className="text-[9px] font-bold uppercase leading-tight">
-                  {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
-                </div>
-                <div className="text-lg font-black leading-none">{count}</div>
-              </div>
-            ))}
+          {/* Los cuadros SON las pestañas de estado: en móvil no caben ocho
+              pestañas de texto, así que no se duplica la navegación. */}
+          <section role="tablist" aria-label="Filtrar por estado" className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+            {statusCounts.map(({ status, count }) => {
+              const activo = estadoFiltro === status && panelTab === "activas";
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  role="tab"
+                  aria-selected={activo}
+                  title={`Ver solo «${ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}»`}
+                  onClick={() => seleccionarEstado(status)}
+                  className={`rounded-lg border px-2 py-1.5 text-left transition ${STATUS_BADGES[status]} ${
+                    activo
+                      ? "ring-2 ring-white/80 brightness-125"
+                      : "opacity-90 hover:opacity-100 hover:brightness-110"
+                  }`}
+                >
+                  <div className="text-[9px] font-bold uppercase leading-tight">
+                    {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
+                  </div>
+                  <div className="text-lg font-black leading-none">{count}</div>
+                </button>
+              );
+            })}
           </section>
+
+          {estadoFiltro && panelTab === "activas" && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
+              <span className="truncate text-xs font-bold text-slate-300">
+                Mostrando solo «{ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}» ·{" "}
+                {listaVisible.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => setEstadoFiltro(null)}
+                className="shrink-0 rounded-lg border border-slate-600 px-2.5 py-1 text-xs font-bold text-slate-200 hover:bg-slate-700"
+              >
+                Ver todas
+              </button>
+            </div>
+          )}
 
         <div className="space-y-5">
           {panelTab === "nueva" && (
@@ -1471,16 +1551,29 @@ export default function RoadsideAssistanceView({
               </div>
             )}
 
-            {/* ── Tab: Activas ── */}
-            {panelTab === "activas" && activeAssistances.length === 0 && (
+            {/* ── Tab: Activas (todas o filtradas por estado) ── */}
+            {panelTab === "activas" && listaVisible.length === 0 && (
               <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
-                Sin asistencias activas.
+                {estadoFiltro
+                  ? `Sin asistencias en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}».`
+                  : "Sin asistencias activas."}
               </div>
             )}
-            {panelTab === "activas" && activeAssistances.length > 0 && (
+            {panelTab === "activas" && listaVisible.length > 0 && filtroEsCerrado && (
+              <div className="grid gap-2 md:grid-cols-2">
+                {listaVisible.map((assistance) => (
+                  <ClosedAssistanceCard
+                    key={`estado-${assistance.id}`}
+                    assistance={assistance}
+                    onOpenBackoffice={setBackofficeAssistance}
+                  />
+                ))}
+              </div>
+            )}
+            {panelTab === "activas" && listaVisible.length > 0 && !filtroEsCerrado && (
 
             <div className="grid gap-3 lg:grid-cols-2">
-              {activeAssistances.map((assistance) => {
+              {listaVisible.map((assistance) => {
                 const nextStatus = getNextStatus(assistance.status);
                 const ActionIcon = getActionIcon(assistance.status);
                 const mapUrl = getMapUrl(assistance);
