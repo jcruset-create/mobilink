@@ -684,6 +684,12 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS wcs_job_idx ON whatsapp_capture_sessions(job_id);
     CREATE INDEX IF NOT EXISTS wcs_status_idx ON whatsapp_capture_sessions(status);
 
+    -- Estado del análisis IA. Antes se deducía de ai_suggestions IS NULL, lo que
+    -- hacía indistinguible "analizando" de "falló y no se va a recuperar".
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_status TEXT;
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_error TEXT;
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_started_at BIGINT;
+
     -- Un único número de WhatsApp para todo el ecosistema: la sesión de
     -- captura puede pertenecer a una asistencia del core (job_id), a una de
     -- Central Pro (connect_assistance_id) o a un alta que aún no existe

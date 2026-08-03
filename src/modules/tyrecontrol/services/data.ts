@@ -116,7 +116,9 @@ export async function listarUsuarios(empresaId?: string): Promise<Perfil[]> {
 export type NuevoUsuario = {
   nombre: string;
   email: string;
-  password: string;
+  /** Solo para usuarios de APK (allí es el PIN). En el panel se entra por
+   *  enlace de email, así que para un cliente se deja vacío. */
+  password?: string;
   rol: Rol;
   acceso_apk: boolean;
   acceso_panel: boolean;
@@ -275,6 +277,41 @@ export async function listarIncidenciasDeRevision(revisionId: string): Promise<a
 }
 
 // ── Empresas visibles por usuario (ficha de usuario) ───────────
+/**
+ * Pantallas permitidas de un cliente. `null` = todas las de su rol.
+ *
+ * Se usa tc_permisos_cliente (nativa de TyreControl) y NO app_usuario_modulos:
+ * aquella referencia app_usuarios, y un cliente creado desde este panel solo
+ * existe en tc_usuarios — el guardado habría fallado por clave ajena.
+ * Su RLS ya permite a un administrador gestionar los de su empresa y a cada
+ * usuario leer los suyos, así que va directo por Supabase.
+ */
+export async function obtenerPantallasUsuario(usuarioId: string): Promise<string[] | null> {
+  const { data, error } = await supabase
+    .from("tc_permisos_cliente")
+    .select("pantalla, puede_ver")
+    .eq("usuario_id", usuarioId);
+  if (error) throw new Error(error.message);
+  const filas = data ?? [];
+  if (filas.length === 0) return null; // sin filas = sin restricción
+  return filas.filter((f: any) => f.puede_ver).map((f: any) => String(f.pantalla));
+}
+
+/** Guarda las pantallas permitidas. `null` (o lista vacía) = todas. */
+export async function guardarPantallasUsuario(usuarioId: string, pantallas: string[] | null): Promise<void> {
+  const { error: delErr } = await supabase
+    .from("tc_permisos_cliente").delete().eq("usuario_id", usuarioId);
+  if (delErr) throw new Error(delErr.message);
+  // Lista vacía = sin restricción, igual que null: guardar cero pantallas
+  // dejaría al usuario fuera de todo sin manera de avisarle.
+  if (!pantallas || pantallas.length === 0) return;
+  const filas = [...new Set(pantallas)].map((pantalla) => ({
+    usuario_id: usuarioId, pantalla, puede_ver: true,
+  }));
+  const { error } = await supabase.from("tc_permisos_cliente").insert(filas);
+  if (error) throw new Error(error.message);
+}
+
 export async function listarEmpresasDeUsuario(usuarioId: string): Promise<string[]> {
   const { data, error } = await supabase
     .from("tc_operador_empresas")
@@ -329,6 +366,43 @@ export async function eliminarUsuario(id: string): Promise<void> {
 }
 
 /// Cambia la contraseña/PIN de un usuario (vía backend, service-role).
+/**
+ * Último acceso de cada usuario visible ({id: fecha ISO | null}).
+ * Vive en auth.users, así que solo el backend (service role) puede leerlo.
+ */
+export async function ultimosAccesos(): Promise<Record<string, string | null>> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/ultimos-accesos`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error consultando accesos");
+  return ((j as any).accesos ?? {}) as Record<string, string | null>;
+}
+
+/**
+ * Enlace de acceso de un solo uso para que un usuario entre al panel.
+ * El backend lo genera con service-role; aquí solo se pide y se devuelve.
+ * Es una credencial: no guardarlo ni registrarlo en ningún sitio.
+ */
+export async function generarEnlaceAcceso(id: string): Promise<{ enlace: string; email: string }> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}/enlace-acceso`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    // El origen lo pone el navegador: así el enlace lleva de vuelta al mismo
+    // panel desde el que se generó (producción o preview), sin cablearlo.
+    body: JSON.stringify({ origen: window.location.origin }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error generando el enlace");
+  return { enlace: String((j as any).enlace), email: String((j as any).email ?? "") };
+}
+
 export async function cambiarPasswordUsuario(id: string, password: string): Promise<void> {
   const { data: sess } = await supabase.auth.getSession();
   const token = sess.session?.access_token;

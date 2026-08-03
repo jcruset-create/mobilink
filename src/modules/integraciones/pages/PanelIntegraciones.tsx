@@ -30,6 +30,13 @@ const CONNECTOR_META: Record<string, { nombre: string; kind: ConnectorKind; desc
     descripcion: "Datos técnicos: tiempos de reparación, mantenimiento, medidas. Config: baseUrl.",
     secretos: ["api_key"],
   },
+  "mobilink-historico": {
+    nombre: "Histórico de Mobilink",
+    kind: "technical",
+    descripcion:
+      "Identifica el vehículo con los datos propios del taller (asistencias y OT): marca, modelo, VIN y medida de neumático. Sin credenciales ni coste. Config: {\"maxAntiguedadDias\": 365}.",
+    secretos: [],
+  },
   tecdoc: {
     nombre: "TecDoc",
     kind: "technical",
@@ -522,9 +529,408 @@ function PestanaOperaciones({ tenantId }: { tenantId: string }) {
 
 // ── Página ───────────────────────────────────────────────────────────────────
 
+// ── Pestaña Mapeos ───────────────────────────────────────────────────────────
+
+type MappingRow = {
+  id: number;
+  entity_type: string;
+  system: string;
+  external_code: string;
+  mobilink_id: string;
+  updated_at_ms: number;
+};
+
+const TIPOS_ENTIDAD = ["customer", "product", "vehicle", "warehouse"] as const;
+
+const TIPO_LABEL: Record<string, string> = {
+  customer: "Cliente",
+  product: "Artículo",
+  vehicle: "Vehículo",
+  warehouse: "Almacén",
+};
+
+/**
+ * Mapeos entre identificadores de Mobilink y códigos del sistema externo.
+ *
+ * Sin mapeo, el Hub envía el identificador tal cual (modo permisivo); con
+ * "strictMappings": true en la config del conector, un id sin mapear manda la
+ * operación a MANUAL_REVIEW en lugar de arriesgarse a apuntar al registro
+ * equivocado en el ERP.
+ */
+function PestanaMapeos({ tenantId }: { tenantId: string }) {
+  const [mappings, setMappings] = useState<MappingRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+
+  // Formulario de alta.
+  const [entityType, setEntityType] = useState<string>("product");
+  const [system, setSystem] = useState("business-central");
+  const [mobilinkId, setMobilinkId] = useState("");
+  const [externalCode, setExternalCode] = useState("");
+  const [guardando, setGuardando] = useState(false);
+
+  const cargar = useCallback(async () => {
+    setError(null);
+    try {
+      const params = new URLSearchParams({ tenantId });
+      if (filtroTipo) params.set("entityType", filtroTipo);
+      if (busqueda.trim()) params.set("search", busqueda.trim());
+      const data = await api<{ mappings: MappingRow[] }>(`/api/v1/admin/mappings?${params}`);
+      setMappings(data.mappings);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }, [tenantId, filtroTipo, busqueda]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const anadir = async () => {
+    if (!mobilinkId.trim() || !externalCode.trim()) {
+      setError("Faltan el id de Mobilink y el código externo");
+      return;
+    }
+    setGuardando(true);
+    setError(null);
+    try {
+      await api(`/api/v1/admin/mappings?tenantId=${encodeURIComponent(tenantId)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          entityType,
+          system,
+          mobilinkId: mobilinkId.trim(),
+          externalCode: externalCode.trim(),
+        }),
+      });
+      setMobilinkId("");
+      setExternalCode("");
+      await cargar();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const borrar = async (id: number) => {
+    setError(null);
+    try {
+      await api(`/api/v1/admin/mappings/${id}?tenantId=${encodeURIComponent(tenantId)}`, { method: "DELETE" });
+      await cargar();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  return (
+    <div>
+      {error && <div className="mb-3 rounded-lg bg-rose-500/10 p-2 text-xs text-rose-300">{error}</div>}
+
+      <div className="mb-3 rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+        <p className="mb-2 text-sm font-black">Nuevo mapeo</p>
+        <p className="mb-3 text-[11px] text-slate-400">
+          Traduce un identificador de Mobilink al código que usa el sistema externo. Sin mapeo, el Hub
+          envía el identificador tal cual.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-[11px] text-slate-400">
+            Tipo
+            <select
+              value={entityType}
+              onChange={(e) => setEntityType(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+            >
+              {TIPOS_ENTIDAD.map((t) => (
+                <option key={t} value={t}>
+                  {TIPO_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] text-slate-400">
+            Sistema
+            <input
+              value={system}
+              onChange={(e) => setSystem(e.target.value)}
+              className="w-40 rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] text-slate-400">
+            Id en Mobilink
+            <input
+              value={mobilinkId}
+              onChange={(e) => setMobilinkId(e.target.value)}
+              placeholder="CLI-00125"
+              className="w-40 rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] text-slate-400">
+            Código externo
+            <input
+              value={externalCode}
+              onChange={(e) => setExternalCode(e.target.value)}
+              placeholder="10000"
+              className="w-40 rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+            />
+          </label>
+          <button
+            onClick={anadir}
+            disabled={guardando}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+          >
+            {guardando ? "Guardando…" : "Añadir"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <select
+          value={filtroTipo}
+          onChange={(e) => setFiltroTipo(e.target.value)}
+          className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+        >
+          <option value="">Todos los tipos</option>
+          {TIPOS_ENTIDAD.map((t) => (
+            <option key={t} value={t}>
+              {TIPO_LABEL[t]}
+            </option>
+          ))}
+        </select>
+        <input
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          placeholder="Buscar por id o código…"
+          className="w-56 rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+        />
+        <button
+          onClick={() => void cargar()}
+          className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-800"
+        >
+          Refrescar
+        </button>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-slate-700">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-slate-800/80 text-slate-300">
+            <tr>
+              <th className="px-3 py-2">Tipo</th>
+              <th className="px-3 py-2">Id en Mobilink</th>
+              <th className="px-3 py-2">Código externo</th>
+              <th className="px-3 py-2">Sistema</th>
+              <th className="px-3 py-2">Actualizado</th>
+              <th className="px-3 py-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {mappings.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                  Sin mapeos. El Hub enviará los identificadores tal cual.
+                </td>
+              </tr>
+            )}
+            {mappings.map((m) => (
+              <tr key={m.id} className="border-t border-slate-800">
+                <td className="px-3 py-2">{TIPO_LABEL[m.entity_type] ?? m.entity_type}</td>
+                <td className="px-3 py-2 font-mono text-slate-200">{m.mobilink_id}</td>
+                <td className="px-3 py-2 font-mono text-sky-300">{m.external_code}</td>
+                <td className="px-3 py-2 text-slate-400">{m.system}</td>
+                <td className="px-3 py-2 text-slate-500">{fmtFecha(m.updated_at_ms)}</td>
+                <td className="px-3 py-2 text-right">
+                  <button
+                    onClick={() => void borrar(m.id)}
+                    className="rounded border border-slate-700 px-2 py-1 text-[11px] text-rose-300 hover:bg-slate-800"
+                  >
+                    Borrar
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Pestaña Catálogo (SPEC WorkPlanner §4) ───────────────────────────────────
+
+type CatalogRow = {
+  id: number;
+  bc_number: string;
+  tipo: string | null;
+  descripcion: string;
+  um_base: string | null;
+  categoria: string | null;
+  precio_orientativo: string | number | null;
+  activo: boolean;
+  motivo_inactivo: string | null;
+};
+
+const MOTIVO_INACTIVO_LABEL: Record<string, string> = {
+  bloqueado: "Bloqueado en BC",
+  fuera_de_filtro: "Fuera del filtro de categorías",
+  huerfano: "Ya no existe en BC",
+};
+
+/**
+ * Catálogo controlado: copia local de los artículos de BC aptos para trabajos
+ * de campo. BC es el maestro — aquí no se crea ni se edita nada, sólo se
+ * sincroniza y se consulta.
+ */
+function PestanaCatalogo({ tenantId }: { tenantId: string }) {
+  const [items, setItems] = useState<CatalogRow[]>([]);
+  const [estado, setEstado] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [busqueda, setBusqueda] = useState("");
+  const [verInactivos, setVerInactivos] = useState(false);
+
+  const cargar = useCallback(async () => {
+    setError(null);
+    try {
+      const params = new URLSearchParams({ tenantId, limit: "500" });
+      if (verInactivos) params.set("todos", "1");
+      if (busqueda.trim()) params.set("search", busqueda.trim());
+      const [cat, st] = await Promise.all([
+        api<{ items: CatalogRow[] }>(`/api/v1/catalog?${params}`),
+        api<any>(`/api/v1/admin/catalog/status?tenantId=${encodeURIComponent(tenantId)}`),
+      ]);
+      setItems(cat.items);
+      setEstado(st);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }, [tenantId, busqueda, verInactivos]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const sincronizar = async (full: boolean) => {
+    setSincronizando(true);
+    setError(null);
+    try {
+      await api(`/api/v1/admin/catalog/sync?tenantId=${encodeURIComponent(tenantId)}`, {
+        method: "POST",
+        body: JSON.stringify({ full }),
+      });
+      await cargar();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSincronizando(false);
+    }
+  };
+
+  return (
+    <div>
+      {error && <div className="mb-3 rounded-lg bg-rose-500/10 p-2 text-xs text-rose-300">{error}</div>}
+
+      <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/60 p-3">
+        <div className="text-xs text-slate-300">
+          <span className="font-black">{estado?.activos ?? "—"}</span> activos de{" "}
+          <span className="font-black">{estado?.total ?? "—"}</span>
+          {estado?.lastSyncMs ? (
+            <span className="ml-2 text-slate-500">Última sync: {fmtFecha(estado.lastSyncMs)}</span>
+          ) : (
+            <span className="ml-2 text-amber-400">Sin sincronizar todavía</span>
+          )}
+          {estado?.status === "error" && (
+            <span className="ml-2 text-rose-400" title={estado?.detail ?? ""}>Última sync con error</span>
+          )}
+        </div>
+        <div className="ml-auto flex gap-2">
+          <button
+            onClick={() => void sincronizar(false)}
+            disabled={sincronizando}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+          >
+            {sincronizando ? "Sincronizando…" : "Sincronizar ahora"}
+          </button>
+          <button
+            onClick={() => void sincronizar(true)}
+            disabled={sincronizando}
+            title="Trae todo el catálogo y desactiva lo que ya no exista en BC"
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+          >
+            Sync completa
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <input
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          placeholder="Buscar por número o descripción…"
+          className="w-64 rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+        />
+        <label className="flex items-center gap-1.5 text-xs text-slate-400">
+          <input type="checkbox" checked={verInactivos} onChange={(e) => setVerInactivos(e.target.checked)} className="h-3.5 w-3.5 accent-sky-500" />
+          Ver también inactivos
+        </label>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-slate-700">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-slate-800/80 text-slate-300">
+            <tr>
+              <th className="px-3 py-2">Nº BC</th>
+              <th className="px-3 py-2">Descripción</th>
+              <th className="px-3 py-2">Tipo</th>
+              <th className="px-3 py-2">Categoría</th>
+              <th className="px-3 py-2">UM</th>
+              <th className="px-3 py-2">Precio orient.</th>
+              <th className="px-3 py-2">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                  Catálogo vacío. Pulsa «Sincronizar ahora» para traerlo de Business Central.
+                </td>
+              </tr>
+            )}
+            {items.map((it) => (
+              <tr key={it.id} className={`border-t border-slate-800 ${it.activo ? "" : "opacity-50"}`}>
+                <td className="px-3 py-2 font-mono text-sky-300">{it.bc_number}</td>
+                <td className="px-3 py-2">{it.descripcion}</td>
+                <td className="px-3 py-2 text-slate-400">{it.tipo ?? "—"}</td>
+                <td className="px-3 py-2 text-slate-400">{it.categoria ?? "—"}</td>
+                <td className="px-3 py-2 text-slate-400">{it.um_base ?? "—"}</td>
+                <td className="px-3 py-2">{it.precio_orientativo != null ? `${Number(it.precio_orientativo).toFixed(2)} €` : "—"}</td>
+                <td className="px-3 py-2">
+                  {it.activo ? (
+                    <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">Activo</span>
+                  ) : (
+                    <span className="rounded bg-slate-500/15 px-2 py-0.5 text-[10px] font-bold text-slate-400">
+                      {MOTIVO_INACTIVO_LABEL[it.motivo_inactivo ?? ""] ?? "Inactivo"}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-500">
+        El precio es orientativo (última tarifa base sincronizada); el definitivo lo calcula Business
+        Central al facturar. Filtro por categorías: añade{" "}
+        <code className="rounded bg-slate-900 px-1">{"\"catalogCategories\": [\"FRENOS\"]"}</code> a la config del
+        conector Business Central.
+      </p>
+    </div>
+  );
+}
+
 export default function PanelIntegraciones() {
   const [tenantId, setTenantId] = useState(() => localStorage.getItem(TENANT_STORAGE_KEY) || "default");
-  const [pestana, setPestana] = useState<"conectores" | "operaciones">("conectores");
+  const [pestana, setPestana] = useState<"conectores" | "operaciones" | "mapeos" | "catalogo">("conectores");
 
   useEffect(() => {
     localStorage.setItem(TENANT_STORAGE_KEY, tenantId);
@@ -534,6 +940,8 @@ export default function PanelIntegraciones() {
     () => [
       { id: "conectores" as const, label: "🔌 Conectores" },
       { id: "operaciones" as const, label: "📋 Operaciones" },
+      { id: "mapeos" as const, label: "🔗 Mapeos" },
+      { id: "catalogo" as const, label: "📦 Catálogo" },
     ],
     []
   );
@@ -573,7 +981,10 @@ export default function PanelIntegraciones() {
             </button>
           ))}
         </div>
-        {pestana === "conectores" ? <PestanaConectores tenantId={tenantId} /> : <PestanaOperaciones tenantId={tenantId} />}
+        {pestana === "conectores" && <PestanaConectores tenantId={tenantId} />}
+        {pestana === "operaciones" && <PestanaOperaciones tenantId={tenantId} />}
+        {pestana === "mapeos" && <PestanaMapeos tenantId={tenantId} />}
+        {pestana === "catalogo" && <PestanaCatalogo tenantId={tenantId} />}
       </main>
     </div>
   );

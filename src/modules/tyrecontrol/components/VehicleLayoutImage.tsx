@@ -786,7 +786,9 @@ export default function VehicleLayoutImage({
               );
             })()}
             <div className="mt-3 flex flex-col gap-2">
-              <button onClick={() => onFicha?.(montajeSeleccionado.neumatico!.id)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200">Ver ficha</button>
+              {/* Sin onFicha (cliente) el boton no llevaria a ninguna parte: la
+                  ficha de neumatico es una pantalla de administrador. */}
+              {onFicha && <button onClick={() => onFicha(montajeSeleccionado.neumatico!.id)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200">Ver ficha</button>}
               {editable && <button onClick={() => setModalFicha({ sustitucion: true })} className="rounded bg-sky-600 px-2 py-1 text-[12px] font-bold text-white">Sustituir</button>}
               {editable && <button onClick={confirmarDesmontar} disabled={saving} className="rounded bg-rose-600 px-2 py-1 text-[12px] font-bold text-white disabled:opacity-50">Desmontar</button>}
             </div>

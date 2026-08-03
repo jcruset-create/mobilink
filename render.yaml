@@ -73,3 +73,10 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+      # Integration Hub — Business Central (valores en el dashboard, nunca en el repo)
+      - key: IH_SECRET__BUSINESS_CENTRAL__AAD_TENANT_ID
+        sync: false
+      - key: IH_SECRET__BUSINESS_CENTRAL__CLIENT_ID
+        sync: false
+      - key: IH_SECRET__BUSINESS_CENTRAL__CLIENT_SECRET
+        sync: false
