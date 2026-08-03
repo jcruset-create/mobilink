@@ -1074,6 +1074,32 @@ class TyreControlApi {
     return lista;
   }
 
+  /// Incidencias de un vehículo que todavía tienen algún problema abierto.
+  ///
+  /// La pantalla de cambio las carga por su cuenta en vez de fiarse de quien
+  /// la abre: entrando desde la ficha del vehículo nadie se las pasaba, así
+  /// que se cambiaba la rueda y la incidencia se quedaba abierta para siempre.
+  /// Best-effort: sin red devuelve vacío y se trabaja con las que hayan venido.
+  static Future<List<Incidencia>> incidenciasAbiertasDeVehiculo(String vehiculoId) async {
+    try {
+      var q = _db
+          .from('tc_incidencias')
+          .select(
+              '*, vehiculo:tc_vehiculos(matricula, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre)), posicion:tc_posiciones_vehiculo(nombre, codigo_posicion, eje), problemas:tc_incidencia_problemas(id, tipo, estado), revision:revisiones_vehiculo(id, fecha_revision, created_at, estado_revision, tecnico:tc_usuarios(nombre))')
+          .eq('vehiculo_id', vehiculoId);
+      if (empresaActivaId != null) q = q.eq('empresa_id', empresaActivaId!);
+      final data = await q.order('detectada_at', ascending: false);
+      return (data as List)
+          .map((e) => Incidencia.fromJson(Map<String, dynamic>.from(e as Map)))
+          // El estado de la incidencia no basta: manda que le quede algún
+          // problema sin solucionar.
+          .where((i) => i.problemas.any((p) => p.abierto))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// Presión objetivo (bar) y margen para una posición, o null si no está
   /// configurada. Reusa el RPC con precedencia vehículo > tipo, eje concreto
   /// antes que "todos".
