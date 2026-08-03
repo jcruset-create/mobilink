@@ -326,10 +326,25 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
           if (marca != null)
             Text('${mm != null ? '$mm mm' : '— mm'} · ${presion != null ? '$presion bar' : '— bar'}',
                 style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+          // REESC. va en naranja brillante; el resto en azul. Aquí el recuadro
+          // es oscuro, así que el naranja se lee bien como texto y no hace
+          // falta rellenarlo como en el plano del vehículo.
           if (marca != null && distintivos.isNotEmpty)
-            Text(distintivos.join(' · '),
-                style: const TextStyle(fontSize: 6.5, fontWeight: FontWeight.w800, color: AppColors.info),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text.rich(
+              TextSpan(children: [
+                for (int i = 0; i < distintivos.length; i++) ...[
+                  if (i > 0) const TextSpan(text: ' · ', style: TextStyle(color: AppColors.info)),
+                  TextSpan(
+                    text: distintivos[i],
+                    style: TextStyle(
+                        color: distintivos[i] == 'REESC.' ? AppColors.reesculturado : AppColors.info),
+                  ),
+                ],
+              ]),
+              style: const TextStyle(fontSize: 6.5, fontWeight: FontWeight.w800),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           if (widget.conAveria && averias.isNotEmpty)
             Text('⚠ ${averias.join(' · ')}', style: const TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: AppColors.danger), maxLines: 2, overflow: TextOverflow.ellipsis),
         ]),

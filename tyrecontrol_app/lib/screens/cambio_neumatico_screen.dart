@@ -885,14 +885,24 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   }
 
   /// Etiqueta pequena del propio neumatico (recauchutado, reesculturado...).
-  Widget _etiqueta(String txt, Color color) => Container(
+  /// Con [fondo] va rellena y la tinta pasa a oscura: es lo que hace destacar
+  /// el REESC. naranja sobre un recuadro verde o amarillo claros.
+  Widget _etiqueta(String txt, Color color, {Color? fondo}) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
+          color: fondo,
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.55)),
+          // Borde oscuro cuando va rellena: sobre un recuadro ámbar, el naranja
+          // contra el fondo se queda en 1.2:1 y se fundiría con él.
+          border: Border.all(
+              color: fondo != null ? AppColors.background : color.withValues(alpha: 0.55)),
         ),
         child: Text(txt,
-            style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color, height: 1.1)),
+            style: TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.w800,
+                color: fondo != null ? AppColors.background : color,
+                height: 1.1)),
       );
 
   bool _esDireccional(Neumatico? n) {
@@ -1326,7 +1336,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             (TyreControlApi.esMarcaRecauchutada(n.marca) || n.reesculturado || n.giradoEnLlanta))
           Wrap(alignment: WrapAlignment.center, spacing: 3, children: [
             if (TyreControlApi.esMarcaRecauchutada(n.marca)) _etiqueta('RECAUCH.', cTexto),
-            if (n.reesculturado) _etiqueta('REESC.', cTexto),
+            if (n.reesculturado) _etiqueta('REESC.', cTexto, fondo: AppColors.reesculturado),
             if (n.giradoEnLlanta) _etiqueta('GIRADO', cTexto),
           ]),
         Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
