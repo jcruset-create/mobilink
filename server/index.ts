@@ -15725,10 +15725,19 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
       file: f,
       version: f.slice(prefix.length, -4), // entre prefijo y ".apk"
     }));
-    // Orden por versión semántica descendente
+    // Orden por versión semántica descendente. El "+build" (0.31.6+80) cuenta
+    // como un tramo más al final: sin esto, "6+80" se parseaba como 6 y dos
+    // builds del mismo 0.31.6 empataban, así que ganaba la que devolviera
+    // primero el sistema de ficheros — es decir, cualquiera.
+    const partes = (v: string) => {
+      const [nombre, build] = v.split("+");
+      const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
+      out.push(parseInt(build ?? "0", 10) || 0);
+      return out;
+    };
     withVer.sort((a, b) => {
-      const pa = a.version.split(".").map((n) => parseInt(n, 10) || 0);
-      const pb = b.version.split(".").map((n) => parseInt(n, 10) || 0);
+      const pa = partes(a.version);
+      const pb = partes(b.version);
       for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
         if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
       }

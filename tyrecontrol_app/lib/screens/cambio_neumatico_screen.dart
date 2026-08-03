@@ -75,18 +75,30 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   // Milímetros tras el corte, por montaje reesculturado.
   final Map<String, double> _mmReescultura = {};
 
+  /// Incidencias vigentes del vehículo: las que pasa quien abre la pantalla
+  /// MÁS las que se cargan del servidor. Entrando desde la ficha nadie las
+  /// pasaba, así que la rueda se cambiaba y la incidencia seguía abierta.
+  List<Incidencia> _incidencias = [];
+
   // Incidencia (con problemas abiertos) por posición: para pintar el rojo y
-  // ofrecer las operaciones en el panel lateral.
-  late final Map<String, Incidencia> _incidenciaPorPosicion = () {
+  // ofrecer las operaciones en el panel de la rueda.
+  Map<String, Incidencia> _incidenciaPorPosicion = {};
+
+  void _indexarIncidencias(List<Incidencia> lista) {
+    final porId = <String, Incidencia>{};
+    for (final inc in [...widget.incidencias, ...lista]) {
+      porId[inc.id] = inc; // la del servidor pisa a la recibida: es más fresca
+    }
+    _incidencias = porId.values.toList();
     final map = <String, Incidencia>{};
-    for (final inc in widget.incidencias) {
+    for (final inc in _incidencias) {
       final pid = inc.posicionId;
       if (pid == null) continue;
       if (!inc.problemas.any((p) => p.abierto)) continue;
       map[pid] = inc; // si hay varias, la última gana (poco habitual)
     }
-    return map;
-  }();
+    _incidenciaPorPosicion = map;
+  }
 
   /// Problemas abiertos (etiquetas) de una posición aún no atendida en esta sesión.
   List<String>? _problemasVigentes(String posId) {
@@ -158,7 +170,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         TyreControlApi.ultimasMedicionesPorNeumatico(widget.vehiculoId),
         TyreControlApi.datosCatalogoPorModelo(),
         TyreControlApi.marcasRecauchutadas(), // para el distintivo RECAUCH.
+        TyreControlApi.incidenciasAbiertasDeVehiculo(widget.vehiculoId),
       ]);
+
+      // Se reindexa en cada carga: tras resolver una, deja de salir en rojo.
+      _indexarIncidencias(results[8] as List<Incidencia>);
 
       final medidas = results[2] as Map<String, String>;
       final ejes = results[3] as List<Map<String, dynamic>>;
@@ -260,7 +276,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   /// Incidencias de origen (posición + averías) para la ficha de la intervención.
   List<Map<String, dynamic>> _incidenciasOrigen() {
     final out = <Map<String, dynamic>>[];
-    for (final inc in widget.incidencias) {
+    for (final inc in _incidencias) {
       final tipos = inc.problemas.where((x) => x.abierto).map((x) => problemaLabel(x.tipo)).toList();
       out.add({
         'posicion_id': inc.posicionId,
@@ -320,7 +336,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
     // Posiciones sustituidas (se montó una rueda) cuya incidencia sigue abierta
     // y no se resolvió ya en sitio (reparación).
-    final aResolver = widget.incidencias
+    final aResolver = _incidencias
         .where((i) => i.posicionId != null && _posicionesMontadas.contains(i.posicionId)
             && !_incidenciasResueltas.contains(i.id) && i.problemas.any((p) => p.abierto))
         .toList();
@@ -329,7 +345,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     if (aResolver.isEmpty) {
       if (yaResueltas > 0) {
         _aviso('$yaResueltas incidencia(s) solucionada(s)', ok: true);
-      } else if (widget.incidencias.isNotEmpty) {
+      } else if (_incidencias.isNotEmpty) {
         _aviso('No se ha actuado sobre las posiciones con incidencia; siguen pendientes.', ok: false);
       } else {
         _aviso('Cambios guardados', ok: true);
@@ -353,7 +369,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     } finally { if (mounted) setState(() => _trabajando = false); }
 
     final total = ok + yaResueltas;
-    final pendientes = widget.incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - total;
+    final pendientes = _incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - total;
     _aviso(
       total > 0
           ? '$total incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
@@ -361,6 +377,46 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       ok: total > 0,
     );
     if (mounted) Navigator.of(context).pop(true);
+  }
+
+  /// "Ya solucionado": la avería que marcaba el aviso ya no existe (la rueda
+  /// se cambió en otro momento, o el dato venía de una medición vieja). Cierra
+  /// la incidencia sin registrar trabajo nuevo. Pide confirmación porque toca
+  /// el historial del cliente.
+  Future<void> _marcarYaSolucionado(PosicionVehiculo p, Incidencia inc, List<String> labels) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text('¿Ya está solucionado? · ${p.codigoPosicion}'),
+        content: Text(
+            'Se dará por cerrada la avería:\n\n${labels.join('\n')}\n\n'
+            'Úsalo solo si has comprobado en el vehículo que ya no existe.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.of(c).pop(true),
+            child: const Text('Sí, cerrarla', style: TextStyle(color: AppColors.success)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _trabajando = true);
+    try {
+      final abiertos = inc.problemas.where((x) => x.abierto).map((x) => x.id).toList();
+      await TyreControlApi.resolverIncidencia(
+        incidenciaId: inc.id, problemaIds: abiertos, tipoOperacion: 'actualizar_neumatico',
+        resultado: 'reparado',
+        observaciones: 'Ya solucionado: comprobado en el vehículo (app · cambio de neumático).');
+      _posicionesResueltas.add(p.id);
+      _incidenciasResueltas.add(inc.id);
+      HapticFeedback.mediumImpact();
+      if (mounted) setState(() => _posSeleccionada = null);
+      await _cargar();
+      _aviso('Avería cerrada en ${p.codigoPosicion}', ok: true);
+    } catch (e) { _aviso('Error: $e', ok: false); }
+    finally { if (mounted) setState(() => _trabajando = false); }
   }
 
   /// Reparación en sitio (el neumático se queda): registra la operación y da la
@@ -1589,6 +1645,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           const SizedBox(height: 4),
           Text('Avería: ${labels.join(' · ')}',
               style: const TextStyle(color: AppColors.danger, fontSize: 12, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          // Escape para cuando la avería ya no existe: la rueda se cambió en
+          // otro momento, o el aviso venía de una medición vieja. Sin esto la
+          // incidencia se queda abierta para siempre.
+          SizedBox(
+            width: 320,
+            child: _btnOp(Icons.task_alt, 'Ya solucionado', AppColors.success,
+                onTap: inc == null ? null : () => _marcarYaSolucionado(p, inc, labels)),
+          ),
         ],
         const SizedBox(height: 8),
         if (m != null) ...[

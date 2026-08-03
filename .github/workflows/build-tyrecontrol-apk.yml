@@ -38,9 +38,21 @@ jobs:
           flutter-version: "3.35.4"
           cache: true
 
+      # Cada build sale con su propio número: el nombre (0.31.6) viene del
+      # pubspec y el build number es el nº de ejecución del workflow, que sube
+      # solo. Antes todas las builds compartían el +79 del pubspec, así que la
+      # release se sobrescribía a sí misma y en la tablet no había forma de
+      # saber qué versión estabas usando.
       - name: Version de la app
         id: ver
-        run: echo "version=$(grep '^version:' pubspec.yaml | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        run: |
+          NOMBRE=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          {
+            echo "nombre=$NOMBRE"
+            echo "build=${{ github.run_number }}"
+            echo "version=$NOMBRE+${{ github.run_number }}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publicando $NOMBRE+${{ github.run_number }}"
 
       - run: flutter pub get
 
@@ -75,6 +87,8 @@ jobs:
 
       - name: Build APK
         run: flutter build apk --release
+          --build-name=${{ steps.ver.outputs.nombre }}
+          --build-number=${{ steps.ver.outputs.build }}
         env:
           MOBILINK_KEYSTORE_PATH: ${{ env.KS_B64 != '' && '/tmp/mobilink.keystore' || '' }}
           MOBILINK_KEYSTORE_PASSWORD: ${{ env.KS_PASS }}
