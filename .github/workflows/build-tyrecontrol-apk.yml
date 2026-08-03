@@ -38,21 +38,32 @@ jobs:
           flutter-version: "3.35.4"
           cache: true
 
-      # Cada build sale con su propio número: el nombre (0.31.6) viene del
-      # pubspec y el build number es el nº de ejecución del workflow, que sube
-      # solo. Antes todas las builds compartían el +79 del pubspec, así que la
-      # release se sobrescribía a sí misma y en la tablet no había forma de
-      # saber qué versión estabas usando.
-      - name: Version de la app
+      # Cada build sube la versión: 0.31.6 → 0.31.7 → … → 0.31.9 → 0.32.0.
+      # El tramo final va de 0 a 9 y al desbordar arrastra al del medio (y ese,
+      # al llegar a 100, al primero). El pubspec se reescribe ANTES de compilar
+      # para que la APK lleve ya el número nuevo, y se guarda en el repositorio
+      # al final, solo si el build ha ido bien.
+      #
+      # Al build number se le pone el nº de ejecución del workflow: así dos
+      # APK del mismo nombre nunca se confunden y las releases no se pisan.
+      - name: Subir la versión
         id: ver
         run: |
-          NOMBRE=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          ACTUAL=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          IFS=. read -r MA MI PA <<< "$ACTUAL"
+          PA=$((PA + 1))
+          if [ "$PA" -gt 9 ]; then PA=0; MI=$((MI + 1)); fi
+          if [ "$MI" -gt 99 ]; then MI=0; MA=$((MA + 1)); fi
+          NOMBRE="$MA.$MI.$PA"
+          BUILD=${{ github.run_number }}
+          sed -i "s/^version: .*/version: $NOMBRE+$BUILD/" pubspec.yaml
+          grep '^version:' pubspec.yaml
           {
             echo "nombre=$NOMBRE"
-            echo "build=${{ github.run_number }}"
-            echo "version=$NOMBRE+${{ github.run_number }}"
+            echo "build=$BUILD"
+            echo "version=$NOMBRE+$BUILD"
           } >> "$GITHUB_OUTPUT"
-          echo "Publicando $NOMBRE+${{ github.run_number }}"
+          echo "$ACTUAL → $NOMBRE+$BUILD"
 
       - run: flutter pub get
 
@@ -129,3 +140,29 @@ jobs:
           name: Mobilink TyreControl ${{ steps.ver.outputs.version }}
           body: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
           files: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
+
+      # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el
+      # número no se quema. El [skip ci] evita que este commit dispare otro
+      # build (pubspec.yaml está dentro de las rutas que vigila el workflow) y
+      # con él, un bucle infinito.
+      #
+      # Si el push se rechaza porque alguien empujó mientras compilábamos, se
+      # avisa y se sigue: el run NO se pone en rojo por esto. La consecuencia
+      # es solo que el próximo build repita el mismo nombre de versión, y aun
+      # así saldrá con otro build number, así que no se pisa ninguna release.
+      - name: Guardar la versión nueva en el repositorio
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          if git diff --cached --quiet; then
+            echo "El pubspec no ha cambiado; nada que guardar."
+            exit 0
+          fi
+          git commit -m "chore(tyrecontrol): version ${{ steps.ver.outputs.version }} [skip ci]"
+          if ! git push origin HEAD:${{ github.ref_name }}; then
+            echo "::warning::No se ha podido guardar la versión" \
+                 "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}" \
+                 "(seguramente otro push llegó antes). La APK publicada es válida."
+          fi
