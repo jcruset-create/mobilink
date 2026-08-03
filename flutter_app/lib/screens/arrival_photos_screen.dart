@@ -343,7 +343,10 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
         toolbarHeight: 110,
-        title: Image.asset('assets/logo_horizontal2.png', height: 100),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Image.asset('assets/logo_horizontal2.png', height: 100),
+        ),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),

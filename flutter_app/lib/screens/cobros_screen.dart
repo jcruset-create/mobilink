@@ -157,13 +157,24 @@ class _CobrosScreenState extends State<CobrosScreen> {
     );
   }
 
-  Widget _summaryItem(String label, String value, Color color) => Column(
-        children: [
-          Text(value,
-              style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-        ],
+  // Expanded + ellipsis: en vertical los tres bloques del resumen no caben
+  // con su ancho natural.
+  Widget _summaryItem(String label, String value, Color color) => Expanded(
+        child: Column(
+          children: [
+            Text(value,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 2),
+            Text(label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white54, fontSize: 11)),
+          ],
+        ),
       );
 }
 

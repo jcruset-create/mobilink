@@ -12,7 +12,8 @@ final exteriorMode = ValueNotifier<bool>(false);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // La app funciona siempre en vertical (nunca horizontal)
+  // La app funciona siempre en vertical (nunca horizontal). portraitDown
+  // incluido porque en algunos soportes la tablet va invertida.
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
@@ -91,7 +92,13 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset('assets/logo_horizontal2.png', width: 330),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Image.asset('assets/logo_horizontal2.png', width: 330),
+              ),
+            ),
             const SizedBox(height: 40),
             CircularProgressIndicator(color: AppColors.primary),
           ],

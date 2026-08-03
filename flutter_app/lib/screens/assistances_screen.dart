@@ -159,8 +159,10 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     final isExterior = exteriorMode.value;
 
     return Scaffold(
+      // En vertical no caben logo + pestañas + acciones en una sola fila:
+      // arriba logo y acciones, debajo las pestañas a todo el ancho.
       appBar: PreferredSize(
-        preferredSize: Size.fromHeight(isExterior ? 120 : 108),
+        preferredSize: Size.fromHeight(isExterior ? 230 : 214),
         child: Container(
           color: AppColors.background,
           child: SafeArea(
@@ -179,7 +181,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                           children: [
                             Image.asset(
                               'assets/logo_horizontal2.png',
-                              height: isExterior ? 70 : 62,
+                              height: isExterior ? 56 : 48,
                               fit: BoxFit.contain,
                               alignment: Alignment.centerLeft,
                             ),
@@ -226,20 +228,6 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                           ],
                         ),
                       ),
-                      // Pestañas
-                      TabBar(
-                        controller: _tabController,
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        dividerColor: Colors.transparent,
-                        tabs: [
-                          Tab(icon: Icon(Icons.assignment_outlined, size: isExterior ? 28 : 24), text: 'Activas'),
-                          Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
-                          Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
-                          Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
-                          Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),
-                        ],
-                      ),
                       // Acciones
                       const SizedBox(width: 4),
                       ValueListenableBuilder<bool>(
@@ -254,6 +242,20 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                       _TopBarIcon(icon: Icons.qr_code_scanner,        color: AppColors.info,          tooltip: 'Escanear matrícula', onPressed: _scanPlate),
                       _TopBarIcon(icon: Icons.refresh_outlined,      color: AppColors.textSecondary, tooltip: 'Actualizar',    onPressed: _load),
                       _TopBarIcon(icon: Icons.logout,                 color: AppColors.danger,        tooltip: 'Cerrar sesión', onPressed: _logout),
+                    ],
+                  ),
+                  // Pestañas a todo el ancho, debajo del logo
+                  TabBar(
+                    controller: _tabController,
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    dividerColor: Colors.transparent,
+                    tabs: [
+                      Tab(icon: Icon(Icons.assignment_outlined,  size: isExterior ? 28 : 24), text: 'Activas'),
+                      Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
+                      Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
+                      Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
+                      Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),
                     ],
                   ),
                 ],
