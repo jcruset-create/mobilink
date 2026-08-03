@@ -10,6 +10,7 @@ import '../services/probe_session.dart';
 import '../services/tlgx_probe_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/etiqueta_neumatico.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
 
@@ -884,27 +885,6 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     });
   }
 
-  /// Etiqueta pequena del propio neumatico (recauchutado, reesculturado...).
-  /// Con [fondo] va rellena y la tinta pasa a oscura: es lo que hace destacar
-  /// el REESC. naranja sobre un recuadro verde o amarillo claros.
-  Widget _etiqueta(String txt, Color color, {Color? fondo}) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-        decoration: BoxDecoration(
-          color: fondo,
-          borderRadius: BorderRadius.circular(6),
-          // Borde oscuro cuando va rellena: sobre un recuadro ámbar, el naranja
-          // contra el fondo se queda en 1.2:1 y se fundiría con él.
-          border: Border.all(
-              color: fondo != null ? AppColors.background : color.withValues(alpha: 0.55)),
-        ),
-        child: Text(txt,
-            style: TextStyle(
-                fontSize: 8,
-                fontWeight: FontWeight.w800,
-                color: fondo != null ? AppColors.background : color,
-                height: 1.1)),
-      );
-
   bool _esDireccional(Neumatico? n) {
     final txt = (n?.modelo ?? '').toUpperCase();
     return txt.contains('DIREC') || txt.endsWith(' D') || txt.contains(' DH');
@@ -1309,15 +1289,24 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     // El recuadro se pinta ENTERO del color del estado: es lo que se lee de un
     // vistazo con guantes y reflejos. Arrastrando manda el azul de "en
     // movimiento" y se deja sin pintar para no confundir.
-    final fill = arrastrando ? null : tireStatusFill(estado);
+    // El relleno lo manda la BANDA DE PROFUNDIDAD del informe de flota: el
+    // técnico ve el mismo color que verá el cliente en su informe. Sin
+    // profundidad conocida se cae al color del estado (gris de pendiente…).
+    final banda = prof != null ? bandaProfundidad(prof) : null;
+    final fill = arrastrando ? null : (banda?.fondo ?? tireStatusFill(estado));
     // El marco sigue marcando el contexto de la operación (arrastre, rueda
-    // resaltada por incidencia); el relleno marca el estado.
+    // resaltada por incidencia). Y, como el relleno ya no dice si la rueda
+    // está mal, el marco pasa a decirlo: una avería con 15 mm saldría verde
+    // oscuro y sin esto no se distinguiría de una rueda sana.
+    final alerta = estado == TireStatus.grave || estado == TireStatus.advertencia;
     final borde = arrastrando
         ? AppColors.info
         : (resaltar
             ? AppColors.warning
-            : (fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : tireStatusColor(estado)));
-    final cTexto = fill != null ? tireStatusOnFill(estado) : AppColors.textPrimary;
+            : (alerta
+                ? tireStatusColor(estado)
+                : (fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : tireStatusColor(estado))));
+    final cTexto = fill != null ? (banda?.tinta ?? tireStatusOnFill(estado)) : AppColors.textPrimary;
     final cSuave = fill != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
     final cAcento = fill != null ? cTexto : borde;
     final card = Container(
@@ -1333,11 +1322,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         Text(n?.marca ?? '—', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.medida ?? '', style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
         if (n != null &&
-            (TyreControlApi.esMarcaRecauchutada(n.marca) || n.reesculturado || n.giradoEnLlanta))
+            (esNuevoReciente ||
+                TyreControlApi.esMarcaRecauchutada(n.marca) ||
+                n.reesculturado ||
+                n.giradoEnLlanta))
           Wrap(alignment: WrapAlignment.center, spacing: 3, children: [
-            if (TyreControlApi.esMarcaRecauchutada(n.marca)) _etiqueta('RECAUCH.', cTexto),
-            if (n.reesculturado) _etiqueta('REESC.', cTexto, fondo: AppColors.reesculturado),
-            if (n.giradoEnLlanta) _etiqueta('GIRADO', cTexto),
+            // "Nuevo" ya no se ve por el color (ahora manda la profundidad),
+            // así que se dice con todas las letras.
+            if (esNuevoReciente) EtiquetaNeu(txt: 'NEW', color: cTexto, fondo: AppColors.tireNuevo),
+            if (TyreControlApi.esMarcaRecauchutada(n.marca)) EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
+            if (n.reesculturado) EtiquetaNeu(txt: 'REESC.', color: cTexto, fondo: AppColors.reesculturado),
+            if (n.giradoEnLlanta) EtiquetaNeu(txt: 'GIRADO', color: cTexto),
           ]),
         Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
       ]),

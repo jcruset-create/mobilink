@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/etiqueta_neumatico.dart';
 
 /// Histórico de operaciones de un vehículo, agrupado por intervención
 /// (sesión de cambio) con su informe. Al tocar una intervención se ven sus
@@ -309,6 +310,13 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
       if (s['girado'] == true) 'GIRADO',
     ];
     final averias = s['averias'] is List ? (s['averias'] as List).whereType<String>().toList() : const <String>[];
+    // Mismo color que el informe de flota y que el resto de planos de la app:
+    // manda la banda de profundidad. Sin mm conocidos, el recuadro oscuro de
+    // siempre. El borde sigue diciendo lo suyo: rojo avería, verde cambiada.
+    final mmNum = mm is num ? mm.toDouble() : double.tryParse('$mm');
+    final banda = (marca != null && mmNum != null) ? bandaProfundidad(mmNum) : null;
+    final cTexto = banda?.tinta ?? AppColors.textPrimary;
+    final cSuave = banda != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
     return Positioned(
       left: (x / 100 * w).clamp(0.0, w - cardW),
       top: (y / 100 * h).clamp(0.0, h - 24),
@@ -316,37 +324,46 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
         decoration: BoxDecoration(
-          color: AppColors.surface.withValues(alpha: 0.92),
+          color: banda?.fondo ?? AppColors.surface.withValues(alpha: 0.92),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: borde, width: 1.5),
         ),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(s['codigo']?.toString() ?? '—', style: TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
-          Text(marca ?? 'Libre', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(s['codigo']?.toString() ?? '—',
+              style: TextStyle(
+                  fontSize: 7,
+                  fontWeight: FontWeight.w700,
+                  // Sobre un recuadro claro, el borde rojo/verde como tinta no
+                  // se lee: manda la tinta de la banda.
+                  color: banda != null ? cTexto : borde),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(marca ?? 'Libre', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
           if (marca != null)
             Text('${mm != null ? '$mm mm' : '— mm'} · ${presion != null ? '$presion bar' : '— bar'}',
-                style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
-          // REESC. va en naranja brillante; el resto en azul. Aquí el recuadro
-          // es oscuro, así que el naranja se lee bien como texto y no hace
-          // falta rellenarlo como en el plano del vehículo.
+                style: TextStyle(fontSize: 7, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
+          // Mismas etiquetas que en los otros planos: REESC. relleno de naranja
+          // brillante, el resto en contorno.
           if (marca != null && distintivos.isNotEmpty)
-            Text.rich(
-              TextSpan(children: [
-                for (int i = 0; i < distintivos.length; i++) ...[
-                  if (i > 0) const TextSpan(text: ' · ', style: TextStyle(color: AppColors.info)),
-                  TextSpan(
-                    text: distintivos[i],
-                    style: TextStyle(
-                        color: distintivos[i] == 'REESC.' ? AppColors.reesculturado : AppColors.info),
-                  ),
-                ],
-              ]),
-              style: const TextStyle(fontSize: 6.5, fontWeight: FontWeight.w800),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            Wrap(spacing: 2, runSpacing: 2, children: [
+              for (final d in distintivos)
+                EtiquetaNeu(
+                  txt: d,
+                  color: cTexto,
+                  fontSize: 6.5,
+                  fondo: d == 'REESC.'
+                      ? AppColors.reesculturado
+                      : (d == 'NEW' ? AppColors.tireNuevo : null),
+                ),
+            ]),
           if (widget.conAveria && averias.isNotEmpty)
-            Text('⚠ ${averias.join(' · ')}', style: const TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: AppColors.danger), maxLines: 2, overflow: TextOverflow.ellipsis),
+            Text('⚠ ${averias.join(' · ')}',
+                style: TextStyle(
+                    fontSize: 7,
+                    fontWeight: FontWeight.w700,
+                    // El rojo de siempre se pierde sobre la banda roja o la
+                    // verde oscura; ahí manda la tinta legible de la banda.
+                    color: banda != null ? cTexto : AppColors.danger),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
         ]),
       ),
     );
