@@ -495,14 +495,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
               : _conPausa(Stack(children: [
+                  // Sin panel lateral: el vehículo manda y ocupa el centro. El
+                  // stock pasa arriba en una franja y las operaciones, abajo.
                   Column(children: [
                     if (_modoPermuta) _bandaPermuta(),
-                    Expanded(
-                      child: Row(children: [
-                        Expanded(child: _zonaPlano()),
-                        _panelStock(),
-                      ]),
-                    ),
+                    _franjaStock(),
+                    Expanded(child: _zonaPlano()),
+                    if (_posSel != null) _panelOperaciones(_posSel!),
+                    _barraPlanTrabajo(),
+                    _barraInferior(),
                   ]),
                   if (_trabajando)
                     const Positioned.fill(child: ColoredBox(color: Color(0x66000000), child: Center(child: CircularProgressIndicator()))),
@@ -612,27 +613,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Widget _conPausa(Widget child) =>
       _pausas == null ? child : PausaOverlay(controller: _pausas!, child: child);
 
-  // ── Plano + zonas de destino ──────────────────────────────────────────────
+  // ── Plano ─────────────────────────────────────────────────────────────────
+  // Las zonas de destino (almacén / papelera) ya no cuelgan de aquí: viven en
+  // la barra inferior, junto al resto de operaciones.
   Widget _zonaPlano() {
-    return Column(children: [
-      Expanded(
-        child: _imagenChasis == null || _aspect == null
-            ? Center(child: _imagenChasis == null
-                ? const Text('Este vehículo no tiene plano configurado.', style: TextStyle(color: AppColors.textHint))
-                : const CircularProgressIndicator())
-            : Padding(padding: const EdgeInsets.all(8), child: _plano()),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-        child: Row(children: [
-          Expanded(child: _zonaDestino(icono: Icons.warehouse, label: 'Almacén (usado)', color: AppColors.info,
-              onAccept: (m) => _desmontar(m, 'almacen'))),
-          const SizedBox(width: 8),
-          Expanded(child: _zonaDestino(icono: Icons.recycling, label: 'Papelera (reciclaje)', color: AppColors.danger,
-              onAccept: (m) => _desmontar(m, 'pendiente_reciclaje'))),
-        ]),
-      ),
-    ]);
+    return _imagenChasis == null || _aspect == null
+        ? Center(child: _imagenChasis == null
+            ? const Text('Este vehículo no tiene plano configurado.', style: TextStyle(color: AppColors.textHint))
+            : const CircularProgressIndicator())
+        : Padding(padding: const EdgeInsets.all(8), child: _plano());
   }
 
   Widget _zonaDestino({required IconData icono, required String label, required Color color, required void Function(MontajeActual) onAccept}) {
@@ -665,19 +654,34 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           ? c.maxHeight
           : w / _aspect!;
       // Rectángulo (ox,oy,iw,ih) donde se dibuja la imagen dentro del área w×h.
-      // Imagen NORMAL (compacta): se estira a todo el alto (BoxFit.fill) para
-      // separar los ejes y aprovechar la tablet vertical.
-      // Imagen de "ejes separados": ya viene proporcionada; se respeta su
-      // aspecto (contain) para que las RUEDAS no salgan ovaladas ("de bici").
+      // SIEMPRE se respeta el aspecto real de la foto (contain), con o sin
+      // ejes separados: el camión no se deforma ni en horizontal ni en
+      // vertical, y las ruedas no salen ovaladas ("de bici").
+      // El hueco que sobra a los lados no se desperdicia: es justo donde las
+      // tarjetas de posición se abren (ver el factor `k` en _tarjetaPosicion).
+      final a = _aspect!; // ancho / alto de la imagen
       double ox = 0, oy = 0, iw = w, ih = h;
-      if (_ejesSeparados) {
-        final a = _aspect!; // ancho / alto de la imagen
-        if (w / h >= a) {
-          ih = h; iw = h * a; ox = (w - iw) / 2; oy = 0;
-        } else {
-          iw = w; ih = w / a; ox = 0; oy = (h - ih) / 2;
-        }
+      if (w / h >= a) {
+        ih = h; iw = h * a; ox = (w - iw) / 2; oy = 0;
+      } else {
+        iw = w; ih = w / a; ox = 0; oy = (h - ih) / 2;
       }
+      // Factor de apertura de las tarjetas. Al respetar el aspecto sobra hueco
+      // a los lados; la CAPA DE TARJETAS se escala en horizontal respecto al
+      // centro del plano para ocuparlo. Como todas se escalan igual y desde el
+      // mismo centro, se separan del chasis y ENTRE SÍ: dos tarjetas que no se
+      // pisaban (los gemelos de un eje) siguen sin pisarse. Con un tope de
+      // anchura para que no salgan desproporcionadas cuando sobra muchísimo.
+      final areaW = 2 * ox + iw;
+      double anchoMaxPct = 0;
+      for (int i = 0; i < _posiciones.length; i++) {
+        final c2 = _coords(_posiciones[i], i);
+        if (c2.w > anchoMaxPct) anchoMaxPct = c2.w;
+      }
+      final natMax = anchoMaxPct / 100 * iw; // la tarjeta más ancha, sin abrir
+      double k = iw > 0 ? areaW / iw : 1.0;
+      if (natMax > 0 && natMax * k > _kAnchoMaxTarjeta) k = _kAnchoMaxTarjeta / natMax;
+      if (k < 1) k = 1;
       return SizedBox(
         width: w, height: h,
         child: Stack(children: [
@@ -690,7 +694,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             ),
           ),
           for (int i = 0; i < _posiciones.length; i++)
-            _tarjetaPosicion(_posiciones[i], i, ox, oy, iw, ih),
+            _tarjetaPosicion(_posiciones[i], i, ox, oy, iw, ih, k),
         ]),
       );
     });
@@ -713,6 +717,10 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   // 1024 px) se estiran ×1.8 los DOS tramos ENTRE ejes; el frente, las bandas
   // de ruedas y el faldón se dejan igual. Si esa imagen se regenera con otro
   // factor/bandas, actualizar estas constantes para que las tarjetas cuadren.
+  /// Tope de anchura de una tarjeta de posición al abrirse hacia los lados.
+  /// Por encima de esto no se gana legibilidad y se despegan de su rueda.
+  static const double _kAnchoMaxTarjeta = 210;
+
   static const List<List<double>> _kCambioSegs = [
     [0.0, 168.0, 1.0], [168.0, 272.0, 1.0], [272.0, 420.0, 1.8],
     [420.0, 516.0, 1.0], [516.0, 668.0, 1.8], [668.0, 772.0, 1.0], [772.0, 1024.0, 1.0],
@@ -1077,12 +1085,12 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     }
   }
 
-  Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih) {
+  Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih, double k) {
     final co = _coords(p, i);
-    // Ancho exacto en porcentaje, sin suelo en pixeles (ver
-    // vehicle_layout_image.dart): asi dos tarjetas del mismo eje nunca se
-    // pisan ni se meten encima del chasis.
-    final cardW = co.w / 100 * iw;
+    // `k` viene calculado en _plano(): es lo que se abren las tarjetas hacia
+    // los lados para aprovechar el hueco que deja la foto proporcionada.
+    final areaW = 2 * ox + iw;
+    final cardW = co.w / 100 * iw * k;
     // En modo plan el plano enseña CÓMO VA A QUEDAR: cada posición pinta la
     // rueda que acabará ahí, con una etiqueta de dónde viene.
     final mReal = _montajePorPosicion[p.id];
@@ -1104,11 +1112,14 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             border: Border.all(color: AppColors.info, width: esA ? 3 : 2),
           )
         : null;
-    // Anclada por el CENTRO (ver vehicle_layout_image.dart): con el suelo de
-    // 96 px la tarjeta crece hacia los dos lados y no pisa el chasis.
+    // Anclada por el CENTRO y separada del eje del camión por el mismo factor
+    // `k`, para que la tarjeta se abra hacia fuera sin despegarse de su rueda.
+    final centroPlano = ox + iw / 2;
     final centroX = ox + (co.x + co.w / 2) / 100 * iw;
+    final centroAbierto = centroPlano + (centroX - centroPlano) * k;
+    final topeIzq = areaW - cardW;
     return Positioned(
-      left: (centroX - cardW / 2).clamp(0.0, ox + iw - cardW),
+      left: (centroAbierto - cardW / 2).clamp(0.0, topeIzq < 0 ? 0.0 : topeIzq),
       top: (oy + co.y / 100 * ih).clamp(0.0, oy + ih - 44),
       width: cardW,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1312,71 +1323,147 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return out;
   }
 
-  // ── Panel lateral: operaciones + stock ────────────────────────────────────
-  Widget _panelStock() {
+  /// Posición vacía seleccionada: con ella, tocar una tarjeta de stock monta
+  /// directamente (sin arrastrar). Lo consultan la franja y la barra inferior.
+  PosicionVehiculo? get _montarEn {
+    final p = _posSel;
+    return (p != null && !_montajePorPosicion.containsKey(p.id)) ? p : null;
+  }
+
+  // ── Franja superior: stock del cliente ────────────────────────────────────
+  // Mismo contenido que tenía el panel lateral (título, medida, aviso y las
+  // tarjetas arrastrables), pero en horizontal y a todo el ancho.
+  Widget _franjaStock() {
     final medidaTxt = _medidasVehiculo.isEmpty ? 'todas' : _medidasVehiculo.join(' · ');
     final nuevos = _stock.where((l) => l.nuevo > 0).toList();
     final usados = _stock.where((l) => l.usado > 0).toList();
-    final p = _posSel;
-    final montarEn = (p != null && !_montajePorPosicion.containsKey(p.id)) ? p : null; // posición vacía seleccionada
+    final montarEn = _montarEn;
     return Container(
-      width: 280,
+      width: double.infinity,
       decoration: const BoxDecoration(
         color: AppColors.surface,
-        border: Border(left: BorderSide(color: AppColors.cardBorder)),
+        border: Border(bottom: BorderSide(color: AppColors.cardBorder)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (p != null) _panelOperaciones(p),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('STOCK DEL CLIENTE', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
-            Text('Medida: $medidaTxt', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
-            Text(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('STOCK DEL CLIENTE', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+          const SizedBox(width: 10),
+          Text('Medida: $medidaTxt', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
               montarEn != null
                   ? 'Toca una rueda para montarla en ${montarEn.codigoPosicion}.'
                   : 'Arrastra una tarjeta a una posición libre.',
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(color: montarEn != null ? AppColors.info : AppColors.textHint, fontSize: 11, fontWeight: montarEn != null ? FontWeight.w700 : FontWeight.w400),
             ),
-          ]),
-        ),
-        Expanded(
-          child: (nuevos.isEmpty && usados.isEmpty)
-              ? const Center(child: Padding(padding: EdgeInsets.all(16), child: Text('Sin stock de esta medida en el almacén del cliente.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint, fontSize: 13))))
-              : ListView(padding: const EdgeInsets.fromLTRB(10, 4, 10, 16), children: [
+          ),
+        ]),
+        const SizedBox(height: 6),
+        (nuevos.isEmpty && usados.isEmpty)
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 6),
+                child: Text('Sin stock de esta medida en el almacén del cliente.',
+                    style: TextStyle(color: AppColors.textHint, fontSize: 13)),
+              )
+            : SizedBox(
+                height: 58,
+                child: ListView(scrollDirection: Axis.horizontal, children: [
                   if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success, montarEn),
                   if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
                 ]),
-        ),
-        // ── Montaje SIN control de stock ─────────────────────────
-        // Al final y separado del stock a propósito: el botón usado ya decide
-        // el comportamiento (no hay checkboxes ni preguntas de inventario).
-        const Divider(height: 1, color: AppColors.cardBorder),
-        // Plan de trabajo: se pulsa la acción y luego se marcan las ruedas.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('PLAN DE TRABAJO',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
-            const SizedBox(height: 6),
-            for (final e in _kAcciones.entries) ...[
-              _btnAccion(e.key, e.value.label, e.value.icono),
-              const SizedBox(height: 8),
-            ],
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('SIN CONTROL DE STOCK',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
-            const SizedBox(height: 8),
-            _btnSinStock('Montar neumático NUEVO', AppColors.success, montarEn, 'nuevo'),
-            const SizedBox(height: 8),
-            _btnSinStock('Montar neumático USADO', AppColors.warning, montarEn, 'usado'),
-          ]),
-        ),
+              ),
       ]),
+    );
+  }
+
+  // ── Barra de plan de trabajo (debajo del vehículo) ────────────────────────
+  // Los mismos botones de siempre y en el mismo orden; solo cambian de sitio y
+  // se reparten en filas según el ancho que haya.
+  Widget _barraPlanTrabajo() {
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.cardBorder)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('PLAN DE TRABAJO',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+        const SizedBox(height: 6),
+        LayoutBuilder(builder: (ctx, c) {
+          const sep = 8.0;
+          final total = _kAcciones.length;
+          // Tantos botones por fila como quepan sin bajar de ~190 px de ancho.
+          int porFila = ((c.maxWidth + sep) / (190 + sep)).floor();
+          if (porFila < 2) porFila = 2;
+          if (porFila > total) porFila = total;
+          final ancho = (c.maxWidth - sep * (porFila - 1)) / porFila;
+          return Wrap(
+            spacing: sep,
+            runSpacing: sep,
+            children: [
+              for (final e in _kAcciones.entries)
+                SizedBox(width: ancho, child: _btnAccion(e.key, e.value.label, e.value.icono)),
+            ],
+          );
+        }),
+      ]),
+    );
+  }
+
+  // ── Barra inferior: destinos del desmontaje + montaje sin stock ───────────
+  Widget _barraInferior() {
+    final montarEn = _montarEn;
+    final almacen = _zonaDestino(icono: Icons.warehouse, label: 'Almacén (usado)', color: AppColors.info,
+        onAccept: (m) => _desmontar(m, 'almacen'));
+    final papelera = _zonaDestino(icono: Icons.recycling, label: 'Papelera (reciclaje)', color: AppColors.danger,
+        onAccept: (m) => _desmontar(m, 'pendiente_reciclaje'));
+    // Montaje SIN control de stock: el botón usado ya decide el comportamiento
+    // (no hay checkboxes ni preguntas de inventario).
+    final nuevo = _btnSinStock('Montar neumático NUEVO', AppColors.success, montarEn, 'nuevo');
+    final usado = _btnSinStock('Montar neumático USADO', AppColors.warning, montarEn, 'usado');
+    const rotulo = Text('SIN CONTROL DE STOCK',
+        style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      child: LayoutBuilder(builder: (ctx, c) {
+        // Con sitio de sobra, los cuatro en una fila; si no, dos y dos.
+        if (c.maxWidth >= 900) {
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [Spacer(flex: 2), Expanded(flex: 2, child: rotulo)]),
+            const SizedBox(height: 4),
+            Row(children: [
+              Expanded(child: almacen),
+              const SizedBox(width: 8),
+              Expanded(child: papelera),
+              const SizedBox(width: 8),
+              Expanded(child: SizedBox(height: 72, child: nuevo)),
+              const SizedBox(width: 8),
+              Expanded(child: SizedBox(height: 72, child: usado)),
+            ]),
+          ]);
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: almacen),
+            const SizedBox(width: 8),
+            Expanded(child: papelera),
+          ]),
+          const SizedBox(height: 8),
+          rotulo,
+          const SizedBox(height: 4),
+          Row(children: [
+            Expanded(child: nuevo),
+            const SizedBox(width: 8),
+            Expanded(child: usado),
+          ]),
+        ]);
+      }),
     );
   }
 
@@ -1505,17 +1592,29 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         ],
         const SizedBox(height: 8),
         if (m != null) ...[
-          // Reparaciones en sitio sugeridas (el neumático se queda).
-          for (final a in acciones)
-            _btnOp(a.icon, a.label, AppColors.success,
-                onTap: inc == null ? null : () => _repararEnSitio(p, inc, a.key, a.label)),
-          // Avería irreparable → a la papelera de reciclaje.
-          _btnOp(Icons.recycling, 'Avería irreparable · a papelera', AppColors.danger,
-              onTap: () => _marcarIrreparable(p, m)),
-          // Desmontar reutilizable → almacén como usado.
-          _btnOp(Icons.warehouse, 'Desmontar · al almacén (usado)', AppColors.info,
-              onTap: () => _desmontar(m, 'almacen')),
-          const SizedBox(height: 4),
+          // Ahora esta banda va a todo el ancho, bajo el vehículo: los botones
+          // se reparten en horizontal en vez de apilarse.
+          Wrap(spacing: 8, children: [
+            // Reparaciones en sitio sugeridas (el neumático se queda).
+            for (final a in acciones)
+              SizedBox(
+                width: 280,
+                child: _btnOp(a.icon, a.label, AppColors.success,
+                    onTap: inc == null ? null : () => _repararEnSitio(p, inc, a.key, a.label)),
+              ),
+            // Avería irreparable → a la papelera de reciclaje.
+            SizedBox(
+              width: 280,
+              child: _btnOp(Icons.recycling, 'Avería irreparable · a papelera', AppColors.danger,
+                  onTap: () => _marcarIrreparable(p, m)),
+            ),
+            // Desmontar reutilizable → almacén como usado.
+            SizedBox(
+              width: 280,
+              child: _btnOp(Icons.warehouse, 'Desmontar · al almacén (usado)', AppColors.info,
+                  onTap: () => _desmontar(m, 'almacen')),
+            ),
+          ]),
           const Text('Para sustituir, desmonta y luego monta la rueda nueva o usada del stock.',
               style: TextStyle(color: AppColors.textHint, fontSize: 10.5)),
         ] else ...[
@@ -1565,9 +1664,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     if (mounted) setState(() => _posSeleccionada = null);
   }
 
+  /// Grupo de tarjetas de stock. Va en la franja superior, así que se dispone
+  /// en HORIZONTAL; el arrastre y el toque para montar no cambian.
   Widget _grupoStock(String titulo, List<StockAlmacenLinea> lineas, String condicion, Color color, PosicionVehiculo? montarEn) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Padding(padding: const EdgeInsets.symmetric(vertical: 6),
+    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Text(titulo.toUpperCase(), style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800))),
       ...lineas.map((l) {
         final cant = condicion == 'nuevo' ? l.nuevo : l.usado;
@@ -1578,7 +1679,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           child: _cardStock(l, condicion, color, cant, montable: montarEn != null),
         );
         return Padding(
-          padding: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.only(right: 8),
           // Con una posición vacía seleccionada, un toque monta directamente.
           child: montarEn != null
               ? GestureDetector(onTap: _trabajando ? null : () => _montarDesdeStockTap(l, condicion, montarEn), child: card)
