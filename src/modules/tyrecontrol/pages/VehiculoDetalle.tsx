@@ -203,39 +203,38 @@ export default function VehiculoDetalle() {
         />
       </div>
 
-      {/* Estructura de posiciones */}
-      <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Estructura de posiciones ({posiciones.length})</div>
-        {/* Las posiciones salen del TIPO de vehículo: si no tiene los mismos
-            ejes que la configuración, aparecen ruedas que no existen. */}
-        {(() => {
-          const ejesConfig = v.config_ejes?.nombre ? v.config_ejes.nombre.split(/x/i).filter((s) => s.trim() !== "").length : 0;
-          const ejesTipo = v.tipo?.numero_ejes ?? 0;
-          if (!ejesConfig || !ejesTipo || ejesConfig === ejesTipo) return null;
+      {/* El listado de posiciones se quitó: el plano y las etiquetas de cada
+          neumático ya dicen dónde está cada rueda, y repetirlo en fichas de
+          ocho posiciones empujaba lo demás fuera de pantalla en el móvil.
+          Lo que SÍ se queda son los avisos, que no se ven en ninguna otra
+          parte y delatan un vehículo mal configurado. */}
+      {(() => {
+        // Las posiciones salen del TIPO de vehículo: si no tiene los mismos
+        // ejes que la configuración, en el plano aparecen ruedas que no
+        // existen. Sin este aviso, el técnico mide una rueda fantasma.
+        const ejesConfig = v.config_ejes?.nombre ? v.config_ejes.nombre.split(/x/i).filter((s) => s.trim() !== "").length : 0;
+        const ejesTipo = v.tipo?.numero_ejes ?? 0;
+        const descuadre = !!ejesConfig && !!ejesTipo && ejesConfig !== ejesTipo;
+        if (descuadre) {
           return (
-            <div className="mb-2 rounded border border-rose-500/50 bg-rose-950/40 p-2 text-[12px] text-rose-200">
+            <div className="mt-3 rounded-lg border border-rose-500/50 bg-rose-950/40 p-3 text-[12px] text-rose-200">
               El tipo «{v.tipo?.descripcion ?? v.tipo?.nombre}» tiene {ejesTipo} ejes, pero la configuración
               {" "}{v.config_ejes?.nombre} son {ejesConfig}: por eso salen {posiciones.length} posiciones.
               Cambia el tipo del vehículo por uno de {ejesConfig} ejes.
             </div>
           );
-        })()}
-        {posiciones.length === 0 ? (
-          <div className="text-sm text-slate-500">
-            {v.tipo_vehiculo_id ? "Este tipo de vehículo no tiene posiciones definidas." : "Asigna un tipo de vehículo para ver sus posiciones."}
-          </div>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {posiciones.map((p) => (
-              <div key={p.id} className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-center">
-                <div className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</div>
-                <div className="text-[10px] text-slate-400">{p.nombre}</div>
-                <div className="text-[9px] text-slate-500">Eje {p.eje ?? "—"} · {p.lado ?? ""}{p.interior_exterior ? ` · ${p.interior_exterior}` : ""}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+        }
+        if (posiciones.length === 0) {
+          return (
+            <div className="mt-3 rounded-lg border border-amber-500/50 bg-amber-950/30 p-3 text-[12px] text-amber-200">
+              {v.tipo_vehiculo_id
+                ? "Este tipo de vehículo no tiene posiciones definidas, así que el plano sale vacío."
+                : "Asigna un tipo de vehículo para que el plano muestre sus posiciones."}
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       {/* Inspecciones (revisiones del vehículo) */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
