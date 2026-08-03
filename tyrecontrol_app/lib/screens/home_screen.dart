@@ -30,9 +30,9 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     // Refresca el contador de incidencias para el badge de Inicio.
     TyreControlApi.contarIncidenciasPendientes();
-    // Intenta reconectar la sonda guardada en segundo plano (autoConnect):
-    // el técnico no tiene que conectarla a mano, se enlaza al encenderla.
-    ProbeSession.instance.autoReconectar();
+    // Deja la sonda guardada vigilada (autoConnect): el técnico no la conecta
+    // a mano, se enlaza sola al encenderla y se rearma si se apaga o se aleja.
+    ProbeSession.instance.vigilar();
   }
 
   final _tabs = const [
