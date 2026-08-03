@@ -36,6 +36,11 @@ class AppColors {
   static const tireNoAccesible  = Color(0xFF374151); // negro/gris oscuro
   static const tireNuevo        = Color(0xFF00E676); // verde brillante — sin estrenar
   static const tireBien         = Color(0xFF86EFAC); // verde mas claro — dentro de umbral
+
+  /// Naranja brillante del distintivo REESC. Va SIEMPRE de fondo con tinta
+  /// oscura encima: los recuadros del plano se pintan de verde/amarillo/rojo
+  /// claros, y sobre ellos un naranja en texto se perdería.
+  static const reesculturado = Color(0xFFFF7A00);
 }
 
 // ── Tamanos: modo normal vs "exterior" (sol directo / guantes) ──

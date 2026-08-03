@@ -289,7 +289,8 @@ class _TarjetaPosicion extends StatelessWidget {
                       children: [
                         if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca))
                           _EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
-                        if (neumatico!.reesculturado) _EtiquetaNeu(txt: 'REESC.', color: cTexto),
+                        if (neumatico!.reesculturado)
+                          _EtiquetaNeu(txt: 'REESC.', color: cTexto, fondo: AppColors.reesculturado),
                         if (neumatico!.giradoEnLlanta) _EtiquetaNeu(txt: 'GIRADO', color: cTexto),
                       ],
                     ),
@@ -336,19 +337,29 @@ class _TarjetaPosicion extends StatelessWidget {
 /// Etiqueta pequeña del propio neumático (recauchutado, reesculturado, girado).
 class _EtiquetaNeu extends StatelessWidget {
   final String txt;
-  final Color color;
-  const _EtiquetaNeu({required this.txt, required this.color});
+  final Color color; // tinta cuando va sin relleno
+  final Color? fondo; // si se da, la etiqueta va rellena y la tinta es oscura
+  const _EtiquetaNeu({required this.txt, required this.color, this.fondo});
 
   @override
   Widget build(BuildContext context) {
+    final f = fondo;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
       decoration: BoxDecoration(
+        color: f,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.55)),
+        // Borde oscuro cuando va rellena: sobre un recuadro ámbar, el naranja
+        // contra el fondo se queda en 1.2:1 y la pastilla se fundiría con él.
+        border: Border.all(
+            color: f != null ? AppColors.background : color.withValues(alpha: 0.55)),
       ),
       child: Text(txt,
-          style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color, height: 1.1)),
+          style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w800,
+              color: f != null ? AppColors.background : color,
+              height: 1.1)),
     );
   }
 }
