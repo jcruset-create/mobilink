@@ -29,6 +29,53 @@ class ProbeSession extends ChangeNotifier {
   String error = '';
   bool autoReconectando = false; // esperando a que la sonda guardada aparezca
 
+  /// Autoconexión ARMADA: el sistema tiene la petición puesta y enlazará la
+  /// sonda en cuanto se encienda o vuelva a rango. Es lo que hay que mirar
+  /// para decir "buscando sonda", no [autoReconectando] (que solo dura lo que
+  /// tarda en cursarse la petición).
+  bool armada = false;
+
+  bool _vigilando = false;
+  bool _desconexionManual = false; // el técnico la ha soltado a propósito
+  Timer? _rearme;
+
+  /// ¿Hay una sonda recordada? Sin ella no hay nada que autoconectar.
+  bool get hayPredeterminada {
+    final id = sondaPredeterminada()?['remoteId'] as String?;
+    return id != null && id.isNotEmpty;
+  }
+
+  /// Deja la sonda vigilada durante toda la vida de la app: se reengancha al
+  /// encenderla, al volver a rango y al encender el Bluetooth de la tablet.
+  /// Idempotente: se puede llamar cada vez que se abre Inicio.
+  void vigilar() {
+    autoReconectar();
+    if (_vigilando) return;
+    _vigilando = true;
+    // Si el técnico arranca con el Bluetooth apagado, la primera petición
+    // falla; al encenderlo hay que volver a ponerla.
+    // Sin cancelar: el singleton vive lo que la app.
+    FlutterBluePlus.adapterState.listen((s) {
+      if (s == BluetoothAdapterState.on) autoReconectar();
+    });
+  }
+
+  /// Vuelve a armar la autoconexión tras una caída, con una pequeña espera
+  /// para no pelearse con el ciclo de desconexión del sistema.
+  /// OJO: conectarAuto emite `disconnected` nada más suscribirse al estado del
+  /// dispositivo, así que aquí llegan desconexiones que NO son caídas. Por eso
+  /// se sale si la autoconexión ya está armada: sin esa guarda, cada rearme
+  /// volvería a suscribirse, llegaría otro `disconnected` y el ciclo se
+  /// repetiría cada 3 segundos para siempre.
+  void _rearmar() {
+    if (_desconexionManual || !hayPredeterminada || armada) return;
+    _rearme?.cancel();
+    _rearme = Timer(const Duration(seconds: 3), () {
+      if (conectada || armada) return; // se resolvió mientras esperábamos
+      autoReconectar();
+    });
+  }
+
   // Última lectura en vivo (para mostrar mientras se apoya la sonda).
   double? profundidadMm;
   double? presionBar;
@@ -119,20 +166,24 @@ class ProbeSession extends ChangeNotifier {
   /// `autoConnect`, el sistema la enlaza en cuanto se enciende. No bloquea ni
   /// muestra errores: es best-effort al abrir la app.
   Future<void> autoReconectar() async {
-    if (conectada || conectando || autoReconectando) return;
+    if (conectada || conectando || autoReconectando || armada) return;
     final saved = sondaPredeterminada();
     final remoteId = saved?['remoteId'] as String?;
     if (remoteId == null || remoteId.isEmpty) return;
 
     autoReconectando = true;
+    _desconexionManual = false;
     notifyListeners();
     try {
       final probe = _asegurarProbe();
       if (!await probe.pedirPermisos()) return;
       nombre = (saved?['nombre'] as String?) ?? '';
       await probe.conectarAuto(BluetoothDevice.fromId(remoteId));
+      // A partir de aquí manda el sistema: enlazará la sonda en cuanto la vea.
+      armada = true;
     } catch (_) {
-      // Sin permisos / BT apagado: se reintenta la próxima vez que se abra.
+      // Sin permisos / BT apagado: se reintenta al encenderlo (ver vigilar).
+      armada = false;
     } finally {
       autoReconectando = false;
       notifyListeners();
@@ -169,12 +220,18 @@ class ProbeSession extends ChangeNotifier {
     conectada = estado;
     if (estado) {
       autoReconectando = false;
+      armada = false; // ya está enlazada: no hay nada a la espera
+      _rearme?.cancel();
       if (_probe != null && _probe!.nombre.isNotEmpty) nombre = _probe!.nombre;
       // Configura unidades y pide batería en cuanto la sonda está lista
       // (también tras una reconexión automática al encenderla).
       _configurarUnidades();
     } else {
       nombre = '';
+      bateria = null;
+      // Se ha apagado o se ha ido de rango: se vuelve a dejar armada para que
+      // se enganche sola al encenderla otra vez.
+      _rearmar();
     }
     notifyListeners();
   }
@@ -190,6 +247,10 @@ class ProbeSession extends ChangeNotifier {
   }
 
   Future<void> desconectar() async {
+    // Soltada a mano: no se rearma sola (si no, volvería a engancharse).
+    _desconexionManual = true;
+    _rearme?.cancel();
+    armada = false;
     await _probe?.desconectar();
     conectada = false;
     profundidadMm = null;
