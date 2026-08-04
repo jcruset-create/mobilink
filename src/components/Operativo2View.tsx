@@ -205,7 +205,17 @@ export default function Operativo2View({
   const bloqueadosCount = visibleJobs.filter((j) => j.status === "bloqueado").length;
 
   return (
-    <div className={embebido ? "bg-slate-900 p-3 text-slate-100" : "fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100"}>
+    <div
+      className={
+        embebido
+          // Dentro de WorkPlanner sigue siendo una capa fija (por debajo de la
+          // topbar del módulo y de los diálogos del panel, que van a z-50): así
+          // tapa el resto del árbol del panel, que se monta detrás para que sus
+          // diálogos —entrada rápida, plantillas…— sigan funcionando.
+          ? "fixed inset-x-0 bottom-0 top-[44px] z-30 overflow-auto bg-slate-900 p-3 text-slate-100"
+          : "fixed inset-0 z-40 overflow-auto bg-slate-900 p-3 text-slate-100"
+      }
+    >
       {/* Barra superior (solo en el panel: dentro de WorkPlanner navega su menú) */}
       <div className={`mb-2 items-center justify-between ${embebido ? "hidden" : "flex"}`}>
         <span className="text-sm font-bold">📊 Mobilink · Operativo 2{userName ? <span className="ml-2 rounded bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-100">👤 {userName}</span> : null}</span>
