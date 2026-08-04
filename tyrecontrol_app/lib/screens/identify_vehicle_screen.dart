@@ -7,12 +7,25 @@ import '../services/ocr_service.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import 'cambio_neumatico_screen.dart';
 import 'confirm_vehicle_screen.dart';
+
+/// Qué se va a hacer con el vehículo una vez identificado.
+enum DestinoVehiculo { revision, operaciones }
 
 /// Pantalla 3: identificar vehiculo. Cuatro metodos, priorizando el
 /// mas rapido (foto) sin esconder los demas.
 class IdentifyVehicleScreen extends StatefulWidget {
-  const IdentifyVehicleScreen({super.key});
+  /// A dónde se va tras elegir el vehículo.
+  ///
+  /// `revision` (lo de siempre) pasa por la pantalla de confirmación, donde se
+  /// piden kilómetros y si se verifican presiones. `operaciones` entra directo
+  /// a Cambios: no hay nada que preguntar antes, y abrir esa pantalla no
+  /// escribe nada — solo Finalizar guarda —, así que equivocarse de camión y
+  /// salir no deja rastro.
+  final DestinoVehiculo destino;
+
+  const IdentifyVehicleScreen({super.key, this.destino = DestinoVehiculo.revision});
 
   @override
   State<IdentifyVehicleScreen> createState() => _IdentifyVehicleScreenState();
@@ -84,7 +97,21 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
     }
   }
 
-  void _irAConfirmar(Vehiculo v) {
+  Future<void> _irAConfirmar(Vehiculo v) async {
+    if (widget.destino == DestinoVehiculo.operaciones) {
+      // Se abre Cambios y, al cerrarse, se cierra TAMBIÉN esta pantalla: el
+      // técnico vuelve a Inicio y no a la búsqueda que ya usó.
+      //
+      // Con pushReplacement se llegaría al mismo sitio, pero mal: esa llamada
+      // completa al instante el `await` de quien nos abrió, así que Inicio
+      // refrescaría el contador de incidencias ANTES de que la operación
+      // hubiera empezado siquiera.
+      final r = await Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => CambioNeumaticoScreen(vehiculoId: v.id)));
+      if (!mounted) return;
+      Navigator.of(context).pop(r);
+      return;
+    }
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => ConfirmVehicleScreen(vehiculo: v)));
   }
 
@@ -92,7 +119,11 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
   Widget build(BuildContext context) {
     final recientes = OfflineStore.vehiculosRecientes();
     return Scaffold(
-      appBar: AppBar(title: const Text('Identificar vehículo')),
+      appBar: AppBar(
+        title: Text(widget.destino == DestinoVehiculo.operaciones
+            ? 'Operaciones · elige el vehículo'
+            : 'Identificar vehículo'),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
