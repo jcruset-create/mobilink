@@ -274,6 +274,18 @@ export default function RoadsideTrackingPage() {
   }
 
   const files: RoadsideAssistanceFile[] = data?.files ?? [];
+
+  // Furgoneta tal y como la ve el cliente: marca (y modelo, si está) más la
+  // matrícula. El nombre interno solo aparece si no hay ninguno de los dos.
+  const vanLabel =
+    [
+      [data?.vanMarca, data?.vanModelo].filter(Boolean).join(" ").trim(),
+      data?.vanPlate?.trim(),
+    ]
+      .filter(Boolean)
+      .join(" · ") ||
+    assistance.assignedVehicleName ||
+    "Pendiente";
   const isFinished =
     assistance.status === "llegada_taller" ||
     assistance.status === "cancelada";
@@ -458,7 +470,7 @@ export default function RoadsideTrackingPage() {
             </div>
             <div className="space-y-2 text-sm font-semibold text-slate-700">
               <div>Operario: {assistance.assignedTechName || "Pendiente"}</div>
-              <div>Furgoneta: {assistance.assignedVehicleName || "Pendiente"}</div>
+              <div>Furgoneta: {vanLabel}</div>
               <div>Salida: {formatTime(assistance.departedAtMs)}</div>
               <div>Llegada al punto: {formatTime(assistance.arrivedAtPointMs)}</div>
               {isFinished && (
