@@ -2536,6 +2536,74 @@ async function pauseActiveJobsForStandby(triggerTime: string) {
   }
 }
 
+/**
+ * Asigna (o libera, con vehicleId = null) la furgoneta de un trabajo del área
+ * "movil". Mientras el trabajo siga abierto esa unidad no se ofrece para
+ * asistencias en carretera.
+ */
+async function asignarFurgonetaAlTrabajo(jobId: number, vehicleId: number | null) {
+  const target = jobs.find((job) => job.id === jobId);
+  if (!target) return;
+
+  const vehiculo = vehicleId != null
+    ? roadside.visibleRoadsideVehicles.find((v) => v.id === vehicleId) ?? null
+    : null;
+
+  const actualizado: Job = {
+    ...target,
+    assignedVehicleId: vehiculo ? vehiculo.id : null,
+    assignedVehicleName: vehiculo ? vehiculo.name : null,
+  };
+
+  setJobs((prev) => prev.map((job) => (job.id === jobId ? actualizado : job)));
+  appendLog(
+    vehiculo
+      ? `Unidad movil ${vehiculo.name} asignada al trabajo ${target.plate}.`
+      : `Unidad movil liberada del trabajo ${target.plate}.`
+  );
+
+  try {
+    await saveJobToBackend(actualizado);
+  } catch (error) {
+    console.error("Error asignando furgoneta al trabajo:", error);
+    appendLog("Error al guardar la unidad movil del trabajo.");
+  }
+}
+
+/**
+ * Furgonetas retenidas por un trabajo de taller abierto (área "movil"): no
+ * pueden ofrecerse para una asistencia en carretera.
+ */
+const furgonetasOcupadasEnTaller = new Map<number, string>(
+  visibleJobs
+    .filter(
+      (job) =>
+        job.assignedVehicleId != null &&
+        job.status !== "cerrado"
+    )
+    .map((job) => [job.assignedVehicleId as number, job.plate])
+);
+
+/** Furgonetas retenidas por una asistencia en carretera en curso. */
+const furgonetasEnAsistencia = new Set<string>(
+  (roadside.visibleRoadsideAssistances ?? [])
+    .filter((a) =>
+      ["asignada", "en_camino", "en_punto", "inicio_reparacion", "en_camino_base"].includes(a.status)
+    )
+    .map((a) => String(a.assignedVehicleName || "").trim())
+    .filter(Boolean)
+);
+
+/**
+ * Técnicos que están ocupados en un trabajo de taller: Assist no debe
+ * ofrecerlos para una asistencia nueva.
+ */
+const tecnicosOcupadosEnTaller = new Set<string>(
+  visibleTechs
+    .filter((tech) => tech.currentJobId != null && tech.status === "ocupado")
+    .map((tech) => tech.name)
+);
+
 async function pauseJob(jobId: number) {
   const target = jobs.find((job) => job.id === jobId);
   if (!target || target.status !== "activo") return;
@@ -4535,6 +4603,10 @@ const operativo2Element = (
     reassignJob={reassignJob}
     addExtraSupportToJob={addExtraSupportToJob}
     removeSupportByNameFromJob={removeSupportByNameFromJob}
+    furgonetas={roadside.visibleRoadsideVehicles}
+    furgonetasOcupadasEnTaller={furgonetasOcupadasEnTaller}
+    furgonetasEnAsistencia={furgonetasEnAsistencia}
+    asignarFurgonetaAlTrabajo={asignarFurgonetaAlTrabajo}
     embebido={embebido}
   />
 );
@@ -4597,6 +4669,12 @@ if (view === "asistencias" && canView("asistencias")) {
       assistances={roadside.visibleRoadsideAssistances}
       techs={roadside.visibleRoadsideTechs}
       vehicles={roadside.visibleRoadsideVehicles}
+      tecnicosOcupadosEnTaller={tecnicosOcupadosEnTaller}
+      furgonetasOcupadasEnTaller={new Set(
+        Array.from(furgonetasOcupadasEnTaller.keys())
+          .map((id) => roadside.visibleRoadsideVehicles.find((v) => v.id === id)?.name)
+          .filter((name): name is string => Boolean(name))
+      )}
       currentBase={getWorkshopById(selectedWorkshopId).city}
       loading={roadside.roadsideAssistancesLoading}
       error={

@@ -212,6 +212,18 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
   `);
 
+  // Unidad móvil asignada al trabajo (área "movil"): mientras el trabajo está
+  // en curso la furgoneta no está disponible para asistencias en carretera.
+  // Se guarda el id (integridad) y el nombre (es lo que cruza roadside, que
+  // referencia las furgonetas por nombre en "assignedVehicleName").
+  await pool.query(`
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "assignedVehicleId" INTEGER;
+
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "assignedVehicleName" TEXT;
+  `);
+
   // APK Mobilink Taller: fotos adjuntas a un trabajo
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_files (
