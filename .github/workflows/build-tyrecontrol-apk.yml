@@ -148,20 +148,9 @@ jobs:
           body: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
           files: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
 
-      # Centro de descargas (/descargas.html): el servidor lista los .apk que
-      # encuentra en public/ y se queda con la versión más alta, así que basta
-      # con dejar el fichero ahí. Se borra la anterior en el mismo commit: solo
-      # se sirve la última y así el árbol no acumula APKs de 58 MB.
-      #
-      # Solo con la clave estable: una APK de debug en el centro de descargas
-      # no se puede instalar encima de la que tienen los técnicos.
-      - name: Publicar la APK en el centro de descargas
-        if: ${{ env.KS_B64 != '' }}
-        run: |
-          rm -f ../public/tyrecontrol-*.apk
-          cp "build/app/outputs/flutter-apk/tyrecontrol-${{ steps.ver.outputs.version }}.apk" \
-             "../public/tyrecontrol-${{ steps.ver.outputs.version }}.apk"
-          ls -la ../public/tyrecontrol-*.apk
+      # El centro de descargas no necesita nada más: /apps/tyrecontrol redirige
+      # al asset de esta release (ver APK_APPS en server/index.ts). Así el
+      # binario no entra en el repositorio, que crecía 58 MB por compilación.
 
       # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el
       # número no se quema. El [skip ci] evita que este commit dispare otro
@@ -172,19 +161,17 @@ jobs:
       # avisa y se sigue: el run NO se pone en rojo por esto. La consecuencia
       # es solo que el próximo build repita el mismo nombre de versión, y aun
       # así saldrá con otro build number, así que no se pisa ninguna release.
-      - name: Guardar la versión nueva y la APK en el repositorio
+      - name: Guardar la versión nueva en el repositorio
         if: ${{ env.KS_B64 != '' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pubspec.yaml
-          # -A recoge tanto la APK nueva como el borrado de la anterior.
-          git -C .. add -A public
           if git diff --cached --quiet; then
-            echo "Ni el pubspec ni la APK han cambiado; nada que guardar."
+            echo "El pubspec no ha cambiado; nada que guardar."
             exit 0
           fi
-          git commit -m "chore(tyrecontrol): version ${{ steps.ver.outputs.version }} y APK en descargas [skip ci]"
+          git commit -m "chore(tyrecontrol): version ${{ steps.ver.outputs.version }} [skip ci]"
           # Se reintenta una vez sobre la punta actual: el push suele fallar
           # solo porque otro commit llegó mientras compilábamos, y sin este
           # reintento el centro de descargas se quedaría con la APK anterior.
@@ -193,8 +180,9 @@ jobs:
             git pull --rebase origin ${{ github.ref_name }} || true
             if ! git push origin HEAD:${{ github.ref_name }}; then
               echo "::warning::No se ha podido guardar la versión" \
-                   "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}." \
-                   "La APK publicada en la release es válida, pero el centro de" \
-                   "descargas sigue con la anterior: súbela a mano o relanza el workflow."
+                   "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}" \
+                   "(seguramente otro push llegó antes). La release está publicada," \
+                   "así que el centro de descargas ya sirve esta APK; lo único que" \
+                   "pasa es que el próximo build repetirá el nombre de versión."
             fi
           fi
