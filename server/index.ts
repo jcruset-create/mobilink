@@ -15914,11 +15914,44 @@ mountLicenses(app, requireLicensesAdmin);
              mobilink-stockflow-<v>.apk
 ========================================================= */
 
-const APK_APPS: Record<string, { prefix: string; label: string }> = {
+// Cada app puede publicarse por dos caminos:
+//  - releaseTag: la CI publica una GitHub Release por build (TyreControl). El
+//    centro de descargas redirige al asset, así que el binario NO vive en el
+//    repositorio y este no engorda 58 MB por compilación.
+//  - prefix: fichero suelto en public/ (las que todavía se compilan a mano).
+// Si hay release se usa la release; si falla o no hay, se cae al fichero.
+const APK_APPS: Record<
+  string,
+  { prefix: string; label: string; releaseTag?: string; pubspec?: string }
+> = {
   assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
-  tyrecontrol: { prefix: "tyrecontrol-", label: "Mobilink TyreControl" },
+  tyrecontrol: {
+    prefix: "tyrecontrol-",
+    label: "Mobilink TyreControl",
+    releaseTag: "tyrecontrol-v",
+    pubspec: "tyrecontrol_app/pubspec.yaml",
+  },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
 };
+
+// Orden por versión descendente. El "+build" (0.31.6+80) cuenta como un tramo
+// más al final: sin esto, "6+80" se parseaba como 6 y dos builds del mismo
+// 0.31.6 empataban, así que ganaba el que devolviera primero el sistema de
+// ficheros — es decir, cualquiera.
+function versionPartes(v: string): number[] {
+  const [nombre, build] = v.split("+");
+  const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
+  out.push(parseInt(build ?? "0", 10) || 0);
+  return out;
+}
+function masNuevaPrimero(a: string, b: string): number {
+  const pa = versionPartes(a);
+  const pb = versionPartes(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
+  }
+  return 0;
+}
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
 function latestApkFor(prefix: string): { file: string; version: string } | null {
@@ -15932,51 +15965,124 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
       file: f,
       version: f.slice(prefix.length, -4), // entre prefijo y ".apk"
     }));
-    // Orden por versión semántica descendente. El "+build" (0.31.6+80) cuenta
-    // como un tramo más al final: sin esto, "6+80" se parseaba como 6 y dos
-    // builds del mismo 0.31.6 empataban, así que ganaba la que devolviera
-    // primero el sistema de ficheros — es decir, cualquiera.
-    const partes = (v: string) => {
-      const [nombre, build] = v.split("+");
-      const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
-      out.push(parseInt(build ?? "0", 10) || 0);
-      return out;
-    };
-    withVer.sort((a, b) => {
-      const pa = partes(a.version);
-      const pb = partes(b.version);
-      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
-      }
-      return 0;
-    });
+    withVer.sort((a, b) => masNuevaPrimero(a.version, b.version));
     return withVer[0];
   } catch {
     return null;
   }
 }
 
-// JSON con la última versión de cada app (lo consume /descargas.html)
-app.get("/api/apps/list", (_req, res) => {
-  const out = Object.entries(APK_APPS).map(([key, { prefix, label }]) => {
-    const latest = latestApkFor(prefix);
-    return {
-      key,
-      label,
-      version: latest?.version ?? null,
-      url: latest ? `/apps/${key}` : null,
+// ── Última APK publicada como GitHub Release ────────────────────────────────
+// El repositorio es público, así que el asset se descarga sin credenciales y
+// basta con redirigir al navegador. Se cachea porque la API sin token permite
+// 60 peticiones por hora y el centro de descargas lo consulta en cada visita.
+const GH_REPO = process.env.GITHUB_REPO || "jcruset-create/mobilink";
+type ApkRelease = { version: string; url: string };
+const releaseCache = new Map<string, { hasta: number; valor: ApkRelease | null }>();
+const RELEASE_TTL_OK_MS = 10 * 60 * 1000;
+const RELEASE_TTL_FALLO_MS = 60 * 1000; // tras un fallo se reintenta antes
+
+async function latestReleaseApk(tagPrefix: string): Promise<ApkRelease | null> {
+  const cache = releaseCache.get(tagPrefix);
+  if (cache && Date.now() < cache.hasta) return cache.valor;
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "mobilink-descargas",
     };
-  });
+    // Opcional: solo sirve para subir el límite de peticiones.
+    if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    const r = await fetch(`https://api.github.com/repos/${GH_REPO}/releases?per_page=30`, {
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`);
+    const releases = (await r.json()) as any[];
+    const candidatas = (Array.isArray(releases) ? releases : [])
+      .filter((rel) => !rel.draft && !rel.prerelease && String(rel.tag_name ?? "").startsWith(tagPrefix))
+      .map((rel) => ({
+        version: String(rel.tag_name).slice(tagPrefix.length),
+        asset: (rel.assets ?? []).find((a: any) => String(a.name ?? "").endsWith(".apk")),
+      }))
+      .filter((c) => c.asset?.browser_download_url);
+    candidatas.sort((a, b) => masNuevaPrimero(a.version, b.version));
+    const mejor = candidatas[0]
+      ? { version: candidatas[0].version, url: candidatas[0].asset.browser_download_url as string }
+      : null;
+    releaseCache.set(tagPrefix, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor: mejor });
+    return mejor;
+  } catch (e: any) {
+    console.warn("[descargas] no se pudo leer las releases de GitHub:", e?.message || e);
+    // Se conserva lo último bueno si lo había; si no, se reintenta en un minuto.
+    const valor = cache?.valor ?? null;
+    releaseCache.set(tagPrefix, { hasta: Date.now() + RELEASE_TTL_FALLO_MS, valor });
+    return valor;
+  }
+}
+
+// Versión declarada en el pubspec de la app dentro del repositorio. La CI
+// guarda ese número DESPUÉS de publicar la release, así que si está aquí es
+// que su release existe.
+function versionDelPubspec(rel: string): string | null {
+  try {
+    const txt = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+    return txt.match(/^version:\s*(\S+)/m)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Resuelve la descarga de una app, por orden de preferencia:
+//   1. La release más reciente según la API de GitHub (nombre de asset exacto).
+//   2. Si la API falla o agota su límite de peticiones, la URL construida a
+//      partir de la versión del repositorio: no hace ninguna llamada y apunta
+//      a una release que sabemos publicada.
+//   3. Fichero suelto en public/ (apps que aún se compilan a mano).
+async function resolverApk(
+  app0: { prefix: string; releaseTag?: string; pubspec?: string }
+): Promise<{ version: string; url?: string; file?: string } | null> {
+  if (app0.releaseTag) {
+    const rel = await latestReleaseApk(app0.releaseTag);
+    if (rel) return { version: rel.version, url: rel.url };
+
+    const v = app0.pubspec ? versionDelPubspec(app0.pubspec) : null;
+    if (v) {
+      // El "+" del build number va codificado en la URL (…-v0.32.2%2B51).
+      const tag = encodeURIComponent(`${app0.releaseTag}${v}`);
+      const fichero = encodeURIComponent(`${app0.prefix}${v}.apk`);
+      return { version: v, url: `https://github.com/${GH_REPO}/releases/download/${tag}/${fichero}` };
+    }
+  }
+  const local = latestApkFor(app0.prefix);
+  return local ? { version: local.version, file: local.file } : null;
+}
+
+// JSON con la última versión de cada app (lo consume /descargas.html)
+app.get("/api/apps/list", async (_req, res) => {
+  const out = await Promise.all(
+    Object.entries(APK_APPS).map(async ([key, app0]) => {
+      const latest = await resolverApk(app0);
+      return {
+        key,
+        label: app0.label,
+        version: latest?.version ?? null,
+        url: latest ? `/apps/${key}` : null,
+      };
+    })
+  );
   res.json(out);
 });
 
 // Descarga directa de la última APK de una app
-app.get("/apps/:app", (req, res) => {
+app.get("/apps/:app", async (req, res) => {
   const app0 = APK_APPS[String(req.params.app)];
   if (!app0) return res.status(404).json({ error: "App no encontrada" });
-  const latest = latestApkFor(app0.prefix);
+  const latest = await resolverApk(app0);
   if (!latest) return res.status(404).json({ error: "Sin APK disponible" });
-  res.download(path.join(__dirname, "../public", latest.file));
+  // Con release se redirige al asset de GitHub: la descarga no pasa por
+  // nuestro servidor y el binario no vive en el repositorio.
+  if (latest.url) return res.redirect(302, latest.url);
+  res.download(path.join(__dirname, "../public", latest.file!));
 });
 
 /* =========================================================
