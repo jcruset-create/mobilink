@@ -31,8 +31,9 @@ const updateOperationStatus = vi.fn(async (id: number, status: string, opts: any
 });
 
 vi.mock("../../infrastructure/repositories.ts", () => ({
-  createOperation: (...a: any[]) => createOperation(...a),
-  updateOperationStatus: (...a: any[]) => updateOperationStatus(...a),
+  createOperation: (...a: Parameters<typeof createOperation>) => createOperation(...a),
+  updateOperationStatus: (...a: Parameters<typeof updateOperationStatus>) =>
+    updateOperationStatus(...a),
   getOperation: async (id: number) => operaciones[id] ?? null,
   appendLog: async (entry: any) => {
     logs.push({ level: entry.level, message: entry.message, status: entry.status });

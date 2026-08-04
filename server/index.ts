@@ -4902,8 +4902,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
 
 app.get("/api/webfleet/vehicle/:vehicleId/position", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
-    const { vehicleId } = req.params;
-    const position = await getWebfleetVehiclePosition(vehicleId);
+    const position = await getWebfleetVehiclePosition(String(req.params.vehicleId));
     res.json(position);
   } catch (error: any) {
     const noConfig = error?.message?.includes("no configuradas");
@@ -8173,7 +8172,9 @@ async function buildVehicleTrackingPdfBuffer(
     doc.moveDown(0.3);
     try {
       const mapBuf = await buildTrackMapImage(track, stops);
-      if (mapBuf) doc.image(mapBuf, { fit: [480, 380], align: "left" });
+      // Sin "align": pdfkit solo admite center/right y la izquierda ya es el
+      // valor por defecto, así que la opción anterior no hacía nada.
+      if (mapBuf) doc.image(mapBuf, { fit: [480, 380] as [number, number] });
     } catch { /* sin mapa */ }
   }
 
