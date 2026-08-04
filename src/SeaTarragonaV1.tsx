@@ -4293,6 +4293,7 @@ if (view === "operarios" && canView("operarios")) {
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
       onBack={() => {
+        if (embebido && onVolverModulo) { onVolverModulo(); return; }
         setView("operativo");
         void reloadMaintenanceAvailabilityFromBackend();
       }}
