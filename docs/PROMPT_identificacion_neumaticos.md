@@ -23,9 +23,48 @@ stock como *sin* ella.
 
 ---
 
-## La buena noticia: el interruptor ya existe
+## El modelo mixto YA EXISTE — y es el único que existe de verdad
 
-No hay que inventar el concepto. Está montado desde `fase8` y sin usar:
+Esto es lo primero que hay que entender, porque cambia el encuadre de todo lo
+demás. **No hay que construir el modelo mixto: hay que ponerle una política
+encima al que ya está funcionando.**
+
+`control_individual` **no es un ajuste por empresa: es una columna de cada
+neumático**. El modelo de datos siempre ha sido mixto por naturaleza — cada
+goma decide por su cuenta si tiene identidad. Y desde el panel ya se está
+usando:
+
+| Dónde | Valor por defecto | Qué hace |
+|---|---|---|
+| `ModalMontarFueraAlmacen.tsx:20` | **`true`** | Montar fuera de almacén sale ya marcado como individual, con sus campos de DOT, serie y RFID |
+| `ModalMontarDesdeFicha.tsx:29` | `false` | Casilla *«Controlar este neumático individualmente»* que el usuario marca o no |
+| `ModalCopiarNeumatico.tsx:26` | hereda | Toma el valor del neumático de origen |
+| `MontajesActuales.tsx:118` | `false` fijo | Nunca identifica |
+
+Es decir: **en la misma flota ya conviven hoy gomas identificadas y gomas
+genéricas.** Eso es exactamente el modelo mixto que se pide.
+
+Lo que **no** existe son tres cosas, y son las que lo hacen frágil:
+
+1. **No hay política.** La identidad la decide una casilla que alguien marca o
+   no marca, montaje a montaje, sin criterio escrito en ninguna parte. Dos
+   administrativos con el mismo cliente pueden hacerlo distinto el mismo día.
+2. **La APK no participa.** `p_control_individual: false` fijo
+   (`supabase_service.dart:740` y `:772`). El taller **solo puede crear
+   genéricos**: toda la identidad que hay hoy la ha metido alguien a mano desde
+   el panel.
+3. **Un identificado no puede volver a montarse** — el fallo de la clave
+   duplicada que se explica más abajo. Hoy no ha explotado **porque casi nadie
+   usa la identidad**, y quien la usa monta gomas nuevas desde el panel.
+
+> **Comprobar en producción antes de nada:** cuántos `tc_neumaticos` tienen
+> `control_individual = true`, y cuántos de ellos llevan RFID o serie de
+> verdad. Eso dice si el mixto se está usando en serio o si son cuatro fichas
+> sueltas — y cambia la urgencia de la fase 2.
+
+## Y las piezas de base también están puestas
+
+No hay que inventar el concepto. Está montado desde `fase8`:
 
 **En la tabla** (`supabase/migrations/tyrecontrol_fase8_operaciones.sql:51`):
 
@@ -56,9 +95,10 @@ unique (rfid_epc)                 where rfid_epc     is not null   -- uq_tc_neu_
 con un trigger que convierte `''` en `NULL` para que los que no tienen dato no
 choquen entre sí (`tyrecontrol_fix_rfid_serie_vacios.sql`).
 
-**Lo único que falta es que alguien ponga ese interruptor a `true`.** Hoy la
-APK lo manda fijo a `false` en los dos caminos
-(`tyrecontrol_app/lib/services/supabase_service.dart:740` y `:772`).
+Así que la base está toda puesta: la columna, el parámetro en los dos RPC, la
+unicidad y la limpieza de vacíos. **Lo que falta no es fontanería, es
+gobierno**: quién decide cuándo ese interruptor va a `true`, y qué pasa cuando
+una goma identificada vuelve.
 
 ---
 
@@ -70,26 +110,27 @@ cosas que no tienen nada que ver:
 | Eje | Valores | Quién lo decide |
 |---|---|---|
 | **Gestión de stock** | con stock (`tc_montar_desde_almacen`) / sin stock (`tc_montar_desde_catalogo`) | El producto: si existe en el almacén del cliente o solo en el catálogo |
-| **Identidad** | genérico / identificable | La **política** del cliente (lo nuevo de este documento) |
+| **Identidad** | genérico / identificable | Hoy: la casilla que marca quien monta desde el panel. Mañana: la **política** del cliente |
 | **Condición** | nuevo / usado | El técnico, al montar |
 
 Son **2 × 2 × 2 = 8 combinaciones**, todas legítimas:
 
 ```
-con stock  + genérico     + nuevo   ← lo de hoy, mayoritario
-con stock  + genérico     + usado   ← lo de hoy
-con stock  + identificable + nuevo  ← NUEVO: descuenta stock Y crea ficha con serie/RFID
-con stock  + identificable + usado  ← NUEVO: reencuentra la ficha que ya existía
-sin stock  + genérico     + nuevo   ← lo de hoy (catálogo)
-sin stock  + genérico     + usado   ← lo de hoy
-sin stock  + identificable + nuevo  ← NUEVO
-sin stock  + identificable + usado  ← NUEVO
+con stock + genérico      + nuevo  ← funciona, y es lo mayoritario
+con stock + genérico      + usado  ← funciona
+con stock + identificable + nuevo  ← funciona hoy desde el panel
+con stock + identificable + usado  ← ROTO: choca con uq_tc_neu_rfid al reencontrar
+sin stock + genérico      + nuevo  ← funciona (catálogo)
+sin stock + genérico      + usado  ← funciona
+sin stock + identificable + nuevo  ← funciona hoy desde el panel
+sin stock + identificable + usado  ← ROTO: mismo choque
 ```
 
 Que un neumático sea identificable **no dice nada** sobre si descuenta stock, y
 al revés. Los dos RPC tienen que soportar las cuatro combinaciones de su
-columna. Hoy el código ya está preparado para ello — es simétrico en los dos —
-salvo por el problema que viene ahora.
+columna, y hoy ya son simétricos en eso. Las dos filas marcadas como ROTO no
+son funcionalidad pendiente: **son un fallo latente en producción**, y es lo
+que viene ahora.
 
 ---
 
@@ -106,7 +147,8 @@ Con neumáticos genéricos eso es correcto: cada montaje es una unidad anónima
 nueva y no hay nada que reencontrar. **Con identificables es directamente
 incompatible.**
 
-Escenario real, modo identificado:
+Escenario real, **reproducible hoy mismo desde el panel**, sin cambiar ni una
+línea:
 
 1. Se monta la goma RFID `E280…A1` en el 1234ABC. Se crea su ficha. ✅
 2. Meses después se desmonta a almacén. La ficha queda con `estado='almacen'`.
@@ -122,9 +164,12 @@ se duplique la identidad, pero a costa de reventar el montaje** con un error
 crudo de Postgres en la cara del técnico. No es un fallo del índice: es que
 «montar = insertar» y «neumático identificable» no pueden ser verdad a la vez.
 
-> Esto además explica por qué `p_control_individual` sigue a `false` en la APK.
-> El día que se active sin tocar nada más, el primer usado que vuelva a montarse
-> rompe la pantalla de Cambios.
+> **Esto no es un riesgo futuro: es una bomba de relojería ya puesta.** Basta
+> con que una goma montada con RFID desde «Montar fuera de almacén» —que sale
+> marcada como individual **por defecto**— se desmonte y se vuelva a montar. No
+> ha explotado todavía porque casi nadie usa la identidad, y quien la usa monta
+> gomas nuevas. Y explica de paso por qué activar `p_control_individual` en la
+> APK sin arreglar esto rompería la pantalla de Cambios el primer día.
 
 ---
 
@@ -133,7 +178,12 @@ crudo de Postgres en la cara del técnico. No es un fallo del índice: es que
 ### Pieza 1 — Dónde vive la política *(copiar un patrón que ya existe)*
 
 Los tres modos no son tres códigos distintos: son **una política con
-excepciones**. Y el módulo ya tiene ese patrón resuelto para los umbrales de
+excepciones** puesta encima del mixto que ya existe. Genérico e identificado no
+son modos aparte — son el mixto con la excepción vacía o con la excepción
+puesta a todo. Lo que aporta esta pieza es que la decisión **deje de ser una
+casilla que alguien marca a ojo** y pase a estar escrita en algún sitio.
+
+El módulo ya tiene ese patrón resuelto para los umbrales de
 profundidad (`tyrecontrol_informes_umbrales_categoria.sql:23-45`): una tabla
 general por empresa, más tablas de excepción por medida y por categoría.
 
@@ -168,12 +218,17 @@ modo = 'identificado' → true  siempre
 modo = 'mixto'        → lo que diga la excepción por medida; si no hay fila, false
 ```
 
-**Por qué la decide el RPC y no la app:** hoy `p_control_individual` viene de
-la APK, y eso significa que la política dependería de que todas las versiones
-de la APK instaladas estén al día. Si la decide el servidor, un cliente puede
-cambiar de modo sin que nadie actualice nada. El parámetro se conserva en la
-firma como **anulación explícita** (`null` = «aplica la política»), para no
-romper las llamadas actuales ni el alta manual desde el panel.
+**Por qué la decide el RPC y no la app:** hoy el valor lo pone quien llama —una
+casilla en el panel, un `false` fijo en la APK—, así que la política dependería
+de que todas las pantallas y todas las versiones de la APK instaladas estén al
+día. Si la decide el servidor, un cliente puede cambiar de modo sin que nadie
+actualice nada.
+
+El parámetro se conserva en la firma como **anulación explícita**
+(`null` = «aplica la política»), y esto no es opcional: los cuatro modales del
+panel siguen mandando `true`/`false` a mano y **tienen que seguir funcionando
+igual** el día que entre la política. Migrarlos a `null` es una decisión
+posterior, modal a modal.
 
 > **Alternativa a valorar:** que la excepción del modo mixto sea por
 > **referencia/producto** en lugar de por medida. Es más fino (un modelo
@@ -243,9 +298,10 @@ de interfaz cubre las dos vías**, que es justo lo que pide el negocio.
 
 ### Pieza 4 — Identificar lo que ya está montado
 
-Al pasar de genérico a identificado, la flota entera está montada sin
-identidad. Sin un camino para arreglarlo, el cliente tendría que esperar a
-que caiga cada rueda para que se identifique — años.
+Al subir la cobertura de identidad, la mayor parte de la flota está montada sin
+ella — y con la APK creando solo genéricos, esa mayoría crece cada día. Sin un
+camino para arreglarlo, el cliente tendría que esperar a que caiga cada rueda
+para que se identifique: años.
 
 Hace falta una acción **«Identificar esta rueda»** desde
 `tire_detail_screen.dart`, con su RPC:
@@ -336,10 +392,12 @@ avisa en vez de resolverse en silencio.
    **dropear las viejas explícitamente** y dejar el mismo
    `do $$ … raise warning` de comprobación al final.
 
-3. **El trigger de vacíos es imprescindible.** Si la APK manda `""` en RFID
-   cuando el técnico no lee nada, sin
-   `tc_neumaticos_normaliza_vacios` el segundo montaje choca en el índice
-   único. El trigger ya existe y lo cubre — **no hay que puentearlo** con
+3. **El trigger de vacíos es imprescindible.** Ya pasó con el panel: el
+   formulario «Montar fuera de almacén» mandaba `""` en RFID y serie cuando no
+   se rellenaban, y dos neumáticos sin RFID chocaban en el índice único
+   (`tyrecontrol_fix_rfid_serie_vacios.sql`, la cabecera lo cuenta entero). La
+   APK caerá en lo mismo en cuanto tenga los campos. El trigger
+   `tc_neumaticos_normaliza_vacios` ya lo cubre — **no hay que puentearlo** con
    `insert … on conflict` ni cosas por el estilo.
 
 4. **`creado_automaticamente = not p_control_individual`** ya distingue «ficha
@@ -353,22 +411,39 @@ avisa en vez de resolverse en silencio.
    `profundidad_actual_mm` para que el trigger la feche y gane a la medición
    vieja. Si se escribe por otro camino, vuelve el bug de los 16 mm.
 
+6. **Hay cuatro sitios en el panel que ya escriben `control_individual`** —
+   `ModalMontarFueraAlmacen`, `ModalMontarDesdeFicha`, `ModalCopiarNeumatico` y
+   `MontajesActuales`— con criterios distintos y uno de ellos (`FueraAlmacen`)
+   con `true` por defecto. **Ninguno puede dejar de funcionar** al entrar la
+   política, y conviene decidir de una vez si sus valores se respetan como
+   anulación manual o se migran a `null` para que mande la política.
+
 ---
 
 ## Orden propuesto
 
+**El orden cambia respecto a lo que parecía al principio.** Como el mixto ya
+existe y ya está roto para el usado, «buscar o crear» deja de ser preparación
+para lo nuevo y pasa a ser **corrección de un fallo en producción**. Va primero.
+
 | Fase | Qué entra | Se puede entregar solo |
 |---|---|---|
-| 1 | Política: tablas + función de resolución + pantalla en Configuración. Todos los clientes arrancan en `generico` → **cero cambio de comportamiento** | ✅ |
-| 2 | «Buscar o crear» en los dos RPC + regla de descuento de stock. Sin identidad que buscar, se comporta igual que hoy | ✅ |
-| 3 | Captura en la APK: campos + botón Leer RFID + aviso de «reconocido» | ✅ |
+| 1 | **«Buscar o crear» en los dos RPC** + regla de descuento de stock. Arregla el choque de clave duplicada que ya existe. Sin identidad que buscar, se comporta igual que hoy | ✅ |
+| 2 | Política: tablas + función de resolución + pantalla en Configuración. Arranca respetando lo que cada modal manda hoy → **cero cambio de comportamiento** | ✅ |
+| 3 | Captura en la APK: campos + botón Leer RFID + aviso de «reconocido». Es lo que deja de convertir cada montaje de taller en un genérico | ✅ |
 | 4 | Resolución de conflictos C1/C2 según lo decidido | ✅ |
 | 5 | «Identificar esta rueda» sobre lo ya montado + listado de pendientes | ✅ |
 | 6 | Almacén de usados por serie y profundidad (el otro documento) — que a estas alturas es **solo la pantalla**, porque el dato ya existe | ✅ |
 
-Las fases 1 y 2 son invisibles para el usuario: dejan el sistema preparado sin
-cambiar nada de lo que ve hoy. Es lo que permite subirlas sin riesgo y decidir
-lo demás con calma.
+Las fases 1 y 2 son invisibles para el usuario: arreglan y preparan sin cambiar
+nada de lo que ve hoy. Es lo que permite subirlas sin riesgo y decidir lo demás
+con calma.
+
+**Antes de la fase 1, mirar producción:** cuántos `tc_neumaticos` tienen
+`control_individual = true`, cuántos de ellos llevan RFID o serie real, y si
+alguno de esos ya ha pasado por almacén. Ese último número dice si el fallo del
+duplicado es teórico o si a alguien ya le ha reventado un montaje sin que
+llegara el aviso.
 
 ---
 
@@ -377,6 +452,10 @@ lo demás con calma.
 - **¿Quién decide el modo, y con qué grano?** ¿Por empresa cliente entera, o
   puede una misma empresa llevar identificadas solo las tractoras y genéricos
   los remolques? *(La propuesta de por-medida cubre lo segundo.)*
+- **¿Qué se hace con la identidad que ya hay?** El mixto lleva tiempo en
+  marcha decidido a ojo desde el panel. Si un cliente pasa a modo `generico`,
+  ¿esas gomas pierden la identidad, o se respeta lo ya capturado? *(La
+  propuesta de C3 —guardar siempre lo que se lea— dice que se respeta.)*
 - **¿Serie o RFID?** ¿Se aceptan las dos, o el cliente que va a identificado se
   compromete a poner RFID a todo? Cambia mucho el diálogo de la APK.
 - **El DOT no identifica**: dos gomas del mismo lote comparten DOT. Sirve como
