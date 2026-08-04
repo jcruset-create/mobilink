@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeft,
+  CheckCircle2,
+  Clock3,
   Edit3,
+  FileText,
   KeyRound,
+  List,
+  Map as MapIcon,
   MapPin,
+  Menu,
   Plus,
   RefreshCw,
   Save,
+  Store,
   Trash2,
   Truck,
+  Wifi,
+  X,
 } from "lucide-react";
 
 import type { Tech } from "../modules/workshopTypes";
@@ -49,8 +57,20 @@ function buildVehicleDraft(vehicle: RoadsideVehicle): RoadsideVehicleDraft {
   };
 }
 
+// Titular de la furgoneta: lo que identifica al vehículo de un vistazo es la
+// marca y el modelo con su matrícula ("Peugeot Boxer - 6133LXF"); el número
+// interno ("Furgoneta 001") va debajo. Si no hay marca ni modelo se cae al
+// nombre para no dejar la tarjeta sin título.
 function getVehicleLabel(vehicle: RoadsideVehicle) {
-  return [vehicle.name, vehicle.plate].filter(Boolean).join(" - ");
+  const marcaModelo = [vehicle.marca, vehicle.modelo].filter(Boolean).join(" ").trim();
+  return [marcaModelo || vehicle.name, vehicle.plate].filter(Boolean).join(" - ");
+}
+
+// Línea secundaria: el número de furgoneta, salvo que ya se esté usando como
+// título por no haber marca ni modelo (evita repetirlo dos veces).
+function getVehicleSubLabel(vehicle: RoadsideVehicle) {
+  const marcaModelo = [vehicle.marca, vehicle.modelo].filter(Boolean).join(" ").trim();
+  return marcaModelo ? vehicle.name : "";
 }
 
 type Props = {
@@ -83,6 +103,10 @@ export default function RoadsideAssistanceAdminView({
   onUpdateOperatorCode,
   onDeleteOperatorCode,
 }: Props) {
+  const [adminTab, setAdminTab] = useState<"furgonetas" | "operarios" | "taller">(
+    "furgonetas"
+  );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [vehicleDraft, setVehicleDraft] =
     useState<RoadsideVehicleDraft>(INITIAL_VEHICLE_DRAFT);
   const [editingVehicle, setEditingVehicle] = useState<RoadsideVehicle | null>(
@@ -317,57 +341,175 @@ export default function RoadsideAssistanceAdminView({
     }
   }
 
+  // Salir a la vista de asistencias abriendo una pestaña concreta. El panel lee
+  // ?tab= al montarse, así que basta con dejarlo puesto antes de volver.
+  function irAAsistencias(tab: "nueva" | "activas" | "cerradas" | "historial") {
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `${window.location.pathname}?tab=${tab}`);
+    }
+    setSidebarOpen(false);
+    onBack();
+  }
+
+  const enlaceLateral =
+    "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium text-slate-300 hover:bg-slate-800";
+
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900">
-      <div className="mx-auto max-w-[1500px] space-y-5">
-        <header className="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-red-200 bg-red-50">
-              <Truck className="h-6 w-6 text-red-700" />
+    <div className="flex min-h-screen bg-slate-900 text-slate-100">
+      {/* Backdrop del cajón en móvil */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* ── Barra lateral: la misma que el panel de asistencias, para poder
+             saltar de una pantalla a otra sin botón "Volver" ── */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 transform flex-col border-r border-slate-800 bg-slate-950 transition-transform duration-200 md:static md:z-auto md:w-52 md:flex-shrink-0 md:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-end p-2 md:hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 pt-1 text-sm md:pt-3">
+          <button type="button" onClick={() => irAAsistencias("nueva")} className={enlaceLateral}>
+            <Plus className="h-4 w-4 shrink-0" /> Nueva asistencia
+          </button>
+          <button type="button" onClick={() => irAAsistencias("activas")} className={enlaceLateral}>
+            <Clock3 className="h-4 w-4 shrink-0" /> Activas
+          </button>
+          <button type="button" onClick={() => irAAsistencias("cerradas")} className={enlaceLateral}>
+            <CheckCircle2 className="h-4 w-4 shrink-0" /> Últimas cerradas
+          </button>
+          <button type="button" onClick={() => irAAsistencias("historial")} className={enlaceLateral}>
+            <FileText className="h-4 w-4 shrink-0" /> Historial
+          </button>
+
+          <div className="my-2 border-t border-slate-800" />
+          <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            Configuración
+          </div>
+          <div className="flex items-center gap-2.5 rounded-lg bg-red-600 px-3 py-2 font-medium text-white">
+            <Truck className="h-4 w-4 shrink-0" /> Furgonetas y operarios
+          </div>
+
+          <div className="my-2 border-t border-slate-800" />
+          <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            Herramientas
+          </div>
+          <a href="/flota" target="_blank" rel="noopener noreferrer" className={enlaceLateral}>
+            <MapIcon className="h-4 w-4 shrink-0" /> Mapa flota
+          </a>
+          <a href="/asistencias/central" className={enlaceLateral}>
+            <Wifi className="h-4 w-4 shrink-0" /> Central
+          </a>
+          <a href="/asistencias/talleres" className={enlaceLateral}>
+            <Store className="h-4 w-4 shrink-0" /> Talleres
+          </a>
+          <a href="/otf" target="_blank" rel="noopener noreferrer" className={enlaceLateral}>
+            <Truck className="h-4 w-4 shrink-0" /> OTF
+          </a>
+          <a href="/vehiculo" target="_blank" rel="noopener noreferrer" className={enlaceLateral}>
+            <List className="h-4 w-4 shrink-0" /> Historial vehículo
+          </a>
+        </nav>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-200 hover:bg-slate-700 md:hidden"
+              aria-label="Abrir menú"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="flex items-center justify-center px-1">
+              <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-9 md:h-12" />
             </div>
-            <div>
-              <h1 className="text-xl font-black">
-                Configuracion asistencia
-              </h1>
-              <div className="text-sm font-medium text-slate-500">
-                {activeVehicleCount} furgonetas activas - {operatorCodes.length} operarios asistencia
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-bold md:text-base">Furgonetas y operarios</h1>
+              <div className="text-xs text-slate-400">
+                {activeVehicleCount} furgonetas · {operatorCodes.length} operarios
               </div>
             </div>
           </div>
-
-          <div className="flex flex-wrap gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={onRefresh}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
             >
-              <RefreshCw className="h-4 w-4" />
-              Actualizar
-            </button>
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Volver
+              <RefreshCw className="h-4 w-4" /> <span className="hidden sm:inline">Actualizar</span>
             </button>
           </div>
         </header>
 
+      <div className="mx-auto w-full max-w-[1500px] space-y-5 p-4">
+
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+          <div className="rounded-lg border border-red-500/40 bg-red-500/15 px-4 py-3 text-sm font-semibold text-red-300">
             {error}
           </div>
         )}
 
-        <div className="grid gap-5 xl:grid-cols-[430px_minmax(0,1fr)]">
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        {/* Pestañas: cada cosa en la suya en vez de todo apilado en la misma
+            pantalla, que en móvil obligaba a un scroll larguísimo. */}
+        <nav className="flex gap-1 rounded-xl border border-slate-700 bg-slate-800 p-1">
+          {([
+            ["furgonetas", "Furgonetas", Truck, activeVehicleCount],
+            ["operarios", "Operarios", KeyRound, operatorCodes.length],
+            ["taller", "Taller base", MapPin, null],
+          ] as const).map(([tab, label, Icon, badge]) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setAdminTab(tab)}
+              aria-current={adminTab === tab}
+              className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-bold transition-colors ${
+                adminTab === tab
+                  ? "bg-red-600 text-white"
+                  : "text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="truncate">{label}</span>
+              {badge != null && badge > 0 && (
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${
+                    adminTab === tab ? "bg-red-800 text-white" : "bg-slate-700 text-slate-200"
+                  }`}
+                >
+                  {badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        <div className="grid gap-5">
+          <section
+            className={`rounded-xl border border-slate-700 bg-slate-800 p-4 shadow-sm ${
+              adminTab === "furgonetas" ? "" : "hidden"
+            }`}
+          >
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-black uppercase text-slate-700">
+              <h2 className="text-sm font-black uppercase text-slate-200">
                 Furgonetas
               </h2>
-              <Truck className="h-5 w-5 text-slate-500" />
+              <Truck className="h-5 w-5 text-slate-400" />
             </div>
 
             <div className="space-y-3">
@@ -380,7 +522,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="Nombre, ejemplo: Furgoneta 1"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
               />
 
               <input
@@ -392,7 +534,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="Matricula"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:ring-2 focus:ring-slate-300"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 uppercase"
               />
 
               <input
@@ -404,7 +546,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="ID Webfleet (ej: 012)"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
               />
 
               <input
@@ -416,7 +558,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="Base (ej: Tarragona, Reus...)"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
               />
 
               <div className="grid grid-cols-2 gap-2">
@@ -429,7 +571,7 @@ export default function RoadsideAssistanceAdminView({
                     }))
                   }
                   placeholder="Marca (ej: Mercedes)"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
                 <input
                   value={vehicleDraft.modelo}
@@ -440,11 +582,11 @@ export default function RoadsideAssistanceAdminView({
                     }))
                   }
                   placeholder="Modelo (ej: Sprinter)"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
                 />
               </div>
 
-              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+              <label className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={vehicleDraft.esTaller}
@@ -455,7 +597,7 @@ export default function RoadsideAssistanceAdminView({
                     }))
                   }
                 />
-                <span className="text-sm font-black text-slate-700">
+                <span className="text-sm font-black text-slate-200">
                   Furgoneta taller
                 </span>
               </label>
@@ -470,10 +612,10 @@ export default function RoadsideAssistanceAdminView({
                 }
                 rows={2}
                 placeholder="Notas"
-                className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
               />
 
-              <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+              <label className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={vehicleDraft.active}
@@ -484,13 +626,13 @@ export default function RoadsideAssistanceAdminView({
                     }))
                   }
                 />
-                <span className="text-sm font-black text-slate-700">
+                <span className="text-sm font-black text-slate-200">
                   Furgoneta activa
                 </span>
               </label>
 
               {vehicleError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                <div className="rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-300">
                   {vehicleError}
                 </div>
               )}
@@ -500,7 +642,7 @@ export default function RoadsideAssistanceAdminView({
                   type="button"
                   onClick={handleSaveVehicle}
                   disabled={vehicleSaving}
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-black text-white hover:bg-red-500 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   {editingVehicle ? "Guardar" : "Crear"}
@@ -510,7 +652,7 @@ export default function RoadsideAssistanceAdminView({
                   <button
                     type="button"
                     onClick={resetVehicleForm}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-black text-slate-200 hover:bg-slate-800"
                   >
                     Cancelar
                   </button>
@@ -519,7 +661,7 @@ export default function RoadsideAssistanceAdminView({
 
               <div className="space-y-2 pt-2">
                 {vehicles.length === 0 && (
-                  <div className="rounded-lg bg-slate-50 px-3 py-3 text-sm font-bold text-slate-400">
+                  <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm font-bold text-slate-400">
                     No hay furgonetas creadas.
                   </div>
                 )}
@@ -529,35 +671,35 @@ export default function RoadsideAssistanceAdminView({
                     key={vehicle.id}
                     className={`rounded-lg border px-3 py-2 ${
                       vehicle.active
-                        ? "border-slate-200 bg-slate-50"
-                        : "border-slate-200 bg-white opacity-60"
+                        ? "border-slate-700 bg-slate-950"
+                        : "border-slate-800 bg-slate-950 opacity-50"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-black text-slate-800">
+                        <div className="truncate text-sm font-black text-slate-100">
                           {getVehicleLabel(vehicle)}
                         </div>
                         <div className="mt-1 flex flex-wrap gap-1">
                           {vehicle.webfleetVehicleId && (
-                            <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">
+                            <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-bold text-blue-300">
                               WF: {vehicle.webfleetVehicleId}
                             </span>
                           )}
                           {vehicle.base && (
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                            <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-bold text-slate-200">
                               {vehicle.base}
                             </span>
                           )}
                           {vehicle.esTaller && (
-                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
                               Taller
                             </span>
                           )}
                         </div>
-                        {(vehicle.marca || vehicle.modelo) && (
+                        {getVehicleSubLabel(vehicle) && (
                           <div className="mt-0.5 truncate text-xs text-slate-400">
-                            {[vehicle.marca, vehicle.modelo].filter(Boolean).join(" ")}
+                            {getVehicleSubLabel(vehicle)}
                           </div>
                         )}
                       </div>
@@ -566,7 +708,7 @@ export default function RoadsideAssistanceAdminView({
                         <button
                           type="button"
                           onClick={() => startVehicleEdit(vehicle)}
-                          className="rounded-md border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50"
+                          className="rounded-md border border-slate-700 bg-slate-950 p-2 text-slate-300 hover:bg-slate-800"
                         >
                           <Edit3 className="h-4 w-4" />
                         </button>
@@ -575,7 +717,7 @@ export default function RoadsideAssistanceAdminView({
                           <button
                             type="button"
                             onClick={() => handleDeactivateVehicle(vehicle)}
-                            className="rounded-md border border-red-200 bg-white p-2 text-red-600 hover:bg-red-50"
+                            className="rounded-md border border-red-500/40 bg-slate-950 p-2 text-red-300 hover:bg-red-500/15"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -588,22 +730,26 @@ export default function RoadsideAssistanceAdminView({
             </div>
           </section>
 
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <section
+            className={`rounded-xl border border-slate-700 bg-slate-800 p-4 shadow-sm ${
+              adminTab === "operarios" ? "" : "hidden"
+            }`}
+          >
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-black uppercase text-slate-700">
+              <h2 className="text-sm font-black uppercase text-slate-200">
                 Operarios asistencia
               </h2>
-              <KeyRound className="h-5 w-5 text-slate-500" />
+              <KeyRound className="h-5 w-5 text-slate-400" />
             </div>
 
             {operatorCodeError && (
-              <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-300">
                 {operatorCodeError}
               </div>
             )}
 
-            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="mb-3 text-xs font-black uppercase text-slate-500">
+            <div className="mb-4 rounded-lg border border-slate-700 bg-slate-950 p-3">
+              <div className="mb-3 text-xs font-black uppercase text-slate-400">
                 Alta operario
               </div>
 
@@ -611,7 +757,7 @@ export default function RoadsideAssistanceAdminView({
                 <select
                   value={newOperatorName}
                   onChange={(event) => setNewOperatorName(event.target.value)}
-                  className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
+                  className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-black"
                 >
                   <option value="">
                     {availableTechs.length
@@ -630,7 +776,7 @@ export default function RoadsideAssistanceAdminView({
                   inputMode="numeric"
                   onChange={(event) => setNewOperatorCode(event.target.value)}
                   placeholder="Codigo"
-                  className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
+                  className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-black"
                 />
 
                 <button
@@ -638,7 +784,7 @@ export default function RoadsideAssistanceAdminView({
                   title="Generar codigo"
                   onClick={generateNewOperatorCode}
                   disabled={!availableTechs.length}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
                 >
                   <RefreshCw className="h-4 w-4" />
                 </button>
@@ -647,7 +793,7 @@ export default function RoadsideAssistanceAdminView({
                   type="button"
                   onClick={handleAddOperator}
                   disabled={addingOperator || !availableTechs.length}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-60"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-black text-white hover:bg-red-500 disabled:opacity-60"
                 >
                   <Plus className="h-4 w-4" />
                   Alta
@@ -657,7 +803,7 @@ export default function RoadsideAssistanceAdminView({
 
             <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
               {operatorCodes.length === 0 && (
-                <div className="rounded-lg bg-slate-50 px-3 py-4 text-sm font-bold text-slate-400">
+                <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-4 text-sm font-bold text-slate-400">
                   No hay operarios dados de alta para asistencia.
                 </div>
               )}
@@ -670,13 +816,13 @@ export default function RoadsideAssistanceAdminView({
                 return (
                   <div
                     key={`operator-code-${techName}`}
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
                   >
                     <div className="mb-2 flex items-center justify-between gap-3">
-                      <div className="min-w-0 truncate text-sm font-black text-slate-800">
+                      <div className="min-w-0 truncate text-sm font-black text-slate-100">
                         {techName}
                       </div>
-                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">
+                      <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-black text-emerald-300">
                         Activo
                       </span>
                     </div>
@@ -691,14 +837,14 @@ export default function RoadsideAssistanceAdminView({
                             [techName]: event.target.value,
                           }))
                         }
-                        className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:ring-2 focus:ring-slate-300"
+                        className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-black"
                       />
 
                       <button
                         type="button"
                         title="Generar codigo"
                         onClick={() => generateOperatorCode(techName)}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800"
                       >
                         <RefreshCw className="h-4 w-4" />
                       </button>
@@ -708,7 +854,7 @@ export default function RoadsideAssistanceAdminView({
                         title="Guardar codigo"
                         onClick={() => handleSaveOperatorCode(techName)}
                         disabled={isSaving}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-red-600 text-white hover:bg-red-500 disabled:opacity-60"
                       >
                         <Save className="h-4 w-4" />
                       </button>
@@ -718,7 +864,7 @@ export default function RoadsideAssistanceAdminView({
                         title="Dar de baja"
                         onClick={() => handleDeleteOperatorCode(techName)}
                         disabled={isSaving}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-500/40 bg-slate-950 text-red-300 hover:bg-red-500/15 disabled:opacity-60"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -731,47 +877,51 @@ export default function RoadsideAssistanceAdminView({
         </div>
 
         {/* Taller base / Geofencing */}
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <section
+          className={`rounded-xl border border-slate-700 bg-slate-800 p-4 shadow-sm ${
+            adminTab === "taller" ? "" : "hidden"
+          }`}
+        >
           <div className="mb-4 flex items-center gap-2">
-            <MapPin className="h-5 w-5 text-slate-500" />
-            <h2 className="text-sm font-black uppercase text-slate-700">
+            <MapPin className="h-5 w-5 text-slate-400" />
+            <h2 className="text-sm font-black uppercase text-slate-200">
               Taller base — geofencing automático
             </h2>
           </div>
-          <p className="mb-4 text-xs text-slate-500">
+          <p className="mb-4 text-xs text-slate-400">
             Cuando el operario llega a menos del radio configurado, la asistencia pasa automáticamente a <strong>Llegada al taller</strong>.
           </p>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-600">Dirección</label>
+              <label className="mb-1 block text-xs font-semibold text-slate-300">Dirección</label>
               <input
                 value={workshopConfig.taller_direccion}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_direccion: e.target.value }))}
                 placeholder="C/ Exemple, 1 — Tarragona"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-600">Latitud GPS</label>
+              <label className="mb-1 block text-xs font-semibold text-slate-300">Latitud GPS</label>
               <input
                 value={workshopConfig.taller_lat}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_lat: e.target.value }))}
                 placeholder="41.121134"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-slate-300"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-mono"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-600">Longitud GPS</label>
+              <label className="mb-1 block text-xs font-semibold text-slate-300">Longitud GPS</label>
               <input
                 value={workshopConfig.taller_lng}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_lng: e.target.value }))}
                 placeholder="1.242743"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-slate-300"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-mono"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-600">Radio detección (metros)</label>
+              <label className="mb-1 block text-xs font-semibold text-slate-300">Radio detección (metros)</label>
               <input
                 type="number"
                 min={50}
@@ -779,7 +929,7 @@ export default function RoadsideAssistanceAdminView({
                 value={workshopConfig.taller_radio_m}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_radio_m: e.target.value }))}
                 placeholder="300"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-slate-300"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-mono"
               />
             </div>
           </div>
@@ -789,13 +939,13 @@ export default function RoadsideAssistanceAdminView({
               type="button"
               onClick={handleSaveWorkshopConfig}
               disabled={workshopConfigSaving}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
               {workshopConfigSaving ? "Guardando..." : "Guardar configuración"}
             </button>
             {workshopConfigMsg && (
-              <span className={`text-sm font-semibold ${workshopConfigMsg.startsWith("Error") || workshopConfigMsg.startsWith("No se") ? "text-red-600" : "text-emerald-600"}`}>
+              <span className={`text-sm font-semibold ${workshopConfigMsg.startsWith("Error") || workshopConfigMsg.startsWith("No se") ? "text-red-400" : "text-emerald-400"}`}>
                 {workshopConfigMsg}
               </span>
             )}
@@ -809,13 +959,14 @@ export default function RoadsideAssistanceAdminView({
                 href={`https://maps.google.com/?q=${workshopConfig.taller_lat},${workshopConfig.taller_lng}`}
                 target="_blank"
                 rel="noreferrer"
-                className="underline hover:text-slate-600"
+                className="underline hover:text-slate-200"
               >
                 Ver en Maps
               </a>
             </p>
           )}
         </section>
+        </div>
       </div>
     </div>
   );
