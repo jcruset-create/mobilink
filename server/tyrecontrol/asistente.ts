@@ -220,7 +220,9 @@ async function marcasNeumaticos(a: Alcance, matricula?: string | null) {
   const marcasRecau = new Set((mr ?? []).map((m: any) => String(m.nombre ?? "").trim().toUpperCase()));
   const esRecau = (marca: any) => marcasRecau.has(String(marca ?? "").trim().toUpperCase());
 
-  const filas = (data ?? []).filter((m: any) => !mat || m.vehiculo?.matricula);
+  // El cliente de Supabase tipa data como "filas | error"; aquí ya se ha
+  // comprobado el error, así que se acota a filas para poder leerlas.
+  const filas = ((data ?? []) as any[]).filter((m: any) => !mat || m.vehiculo?.matricula);
 
   // Detalle por posición: solo tiene sentido para un vehículo concreto.
   if (mat) {
