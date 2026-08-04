@@ -4841,7 +4841,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
     // ven con estado + ubicación + técnico, pero sin el detalle de la
     // asistencia (ni informe de seguimiento).
     const dbVehicles = await db.query(`
-      SELECT rv."webfleetVehicleId", rv.plate, rv.name, rv."tallerId",
+      SELECT rv."webfleetVehicleId", rv.plate, rv.name, rv."tallerId", rv.active,
              at.nombre AS "tallerNombre",
              ra.id AS "asistenciaActivaId",
              ra."assignedTechName" AS "techName"
@@ -4868,7 +4868,13 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
 
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     res.json(
-      vehicles.map((v: any) => {
+      vehicles
+        // Una furgoneta dada de baja sigue existiendo en Webfleet, pero para
+        // nosotros ya no es flota: fuera del mapa y del selector. Los objetos
+        // que no tenemos dados de alta se siguen mostrando: no están de baja,
+        // simplemente no están fichados todavía.
+        .filter((v: any) => infoByWebfleetId.get(v.objectno)?.active !== false)
+        .map((v: any) => {
         const info = infoByWebfleetId.get(v.objectno);
         const tallerId = info?.tallerId != null ? Number(info.tallerId) : null;
         const esPropio = miTallerId == null || tallerId == null || tallerId === miTallerId;
