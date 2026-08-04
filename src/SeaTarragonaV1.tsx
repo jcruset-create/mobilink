@@ -4538,9 +4538,11 @@ const operativo2Element = (
   />
 );
 
-// En modo embebido (Mobilink WorkPlanner) el panel renderiza SOLO la vista
-// pedida: sin cabecera, sin conmutador y sin montar el resto del panel.
-if (view === "operativo2" && embebido) return operativo2Element;
+// Nota: NO se hace early-return de Operativo 2 en modo embebido. Los diálogos
+// del panel (entrada rápida, plantillas, confirmaciones…) viven más abajo en
+// este mismo árbol, así que devolver sólo la vista dejaba sus botones sin
+// efecto. La vista se pinta en su sitio del árbol y el resto del panel queda
+// oculto por las clases `hidden` de más abajo y por la cabecera embebida.
 
 if (view === "agenda" && canView("agenda")) {
   return (
