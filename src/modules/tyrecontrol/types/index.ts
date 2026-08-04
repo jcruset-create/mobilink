@@ -430,6 +430,33 @@ export interface UmbralesEmpresa {
   presion_tolerancia_bar: number;
 }
 
+// Modo de identificación de neumáticos de una empresa.
+//   generico     → nada se identifica (comportamiento histórico)
+//   identificado → todo lleva número de serie o RFID
+//   mixto        → solo las medidas con excepción
+export type ModoIdentificacion = "generico" | "identificado" | "mixto";
+
+export const MODO_IDENTIFICACION_LABELS: Record<ModoIdentificacion, string> = {
+  generico: "Genérico",
+  identificado: "Todo identificado",
+  mixto: "Mixto",
+};
+
+export interface ConfigIdentificacion {
+  empresa_id: string;
+  modo: ModoIdentificacion;
+  // Cuando la política resuelve "identificable" y no llega ni RFID ni serie:
+  // true bloquea el montaje, false lo deja pasar como genérico.
+  exigir_identidad: boolean;
+}
+
+// Excepción por medida del modo mixto.
+export interface IdentificacionMedida {
+  empresa_id: string;
+  medida: string;
+  identificable: boolean;
+}
+
 // Override de umbrales para una medida concreta dentro de una empresa.
 export interface UmbralMedida {
   empresa_id: string;

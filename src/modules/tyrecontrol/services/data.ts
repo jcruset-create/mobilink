@@ -10,6 +10,7 @@ import type {
   TipoIncidencia, TipoIncidenciaInput, MotivoPendiente, MotivoPendienteInput,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
+  ConfigIdentificacion, IdentificacionMedida, ModoIdentificacion,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
@@ -1664,6 +1665,59 @@ export async function guardarUmbralMedida(empresaId: string, medida: string, pat
 export async function eliminarUmbralMedida(empresaId: string, medida: string): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
   if (error) throw new Error(error.message);
+}
+
+// ── Política de identificación (genérico / identificado / mixto) ─────────────
+// Sin fila guardada la empresa es 'generico', que es como se ha comportado
+// siempre el sistema. La resuelve el servidor en cada montaje
+// (tc_identificacion_resuelve), no la app.
+export async function obtenerIdentificacionEmpresa(empresaId: string): Promise<ConfigIdentificacion | null> {
+  const { data, error } = await supabase.from("tc_config_identificacion").select("*").eq("empresa_id", empresaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as ConfigIdentificacion) ?? null;
+}
+
+export async function guardarIdentificacionEmpresa(empresaId: string, patch: {
+  modo: ModoIdentificacion; exigir_identidad: boolean;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_config_identificacion")
+    .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarIdentificacionMedida(empresaId: string): Promise<IdentificacionMedida[]> {
+  const { data, error } = await supabase.from("tc_config_identificacion_medida")
+    .select("*").eq("empresa_id", empresaId).order("medida");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as IdentificacionMedida[];
+}
+
+export async function guardarIdentificacionMedida(empresaId: string, medida: string, identificable: boolean): Promise<void> {
+  const { error } = await supabase.from("tc_config_identificacion_medida")
+    .upsert({ empresa_id: empresaId, medida, identificable, updated_at: new Date().toISOString() },
+            { onConflict: "empresa_id,medida" });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarIdentificacionMedida(empresaId: string, medida: string): Promise<void> {
+  const { error } = await supabase.from("tc_config_identificacion_medida")
+    .delete().eq("empresa_id", empresaId).eq("medida", medida);
+  if (error) throw new Error(error.message);
+}
+
+// Cuántos neumáticos activos de la empresa llevan identidad de verdad. Es la
+// medida de cobertura real: control_individual sin RFID ni serie no sirve.
+export async function coberturaIdentificacion(empresaId: string): Promise<{ total: number; conIdentidad: number }> {
+  const base = supabase.from("tc_neumaticos").select("*", { count: "exact", head: true })
+    .eq("empresa_id", empresaId).eq("activo", true);
+  const [{ count: total, error: e1 }, { count: conIdentidad, error: e2 }] = await Promise.all([
+    base,
+    supabase.from("tc_neumaticos").select("*", { count: "exact", head: true })
+      .eq("empresa_id", empresaId).eq("activo", true).or("rfid_epc.not.is.null,numero_serie.not.is.null"),
+  ]);
+  if (e1) throw new Error(e1.message);
+  if (e2) throw new Error(e2.message);
+  return { total: total ?? 0, conIdentidad: conIdentidad ?? 0 };
 }
 
 // Categoría de una medida del catálogo (turismo/4x4/furgoneta/camion/otros)
