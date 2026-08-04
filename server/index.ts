@@ -613,6 +613,8 @@ stripeSessionId: job.stripeSessionId ?? null,
 stripePaymentIntentId: job.stripePaymentIntentId ?? null,
 finishedWhatsappSentAtMs: job.finishedWhatsappSentAtMs ?? null,
 finishedWhatsappSid: job.finishedWhatsappSid ?? null,
+assignedVehicleId: job.assignedVehicleId ?? null,
+assignedVehicleName: job.assignedVehicleName ?? null,
   };
 }
 
@@ -2340,12 +2342,14 @@ if (interruptedMaintenanceTasks.length > 0) {
           "actualMinutes",
           "workedAccumulatedMinutes",
           "pausedAccumulatedMinutes",
-          "pausedAtMs"
+          "pausedAtMs",
+          "assignedVehicleId",
+          "assignedVehicleName"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19
+          $18, $19, $20, $21
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2365,7 +2369,9 @@ if (interruptedMaintenanceTasks.length > 0) {
           "actualMinutes" = EXCLUDED."actualMinutes",
           "workedAccumulatedMinutes" = EXCLUDED."workedAccumulatedMinutes",
           "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
-          "pausedAtMs" = EXCLUDED."pausedAtMs"
+          "pausedAtMs" = EXCLUDED."pausedAtMs",
+          "assignedVehicleId" = EXCLUDED."assignedVehicleId",
+          "assignedVehicleName" = EXCLUDED."assignedVehicleName"
         RETURNING *
       `,
       [
@@ -2388,6 +2394,8 @@ if (interruptedMaintenanceTasks.length > 0) {
         job.workedAccumulatedMinutes ?? 0,
         job.pausedAccumulatedMinutes ?? 0,
         job.pausedAtMs ?? null,
+        Number.isFinite(Number(job.assignedVehicleId)) ? Number(job.assignedVehicleId) : null,
+        String(job.assignedVehicleName || "").trim() || null,
       ]
     );
 
@@ -2471,12 +2479,14 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
           "actualMinutes",
           "workedAccumulatedMinutes",
           "pausedAccumulatedMinutes",
-          "pausedAtMs"
+          "pausedAtMs",
+          "assignedVehicleId",
+          "assignedVehicleName"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19
+          $18, $19, $20, $21
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2496,7 +2506,9 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
           "actualMinutes" = EXCLUDED."actualMinutes",
           "workedAccumulatedMinutes" = EXCLUDED."workedAccumulatedMinutes",
           "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
-          "pausedAtMs" = EXCLUDED."pausedAtMs"
+          "pausedAtMs" = EXCLUDED."pausedAtMs",
+          "assignedVehicleId" = EXCLUDED."assignedVehicleId",
+          "assignedVehicleName" = EXCLUDED."assignedVehicleName"
         RETURNING *
       `,
       [
@@ -2519,6 +2531,8 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
         job.workedAccumulatedMinutes ?? 0,
         job.pausedAccumulatedMinutes ?? 0,
         job.pausedAtMs ?? null,
+        Number.isFinite(Number(job.assignedVehicleId)) ? Number(job.assignedVehicleId) : null,
+        String(job.assignedVehicleName || "").trim() || null,
       ]
     );
 

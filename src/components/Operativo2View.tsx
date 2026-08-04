@@ -94,6 +94,12 @@ export type Operativo2ViewProps = {
   addExtraSupportToJob: (jobId: number, supportName: string) => void;
   removeSupportByNameFromJob: (jobId: number, nameToRemove: string) => void;
 
+  /** Furgonetas activas del taller y las que ya están retenidas por otro trabajo. */
+  furgonetas: { id: number; name: string; plate?: string | null }[];
+  furgonetasOcupadasEnTaller: Map<number, string>;
+  furgonetasEnAsistencia: Set<string>;
+  asignarFurgonetaAlTrabajo: (jobId: number, vehicleId: number | null) => Promise<void> | void;
+
   /**
    * Modo embebido (Mobilink WorkPlanner): la vista fluye dentro del layout del
    * módulo en vez de ocupar la pantalla como overlay, y oculta su barra de
@@ -164,6 +170,10 @@ export default function Operativo2View({
   reassignJob,
   addExtraSupportToJob,
   removeSupportByNameFromJob,
+  furgonetas,
+  furgonetasOcupadasEnTaller,
+  furgonetasEnAsistencia,
+  asignarFurgonetaAlTrabajo,
   embebido,
 }: Operativo2ViewProps) {
   const [op2CitaOpen, setOp2CitaOpen] = useState(false);
@@ -200,6 +210,45 @@ export default function Operativo2View({
   ])).filter((n) => !isTestTech(n));
   const trabajando = trabajandoNames.map((name) => ({ name }));
   const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : maintTechNames.has(n) ? "text-yellow-300" : "text-slate-200");
+  /**
+   * Selector de unidad móvil para los trabajos del área "movil". Se ocultan
+   * las furgonetas que ya retiene otro trabajo o una asistencia en curso; la
+   * del propio trabajo siempre se ve, para poder cambiarla o liberarla.
+   */
+  function SelectorFurgoneta({ job }: { job: Job }) {
+    if (job.area !== "movil") return null;
+
+    const disponibles = furgonetas.filter((v) => {
+      if (v.id === job.assignedVehicleId) return true;
+      if (furgonetasOcupadasEnTaller.has(v.id)) return false;
+      if (furgonetasEnAsistencia.has(v.name)) return false;
+      return true;
+    });
+
+    return (
+      <select
+        value={job.assignedVehicleId ?? ""}
+        onChange={(e) => {
+          const valor = e.target.value;
+          void asignarFurgonetaAlTrabajo(job.id, valor ? Number(valor) : null);
+        }}
+        title="Unidad móvil asignada"
+        className={`rounded border px-1.5 py-1 text-[11px] ${
+          job.assignedVehicleId
+            ? "border-sky-500/50 bg-sky-500/10 text-sky-200"
+            : "border-rose-500/60 bg-rose-500/10 text-rose-200"
+        }`}
+      >
+        <option value="">🚐 Furgoneta…</option>
+        {disponibles.map((v) => (
+          <option key={v.id} value={v.id}>
+            {v.name}{v.plate ? ` · ${v.plate}` : ""}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
   const agendados = agenda.dueScheduledJobs ?? [];
   const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
   const bloqueadosCount = visibleJobs.filter((j) => j.status === "bloqueado").length;
@@ -384,7 +433,8 @@ export default function Operativo2View({
                       <option key={t.name} value={t.name}>{t.name}</option>
                     ))}
                   </select>
-                  <button type="button" disabled={assignedNames.length === 0} onClick={() => { void authorizeProposedJob(job.id); }} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-40">✓ Autorizar</button>
+                  <SelectorFurgoneta job={job} />
+                  <button type="button" disabled={assignedNames.length === 0 || (job.area === "movil" && !job.assignedVehicleId)} title={job.area === "movil" && !job.assignedVehicleId ? "Asigna una furgoneta antes de autorizar" : undefined} onClick={() => { void authorizeProposedJob(job.id); }} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-40">✓ Autorizar</button>
                   <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-300">Cola</button>
                   <button type="button" onClick={() => { void rejectProposedJob(job.id); }} className="rounded border border-slate-500/40 bg-slate-700 px-2 py-1 text-[11px] text-slate-200">Rechazar</button>
                   <button type="button" onClick={() => { void deleteValidationJob(job.id); }} className="rounded bg-rose-600 px-2 py-1 text-[11px] font-bold text-white">Eliminar</button>
@@ -438,6 +488,7 @@ export default function Operativo2View({
                           <option key={t.name} value={t.name}>{t.name}</option>
                         ))}
                       </select>
+                      <SelectorFurgoneta job={job} />
                       <button type="button" onClick={() => pauseJob(job.id)} className="rounded border border-orange-400/40 bg-orange-400/10 px-2 py-1 text-[11px] text-orange-300">Stand by</button>
                       <button type="button" onClick={() => finishJob(job.id)} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white">✓ Cerrar</button>
                     </div>

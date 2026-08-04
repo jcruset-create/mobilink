@@ -109,6 +109,14 @@ export type Job = {
   customerPhone?: string;
   finishedWhatsappSentAtMs?: number | null;
   finishedWhatsappSid?: string | null;
+
+  /**
+   * Unidad móvil (furgoneta) asignada al trabajo. Sólo se usa en el área
+   * "movil": mientras el trabajo está abierto, esa furgoneta no puede
+   * ofrecerse para una asistencia en carretera.
+   */
+  assignedVehicleId?: number | null;
+  assignedVehicleName?: string | null;
   createdAtMs: number;
   startedAtMs: number | null;
   closedAtMs?: number;

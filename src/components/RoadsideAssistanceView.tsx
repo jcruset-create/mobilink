@@ -280,6 +280,10 @@ type Props = {
   assistances: RoadsideAssistance[];
   techs: Tech[];
   vehicles: RoadsideVehicle[];
+  /** Técnicos ocupados en un trabajo de taller: no se ofrecen para una asistencia. */
+  tecnicosOcupadosEnTaller?: Set<string>;
+  /** Furgonetas retenidas por un trabajo de taller (área "movil"), por nombre. */
+  furgonetasOcupadasEnTaller?: Set<string>;
   webfleetVehicles: WebfleetVehicle[];
   currentBase?: string;
   loading: boolean;
@@ -351,6 +355,8 @@ export default function RoadsideAssistanceView({
   assistances,
   techs,
   vehicles,
+  tecnicosOcupadosEnTaller,
+  furgonetasOcupadasEnTaller,
   webfleetVehicles,
   currentBase,
   loading,
@@ -563,10 +569,24 @@ export default function RoadsideAssistanceView({
     setHistorialPage(1);
   }
 
-  const roadsideCapableTechs = useMemo(
-    () => techs.filter((tech) => tech.roadsideCapable),
-    [techs]
-  );
+  /**
+   * Técnicos ofrecibles para una asistencia: además de ser aptos para
+   * carretera, no pueden estar ocupados en un trabajo de taller ni llevar ya
+   * otra asistencia en curso.
+   */
+  const roadsideCapableTechs = useMemo(() => {
+    const enAsistencia = new Set(
+      assistances
+        .filter((item) => !isClosed(item.status) && item.assignedTechName)
+        .map((item) => String(item.assignedTechName))
+    );
+    return techs.filter(
+      (tech) =>
+        tech.roadsideCapable &&
+        !tecnicosOcupadosEnTaller?.has(tech.name) &&
+        !enAsistencia.has(tech.name)
+    );
+  }, [techs, assistances, tecnicosOcupadosEnTaller]);
 
   const editAssignableTechs = useMemo(() => {
     if (
@@ -615,11 +635,13 @@ export default function RoadsideAssistanceView({
     () =>
       vehicles.filter((vehicle) => {
         if (!vehicle.active) return false;
+        // Retenida por un trabajo de taller del área "movil": no disponible.
+        if (furgonetasOcupadasEnTaller?.has(vehicle.name)) return false;
         // Solo furgonetas de la base de la sede actual (las sin base se muestran igual)
         if (!currentBase || !vehicle.base) return true;
         return vehicle.base.trim().toLowerCase() === currentBase.trim().toLowerCase();
       }),
-    [vehicles, currentBase]
+    [vehicles, currentBase, furgonetasOcupadasEnTaller]
   );
 
   async function handleRedirect(assistance: RoadsideAssistance) {
