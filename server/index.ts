@@ -4296,17 +4296,30 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       ),
     ]);
 
-    // Matrícula de NUESTRA furgoneta (no la del camión asistido)
+    // Datos de NUESTRA furgoneta (no del camión asistido). Al cliente se le
+    // enseña marca/modelo + matrícula, que es lo que reconoce cuando la ve
+    // llegar; el nombre interno ("Furgoneta 010") no le dice nada.
+    // Se busca por el identificador de Webfleet y, si la asistencia no lo
+    // tiene, por el nombre con el que se asignó.
     let vanPlate: string | null = null;
-    if (assistance.webfleetVehicleId) {
-      try {
-        const vp = await db.query(
-          `SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`,
-          [assistance.webfleetVehicleId]
-        );
-        vanPlate = vp.rows[0]?.plate ?? null;
-      } catch { /* sin matrícula */ }
-    }
+    let vanMarca: string | null = null;
+    let vanModelo: string | null = null;
+    try {
+      const vp = assistance.webfleetVehicleId
+        ? await db.query(
+            `SELECT plate, marca, modelo FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`,
+            [assistance.webfleetVehicleId]
+          )
+        : assistance.assignedVehicleName
+          ? await db.query(
+              `SELECT plate, marca, modelo FROM roadside_vehicles WHERE name = $1 LIMIT 1`,
+              [assistance.assignedVehicleName]
+            )
+          : null;
+      vanPlate = vp?.rows[0]?.plate ?? null;
+      vanMarca = vp?.rows[0]?.marca ?? null;
+      vanModelo = vp?.rows[0]?.modelo ?? null;
+    } catch { /* sin datos de furgoneta */ }
 
     // Coordenadas del taller (destino en vuelta al taller)
     let workshop: { lat: number; lng: number } | null = null;
@@ -4320,6 +4333,8 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
     res.json({
       assistance,
       vanPlate,
+      vanMarca,
+      vanModelo,
       workshop,
       events: eventsResult.rows.map((e: any) => ({
         status: e.status,
