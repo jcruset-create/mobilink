@@ -90,6 +90,24 @@ class _InicioTab extends StatelessWidget {
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IdentifyVehicleScreen())),
           ),
           const SizedBox(height: 14),
+          // Operaciones: entra a Cambios sin dar el rodeo por la ficha del
+          // vehículo. Identificar el camión no se puede saltar (Cambios
+          // necesita saber sobre cuál se trabaja), pero la ficha sí.
+          _BigTile(
+            // El mismo icono que el botón "Cambiar" de la ficha, que es a
+            // donde lleva. Icons.build ya lo usan Herramientas (pestaña y
+            // botón) y repetirlo aquí despistaría.
+            icon: Icons.swap_horiz,
+            label: 'Operaciones',
+            onTap: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const IdentifyVehicleScreen(destino: DestinoVehiculo.operaciones)));
+              // Una operación puede haber cerrado incidencias: hay que
+              // refrescar el contador de la pestaña, como hace Incidencias.
+              await TyreControlApi.contarIncidenciasPendientes();
+            },
+          ),
+          const SizedBox(height: 14),
           // Planificación arriba (antes estaba abajo con Vehículos)
           Row(
             children: [
