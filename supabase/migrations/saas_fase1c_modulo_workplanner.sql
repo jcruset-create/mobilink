@@ -6,6 +6,11 @@
 --   módulo 'taller': una empresa puede tener WorkPlanner sin tener
 --   el panel de taller completo, y al revés.
 --
+-- NOTA: desde v2.15.1 esta migración también se aplica sola al arrancar el
+-- servidor (server/db.ts, bloque "SaaS: módulo workplanner licenciable"), así
+-- que normalmente no hace falta ejecutarla a mano. Se conserva aquí como
+-- referencia y para entornos sin ese arranque.
+--
 -- Pegar en Supabase (SQL Editor). Idempotente.
 -- ============================================================
 

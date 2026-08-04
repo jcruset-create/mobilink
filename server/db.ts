@@ -844,6 +844,45 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
   `).catch(() => {});
 
+  // ── SaaS: módulo "workplanner" licenciable ────────────────────────────
+  // Equivale a supabase/migrations/saas_fase1c_modulo_workplanner.sql. Se
+  // aplica en el arranque para no depender de ejecutarlo a mano en el SQL
+  // Editor. Es idempotente y sólo actúa si las tablas SaaS existen.
+  const MODULOS_LICENCIABLES =
+    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner'";
+  const EMPRESA_SEMILLA = "00000000-0000-4000-a000-000000000001";
+
+  await pool
+    .query(
+      `
+      DO $migracion$
+      BEGIN
+        IF to_regclass('public.app_licencias') IS NOT NULL THEN
+          ALTER TABLE app_licencias DROP CONSTRAINT IF EXISTS app_licencias_modulo_check;
+          ALTER TABLE app_licencias ADD CONSTRAINT app_licencias_modulo_check
+            CHECK (modulo IN (${MODULOS_LICENCIABLES}));
+
+          INSERT INTO app_licencias (empresa_id, modulo)
+          SELECT '${EMPRESA_SEMILLA}', 'workplanner'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM app_licencias
+            WHERE empresa_id = '${EMPRESA_SEMILLA}' AND modulo = 'workplanner'
+          );
+        END IF;
+
+        IF to_regclass('public.app_usuario_modulos') IS NOT NULL THEN
+          ALTER TABLE app_usuario_modulos DROP CONSTRAINT IF EXISTS app_usuario_modulos_modulo_check;
+          ALTER TABLE app_usuario_modulos ADD CONSTRAINT app_usuario_modulos_modulo_check
+            CHECK (modulo IN (${MODULOS_LICENCIABLES}));
+        END IF;
+      END
+      $migracion$;
+    `
+    )
+    .catch((error) => {
+      console.error("No se pudo aplicar la migración del módulo workplanner:", error);
+    });
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 
