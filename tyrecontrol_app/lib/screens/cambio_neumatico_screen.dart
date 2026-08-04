@@ -466,8 +466,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _soltarStockEnPosicion(_DragStock d, PosicionVehiculo p) async {
     double? profUsado;
     if (d.condicion == 'usado') {
-      profUsado = await _pedirProfundidad();
-      if (profUsado == null) return; // canceló
+      final r = await _pedirProfundidad();
+      if (r == null) return; // canceló
+      profUsado = r.mm;
     }
     setState(() => _trabajando = true);
     try {
@@ -483,9 +484,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     finally { if (mounted) setState(() => _trabajando = false); }
   }
 
-  Future<double?> _pedirProfundidad() async {
+  /// Profundidad del usado que se va a montar.
+  ///
+  /// Devuelve null si el técnico CANCELA. Si acepta, devuelve un registro con
+  /// los mm, que a su vez pueden ser null: "Sin medir" y un campo vacío
+  /// significan "no se sabe", NO cero. Antes ambos casos guardaban 0.0, y una
+  /// rueda con 0 mm sale roja y cuenta como bajo mínimo en el informe.
+  Future<({double? mm})?> _pedirProfundidad() async {
     final ctrl = TextEditingController();
-    return showDialog<double>(
+    return showDialog<({double? mm})>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Profundidad restante'),
@@ -496,8 +503,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          TextButton(onPressed: () => Navigator.pop(ctx, 0.0), child: const Text('Sin medir')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.')) ?? 0.0), child: const Text('Montar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, (mm: null)), child: const Text('Sin medir')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, (mm: double.tryParse(ctrl.text.replaceAll(',', '.')))),
+            child: const Text('Montar'),
+          ),
         ],
       ),
     );
@@ -1267,8 +1277,10 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final med = _mediciones[m.neumaticoId];
     final obj = p.eje != null ? _presionesObjetivo[p.eje] : null;
     final cat = n != null ? _datosCat[TyreControlApi.claveCatalogo(n.marca, n.modelo, n.medida)] : null;
-    // Profundidad: revisión → profundidad actual (dibujo/usado) → dibujo del catálogo.
-    final prof = med?.profundidadMm ?? n?.profundidadActualMm?.toDouble() ?? cat?.prof;
+    // Profundidad: la medición de revisión o la del propio neumático, LA MÁS
+    // RECIENTE de las dos (ver profundidadVigente); de respaldo, el catálogo.
+    // Antes ganaba siempre la revisión y por eso un reesculturado no se veía.
+    final prof = profundidadVigente(med, n) ?? cat?.prof;
     // Presión: revisión → presión recomendada del eje → presión máx. del catálogo.
     final pres = med?.presionBar ?? obj?.presion.toDouble() ?? cat?.pres;
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
@@ -1593,8 +1605,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     }
     double? profUsado;
     if (condicion == 'usado') {
-      profUsado = await _pedirProfundidad();
-      if (profUsado == null) return; // canceló
+      final r = await _pedirProfundidad();
+      if (r == null) return; // canceló
+      profUsado = r.mm;
     }
     setState(() => _trabajando = true);
     try {

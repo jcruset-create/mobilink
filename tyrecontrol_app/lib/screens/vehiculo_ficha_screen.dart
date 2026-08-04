@@ -176,7 +176,10 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
     final med = _medPorNeumatico[m!.neumaticoId];
     final obj = p.eje != null ? _presionesObjetivo[p.eje] : null;
     final cat = _datosCat[TyreControlApi.claveCatalogo(n.marca, n.modelo, n.medida)];
-    final prof = med?.profundidadMm ?? n.profundidadActualMm?.toDouble() ?? cat?.prof;
+    // La medición de revisión o la del propio neumático, la MÁS RECIENTE
+    // (ver profundidadVigente): un reesculturado o un usado con la
+    // profundidad puesta a mano tienen que ganar a la medición anterior.
+    final prof = profundidadVigente(med, n) ?? cat?.prof;
     final pres = med?.presionBar ?? obj?.presion.toDouble() ?? cat?.pres;
 
     if (_esNuevo(n, med)) return (prof: prof, pres: pres, estado: TireStatus.nuevo);
@@ -186,7 +189,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
     }
     // Solo la presión MEDIDA puede marcar anomalía: la de respaldo (objetivo o
     // catálogo) coincidiría siempre consigo misma.
-    final base = med ?? RevisionDetalleDraft(posicionId: p.id, profundidadMm: prof);
+    final base = med?.conProfundidad(prof) ?? RevisionDetalleDraft(posicionId: p.id, profundidadMm: prof);
     final estado = _umbralDe(p).evaluar(base, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
     return (prof: prof, pres: pres, estado: estado);
   }
