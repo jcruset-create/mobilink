@@ -780,13 +780,17 @@ export function createConnectBackofficeRouter(): Router {
     const now = Date.now();
     const r = await db.query(
       `INSERT INTO connect_workshops
-         ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType", "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING *`,
+         ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType",
+          address, "postalCode", city, province, email, "commercialNetwork", "openingHours",
+          "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18) RETURNING *`,
       [
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
         WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : "assist",
+        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null,
         now,
       ],
     );
@@ -819,6 +823,13 @@ export function createConnectBackofficeRouter(): Router {
          "liteSettings" = COALESCE($11, "liteSettings"),
          features = COALESCE($12, features),
          "coreWorkshopId" = COALESCE($13, "coreWorkshopId"),
+         address = COALESCE($14, address),
+         "postalCode" = COALESCE($15, "postalCode"),
+         city = COALESCE($16, city),
+         province = COALESCE($17, province),
+         email = COALESCE($18, email),
+         "commercialNetwork" = COALESCE($19, "commercialNetwork"),
+         "openingHours" = COALESCE($20, "openingHours"),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -828,7 +839,9 @@ export function createConnectBackofficeRouter(): Router {
        u.name, now, Number(req.params.id),
        b.liteSettings ? JSON.stringify(b.liteSettings) : null,
        b.features ? JSON.stringify(b.features) : null,
-       b.coreWorkshopId != null ? String(b.coreWorkshopId) : null],
+       b.coreWorkshopId != null ? String(b.coreWorkshopId) : null,
+       b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
