@@ -162,6 +162,8 @@ export type RoadsideAssistanceFile = {
 export type RoadsideTrackingResponse = {
   assistance: RoadsideAssistance;
   vanPlate?: string | null;
+  vanMarca?: string | null;
+  vanModelo?: string | null;
   workshop?: { lat: number; lng: number } | null;
   events: Array<{
     status: RoadsideAssistanceStatus;
