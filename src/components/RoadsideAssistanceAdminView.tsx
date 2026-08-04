@@ -399,7 +399,7 @@ export default function RoadsideAssistanceAdminView({
           <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Configuración
           </div>
-          <div className="flex items-center gap-2.5 rounded-lg bg-red-600 px-3 py-2 font-medium text-white">
+          <div className="flex items-center gap-2.5 rounded-lg bg-orange-600 px-3 py-2 font-medium text-white">
             <Truck className="h-4 w-4 shrink-0" /> Furgonetas y operarios
           </div>
 
@@ -480,7 +480,7 @@ export default function RoadsideAssistanceAdminView({
               aria-current={adminTab === tab}
               className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-bold transition-colors ${
                 adminTab === tab
-                  ? "bg-red-600 text-white"
+                  ? "bg-orange-600 text-white"
                   : "text-slate-300 hover:bg-slate-700"
               }`}
             >
@@ -489,7 +489,7 @@ export default function RoadsideAssistanceAdminView({
               {badge != null && badge > 0 && (
                 <span
                   className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${
-                    adminTab === tab ? "bg-red-800 text-white" : "bg-slate-700 text-slate-200"
+                    adminTab === tab ? "bg-orange-800 text-white" : "bg-slate-700 text-slate-200"
                   }`}
                 >
                   {badge}
@@ -522,7 +522,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="Nombre, ejemplo: Furgoneta 1"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
               />
 
               <input
@@ -534,7 +534,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="Matricula"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 uppercase"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 uppercase"
               />
 
               <input
@@ -546,7 +546,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="ID Webfleet (ej: 012)"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
               />
 
               <input
@@ -558,7 +558,7 @@ export default function RoadsideAssistanceAdminView({
                   }))
                 }
                 placeholder="Base (ej: Tarragona, Reus...)"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
               />
 
               <div className="grid grid-cols-2 gap-2">
@@ -571,7 +571,7 @@ export default function RoadsideAssistanceAdminView({
                     }))
                   }
                   placeholder="Marca (ej: Mercedes)"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
                 <input
                   value={vehicleDraft.modelo}
@@ -582,7 +582,7 @@ export default function RoadsideAssistanceAdminView({
                     }))
                   }
                   placeholder="Modelo (ej: Sprinter)"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </div>
 
@@ -612,7 +612,7 @@ export default function RoadsideAssistanceAdminView({
                 }
                 rows={2}
                 placeholder="Notas"
-                className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
               />
 
               <label className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
@@ -642,7 +642,7 @@ export default function RoadsideAssistanceAdminView({
                   type="button"
                   onClick={handleSaveVehicle}
                   disabled={vehicleSaving}
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-black text-white hover:bg-red-500 disabled:opacity-60"
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
                   {editingVehicle ? "Guardar" : "Crear"}
@@ -757,7 +757,7 @@ export default function RoadsideAssistanceAdminView({
                 <select
                   value={newOperatorName}
                   onChange={(event) => setNewOperatorName(event.target.value)}
-                  className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-black"
+                  className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 font-black"
                 >
                   <option value="">
                     {availableTechs.length
@@ -776,7 +776,7 @@ export default function RoadsideAssistanceAdminView({
                   inputMode="numeric"
                   onChange={(event) => setNewOperatorCode(event.target.value)}
                   placeholder="Codigo"
-                  className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-black"
+                  className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 font-black"
                 />
 
                 <button
@@ -793,7 +793,7 @@ export default function RoadsideAssistanceAdminView({
                   type="button"
                   onClick={handleAddOperator}
                   disabled={addingOperator || !availableTechs.length}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-black text-white hover:bg-red-500 disabled:opacity-60"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-60"
                 >
                   <Plus className="h-4 w-4" />
                   Alta
@@ -837,7 +837,7 @@ export default function RoadsideAssistanceAdminView({
                             [techName]: event.target.value,
                           }))
                         }
-                        className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-black"
+                        className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 font-black"
                       />
 
                       <button
@@ -854,7 +854,7 @@ export default function RoadsideAssistanceAdminView({
                         title="Guardar codigo"
                         onClick={() => handleSaveOperatorCode(techName)}
                         disabled={isSaving}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-red-600 text-white hover:bg-red-500 disabled:opacity-60"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-orange-600 text-white hover:bg-orange-500 disabled:opacity-60"
                       >
                         <Save className="h-4 w-4" />
                       </button>
@@ -899,7 +899,7 @@ export default function RoadsideAssistanceAdminView({
                 value={workshopConfig.taller_direccion}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_direccion: e.target.value }))}
                 placeholder="C/ Exemple, 1 — Tarragona"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
               />
             </div>
             <div>
@@ -908,7 +908,7 @@ export default function RoadsideAssistanceAdminView({
                 value={workshopConfig.taller_lat}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_lat: e.target.value }))}
                 placeholder="41.121134"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-mono"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 font-mono"
               />
             </div>
             <div>
@@ -917,7 +917,7 @@ export default function RoadsideAssistanceAdminView({
                 value={workshopConfig.taller_lng}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_lng: e.target.value }))}
                 placeholder="1.242743"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-mono"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 font-mono"
               />
             </div>
             <div>
@@ -929,7 +929,7 @@ export default function RoadsideAssistanceAdminView({
                 value={workshopConfig.taller_radio_m}
                 onChange={(e) => setWorkshopConfig((p) => ({ ...p, taller_radio_m: e.target.value }))}
                 placeholder="300"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40 font-mono"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40 font-mono"
               />
             </div>
           </div>
@@ -939,7 +939,7 @@ export default function RoadsideAssistanceAdminView({
               type="button"
               onClick={handleSaveWorkshopConfig}
               disabled={workshopConfigSaving}
-              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
               {workshopConfigSaving ? "Guardando..." : "Guardar configuración"}

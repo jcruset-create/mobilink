@@ -977,7 +977,7 @@ export default function RoadsideAssistanceView({
               }}
               className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium transition-colors ${
                 panelTab === tab
-                  ? "bg-red-600 text-white"
+                  ? "bg-orange-600 text-white"
                   : "text-slate-300 hover:bg-slate-800"
               }`}
             >
@@ -986,7 +986,7 @@ export default function RoadsideAssistanceView({
               {badge != null && badge > 0 && (
                 <span
                   className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
-                    panelTab === tab ? "bg-red-800 text-white" : "bg-red-600 text-white"
+                    panelTab === tab ? "bg-orange-800 text-white" : "bg-orange-600 text-white"
                   }`}
                 >
                   {badge}
@@ -1190,7 +1190,7 @@ export default function RoadsideAssistanceView({
                         customerName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -1206,7 +1206,7 @@ export default function RoadsideAssistanceView({
                         customerPhone: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
               </div>
@@ -1225,7 +1225,7 @@ export default function RoadsideAssistanceView({
                     }))
                   }
                   placeholder="Nombre del conductor"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </label>
 
@@ -1255,7 +1255,7 @@ export default function RoadsideAssistanceView({
                   <select
                     defaultValue=""
                     onChange={(e) => { applyKnownPlaceToDraft(e.target.value, false); e.target.value = ""; }}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     <option value="">— Elegir lugar conocido —</option>
                     {knownPlaces.map((p) => (
@@ -1280,7 +1280,7 @@ export default function RoadsideAssistanceView({
                       address: event.target.value,
                     }))
                   }
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </label>
 
@@ -1296,7 +1296,7 @@ export default function RoadsideAssistanceView({
                       googleMapsUrl: event.target.value,
                     }))
                   }
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </label>
 
@@ -1323,7 +1323,7 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       setDraft((prev) => ({ ...prev, latitude: event.target.value }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -1336,7 +1336,7 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       setDraft((prev) => ({ ...prev, longitude: event.target.value }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
               </div>
@@ -1354,7 +1354,7 @@ export default function RoadsideAssistanceView({
                         plate: event.target.value.toUpperCase(),
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -1371,7 +1371,7 @@ export default function RoadsideAssistanceView({
                       }))
                     }
                     placeholder="Opcional"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -1404,7 +1404,7 @@ export default function RoadsideAssistanceView({
                         vehicleDescription: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
               </div>
@@ -1422,7 +1422,7 @@ export default function RoadsideAssistanceView({
                         assignedTechName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {roadsideCapableTechs.map((tech) => (
@@ -1442,7 +1442,7 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       applyVehicleToDraft(event.target.value)
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {activeVehicles.map((vehicle) => (
@@ -1467,7 +1467,7 @@ export default function RoadsideAssistanceView({
                         webfleetVehicleId: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {webfleetVehicles.map((v) => (
@@ -1511,7 +1511,7 @@ export default function RoadsideAssistanceView({
                     setDraft((prev) => ({ ...prev, descripcionAveria: event.target.value }))
                   }
                   rows={2}
-                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </label>
 
@@ -1525,7 +1525,7 @@ export default function RoadsideAssistanceView({
                     setDraft((prev) => ({ ...prev, trabajosARealizar: event.target.value }))
                   }
                   rows={2}
-                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </label>
 
@@ -1542,7 +1542,7 @@ export default function RoadsideAssistanceView({
                     }))
                   }
                   rows={3}
-                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               </label>
 
@@ -1556,7 +1556,7 @@ export default function RoadsideAssistanceView({
                 type="button"
                 onClick={handleCreate}
                 disabled={saving}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-3 text-sm font-bold text-white hover:bg-orange-500 disabled:opacity-60"
               >
                 <Plus className="h-4 w-4" />
                 {saving ? "Guardando..." : "Crear asistencia"}
@@ -1842,7 +1842,7 @@ export default function RoadsideAssistanceView({
                               handleStatusChange(assistance, nextStatus)
                             }
                             disabled={changingId === assistance.id}
-                            className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
+                            className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-3 py-2 text-sm font-bold text-white hover:bg-orange-500 disabled:opacity-60"
                           >
                             <ActionIcon className="h-4 w-4" />
                             {getActionLabel(assistance.status)}
@@ -1994,7 +1994,7 @@ export default function RoadsideAssistanceView({
                     <button
                       type="button"
                       onClick={searchHistorial}
-                      className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-bold text-white hover:bg-red-500"
+                      className="rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-bold text-white hover:bg-orange-500"
                     >
                       Buscar
                     </button>
@@ -2143,7 +2143,7 @@ export default function RoadsideAssistanceView({
                         status: event.target.value as RoadsideAssistanceStatus,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     {[
                       ...ROADSIDE_ASSISTANCE_STATUS_FLOW,
@@ -2195,7 +2195,7 @@ export default function RoadsideAssistanceView({
                         customerName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2211,7 +2211,7 @@ export default function RoadsideAssistanceView({
                         customerPhone: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2221,7 +2221,7 @@ export default function RoadsideAssistanceView({
                     <select
                       defaultValue=""
                       onChange={(e) => { applyKnownPlaceToDraft(e.target.value, true); e.target.value = ""; }}
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                     >
                       <option value="">— Elegir lugar conocido —</option>
                       {knownPlaces.map((p) => (
@@ -2243,7 +2243,7 @@ export default function RoadsideAssistanceView({
                         address: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2259,7 +2259,7 @@ export default function RoadsideAssistanceView({
                         googleMapsUrl: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2290,7 +2290,7 @@ export default function RoadsideAssistanceView({
                         latitude: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2306,7 +2306,7 @@ export default function RoadsideAssistanceView({
                         longitude: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2322,7 +2322,7 @@ export default function RoadsideAssistanceView({
                         plate: event.target.value.toUpperCase(),
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2339,7 +2339,7 @@ export default function RoadsideAssistanceView({
                       }))
                     }
                     placeholder="Opcional"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2372,7 +2372,7 @@ export default function RoadsideAssistanceView({
                         vehicleDescription: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2388,7 +2388,7 @@ export default function RoadsideAssistanceView({
                         assignedTechName: event.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {editAssignableTechs.map((tech) => (
@@ -2408,7 +2408,7 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       applyVehicleToEditDraft(event.target.value)
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   >
                     <option value="">Sin asignar</option>
                     {activeVehicles.map((vehicle) => (
@@ -2432,7 +2432,7 @@ export default function RoadsideAssistanceView({
                           webfleetVehicleId: event.target.value,
                         }))
                       }
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                     >
                       <option value="">Sin asignar</option>
                       {webfleetVehicles.map((v) => (
@@ -2451,7 +2451,7 @@ export default function RoadsideAssistanceView({
                         }))
                       }
                       placeholder="ID Webfleet"
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                     />
                   )}
                 </label>
@@ -2504,7 +2504,7 @@ export default function RoadsideAssistanceView({
                       setEditDraft((prev) => ({ ...prev, descripcionAveria: event.target.value }))
                     }
                     rows={2}
-                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2518,7 +2518,7 @@ export default function RoadsideAssistanceView({
                       setEditDraft((prev) => ({ ...prev, trabajosARealizar: event.target.value }))
                     }
                     rows={2}
-                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
 
@@ -2535,7 +2535,7 @@ export default function RoadsideAssistanceView({
                       }))
                     }
                     rows={3}
-                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                    className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
               </div>
@@ -2560,7 +2560,7 @@ export default function RoadsideAssistanceView({
                 type="button"
                 onClick={handleUpdate}
                 disabled={savingEdit}
-                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
                 {savingEdit ? "Guardando..." : "Guardar cambios"}
@@ -2726,7 +2726,7 @@ export default function RoadsideAssistanceView({
                   placeholder="cliente@email.com"
                   value={reportEmail}
                   onChange={(e) => setReportEmail(e.target.value)}
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                 />
               )}
 
@@ -2738,7 +2738,7 @@ export default function RoadsideAssistanceView({
                 type="button"
                 onClick={handleSendReport}
                 disabled={sendingReport}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500 disabled:opacity-50"
               >
                 <Send className="h-4 w-4" />
                 {sendingReport ? "Enviando..." : "Enviar informe"}
