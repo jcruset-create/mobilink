@@ -2,6 +2,10 @@
 #  - como artifact del run (pestaña Actions)
 #  - como GitHub Release "tyrecontrol-vX.Y.Z+N", para descargarla
 #    directamente desde el navegador de la tablet e instalarla.
+#  - en public/, que es de donde tira el centro de descargas
+#    (/descargas.html → /api/apps/list → ficheros public/tyrecontrol-*.apk).
+#
+# El fichero se llama igual en los tres sitios: tyrecontrol-<versión>.apk.
 name: Build TyreControl APK
 
 on:
@@ -120,14 +124,17 @@ jobs:
             exit 1
           fi
 
+      # El nombre lleva el prefijo "tyrecontrol-" porque es el que busca el
+      # centro de descargas (APK_APPS en server/index.ts): el fichero que se
+      # publica en public/ y el que se adjunta a la release son el mismo.
       - name: Renombrar APK
         run: cp build/app/outputs/flutter-apk/app-release.apk
-          "build/app/outputs/flutter-apk/mobilink-tyrecontrol-${{ steps.ver.outputs.version }}.apk"
+          "build/app/outputs/flutter-apk/tyrecontrol-${{ steps.ver.outputs.version }}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mobilink-tyrecontrol-${{ steps.ver.outputs.version }}
-          path: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
+          name: tyrecontrol-${{ steps.ver.outputs.version }}
+          path: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
 
       # Solo se publica release si la APK va firmada con la clave estable. Una
       # release que no se puede instalar encima de la anterior es peor que no
@@ -139,7 +146,22 @@ jobs:
           tag_name: tyrecontrol-v${{ steps.ver.outputs.version }}
           name: Mobilink TyreControl ${{ steps.ver.outputs.version }}
           body: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
-          files: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
+          files: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
+
+      # Centro de descargas (/descargas.html): el servidor lista los .apk que
+      # encuentra en public/ y se queda con la versión más alta, así que basta
+      # con dejar el fichero ahí. Se borra la anterior en el mismo commit: solo
+      # se sirve la última y así el árbol no acumula APKs de 58 MB.
+      #
+      # Solo con la clave estable: una APK de debug en el centro de descargas
+      # no se puede instalar encima de la que tienen los técnicos.
+      - name: Publicar la APK en el centro de descargas
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          rm -f ../public/tyrecontrol-*.apk
+          cp "build/app/outputs/flutter-apk/tyrecontrol-${{ steps.ver.outputs.version }}.apk" \
+             "../public/tyrecontrol-${{ steps.ver.outputs.version }}.apk"
+          ls -la ../public/tyrecontrol-*.apk
 
       # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el
       # número no se quema. El [skip ci] evita que este commit dispare otro
@@ -150,19 +172,29 @@ jobs:
       # avisa y se sigue: el run NO se pone en rojo por esto. La consecuencia
       # es solo que el próximo build repita el mismo nombre de versión, y aun
       # así saldrá con otro build number, así que no se pisa ninguna release.
-      - name: Guardar la versión nueva en el repositorio
+      - name: Guardar la versión nueva y la APK en el repositorio
         if: ${{ env.KS_B64 != '' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pubspec.yaml
+          # -A recoge tanto la APK nueva como el borrado de la anterior.
+          git -C .. add -A public
           if git diff --cached --quiet; then
-            echo "El pubspec no ha cambiado; nada que guardar."
+            echo "Ni el pubspec ni la APK han cambiado; nada que guardar."
             exit 0
           fi
-          git commit -m "chore(tyrecontrol): version ${{ steps.ver.outputs.version }} [skip ci]"
+          git commit -m "chore(tyrecontrol): version ${{ steps.ver.outputs.version }} y APK en descargas [skip ci]"
+          # Se reintenta una vez sobre la punta actual: el push suele fallar
+          # solo porque otro commit llegó mientras compilábamos, y sin este
+          # reintento el centro de descargas se quedaría con la APK anterior.
           if ! git push origin HEAD:${{ github.ref_name }}; then
-            echo "::warning::No se ha podido guardar la versión" \
-                 "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}" \
-                 "(seguramente otro push llegó antes). La APK publicada es válida."
+            echo "Push rechazado; se reintenta sobre la punta actual de ${{ github.ref_name }}."
+            git pull --rebase origin ${{ github.ref_name }} || true
+            if ! git push origin HEAD:${{ github.ref_name }}; then
+              echo "::warning::No se ha podido guardar la versión" \
+                   "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}." \
+                   "La APK publicada en la release es válida, pero el centro de" \
+                   "descargas sigue con la anterior: súbela a mano o relanza el workflow."
+            fi
           fi
