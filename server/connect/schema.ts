@@ -11,6 +11,7 @@
 
 import crypto from "node:crypto";
 import db from "../db.ts";
+import { seedNetworkWorkshops } from "./seedWorkshops.ts";
 
 export async function initConnect(): Promise<void> {
   await db.query(`
@@ -678,6 +679,21 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteSettings" TEXT NOT NULL DEFAULT '{}';
     -- {arrivalRadiusUrbanM, arrivalRadiusRuralM, workshopRadiusM, trackWhileWorking, finishRules:{...}}
 
+    -- Ficha postal del taller. Hasta ahora solo se guardaban las coordenadas,
+    -- pero la central necesita la dirección escrita para llamar, facturar y
+    -- decirle al cliente dónde va (los talleres de red no son SEA Tarragona).
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS address TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "postalCode" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS province TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS email TEXT;
+    -- Red comercial o franquicia a la que pertenece (Confortauto, Euromaster…).
+    -- No confundir con "networkParticipation", que es la adhesión a la red Mobilink.
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "commercialNetwork" TEXT;
+    -- Horario de apertura tal cual lo declara el taller, en texto libre
+    -- ("L-V 08:30-13:30|15:00-18:30; Sáb 09:00-13:00").
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "openingHours" TEXT;
+
     -- Resultado y datos de cierre reportados por el taller (Lite o externo)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resultCode" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resolutionNotes" TEXT;
@@ -844,6 +860,7 @@ export async function initConnect(): Promise<void> {
   `);
 
   await seedConnectDefaults();
+  await seedNetworkWorkshops();
 }
 
 /**
