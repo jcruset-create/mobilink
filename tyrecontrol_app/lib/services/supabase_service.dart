@@ -1356,7 +1356,13 @@ class TyreControlApi {
         final prof = (r['profundidad_mm'] as num?)?.toDouble();
         final pres = (r['presion_bar'] as num?)?.toDouble();
         if (prof == null && pres == null) continue;
-        out[nid] = RevisionDetalleDraft(posicionId: '', neumaticoId: nid, profundidadMm: prof, presionBar: pres);
+        // La fecha es la que decide si esta medición sigue valiendo o si la
+        // profundidad del propio neumático es más reciente (ver
+        // profundidadVigente en models.dart).
+        out[nid] = RevisionDetalleDraft(
+          posicionId: '', neumaticoId: nid, profundidadMm: prof, presionBar: pres,
+          medidoEn: DateTime.tryParse('${r['created_at'] ?? ''}'),
+        );
       }
       return out;
     } catch (_) {
