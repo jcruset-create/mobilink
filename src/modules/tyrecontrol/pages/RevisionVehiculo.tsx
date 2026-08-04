@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { profundidadVigente } from "../utils/profundidad";
 import { useSearchParams } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
@@ -69,7 +70,7 @@ export default function RevisionVehiculo() {
     const neu = m?.neumatico;
     if (!neu) return { ultimaProfundidad: null as number | null, presionRecomendada: null as number | null };
     const medicion = medicionesActuales[neu.id];
-    const ultimaProfundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? null;
+    const ultimaProfundidad = profundidadVigente(medicion, neu);
     const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
     const presionRecomendada = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
     return { ultimaProfundidad, presionRecomendada };

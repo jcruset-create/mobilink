@@ -490,9 +490,11 @@ export async function listarMontajesVehiculo(vehiculoId: string): Promise<Montaj
 // Última medición de profundidad/presión registrada en una revisión completada
 // para cada neumático de este vehículo (para mostrarla en el plano en vez del
 // dato de alta, que solo vale como referencia inicial).
-export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promise<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>> {
+export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promise<Record<string, { profundidad_mm: number | null; presion_bar: number | null; medido_en: string | null }>> {
   const { data: revs, error: e1 } = await supabase.from("revisiones_vehiculo")
-    .select("id").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
+    // created_at viaja porque hace falta saber si la medición es anterior a la
+    // profundidad del propio neumático (ver utils/profundidad.ts).
+    .select("id, created_at, fecha_revision").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
     .order("fecha_revision", { ascending: false }).order("created_at", { ascending: false });
   if (e1) throw new Error(e1.message);
   const ids = (revs ?? []).map((r) => r.id);
@@ -512,12 +514,21 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   const ordenRevision = new Map(ids.map((id, i) => [id, i]));
   const detsOrdenados = [...(dets ?? [])].sort((a, b) => (ordenRevision.get(a.revision_id) ?? 0) - (ordenRevision.get(b.revision_id) ?? 0));
 
-  const mapa: Record<string, { profundidad_mm: number | null; presion_bar: number | null }> = {};
+  // Fecha de cada revisión, para sellar la medición con la que le toca.
+  const fechaRevision = new Map((revs ?? []).map((r: any) =>
+    [r.id as string, (r.created_at ?? r.fecha_revision ?? null) as string | null]));
+
+  const mapa: Record<string, { profundidad_mm: number | null; presion_bar: number | null; medido_en: string | null }> = {};
   for (const d of detsOrdenados) {
     const nid = d.neumatico_id ?? (d.posicion_id ? neuPorPosicion.get(d.posicion_id) : null);
     if (!nid) continue;
-    const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null };
-    if (actual.profundidad_mm == null && d.profundidad_mm != null) actual.profundidad_mm = d.profundidad_mm;
+    const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null, medido_en: null };
+    if (actual.profundidad_mm == null && d.profundidad_mm != null) {
+      actual.profundidad_mm = d.profundidad_mm;
+      // La fecha es la de la revisión de la que sale la PROFUNDIDAD, que es el
+      // dato que se compara después.
+      actual.medido_en = fechaRevision.get(d.revision_id) ?? null;
+    }
     if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
     mapa[nid] = actual;
   }
