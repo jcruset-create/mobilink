@@ -450,6 +450,18 @@ export interface ConfigIdentificacion {
   exigir_identidad: boolean;
 }
 
+// Neumático al que le falta identidad y cuya medida sí debería llevarla.
+export interface PendienteIdentificar {
+  neumatico_id: string;
+  numero_interno: string | null;
+  marca: string | null;
+  medida: string | null;
+  profundidad_actual_mm: number | null;
+  estado: string;
+  matricula: string | null;
+  codigo_posicion: string | null;
+}
+
 // Excepción por medida del modo mixto.
 export interface IdentificacionMedida {
   empresa_id: string;

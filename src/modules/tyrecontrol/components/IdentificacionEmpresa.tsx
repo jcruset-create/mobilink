@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import {
   obtenerIdentificacionEmpresa, guardarIdentificacionEmpresa,
   listarIdentificacionMedida, guardarIdentificacionMedida, eliminarIdentificacionMedida,
-  coberturaIdentificacion, listarMedidas,
+  coberturaIdentificacion, pendientesIdentificar, listarMedidas,
 } from "../services/data";
-import type { IdentificacionMedida, MedidaNeumatico, ModoIdentificacion } from "../types";
+import type { IdentificacionMedida, MedidaNeumatico, ModoIdentificacion, PendienteIdentificar } from "../types";
 import { MODO_IDENTIFICACION_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "./ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -16,6 +16,11 @@ import { useTyreAuth } from "../contexts/TyreAuthContext";
 // app: así un cliente cambia de modo sin que nadie actualice la APK. Las
 // pantallas que hoy mandan la casilla a mano siguen mandando, hasta que se
 // migren a dejar decidir a la política.
+
+// El listado de pendientes es informativo: con una flota grande puede tener
+// cientos de filas y no aporta nada volcarlas todas en la ficha de la empresa.
+const LIMITE_PENDIENTES = 25;
+
 const MODOS: { valor: ModoIdentificacion; ayuda: string }[] = [
   { valor: "generico", ayuda: "Nada se identifica. Es como ha funcionado siempre." },
   { valor: "identificado", ayuda: "Toda goma lleva número de serie o RFID y se sigue una a una." },
@@ -36,18 +41,21 @@ export default function IdentificacionEmpresa({ empresaId }: { empresaId: string
   const [nuevaMedida, setNuevaMedida] = useState("");
 
   const [cobertura, setCobertura] = useState<{ total: number; conIdentidad: number } | null>(null);
+  const [pendientes, setPendientes] = useState<PendienteIdentificar[]>([]);
 
   async function cargar() {
-    const [c, exc, meds, cob] = await Promise.all([
+    const [c, exc, meds, cob, pend] = await Promise.all([
       obtenerIdentificacionEmpresa(empresaId).catch(() => null),
       listarIdentificacionMedida(empresaId).catch(() => [] as IdentificacionMedida[]),
       listarMedidas().catch(() => [] as MedidaNeumatico[]),
       coberturaIdentificacion(empresaId).catch(() => null),
+      pendientesIdentificar(empresaId).catch(() => [] as PendienteIdentificar[]),
     ]);
     if (c) { setModo(c.modo); setExigir(c.exigir_identidad); }
     setExcepciones(exc);
     setMedidas(meds);
     setCobertura(cob);
+    setPendientes(pend);
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [empresaId]);
 
@@ -55,6 +63,8 @@ export default function IdentificacionEmpresa({ empresaId }: { empresaId: string
     setGuardando(true); setMsg("");
     try {
       await guardarIdentificacionEmpresa(empresaId, { modo, exigir_identidad: exigir });
+      // El modo decide qué se reclama, así que la lista de pendientes cambia.
+      setPendientes(await pendientesIdentificar(empresaId).catch(() => []));
       setMsg("✔ Política guardada");
     } catch (e: any) { setMsg(e?.message || "Error al guardar"); } finally { setGuardando(false); }
   }
@@ -182,6 +192,43 @@ export default function IdentificacionEmpresa({ empresaId }: { empresaId: string
           <b className="text-slate-200">{cobertura.conIdentidad}</b> de {cobertura.total} neumáticos activos
           llevan número de serie o RFID ({pct}%).
           {pct < 100 && " El resto se irá identificando al montarlos."}
+        </div>
+      )}
+
+      {/* Pendientes: solo lo que la política reclama de verdad. En genérico
+          esta lista está vacía por definición. */}
+      {pendientes.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">
+            Pendientes de identificar ({pendientes.length})
+          </div>
+          <div className="mb-2 text-[11px] text-slate-500">
+            Su medida debería llevar identidad y no la tienen. El técnico puede ponérsela desde la APK,
+            en la ficha de la rueda, sin desmontarla.
+          </div>
+          <TableWrap>
+            <thead className="bg-slate-900"><tr>
+              <th className={thCls}>Neumático</th><th className={thCls}>Medida</th>
+              <th className={thCls}>Dónde está</th><th className={thCls}>mm</th>
+            </tr></thead>
+            <tbody>
+              {pendientes.slice(0, LIMITE_PENDIENTES).map((p) => (
+                <tr key={p.neumatico_id} className="border-t border-slate-700/60">
+                  <td className={tdCls + " font-semibold text-slate-200"}>{p.numero_interno ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>{p.medida ?? "—"}</td>
+                  <td className={tdCls + " text-slate-400"}>
+                    {p.matricula ? `${p.matricula} · ${p.codigo_posicion ?? "?"}` : "En almacén"}
+                  </td>
+                  <td className={tdCls + " text-slate-400"}>{p.profundidad_actual_mm ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+          {pendientes.length > LIMITE_PENDIENTES && (
+            <div className="mt-1 text-[11px] text-slate-500">
+              Se muestran las {LIMITE_PENDIENTES} primeras de {pendientes.length}.
+            </div>
+          )}
         </div>
       )}
     </div>

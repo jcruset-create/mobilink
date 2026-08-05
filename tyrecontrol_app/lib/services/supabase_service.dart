@@ -786,6 +786,25 @@ class TyreControlApi {
     });
   }
 
+  /// Pone identidad a una goma que YA está montada, sin desmontarla ni
+  /// cambiarle el estado. Rellena huecos; el servidor nunca pisa un RFID o una
+  /// serie que ya estuviera puesta.
+  static Future<void> identificarNeumatico({
+    required String neumaticoId,
+    String? rfidEpc,
+    String? numeroSerie,
+    String? dot,
+    String? observaciones,
+  }) async {
+    await _db.rpc('tc_identificar_neumatico', params: {
+      'p_neumatico': neumaticoId,
+      'p_rfid': (rfidEpc ?? '').trim().isEmpty ? null : rfidEpc!.trim(),
+      'p_serie': (numeroSerie ?? '').trim().isEmpty ? null : numeroSerie!.trim(),
+      'p_dot': (dot ?? '').trim().isEmpty ? null : dot!.trim(),
+      'p_obs': observaciones,
+    });
+  }
+
   /// Monta un producto del almacén en una posición (descuenta stock).
   /// [condicion] = 'nuevo' | 'usado'. En usado, [profundidadUsado] se guarda
   /// como profundidad actual del neumático.
