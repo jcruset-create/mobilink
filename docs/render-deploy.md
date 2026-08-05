@@ -45,6 +45,36 @@ envia estas variables a la plantilla: `1` cliente, `2` matricula y `3` trabajo.
 5. Cuando Render asigne la URL `https://...onrender.com`, pon ese valor en `PUBLIC_APP_URL`.
 6. Redepliega para que enlaces de cobro, seguimiento y callbacks usen la URL definitiva.
 
+## Dominio publico: `mobilink-solutions.com`
+
+El dominio de cara al cliente es `mobilink-solutions.com`. La URL `...onrender.com` sigue
+funcionando en paralelo como URL interna: **el servicio de Render no se renombra**, porque su
+nombre deja de ser visible en cuanto hay dominio propio, y renombrarlo mataria la URL antigua al
+instante rompiendo todas las APK ya instaladas.
+
+Importante: `getPublicAppBaseUrl` (`server/index.ts`) **descarta como interno** cualquier host
+que contenga `onrender.com`. Es decir, los enlaces de seguimiento e informe que se envian al
+cliente y el callback de estado de Twilio usan siempre el dominio publico, aunque
+`PUBLIC_APP_URL` apunte a Render. Si el DNS del dominio no apunta al servicio, esos enlaces
+quedan rotos y los WhatsApp no marcan entregado/leido.
+
+Pasos para dar de alta el dominio:
+
+1. Render, en el servicio: `Settings > Custom Domains > Add Custom Domain`. Anade
+   `mobilink-solutions.com` y `www.mobilink-solutions.com`.
+2. En el registrador del dominio, crea los registros DNS que indique Render: normalmente un
+   `A` del dominio raiz a `216.24.57.1` (o `ALIAS`/`ANAME` si el proveedor lo soporta) y un
+   `CNAME` de `www` al host `...onrender.com` del servicio.
+3. Espera a que Render verifique el dominio y emita el certificado TLS (automatico).
+4. Pon `PUBLIC_APP_URL=https://mobilink-solutions.com` y redepliega.
+5. Comprueba que `https://mobilink-solutions.com` carga el panel y que un enlace
+   `/seguimiento/<token>` abre bien.
+6. Solo cuando lo anterior funcione, recompila y redistribuye las APK (ya apuntan al dominio
+   nuevo en su `config.dart`).
+
+La variable opcional `CANONICAL_PUBLIC_URL` permite cambiar el dominio publico sin tocar codigo;
+si no se define, se usa `https://mobilink-solutions.com`.
+
 ## Supabase
 
 Render despliega solo la app web y el servidor Express. Las Edge Functions de Supabase (`supabase/functions`) se despliegan aparte desde Supabase CLI o desde el panel de Supabase.

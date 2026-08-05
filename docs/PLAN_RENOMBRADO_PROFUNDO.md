@@ -42,21 +42,30 @@ Assets con la marca antigua que requieren diseño gráfico nuevo:
 
 ## Tier B — Recomendado, requiere decisión previa
 
-### B1. URL pública `sea-tarragona.onrender.com` — `DECISIÓN` ⚠️ la más delicada
-- **Problema**: `flutter_app/lib/config.dart` y `tyrecontrol_app/lib/config.dart` llevan
-  la URL **incrustada**. Cambiar el nombre del servicio Render = URL nueva = **todas las
-  apps instaladas dejan de funcionar** hasta reinstalar.
-- **Opción recomendada — dominio propio** (p. ej. `api.mobilink.es`):
-  1. Comprar dominio y añadirlo como custom domain del servicio Render actual (la URL
-     onrender.com antigua SIGUE funcionando en paralelo → cero rotura).
-  2. Cambiar `kBackendUrl` en las apps al dominio nuevo, subir versión, recompilar APKs,
-     redistribuir con calma.
-  3. Cuando todas las instalaciones estén actualizadas, renombrar el servicio Render (o no:
-     con dominio propio el nombre interno da igual).
-- **Opción B — renombrar el servicio Render**: crea URL `mobilink-XXXX.onrender.com` y
-  **mata la antigua al instante**. Solo aceptable coordinando reinstalación inmediata de
-  todas las apps. No recomendada.
-- **Decisión pendiente**: ¿compramos dominio? ¿cuál?
+### B1. URL pública `sea-tarragona.onrender.com` — `CÓDIGO LISTO` ⏳ (2026-08-05)
+**Decidido: opción A — dominio propio `mobilink-solutions.com`.** El servicio de Render NO se
+renombra: con dominio propio el nombre interno da igual y la URL `onrender.com` sigue viva en
+paralelo, así que las apps ya instaladas no se rompen.
+
+- **Código ya cambiado** (commit del 2026-08-05): `kBackendUrl` en las 7 apps Flutter,
+  `vite.tecnicos.config.ts`, los *fallback* de `server/index.ts`, `.env.example` y la función
+  `alertas-email` de Supabase. Versiones de `pubspec.yaml` subidas.
+- **Pendiente de infraestructura (lo hace el usuario, en este orden):**
+  1. Render → servicio → *Settings → Custom Domains* → añadir `mobilink-solutions.com` y
+     `www.mobilink-solutions.com`.
+  2. DNS en el registrador: `A` del dominio raíz → `216.24.57.1` (o ALIAS/ANAME) y `CNAME` de
+     `www` al host `.onrender.com` que indique Render. **Ahora mismo el dominio resuelve a
+     `216.198.79.1`, que no es Render** — hay que corregirlo.
+  3. Esperar verificación + certificado TLS automático.
+  4. `PUBLIC_APP_URL=https://mobilink-solutions.com` en Render y redesplegar.
+  5. Solo entonces: recompilar los APK y redistribuirlos.
+- **Ojo — enlaces de cliente ya afectados:** `getPublicAppBaseUrl` descarta como interno
+  cualquier host `onrender.com`, así que los enlaces de seguimiento y los *callbacks* de estado
+  de Twilio **ya apuntan a `mobilink-solutions.com`**. Mientras el DNS no apunte a Render, esos
+  enlaces están rotos y los WhatsApp no marcan entregado/leído. El paso 2 lo arregla.
+- **Opción B descartada — renombrar el servicio Render**: crea `mobilink-XXXX.onrender.com` y
+  **mata la antigua al instante**. Solo aceptable coordinando reinstalación inmediata de todas
+  las apps. No recomendada.
 
 ### B2. Rutas web `/sea-core/*` → `/core/*` — `HECHO` ✅ (2026-07-19)
 - Rutas renombradas a `/core/*` y enlaces internos actualizados (SeaHub, CoreLayout,

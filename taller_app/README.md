@@ -1,7 +1,7 @@
 # Mobilink Taller (APK)
 
 App de gestión de taller: **asignación de tareas** a operarios y **menú de operario**
-para completarlas. Se conecta al backend Express (`https://sea-tarragona.onrender.com`)
+para completarlas. Se conecta al backend Express (`https://mobilink-solutions.com`)
 mediante los endpoints `/api/taller-operator/*`.
 
 ## Puesta en marcha (primera vez)

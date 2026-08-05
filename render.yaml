@@ -13,7 +13,11 @@ services:
         value: production
       - key: AGENDA_TIME_ZONE
         value: Europe/Madrid
+      # Dominio publico de cara al cliente. Se configura en el panel de Render
+      # junto con el custom domain (ver docs/render-deploy.md).
       - key: PUBLIC_APP_URL
+        sync: false
+      - key: CANONICAL_PUBLIC_URL
         sync: false
       - key: DATABASE_URL
         sync: false

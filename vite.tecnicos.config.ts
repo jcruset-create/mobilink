@@ -23,7 +23,7 @@ export default defineConfig({
     "import.meta.env.VITE_NATIVE_MOBILE_APP": JSON.stringify("true"),
     // URL del servidor de producción — la app nativa apunta aquí
     "import.meta.env.VITE_API_BASE": JSON.stringify(
-      process.env.VITE_API_BASE || "https://sea-tarragona.onrender.com"
+      process.env.VITE_API_BASE || "https://mobilink-solutions.com"
     ),
   },
 });

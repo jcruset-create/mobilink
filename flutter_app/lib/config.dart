@@ -1,1 +1,1 @@
-const String kBackendUrl = 'https://sea-tarragona.onrender.com';
+const String kBackendUrl = 'https://mobilink-solutions.com';

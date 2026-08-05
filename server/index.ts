@@ -792,7 +792,12 @@ function getWhatsAppFromNumber() {
 
 // Dominio público de cara al cliente (enlaces de seguimiento/informe por WhatsApp).
 // Debe estar configurado como dominio personalizado en Render + DNS apuntando al servicio.
-const CANONICAL_PUBLIC_URL = "https://mobilink-solutions.com";
+//
+// Se toma de PUBLIC_APP_URL cuando es un dominio real; esta constante es solo el
+// último recurso si esa variable falta o apunta a un host interno (onrender/localhost).
+const CANONICAL_PUBLIC_URL = String(
+  process.env.CANONICAL_PUBLIC_URL || "https://mobilink-solutions.com"
+).replace(/\/+$/, "");
 
 function isInternalHost(url: string): boolean {
   return /onrender\.com|localhost|127\.0\.0\.1|tu-app/i.test(url);
@@ -811,7 +816,7 @@ function getPublicAppBaseUrl(req: express.Request, preferredUrl?: unknown) {
     return preferred.replace(/\/+$/, "");
   }
 
-  // 3) Dominio canónico de Mobilink (evita mostrar sea-tarragona.onrender.com al cliente)
+  // 3) Dominio canónico de Mobilink (evita mostrar la URL interna de Render al cliente)
   return CANONICAL_PUBLIC_URL;
 }
 
@@ -11636,7 +11641,7 @@ app.post(
       // Validate Twilio signature
       const authToken = process.env.TWILIO_AUTH_TOKEN ?? "";
       const twilioSig = req.headers["x-twilio-signature"] as string | undefined;
-      const fullUrl = `${process.env.PUBLIC_APP_URL ?? "https://sea-tarragona.onrender.com"}/api/whatsapp/inbound`;
+      const fullUrl = `${process.env.PUBLIC_APP_URL || CANONICAL_PUBLIC_URL}/api/whatsapp/inbound`;
 
       if (authToken && twilioSig) {
         const valid = twilio.validateRequest(authToken, twilioSig, fullUrl, req.body);
@@ -13860,7 +13865,7 @@ async function enviarWhatsAppRecobro(
   const contentSid = String(process.env[contentSidEnv] || "").trim();
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) throw new Error("Twilio no configurado");
   if (!contentSid) throw new Error(`Falta la plantilla ${contentSidEnv}`);
-  const baseUrl = String(process.env.PUBLIC_APP_URL || "https://sea-tarragona.onrender.com").replace(/\/+$/, "");
+  const baseUrl = String(process.env.PUBLIC_APP_URL || CANONICAL_PUBLIC_URL).replace(/\/+$/, "");
   const message = await twilioClient.messages.create({
     from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
     to: `whatsapp:+${telefono}`,
