@@ -128,10 +128,11 @@ export default function AlmacenUsados() {
   // Los errores del RPC vienen con el prefijo del código; para pantalla sobra.
   const limpiar = (t: string) => t.replace(/^REESCULTURA_[A-Z_]+:\s*/, "");
 
-  // Si los dos mundos no cuadran es el doble conteo: la misma goma contada como
-  // ficha y como unidad anónima de movimientos_stock (ver Decisión 1 en
-  // docs/PROMPT_almacen_usados_individual.md).
-  const desfase = resumen ? Number(resumen.unidades_stock) - Number(resumen.fichas) : 0;
+  // Decisión 1, opción A: el usado se cuenta por fichas y NO genera apuntes en
+  // movimientos_stock, así que su saldo tiene que ser cero. Si queda algo, son
+  // los apuntes viejos del doble conteo, pendientes de regularizar
+  // (tc_migrar_usados_a_fichas).
+  const pendienteRegularizar = resumen ? Number(resumen.unidades_stock) > 0 : false;
 
   return (
     <div>
@@ -148,15 +149,17 @@ export default function AlmacenUsados() {
           <Tarjeta titulo="En almacén" valor={resumen.fichas} pie="gomas con ficha propia" />
           <Tarjeta titulo="Identificadas" valor={resumen.con_identidad} pie="con RFID o nº de serie" />
           <Tarjeta titulo="Reesculturadas" valor={resumen.reesculturadas} pie="se les ha añadido dibujo" />
-          <Tarjeta titulo="Según el stock" valor={Number(resumen.unidades_stock)} pie="unidades en movimientos_stock" />
+          <Tarjeta titulo="Apuntes pendientes" valor={Number(resumen.unidades_stock)} pie="usados aún en movimientos_stock" />
         </div>
       )}
 
-      {desfase !== 0 && (
+      {pendienteRegularizar && (
         <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
-          <b>Los dos recuentos no cuadran</b> ({resumen?.fichas} fichas frente a {Number(resumen?.unidades_stock)} unidades
-          de stock). Es el doble conteo: al desmontar a almacén la goma queda como ficha propia <i>y</i> además suma
-          una unidad anónima en <code>movimientos_stock</code>. Está pendiente de decidir cuál de los dos manda.
+          <b>Quedan {Number(resumen?.unidades_stock)} usados apuntados en el inventario</b> de cuando se contaban
+          por cantidades. Ahora cada goma usada es su ficha, así que esos apuntes están de más: son las mismas
+          gomas contadas dos veces. Se ponen a cero ejecutando{" "}
+          <code>select tc_migrar_usados_a_fichas('empresa', false)</code>; sin el <code>false</code> solo simula
+          y te dice cuántos son.
         </div>
       )}
 
