@@ -24,6 +24,7 @@ type Workshop = {
   networkParticipation: boolean; liteCode: string | null;
   address: string | null; postalCode: string | null; city: string | null; province: string | null;
   email: string | null; commercialNetwork: string | null; openingHours: string | null;
+  notes: string | null;
 };
 
 /** Dirección postal en una línea, saltando lo que el taller no tenga informado. */
@@ -109,7 +110,7 @@ export default function FichaTaller() {
       />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
-      {(direccionCompleta(w) || w.email || w.openingHours) && (
+      {(direccionCompleta(w) || w.email || w.openingHours || w.notes) && (
         <Card className="mb-3 flex flex-wrap gap-x-8 gap-y-2 p-4 text-[13px]">
           {direccionCompleta(w) && (
             <div>
@@ -127,6 +128,12 @@ export default function FichaTaller() {
             <div>
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Horario</div>
               <div className="text-slate-200">{w.openingHours}</div>
+            </div>
+          )}
+          {w.notes && (
+            <div className="w-full">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Observaciones</div>
+              <div className="whitespace-pre-line text-slate-200">{w.notes}</div>
             </div>
           )}
         </Card>
