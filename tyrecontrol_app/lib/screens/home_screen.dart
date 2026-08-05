@@ -99,6 +99,7 @@ class _InicioTab extends StatelessWidget {
             // botón) y repetirlo aquí despistaría.
             icon: Icons.swap_horiz,
             label: 'Operaciones',
+            color: AppColors.tileGris,
             onTap: () async {
               await Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => const IdentifyVehicleScreen(destino: DestinoVehiculo.operaciones)));
@@ -202,13 +203,15 @@ class _BigTile extends StatelessWidget {
   final String label;
   final bool primary;
   final bool small;
+  /// Fondo propio para este boton. Sin el, se usa el de siempre.
+  final Color? color;
   final VoidCallback onTap;
 
-  const _BigTile({required this.icon, required this.label, required this.onTap, this.primary = false, this.small = false});
+  const _BigTile({required this.icon, required this.label, required this.onTap, this.primary = false, this.small = false, this.color});
 
   @override
   Widget build(BuildContext context) {
-    final bg = primary ? AppColors.primary : AppColors.surface;
+    final bg = color ?? (primary ? AppColors.primary : AppColors.surface);
     final fg = primary ? AppColors.onPrimary : AppColors.textPrimary;
     return Material(
       color: bg,
@@ -222,7 +225,9 @@ class _BigTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: primary ? null : Border.all(color: AppColors.cardBorder),
+            // Con fondo propio no se pinta borde: el de las tarjetas normales
+            // es mas oscuro que el gris y quedaria como un cerco.
+            border: (primary || color != null) ? null : Border.all(color: AppColors.cardBorder),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,

@@ -27,6 +27,10 @@ class AppColors {
 
   static const disabledBtn = Color(0xFF2A3441);
 
+  // Gris de los botones de portada que no son la accion principal ni una
+  // alerta: se distingue de la tarjeta normal (surface) sin llamar la atencion.
+  static const tileGris = Color(0xFF4B5563);
+
   // Estados de posicion de neumatico (color + significado, nunca solo color)
   static const tirePendiente    = Color(0xFF4B5563); // gris
   static const tireSeleccionado = Color(0xFF3B82F6); // azul
