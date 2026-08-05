@@ -10,6 +10,7 @@ import '../services/probe_session.dart';
 import '../services/tlgx_probe_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/campo_identidad.dart';
 import '../widgets/etiqueta_neumatico.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
@@ -2023,8 +2024,6 @@ class _DialogoMontajeState extends State<_DialogoMontaje> {
   final _mm = TextEditingController();
   final _rfid = TextEditingController();
   final _serie = TextEditingController();
-  bool _leyendo = false;
-  String _aviso = '';
 
   @override
   void dispose() {
@@ -2032,28 +2031,6 @@ class _DialogoMontajeState extends State<_DialogoMontaje> {
     _rfid.dispose();
     _serie.dispose();
     super.dispose();
-  }
-
-  Future<void> _leerEtiqueta() async {
-    setState(() { _leyendo = true; _aviso = ''; });
-    try {
-      final msg = await ProbeSession.instance.leerEpc();
-      if (!mounted) return;
-      setState(() {
-        if (msg.hayEtiqueta && (msg.epc ?? '').isNotEmpty) {
-          _rfid.text = msg.epc!;
-          _aviso = 'Etiqueta leída';
-        } else if (msg.status == RfidStatus.timeout) {
-          _aviso = 'No se ha encontrado etiqueta. Acerca la sonda al flanco.';
-        } else {
-          _aviso = 'No se ha podido leer${msg.error != null ? ': ${msg.error}' : ''}';
-        }
-      });
-    } catch (e) {
-      if (mounted) setState(() => _aviso = 'Error al leer: $e');
-    } finally {
-      if (mounted) setState(() => _leyendo = false);
-    }
   }
 
   _DatosMontaje _resultado() => _DatosMontaje(
@@ -2064,7 +2041,6 @@ class _DialogoMontajeState extends State<_DialogoMontaje> {
 
   @override
   Widget build(BuildContext context) {
-    final sonda = ProbeSession.instance;
     return AlertDialog(
       title: Text(widget.pideProfundidad ? 'Profundidad restante' : 'Identificar el neumático'),
       content: SizedBox(
@@ -2078,45 +2054,8 @@ class _DialogoMontajeState extends State<_DialogoMontaje> {
                 labelText: 'Profundidad', suffixText: 'mm', hintText: 'p. ej. 8.5'),
             ),
           if (widget.pideProfundidad && widget.pideIdentidad) const Divider(height: 24),
-          if (widget.pideIdentidad) ...[
-            Row(children: [
-              Expanded(
-                child: TextField(
-                  controller: _rfid,
-                  autofocus: !widget.pideProfundidad,
-                  decoration: const InputDecoration(labelText: 'RFID', hintText: 'o lee la etiqueta'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Sin sonda enganchada no se ofrece el botón: siempre queda el
-              // número de serie a mano.
-              if (sonda.puedeLeerRfid)
-                FilledButton.icon(
-                  onPressed: _leyendo ? null : _leerEtiqueta,
-                  icon: Icon(_leyendo ? Icons.bluetooth_searching : Icons.nfc, size: 18),
-                  label: Text(_leyendo ? 'Leyendo…' : 'Leer'),
-                ),
-            ]),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _serie,
-              decoration: const InputDecoration(labelText: 'Número de serie', hintText: 'si no hay etiqueta'),
-            ),
-            if (!sonda.puedeLeerRfid)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text('Sonda no conectada: teclea el número de serie.',
-                    style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-              ),
-            if (_aviso.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(_aviso,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: _aviso == 'Etiqueta leída' ? AppColors.success : AppColors.warning)),
-              ),
-          ],
+          if (widget.pideIdentidad)
+            CampoIdentidad(rfid: _rfid, serie: _serie, autofocus: !widget.pideProfundidad),
         ]),
       ),
       actions: [

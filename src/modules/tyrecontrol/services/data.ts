@@ -10,7 +10,7 @@ import type {
   TipoIncidencia, TipoIncidenciaInput, MotivoPendiente, MotivoPendienteInput,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
-  ConfigIdentificacion, IdentificacionMedida, ModoIdentificacion,
+  ConfigIdentificacion, IdentificacionMedida, ModoIdentificacion, PendienteIdentificar,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
@@ -1703,6 +1703,14 @@ export async function eliminarIdentificacionMedida(empresaId: string, medida: st
   const { error } = await supabase.from("tc_config_identificacion_medida")
     .delete().eq("empresa_id", empresaId).eq("medida", medida);
   if (error) throw new Error(error.message);
+}
+
+// Neumáticos que la política dice que deberían llevar identidad y no la
+// llevan. En modo genérico la lista sale vacía: nadie tiene nada pendiente.
+export async function pendientesIdentificar(empresaId: string): Promise<PendienteIdentificar[]> {
+  const { data, error } = await supabase.rpc("tc_pendientes_identificar", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PendienteIdentificar[];
 }
 
 // Cuántos neumáticos activos de la empresa llevan identidad de verdad. Es la
