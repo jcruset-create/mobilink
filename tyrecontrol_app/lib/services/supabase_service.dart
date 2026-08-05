@@ -758,6 +758,34 @@ class TyreControlApi {
     }
   }
 
+  /// Quién es la goma que se acaba de leer, sin lanzar excepción: sirve para
+  /// pintar el diálogo del conflicto. De una ficha de otra empresa el servidor
+  /// solo dice que existe.
+  static Future<Map<String, dynamic>?> neumaticoPorIdentidad({
+    required String empresaId, String? rfidEpc, String? numeroSerie,
+  }) async {
+    try {
+      final r = await _db.rpc('tc_neumatico_por_identidad', params: {
+        'p_empresa': empresaId,
+        'p_rfid': (rfidEpc ?? '').trim().isEmpty ? null : rfidEpc!.trim(),
+        'p_serie': (numeroSerie ?? '').trim().isEmpty ? null : numeroSerie!.trim(),
+      });
+      return r == null ? null : Map<String, dynamic>.from(r as Map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Registra el desmontaje que no se llegó a apuntar, para poder montar la
+  /// goma donde está de verdad. NO devuelve stock: la rueda no ha pasado por
+  /// el almacén, va de un camión al otro.
+  static Future<void> regularizarDesmontaje(String neumaticoId, {String? observaciones}) async {
+    await _db.rpc('tc_regularizar_desmontaje', params: {
+      'p_neumatico': neumaticoId,
+      'p_obs': observaciones,
+    });
+  }
+
   /// Monta un producto del almacén en una posición (descuenta stock).
   /// [condicion] = 'nuevo' | 'usado'. En usado, [profundidadUsado] se guarda
   /// como profundidad actual del neumático.

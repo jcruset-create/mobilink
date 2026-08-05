@@ -473,11 +473,19 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
     setState(() => _trabajando = true);
     try {
-      final neuId = await TyreControlApi.montarDesdeAlmacen(
-        vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
-        condicion: d.condicion, profundidadUsado: datos.mm,
-        rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie,
-      );
+      String? neuId;
+      try {
+        neuId = await _montarStock(d, p, datos);
+      } on Exception catch (e) {
+        // Consta montada en otro camión: se ofrece resolverlo y se reintenta
+        // UNA vez. Si vuelve a fallar, el error sale tal cual.
+        if (!'$e'.contains('IDENTIDAD_YA_MONTADA')) rethrow;
+        setState(() => _trabajando = false);
+        final resuelto = await _ofrecerRegularizar(datos);
+        if (!resuelto || !mounted) return;
+        setState(() => _trabajando = true);
+        neuId = await _montarStock(d, p, datos);
+      }
       _posicionesMontadas.add(p.id);
       HapticFeedback.mediumImpact();
       await _cargar();
@@ -486,6 +494,13 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     } catch (e) { _aviso('Error al montar: ${_mensajeError(e)}', ok: false); }
     finally { if (mounted) setState(() => _trabajando = false); }
   }
+
+  Future<String?> _montarStock(_DragStock d, PosicionVehiculo p, _DatosMontaje datos) =>
+      TyreControlApi.montarDesdeAlmacen(
+        vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
+        condicion: d.condicion, profundidadUsado: datos.mm,
+        rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie,
+      );
 
   /// Confirma al técnico que la goma se ha RECONOCIDO en vez de darla de alta
   /// otra vez. Es lo que hace visible que la trazabilidad funciona; sin esto,
@@ -524,6 +539,50 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         pideIdentidad: pideIdentidad,
       ),
     );
+  }
+
+  /// La goma leída consta montada en otro camión: casi siempre significa que
+  /// aquel desmontaje no se registró. En vez de dejar al técnico atascado con
+  /// la rueda en la mano, se le enseña el conflicto y decide él.
+  ///
+  /// Devuelve true si ha confirmado y la regularización ha ido bien, de modo
+  /// que quien llama pueda reintentar el montaje.
+  Future<bool> _ofrecerRegularizar(_DatosMontaje datos) async {
+    if (_empresaId == null) return false;
+    final info = await TyreControlApi.neumaticoPorIdentidad(
+      empresaId: _empresaId!, rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie);
+    final id = info?['id'] as String?;
+    if (!mounted || id == null) return false;
+
+    final matricula = (info?['matricula'] as String?) ?? '?';
+    final pos = (info?['codigo_posicion'] as String?) ?? '?';
+    final numero = (info?['numero_interno'] as String?) ?? '';
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Esa goma consta en otro camión'),
+        content: Text(
+          'El $numero figura montado en el $matricula, posición $pos.\n\n'
+          'Si la tienes aquí, es que aquel desmontaje no se registró. '
+          '¿La quito de ahí y la monto en este vehículo?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Quitar y montar')),
+        ],
+      ),
+    );
+    if (ok != true) return false;
+
+    try {
+      await TyreControlApi.regularizarDesmontaje(id,
+          observaciones: 'Regularizado desde la APK al montar en $_matricula');
+      return true;
+    } catch (e) {
+      _aviso('No se ha podido regularizar: ${_mensajeError(e)}', ok: false);
+      return false;
+    }
   }
 
   /// Traduce los errores de identidad del servidor a algo accionable en el
@@ -1656,15 +1715,26 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
     setState(() => _trabajando = true);
     try {
-      final neuId = await TyreControlApi.montarDesdeCatalogo(
-        vehiculoId: widget.vehiculoId,
-        posicionId: p.id,
-        referenciaId: refId,
-        condicion: condicion,
-        profundidadUsado: datos.mm,
-        rfidEpc: datos.rfidEpc,
-        numeroSerie: datos.numeroSerie,
-      );
+      Future<String?> montar() => TyreControlApi.montarDesdeCatalogo(
+            vehiculoId: widget.vehiculoId,
+            posicionId: p.id,
+            referenciaId: refId,
+            condicion: condicion,
+            profundidadUsado: datos.mm,
+            rfidEpc: datos.rfidEpc,
+            numeroSerie: datos.numeroSerie,
+          );
+      String? neuId;
+      try {
+        neuId = await montar();
+      } on Exception catch (e) {
+        if (!'$e'.contains('IDENTIDAD_YA_MONTADA')) rethrow;
+        setState(() => _trabajando = false);
+        final resuelto = await _ofrecerRegularizar(datos);
+        if (!resuelto || !mounted) return;
+        setState(() => _trabajando = true);
+        neuId = await montar();
+      }
       _posicionesMontadas.add(p.id);
       HapticFeedback.mediumImpact();
       await _cargar();
