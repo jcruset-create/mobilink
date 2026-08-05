@@ -450,6 +450,34 @@ export interface ConfigIdentificacion {
   exigir_identidad: boolean;
 }
 
+// Una goma concreta en el almacén: identidad, milímetros y de dónde viene.
+export interface UsadoEnAlmacen {
+  neumatico_id: string;
+  numero_interno: string | null;
+  numero_serie: string | null;
+  rfid_epc: string | null;
+  dot: string | null;
+  marca: string | null;
+  modelo: string | null;
+  medida: string | null;
+  profundidad_actual_mm: number | null;
+  profundidad_actualizada_en: string | null;
+  reesculturado: boolean;
+  estado: string;
+  origen: string | null;
+  fecha_desmontaje: string | null;
+  matricula_anterior: string | null;
+  km_acumulados: number | null;
+}
+
+// Cuántas gomas hay según cada mundo. Si no cuadran, es el doble conteo.
+export interface ResumenAlmacenUsados {
+  fichas: number;
+  con_identidad: number;
+  reesculturadas: number;
+  unidades_stock: number;
+}
+
 // Neumático al que le falta identidad y cuya medida sí debería llevarla.
 export interface PendienteIdentificar {
   neumatico_id: string;

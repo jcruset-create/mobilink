@@ -11,6 +11,7 @@ import type {
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
   ConfigIdentificacion, IdentificacionMedida, ModoIdentificacion, PendienteIdentificar,
+  UsadoEnAlmacen, ResumenAlmacenUsados,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
@@ -1711,6 +1712,31 @@ export async function pendientesIdentificar(empresaId: string): Promise<Pendient
   const { data, error } = await supabase.rpc("tc_pendientes_identificar", { p_empresa: empresaId });
   if (error) throw new Error(error.message);
   return (data ?? []) as PendienteIdentificar[];
+}
+
+// ── Almacén de usados ───────────────────────────────────────────────────────
+// Gomas concretas que están en el almacén, con su identidad y sus milímetros.
+// Vienen ordenadas por dibujo restante: la que mejor casa con un eje, primero.
+export async function listarUsadosAlmacen(empresaId: string): Promise<UsadoEnAlmacen[]> {
+  const { data, error } = await supabase.rpc("tc_almacen_usados", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UsadoEnAlmacen[];
+}
+
+export async function resumenUsadosAlmacen(empresaId: string): Promise<ResumenAlmacenUsados | null> {
+  const { data, error } = await supabase.rpc("tc_almacen_usados_resumen", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  const filas = (data ?? []) as ResumenAlmacenUsados[];
+  return filas[0] ?? null;
+}
+
+// Reescultura de una goma YA DESMONTADA. Para las montadas está el plan de
+// trabajo, que las reesculpe en el camión sin sacarlas del vehículo.
+export async function reesculturarEnAlmacen(neumaticoId: string, profundidadMm: number, obs?: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_reesculturar_en_almacen", {
+    p_neumatico: neumaticoId, p_profundidad_mm: profundidadMm, p_obs: obs ?? null,
+  });
+  if (error) throw new Error(error.message);
 }
 
 // Cuántos neumáticos activos de la empresa llevan identidad de verdad. Es la
