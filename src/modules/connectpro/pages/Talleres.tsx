@@ -4,8 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
-import CapturaWhatsApp, { type ImportacionTalleres, type TallerPropuesto } from "../components/CapturaWhatsApp";
-import ConfirmarImportacionIA, { type PropuestaIA } from "../components/ConfirmarImportacionIA";
+import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
   WORKSHOP_TIER, WORKSHOP_TIER_LABELS, WORKSHOP_TIER_STYLES, fmtDateTime,
   type ProviderCompany, type WorkshopIntegrationType,
@@ -40,21 +39,6 @@ const FORM_VACIO = {
   province: "", email: "", openingHours: "", services: "", notes: "",
 };
 
-/** Campos del alta que la importación por WhatsApp sabe rellenar. */
-const CAMPOS_IMPORTABLES: Array<{ key: keyof typeof FORM_VACIO; label: string }> = [
-  { key: "name", label: "Nombre del taller" },
-  { key: "commercialNetwork", label: "Red comercial" },
-  { key: "address", label: "Dirección" },
-  { key: "postalCode", label: "Código postal" },
-  { key: "city", label: "Municipio" },
-  { key: "province", label: "Provincia" },
-  { key: "latitude", label: "Latitud" },
-  { key: "longitude", label: "Longitud" },
-  { key: "phone", label: "Teléfono" },
-  { key: "email", label: "Email" },
-  { key: "openingHours", label: "Horario" },
-  { key: "services", label: "Servicios (códigos)" },
-];
 
 /** Panel de gestión del taller Lite: operarios, dispositivos y código de acceso. */
 export function LitePanel({ workshop, canEdit, onError }: {
@@ -220,8 +204,6 @@ export default function Talleres() {
   const [busy, setBusy] = useState(false);
   const [openLite, setOpenLite] = useState<number | null>(null);
   const [form, setForm] = useState(FORM_VACIO);
-  const [importacion, setImportacion] = useState<ImportacionTalleres | null>(null);
-  const [revisando, setRevisando] = useState<TallerPropuesto | null>(null);
   const formRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(() => {
@@ -261,44 +243,32 @@ export default function Talleres() {
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
-  /** Valor propuesto para un campo del alta, ya como texto del formulario. */
-  const valorPropuesto = (t: TallerPropuesto, key: keyof typeof FORM_VACIO): string => {
-    if (key === "services") return t.campos.services.join(", ");
-    const v = (t.campos as Record<string, unknown>)[key];
-    return v == null ? "" : String(v);
-  };
-
-  const propuestasDe = (t: TallerPropuesto): PropuestaIA[] =>
-    CAMPOS_IMPORTABLES
-      .map(({ key, label }) => ({ key, label, valor: valorPropuesto(t, key), actual: form[key] === FORM_VACIO[key] ? "" : form[key] }))
-      .filter((p) => p.valor !== "");
+  /** Lo que ya hay escrito, para que la ventana avise de lo que pisaría. */
+  const valoresActuales = Object.fromEntries(
+    CAMPOS_IMPORTABLES.map(({ key }) => [key, form[key] === FORM_VACIO[key] ? "" : form[key]]),
+  );
 
   /**
    * Lo confirmado entra en el formulario de alta; el taller no se crea hasta
    * que el operador revisa la ficha completa y pulsa Añadir.
    */
-  const aplicarImportacion = (campos: Record<string, string>, extras: Array<{ campo: string; valor: string }>) => {
-    const empresa = revisando?.campos.companyName
-      ? providers.find((p) => p.name.trim().toLowerCase() === revisando.campos.companyName!.trim().toLowerCase())
-      : undefined;
-    const observaciones = extras.map((x) => `${x.campo}: ${x.valor}`);
-
+  const aplicarImportacion = (r: ImportacionConfirmada) => {
     setForm((f) => {
       const siguiente = { ...f };
       for (const { key } of CAMPOS_IMPORTABLES) {
-        if (campos[key] != null) siguiente[key] = campos[key];
+        const v = r.campos[key];
+        if (v != null) siguiente[key] = v;
       }
-      if (empresa && !siguiente.providerCompanyId) siguiente.providerCompanyId = String(empresa.id);
-      if (observaciones.length) {
-        siguiente.notes = [siguiente.notes, ...observaciones].filter(Boolean).join("\n");
+      if (r.providerCompanyId && !siguiente.providerCompanyId) {
+        siguiente.providerCompanyId = String(r.providerCompanyId);
       }
+      if (r.observaciones) siguiente.notes = [siguiente.notes, r.observaciones].filter(Boolean).join("\n");
       return siguiente;
     });
 
-    if (revisando?.campos.companyName && !empresa) {
-      setError(`La empresa "${revisando.campos.companyName}" no existe en Central: créala en Empresas o elige otra antes de dar de alta el taller.`);
+    if (r.empresaDesconocida) {
+      setError(`La empresa "${r.empresaDesconocida}" no existe en Central: créala en Empresas o elige otra antes de dar de alta el taller.`);
     }
-    setRevisando(null);
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -319,69 +289,10 @@ export default function Talleres() {
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
       {canEdit && (
-        <CapturaWhatsApp
-          purpose="workshop"
-          onTalleres={(r) => { setImportacion(r); if (r.data.length === 1) setRevisando(r.data[0]); }}
-        />
-      )}
-
-      {importacion && (importacion.data.length > 0 || importacion.avisos.length > 0) && (
-        <Card className="mb-4 border-cyan-500/30 p-4">
-          <h2 className="mb-2 text-sm font-semibold text-cyan-300">
-            Talleres detectados en el WhatsApp ({importacion.data.length})
-          </h2>
-          {importacion.resumen && <p className="mb-2 text-[13px] text-slate-400">{importacion.resumen}</p>}
-
-          {importacion.avisos.map((a, i) => (
-            <p key={i} className="mb-1 text-[13px] text-amber-300">⚠ {a}</p>
-          ))}
-
-          <div className="mt-2 flex flex-col gap-2">
-            {importacion.data.map((t, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-semibold text-slate-100">{t.campos.name ?? "(sin nombre)"}</div>
-                  <div className="text-[12px] text-slate-500">
-                    {[t.campos.city, t.campos.province, t.campos.phone].filter(Boolean).join(" · ") || "Sin ubicación ni teléfono"}
-                  </div>
-                  {t.duplicados.length > 0 && (
-                    <div className="text-[12px] text-amber-300">
-                      Posible duplicado de {t.duplicados.map((d) => `${d.name} (${d.motivos.join(", ")})`).join("; ")}
-                    </div>
-                  )}
-                </div>
-                {t.confidence && (
-                  <Badge className={
-                    t.confidence === "high" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                    : t.confidence === "medium" ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-                    : "border-red-500/40 bg-red-500/10 text-red-300"
-                  }>
-                    Confianza: {t.confidence === "high" ? "alta" : t.confidence === "medium" ? "media" : "baja"}
-                  </Badge>
-                )}
-                <Button onClick={() => setRevisando(t)}>Revisar</Button>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3">
-            <Button variant="ghost" onClick={() => setImportacion(null)}>Descartar la importación</Button>
-          </div>
-        </Card>
-      )}
-
-      {revisando && (
-        <ConfirmarImportacionIA
-          origen={`WhatsApp · ${revisando.campos.name ?? "taller sin nombre"}`}
-          propuestas={propuestasDe(revisando)}
-          extras={revisando.datosDetectados}
-          resumen={
-            revisando.duplicados.length
-              ? `Ojo: se parece a ${revisando.duplicados.map((d) => `${d.name} (${d.motivos.join(", ")})`).join("; ")}.`
-              : importacion?.resumen ?? null
-          }
-          confianza={revisando.confidence}
-          onCancelar={() => setRevisando(null)}
-          onConfirmar={aplicarImportacion}
+        <ImportarTallerWhatsApp
+          empresas={providers}
+          valoresActuales={valoresActuales}
+          onImportar={aplicarImportacion}
         />
       )}
 
