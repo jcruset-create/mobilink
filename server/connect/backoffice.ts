@@ -19,6 +19,7 @@ import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
 import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
+import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
@@ -772,6 +773,49 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  /**
+   * Propuestas de alta leídas de una captura de WhatsApp, ya en el formato de
+   * `connect_workshops` y con los posibles duplicados marcados. No crea nada:
+   * el alta la sigue confirmando el operador campo a campo.
+   */
+  router.get("/whatsapp-capture/:id/workshops", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT ai_suggestions, ai_status, ai_error FROM whatsapp_capture_sessions WHERE id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+
+    let bruto = r.rows[0].ai_suggestions;
+    if (typeof bruto === "string") { try { bruto = JSON.parse(bruto); } catch { bruto = null; } }
+    if (!bruto) {
+      return res.json({
+        data: [], avisos: [], resumen: null,
+        aiStatus: r.rows[0].ai_status, aiError: r.rows[0].ai_error,
+      });
+    }
+
+    const existentes = await db.query(
+      `SELECT id, name, phone, address, latitude, longitude FROM connect_workshops`,
+    );
+    const data = (Array.isArray(bruto.talleres) ? bruto.talleres : []).map((t: any) => {
+      const campos = normalizarPropuesta(t);
+      return {
+        campos,
+        duplicados: buscarDuplicados(campos, existentes.rows),
+        datosDetectados: Array.isArray(t.datosDetectados) ? t.datosDetectados : [],
+        confidence: ["high", "medium", "low"].includes(t.confidence) ? t.confidence : null,
+      };
+    });
+
+    res.json({
+      data,
+      avisos: Array.isArray(bruto.avisos) ? bruto.avisos : [],
+      resumen: typeof bruto.resumen === "string" ? bruto.resumen : null,
+      aiStatus: r.rows[0].ai_status,
+      aiError: r.rows[0].ai_error,
+    });
+  });
+
   router.post("/workshops", ...requireConnectRole("cc_admin"), async (req, res) => {
     const b = req.body ?? {};
     if (!b.name?.trim() || typeof b.latitude !== "number" || typeof b.longitude !== "number") {
@@ -781,16 +825,16 @@ export function createConnectBackofficeRouter(): Router {
     const r = await db.query(
       `INSERT INTO connect_workshops
          ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType",
-          address, "postalCode", city, province, email, "commercialNetwork", "openingHours",
+          address, "postalCode", city, province, email, "commercialNetwork", "openingHours", notes,
           "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19) RETURNING *`,
       [
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
         WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : "assist",
         b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
-        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null,
+        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null,
         now,
       ],
     );
@@ -830,6 +874,7 @@ export function createConnectBackofficeRouter(): Router {
          email = COALESCE($18, email),
          "commercialNetwork" = COALESCE($19, "commercialNetwork"),
          "openingHours" = COALESCE($20, "openingHours"),
+         notes = COALESCE($21, notes),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -841,7 +886,7 @@ export function createConnectBackofficeRouter(): Router {
        b.features ? JSON.stringify(b.features) : null,
        b.coreWorkshopId != null ? String(b.coreWorkshopId) : null,
        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
-       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null],
+       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -1340,6 +1385,8 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.post("/whatsapp-capture/start", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const assistanceId = req.body?.assistanceId != null ? Number(req.body.assistanceId) : null;
+    // 'workshop' cambia el prompt del análisis: alta de taller, no incidencia.
+    const purpose = req.body?.purpose === "workshop" ? "workshop" : "assistance";
 
     const activa = await activeCaptureSession();
     if (activa) {
@@ -1358,9 +1405,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
     const now = Date.now();
     const ins = await db.query(
-      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, status, started_at, created_by)
-       VALUES (NULL, $1, 'ACTIVE', $2, $3) RETURNING *`,
-      [assistanceId, now, u.name],
+      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, purpose, status, started_at, created_by)
+       VALUES (NULL, $1, $4, 'ACTIVE', $2, $3) RETURNING *`,
+      [assistanceId, now, u.name, purpose],
     );
     await auditConnect({
       req, action: "whatsapp.capture_started", resourceType: "assistance",
