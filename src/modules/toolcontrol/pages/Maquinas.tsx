@@ -12,6 +12,7 @@ type Maquina = {
   modelo: string | null;
   estado: string;
   activa: boolean;
+  foto_url: string | null;
   tc_categories: { nombre: string } | null;
   tc_locations: { nombre: string } | null;
 };
@@ -42,6 +43,8 @@ export default function Maquinas() {
   const [form, setForm] = useState<any>({ ...EMPTY });
   const [editId, setEditId] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [fotoFile, setFotoFile] = useState<File | null>(null);
+  const [fotoPreview, setFotoPreview] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
@@ -51,7 +54,7 @@ export default function Maquinas() {
   async function cargar() {
     setCargando(true);
     const [{ data: m }, { data: cats }, { data: ubics }] = await Promise.all([
-      supabase.from("tc_machines").select("id, codigo, nombre, marca, modelo, estado, activa, tc_categories(nombre), tc_locations!tc_machines_ubicacion_id_fkey(nombre)").eq("activa", true).order("nombre"),
+      supabase.from("tc_machines").select("id, codigo, nombre, marca, modelo, estado, activa, foto_url, category_id, ubicacion_id, numero_serie, descripcion, tc_categories(nombre), tc_locations!tc_machines_ubicacion_id_fkey(nombre)").eq("activa", true).order("nombre"),
       supabase.from("tc_categories").select("id, nombre").eq("activa", true).order("nombre"),
       supabase.from("tc_locations").select("id, nombre").eq("activa", true).order("nombre"),
     ]);
@@ -65,22 +68,47 @@ export default function Maquinas() {
     if (m) {
       setForm({ codigo: (m as any).codigo, nombre: m.nombre, marca: m.marca ?? "", modelo: m.modelo ?? "", estado: m.estado,
         category_id: (m as any).category_id ?? "", ubicacion_id: (m as any).ubicacion_id ?? "",
-        numero_serie: (m as any).numero_serie ?? "", descripcion: (m as any).descripcion ?? "" });
+        numero_serie: (m as any).numero_serie ?? "", descripcion: (m as any).descripcion ?? "",
+        foto_url: m.foto_url });
       setEditId(m.id);
+      setFotoPreview(m.foto_url);
     } else {
       setForm({ ...EMPTY });
       setEditId(null);
+      setFotoPreview(null);
     }
+    setFotoFile(null);
     setError("");
     setModal(true);
+  }
+
+  function elegirFoto(file: File | null) {
+    setFotoFile(file);
+    if (fotoPreview?.startsWith("blob:")) URL.revokeObjectURL(fotoPreview);
+    setFotoPreview(file ? URL.createObjectURL(file) : null);
+    if (!file) setForm((f: any) => ({ ...f, foto_url: null }));
   }
 
   async function guardar() {
     if (!form.codigo?.trim() || !form.nombre?.trim()) { setError("Código y nombre obligatorios."); return; }
     setGuardando(true);
+    let fotoUrl: string | null = form.foto_url ?? null;
+    if (fotoFile) {
+      const ext = fotoFile.name.split(".").pop()?.toLowerCase() || "jpg";
+      const ruta = `maquinas/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("toolcontrol-fotos")
+        .upload(ruta, fotoFile, { upsert: true });
+      if (upErr) {
+        setGuardando(false);
+        setError(`Error subiendo la foto: ${upErr.message}`);
+        return;
+      }
+      fotoUrl = supabase.storage.from("toolcontrol-fotos").getPublicUrl(ruta).data.publicUrl;
+    }
     const payload = { codigo: form.codigo.trim(), nombre: form.nombre.trim(), marca: form.marca || null, modelo: form.modelo || null,
       estado: form.estado, category_id: form.category_id || null, ubicacion_id: form.ubicacion_id || null,
-      numero_serie: form.numero_serie || null, descripcion: form.descripcion || null };
+      numero_serie: form.numero_serie || null, descripcion: form.descripcion || null, foto_url: fotoUrl };
     const { error: err } = editId
       ? await supabase.from("tc_machines").update(payload).eq("id", editId)
       : await supabase.from("tc_machines").insert(payload);
@@ -124,7 +152,14 @@ export default function Maquinas() {
               {filtradas.map((m) => (
                 <tr key={m.id} className="border-t border-slate-800 hover:bg-slate-800/50">
                   <td className="p-3 font-mono font-semibold text-slate-200">{m.codigo}</td>
-                  <td className="p-3 font-medium text-slate-100">{m.nombre}</td>
+                  <td className="p-3">
+                    <div className="flex items-center gap-2">
+                      {m.foto_url && (
+                        <img src={m.foto_url} alt="" className="h-9 w-9 shrink-0 rounded-lg border border-slate-700 object-cover" />
+                      )}
+                      <span className="font-medium text-slate-100">{m.nombre}</span>
+                    </div>
+                  </td>
                   <td className="p-3 text-slate-400">{[m.marca, m.modelo].filter(Boolean).join(" · ") || "—"}</td>
                   <td className="p-3 text-slate-400">{(m.tc_categories as any)?.nombre ?? "—"}</td>
                   <td className="p-3 text-slate-400">{(m.tc_locations as any)?.nombre ?? "—"}</td>
@@ -181,6 +216,42 @@ export default function Maquinas() {
                 <input value={form.numero_serie} onChange={(e) => setForm({ ...form, numero_serie: e.target.value })} className={INPUT} /></div>
               <div><label className={LABEL}>Descripción</label>
                 <textarea value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} className={INPUT} rows={2} /></div>
+              <div>
+                <label className={LABEL}>Foto</label>
+                <div className="mt-1 flex items-center gap-3">
+                  {fotoPreview ? (
+                    <img
+                      src={fotoPreview}
+                      alt="Foto de la máquina"
+                      className="h-20 w-20 rounded-lg border border-slate-700 object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-lg border border-dashed border-slate-700 text-xs text-slate-500">
+                      Sin foto
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2">
+                    <label className="cursor-pointer rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-center text-xs font-medium text-slate-200 hover:bg-slate-700">
+                      {fotoPreview ? "Cambiar foto" : "Subir foto"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => elegirFoto(e.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    {fotoPreview && (
+                      <button
+                        type="button"
+                        onClick={() => elegirFoto(null)}
+                        className="rounded-lg border border-red-500/30 bg-red-500/15 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/25"
+                      >
+                        Quitar foto
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
             {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
             <div className="mt-5 flex gap-2 justify-end">
