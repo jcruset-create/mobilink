@@ -77,6 +77,8 @@ export default function Herramientas() {
   const [form, setForm] = useState<any>({ ...EMPTY });
   const [editId, setEditId] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [fotoFile, setFotoFile] = useState<File | null>(null);
+  const [fotoPreview, setFotoPreview] = useState<string | null>(null);
 
   useEffect(() => { cargar(); }, []);
 
@@ -119,6 +121,8 @@ export default function Herramientas() {
   function abrirNueva() {
     setForm({ ...EMPTY });
     setEditId(null);
+    setFotoFile(null);
+    setFotoPreview(null);
     setError("");
     setModal(true);
   }
@@ -130,11 +134,20 @@ export default function Herramientas() {
       estado: h.estado, es_compartida: h.es_compartida,
       category_id: h.category_id ?? "", ubicacion_habitual_id: h.ubicacion_habitual_id ?? "",
       ubicacion_actual_id: h.ubicacion_actual_id ?? "", observaciones: h.observaciones ?? "",
-      activa: h.activa,
+      activa: h.activa, foto_url: h.foto_url,
     });
     setEditId(h.id);
+    setFotoFile(null);
+    setFotoPreview(h.foto_url);
     setError("");
     setModal(true);
+  }
+
+  function elegirFoto(file: File | null) {
+    setFotoFile(file);
+    if (fotoPreview?.startsWith("blob:")) URL.revokeObjectURL(fotoPreview);
+    setFotoPreview(file ? URL.createObjectURL(file) : null);
+    if (!file) setForm((f: any) => ({ ...f, foto_url: null }));
   }
 
   async function guardar() {
@@ -145,7 +158,23 @@ export default function Herramientas() {
     setGuardando(true);
     setError("");
 
+    let fotoUrl: string | null = form.foto_url ?? null;
+    if (fotoFile) {
+      const ext = fotoFile.name.split(".").pop()?.toLowerCase() || "jpg";
+      const ruta = `herramientas/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("toolcontrol-fotos")
+        .upload(ruta, fotoFile, { upsert: true });
+      if (upErr) {
+        setGuardando(false);
+        setError(`Error subiendo la foto: ${upErr.message}`);
+        return;
+      }
+      fotoUrl = supabase.storage.from("toolcontrol-fotos").getPublicUrl(ruta).data.publicUrl;
+    }
+
     const payload = {
+      foto_url:             fotoUrl,
       codigo:               form.codigo.trim(),
       nombre:               form.nombre.trim(),
       descripcion:          form.descripcion || null,
@@ -260,10 +289,21 @@ export default function Herramientas() {
                   <tr key={h.id} className="border-t border-slate-800 align-middle hover:bg-slate-800/50">
                     <td className="p-3 font-mono font-semibold text-slate-200">{h.codigo}</td>
                     <td className="p-3">
-                      <div className="font-medium text-slate-100">{h.nombre}</div>
-                      {h.es_compartida && (
-                        <span className="text-xs text-cyan-300">Compartida</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {h.foto_url && (
+                          <img
+                            src={h.foto_url}
+                            alt=""
+                            className="h-9 w-9 shrink-0 rounded-lg border border-slate-700 object-cover"
+                          />
+                        )}
+                        <div>
+                          <div className="font-medium text-slate-100">{h.nombre}</div>
+                          {h.es_compartida && (
+                            <span className="text-xs text-cyan-300">Compartida</span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className="p-3 text-slate-400">
                       {[h.marca, h.modelo].filter(Boolean).join(" · ") || "—"}
@@ -461,6 +501,43 @@ export default function Herramientas() {
                   className={INPUT}
                   rows={2}
                 />
+              </div>
+
+              <div>
+                <label className={LABEL}>Foto</label>
+                <div className="mt-1 flex items-center gap-3">
+                  {fotoPreview ? (
+                    <img
+                      src={fotoPreview}
+                      alt="Foto de la herramienta"
+                      className="h-20 w-20 rounded-lg border border-slate-700 object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-lg border border-dashed border-slate-700 text-xs text-slate-500">
+                      Sin foto
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2">
+                    <label className="cursor-pointer rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-center text-xs font-medium text-slate-200 hover:bg-slate-700">
+                      {fotoPreview ? "Cambiar foto" : "Subir foto"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => elegirFoto(e.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    {fotoPreview && (
+                      <button
+                        type="button"
+                        onClick={() => elegirFoto(null)}
+                        className="rounded-lg border border-red-500/30 bg-red-500/15 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/25"
+                      >
+                        Quitar foto
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <label className="flex items-center gap-2 text-sm text-slate-300">
