@@ -14,10 +14,14 @@
 import db from "../db.ts";
 import { extractJson, AI_IMAGE_RULES } from "./ai.ts";
 
+/** Para qué se abrió la captura: decide con qué prompt la lee la IA. */
+export type CapturePurpose = "assistance" | "workshop";
+
 export interface CaptureSession {
   id: number;
   job_id: number | null;
   connect_assistance_id: number | null;
+  purpose: CapturePurpose;
   status: "ACTIVE" | "CLOSED";
   started_at: number;
   ended_at: number | null;
@@ -41,11 +45,18 @@ export function normalize(row: any): CaptureSession {
   if (typeof ai === "string") { try { ai = JSON.parse(ai); } catch { ai = null; } }
   return {
     ...row,
+    purpose: row.purpose === "workshop" ? "workshop" : "assistance",
     started_at: row.started_at ? Number(row.started_at) : 0,
     ended_at: row.ended_at ? Number(row.ended_at) : null,
     ai_suggestions: ai ?? null,
     ai_started_at: row.ai_started_at ? Number(row.ai_started_at) : null,
   };
+}
+
+/** Para qué se abrió la sesión (las anteriores a esta columna son de asistencia). */
+export async function capturePurpose(sessionId: number): Promise<CapturePurpose> {
+  const r = await db.query(`SELECT purpose FROM whatsapp_capture_sessions WHERE id = $1`, [sessionId]);
+  return r.rows[0]?.purpose === "workshop" ? "workshop" : "assistance";
 }
 
 /** Mensajes de una sesión, en orden de llegada. */
@@ -67,9 +78,9 @@ export async function captureMessages(sessionId: number): Promise<any[]> {
  * también se leen. Todo lo relevante que no encaje en un campo concreto vuelve
  * en `datosDetectados` para no perderlo.
  */
-export async function analyzeCaptureSession(sessionId: number): Promise<Record<string, any>> {
+async function captureContext(sessionId: number): Promise<{ lines: string[]; imageUrls: string[] } | null> {
   const messages = await captureMessages(sessionId);
-  if (!messages.length) return {};
+  if (!messages.length) return null;
 
   const lines: string[] = [];
   const imageUrls: string[] = [];
@@ -95,6 +106,13 @@ export async function analyzeCaptureSession(sessionId: number): Promise<Record<s
       lines.push(`[DOCUMENTO${ts}]`);
     }
   }
+  return { lines, imageUrls };
+}
+
+export async function analyzeCaptureSession(sessionId: number): Promise<Record<string, any>> {
+  const ctx = await captureContext(sessionId);
+  if (!ctx) return {};
+  const { lines, imageUrls } = ctx;
 
   const system = `Eres un asistente de una empresa de asistencia en carretera.
 Analiza los mensajes e imágenes de WhatsApp de una incidencia y extrae la información relevante.
@@ -139,6 +157,69 @@ kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lis
 }
 
 /**
+ * Analiza la sesión buscando ALTAS DE TALLER, no incidencias: es lo que llega
+ * cuando alguien reenvía por WhatsApp la ficha de Google de un taller, una
+ * tarjeta o una captura de pantalla.
+ *
+ * Devuelve los campos con los nombres de `connect_workshops`, para que lo que
+ * sale de la IA sea exactamente lo que entra en Central sin traducciones por
+ * el camino. Lo que Google da pero Central no guarda (valoración, reseñas,
+ * web, URL de Maps, categorías) vuelve en `datosDetectados`.
+ */
+export async function analyzeWorkshopCaptureSession(sessionId: number): Promise<Record<string, any>> {
+  const ctx = await captureContext(sessionId);
+  if (!ctx) return {};
+  const { lines, imageUrls } = ctx;
+
+  const system = `Eres un asistente de alta de talleres de una red de asistencia en carretera.
+Analiza los mensajes e imágenes de WhatsApp y extrae los talleres que aparezcan.
+
+${AI_IMAGE_RULES}
+
+REGLAS INNEGOCIABLES:
+- Extrae SOLO datos verificables que estén escritos en los mensajes o visibles en las imágenes. Lo que no conste va a null. No completes direcciones, teléfonos ni coordenadas "de memoria".
+- No puedes abrir enlaces. Si un taller llega solo como enlace (share.google, maps.app.goo.gl, goo.gl/maps…) y no hay más datos ni captura, NO deduzcas nada del enlace: añádelo a "avisos" pidiendo el enlace completo o una captura de la ficha.
+- Comprueba que sea un negocio de automoción (taller mecánico, neumáticos, carrocería, electricidad del automóvil, grúa, ITV…). Si no lo es, no lo incluyas y dilo en "avisos".
+- Si hay varios talleres, devuelve un registro por cada uno.
+- Conserva el nombre comercial tal cual lo muestra Google en "name", pero límpialo de comillas, emojis y reclamos publicitarios.
+- Coordenadas en decimal con punto. Teléfonos con prefijo internacional cuando se pueda deducir del propio número (España: +34).
+
+Responde SOLO con JSON válido, sin markdown (null si no consta):
+{
+  "talleres": [{
+    "name": string,
+    "companyName": string,          // empresa propietaria, si consta (Grupo Soledad…)
+    "commercialNetwork": string,    // red o franquicia (Confortauto, Euromaster…)
+    "address": string,              // calle y número, sin CP ni municipio
+    "postalCode": string,
+    "city": string,
+    "province": string,
+    "latitude": number, "longitude": number,
+    "phone": string, "email": string,
+    "openingHours": string,         // en una línea: "L-V 08:30-13:30|15:00-18:30; Sáb 09:00-13:00"
+    "services": string[],           // SOLO estos códigos: tow_truck, mechanical, tyres, battery, fuel, lockout, electric_vehicle, heavy_vehicle, machinery, other
+    "datosDetectados": [{ "campo": string, "valor": string, "origen": "imagen"|"texto"|"audio" }],
+    "confidence": "high"|"medium"|"low"
+  }],
+  "avisos": [string],
+  "resumen": string
+}
+
+"datosDetectados" es para lo relevante que no encaja arriba: valoración de Google,
+número de reseñas, sitio web, URL de Google Maps, categorías, estado del negocio
+(abierto / cerrado temporalmente / cerrado permanentemente), persona de contacto,
+CIF… Si no hay nada, lista vacía.`;
+
+  return extractJson({
+    system,
+    text: `Mensajes de la sesión:\n${lines.join("\n")}`,
+    images: imageUrls,
+    maxTokens: 3000,
+    strict: true,
+  });
+}
+
+/**
  * Guarda el análisis en la sesión (se llama al cerrarla), dejando rastro del
  * estado en ai_status/ai_error. Antes un fallo devolvía {} sin persistir nada
  * y la sesión quedaba "Analizando con IA…" para siempre en el backoffice.
@@ -150,10 +231,13 @@ export async function saveCaptureAnalysis(sessionId: number): Promise<Record<str
      WHERE id = $1`,
     [sessionId, Date.now()],
   );
+  const purpose = await capturePurpose(sessionId);
   let suggestions: Record<string, any> = {};
   let failure: string | null = null;
   try {
-    suggestions = await analyzeCaptureSession(sessionId);
+    suggestions = purpose === "workshop"
+      ? await analyzeWorkshopCaptureSession(sessionId)
+      : await analyzeCaptureSession(sessionId);
     if (Object.keys(suggestions).length === 0) {
       // Con strict, los fallos del proveedor llegan por el catch con su motivo;
       // aquí solo queda el caso de una sesión sin nada que extraer.

@@ -712,6 +712,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS wcs_connect_idx
       ON whatsapp_capture_sessions(connect_assistance_id);
 
+    -- Para qué se abrió la captura: decide qué prompt usa el análisis con IA.
+    -- 'assistance' (por defecto) es lo de siempre; 'workshop' es el alta de un
+    -- taller de la red que llega por WhatsApp (ficha de Google, tarjeta…).
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'assistance';
+
     CREATE TABLE IF NOT EXISTS whatsapp_capture_messages (
       id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL REFERENCES whatsapp_capture_sessions(id) ON DELETE CASCADE,
