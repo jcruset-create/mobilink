@@ -641,8 +641,8 @@ export default function AgendaView({
       ? "rounded-2xl border border-slate-600 bg-slate-700 px-4 py-2 text-sm font-medium text-slate-100 hover:bg-slate-600"
       : "rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium",
     calBox: dark
-      ? "h-[calc(100dvh-180px)] w-full overflow-auto rounded-2xl border border-slate-700 bg-slate-900 pb-24 shadow-sm"
-      : "h-[calc(100dvh-180px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white pb-24 shadow-sm",
+      ? "h-[calc(100dvh-140px)] w-full overflow-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-sm"
+      : "h-[calc(100dvh-140px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm",
     gridHead: dark ? "bg-slate-800" : "bg-white",
     gridBorder: dark ? "border-slate-700" : "border-slate-200",
     gridBorderSoft: dark ? "border-slate-800" : "border-slate-100",
@@ -2077,7 +2077,9 @@ appendLog(
           </div>
 
           <div
-            className={`grid ${
+            // pb-16: aire por debajo de la última franja horaria, para que no
+            // quede pegada al borde del calendario (se notaba en móvil).
+            className={`grid pb-16 ${
               calendarMode === "day"
                 ? "min-w-[900px] grid-cols-[70px_1fr]"
                 : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
