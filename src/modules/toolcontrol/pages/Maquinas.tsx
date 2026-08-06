@@ -45,6 +45,7 @@ export default function Maquinas() {
   const [form, setForm] = useState<any>({ ...EMPTY });
   const [editId, setEditId] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [fotoAmpliada, setFotoAmpliada] = useState<string | null>(null);
   const [fotos, setFotos] = useState<FotoItem[]>([]);
   const [fotosIniciales, setFotosIniciales] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -210,7 +211,7 @@ export default function Maquinas() {
                   <td className="p-3">
                     <div className="flex items-center gap-2">
                       {m.foto_url && (
-                        <img src={m.foto_url} alt="" className="h-9 w-9 shrink-0 rounded-lg border border-slate-700 object-cover" />
+                        <img src={m.foto_url} alt="" onClick={() => setFotoAmpliada(m.foto_url)} className="h-9 w-9 shrink-0 cursor-pointer rounded-lg border border-slate-700 object-cover hover:opacity-80" />
                       )}
                       <span className="font-medium text-slate-100">{m.nombre}</span>
                     </div>
@@ -279,7 +280,8 @@ export default function Maquinas() {
                       <img
                         src={f.url}
                         alt=""
-                        className="h-20 w-20 rounded-lg border border-slate-700 object-cover"
+                        onClick={() => setFotoAmpliada(f.url)}
+                        className="h-20 w-20 cursor-pointer rounded-lg border border-slate-700 object-cover hover:opacity-80"
                       />
                       <button
                         type="button"
@@ -316,6 +318,29 @@ export default function Maquinas() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Visor de foto ampliada */}
+      {fotoAmpliada && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setFotoAmpliada(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setFotoAmpliada(null)}
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-slate-800/90 text-xl font-bold text-slate-100 hover:bg-slate-700"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+          <img
+            src={fotoAmpliada}
+            alt=""
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain"
+          />
         </div>
       )}
 
