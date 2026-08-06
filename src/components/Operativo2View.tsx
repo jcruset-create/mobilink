@@ -428,7 +428,12 @@ export default function Operativo2View({
                 return (
                   <div key={job.id} className="rounded-lg bg-slate-900 p-2" style={{ borderLeft: `3px solid ${job.urgent ? "#fb7185" : "#34d399"}` }}>
                     <div className="flex items-center justify-between">
-                      <span className="text-[12px] font-bold">{job.plate}{job.urgent ? " ⚠️" : ""} <span className="font-normal text-slate-400">· {getOperationLabel(job)}</span></span>
+                      <span className="text-[12px] font-bold">
+                        {job.customerName ? (
+                          <span className="text-sky-300">{job.customerName} · </span>
+                        ) : null}
+                        {job.plate}{job.urgent ? " ⚠️" : ""} <span className="font-normal text-slate-400">· {getOperationLabel(job)}</span>
+                      </span>
                       <span className="text-[10px] text-slate-400">⏱ {formatMinutes(getWorkedMinutes(job))}</span>
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1">
