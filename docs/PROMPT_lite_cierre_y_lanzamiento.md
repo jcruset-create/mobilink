@@ -26,7 +26,7 @@ más cinco huecos declarados.
 | 9 | Finalización y retorno | Hecho | `validateFinish`, `DEFAULT_FINISH_RULES`, estados `returning_to_workshop` y `at_workshop` |
 | 10 | Modo offline | Hecho (parcial) | `queue.dart` + `connect_lite_actions` (idempotencia por `clientActionId`). **Fotos y firma no se encolan** |
 | 11 | KPIs y auditoría | Hecho | `computeLiteKpis`, `statusQualityScore`, `connect_audit_logs` con `actorType = 'lite'` |
-| 12 | Pruebas, endurecimiento y lanzamiento | **No hecho** | Ver §2 |
+| 12 | Pruebas, endurecimiento y lanzamiento | En curso | Bloque A hecho; B a G pendientes |
 
 Cobertura de pruebas actual: 23 pruebas unitarias de reglas de dominio
 (`liteRules.test.ts`), dentro de las 310 del repositorio. No hay pruebas de
@@ -39,7 +39,11 @@ integración ni end-to-end.
 Siete huecos, ordenados por lo que bloquea a lo que mejora. Los tres primeros
 impiden que Lite se pueda usar en la calle; los demás son deuda declarada.
 
-### H1. La aplicación no se puede compilar (bloqueante)
+### H1. La aplicación no se puede compilar — RESUELTO
+
+> Cerrado por el bloque A. Se describe el problema tal y como estaba porque la
+> causa raíz (el `.gitignore`) puede repetirse con la próxima app.
+
 
 `lite_app/` contiene `lib/`, `pubspec.yaml` y `pubspec.lock`, y **nada más**. No
 hay carpeta `android/` ni `ios/`, así que no hay `AndroidManifest.xml`, ni
@@ -122,7 +126,7 @@ del diseño actual está mal, dilo y espera respuesta en vez de reescribirlo.
 Antes de tocar nada: `git fetch origin main && git pull`, y `bash
 scripts/check-versions.sh`.
 
-### Bloque A — Que la aplicación se pueda compilar
+### Bloque A — Que la aplicación se pueda compilar — HECHO
 
 Es lo primero porque sin esto nada de lo demás se puede probar en un teléfono.
 
