@@ -20,6 +20,7 @@ import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
 import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
+import { interpretarBusqueda, talleresCercanos } from "./geoSearch.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
@@ -758,6 +759,87 @@ export function createConnectBackofficeRouter(): Router {
   router.get("/providers/:id/workshops", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(`SELECT * FROM connect_workshops WHERE "providerCompanyId" = $1 ORDER BY name`, [Number(req.params.id)]);
     res.json({ data: r.rows });
+  });
+
+  /**
+   * Búsqueda de ubicación del mapa operativo: municipio, código postal, punto
+   * kilométrico de carretera, coordenadas o enlace de Google Maps. Devuelve el
+   * punto y los talleres más cercanos, que es la pregunta real ("¿a quién le
+   * mando esto?").
+   *
+   * La geocodificación se hace en el servidor y no en el navegador para no
+   * publicar la clave de Google en el panel.
+   */
+  router.get("/geo/search", ...requireConnectRole("operator"), async (req, res) => {
+    const consulta = String(req.query.q ?? "");
+    const plan = interpretarBusqueda(consulta);
+    if (!plan) return err(res, 422, "validation_failed", "Escribe una localidad, un código postal o un punto kilométrico");
+
+    const talleres = await db.query(
+      `SELECT w.id, w.name, w.latitude, w.longitude, w."radiusKm", w.phone, w."integrationType",
+              w."connectStatus", w."networkParticipation", w.city, w.province, pc.name AS "providerName"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"`,
+    );
+    const responder = (punto: { lat: number; lng: number }, etiqueta: string, precision: string, avisos: string[]) =>
+      res.json({
+        punto, etiqueta, tipo: plan.tipo, precision, avisos,
+        workshops: talleresCercanos(punto, talleres.rows.map((w: any) => ({
+          ...w, latitude: Number(w.latitude), longitude: Number(w.longitude), radiusKm: Number(w.radiusKm),
+        }))),
+      });
+
+    // Coordenadas y enlaces no hace falta preguntárselos a nadie
+    if (plan.punto) return responder(plan.punto, plan.etiqueta, "exacta", plan.avisos);
+    if (!plan.consultas.length) {
+      return err(res, 422, "not_geocodable", plan.avisos[0] ?? "No se puede situar eso en el mapa");
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return err(res, 503, "geocoder_unavailable", "GOOGLE_MAPS_API_KEY no configurada en el servidor");
+
+    // Se prueban las consultas en orden: de la más precisa a la de repliegue
+    for (let i = 0; i < plan.consultas.length; i++) {
+      const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+      url.searchParams.set("address", plan.consultas[i]);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("language", "es");
+      if (plan.componentes) url.searchParams.set("components", plan.componentes);
+
+      let data: any;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        data = await r.json();
+      } catch (e: any) {
+        console.error("[Connect] geocodificación:", e?.message);
+        return err(res, 502, "geocoder_error", "El geocodificador no responde ahora mismo");
+      }
+      if (data.status === "ZERO_RESULTS") continue;
+      if (data.status !== "OK" || !data.results?.[0]) {
+        console.error(`[Connect] geocodificación ${data.status}: ${data.error_message ?? ""}`);
+        return err(res, 502, "geocoder_error", `El geocodificador devolvió ${data.status}`);
+      }
+
+      const r0 = data.results[0];
+      const avisos = [...plan.avisos];
+      // Un repliegue ya no es lo que pidió el operador: hay que decírselo
+      if (i > 0) avisos.unshift(`No se encontró "${plan.consultas[0]}"; se muestra "${r0.formatted_address}".`);
+      const precision = r0.geometry?.location_type === "ROOFTOP" ? "exacta"
+        : r0.geometry?.location_type === "RANGE_INTERPOLATED" ? "interpolada"
+        : "aproximada";
+      if (precision === "aproximada" && plan.tipo === "punto_kilometrico") {
+        avisos.push("Google no ha situado el kilómetro exacto: el punto es orientativo.");
+      }
+      return responder(
+        { lat: r0.geometry.location.lat, lng: r0.geometry.location.lng },
+        r0.formatted_address ?? plan.etiqueta,
+        precision,
+        avisos,
+      );
+    }
+
+    return err(res, 404, "not_found", `No se ha encontrado "${consulta}"`);
   });
 
   // ── Talleres de la red ────────────────────────────────────
