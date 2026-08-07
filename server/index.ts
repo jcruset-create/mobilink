@@ -15299,29 +15299,36 @@ app.post(
       const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
 
       const systemPrompt = `Eres un extractor de datos de administración de un taller.
-Recibirás la imagen de un aviso de devolución de recibo bancario o de una factura pendiente
+Recibirás la imagen de un aviso de devolución de recibo bancario o de facturas pendientes
 (normalmente un email del banco o de contabilidad con campos como CLIENTE, FACTURA,
-VENCIMIENTO, NOMINAL, GASTOS, TOTAL).
+VENCIMIENTO, NOMINAL, GASTOS, TOTAL). El aviso puede contener UNA o VARIAS partidas
+(varias facturas/recibos en una tabla).
 
 Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
 {
   "clienteCodigo": string | null,      // código numérico del cliente si aparece (ej. "100506")
   "clienteNombre": string | null,      // razón social (ej. "DENIS EXPRESS CARGO, S.L.")
-  "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
-  "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
-  "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3", "1/2"); null si no aparece
   "fechaContabilizacion": string | null, // FECHA CONTABILIZACIÓN del aviso en ISO yyyy-mm-dd
-  "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
-  "nominal": number | null,            // importe nominal en euros
-  "gastos": number | null,             // gastos de devolución en euros
-  "total": number | null,              // importe total en euros (nominal + gastos)
-  "confianza": "alta" | "media" | "baja"
+  "confianza": "alta" | "media" | "baja",
+  "partidas": [                        // UNA entrada por cada factura/recibo del aviso
+    {
+      "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
+      "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
+      "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3"); null si no aparece
+      "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
+      "nominal": number | null,            // importe nominal en euros
+      "gastos": number | null,             // gastos de devolución en euros
+      "total": number | null               // importe total de ESTA partida (nominal + gastos)
+    }
+  ]
 }
 
 Reglas:
+- Si el aviso tiene una tabla con varias facturas, devuelve una partida por fila (no las sumes en una sola).
+- El "Total" general del aviso (suma de todas las partidas) NO es una partida: ignóralo.
 - Fechas tipo "30.06.26" o "2.07.26" son dd.mm.aa → conviértelas a ISO (2026-06-30, 2026-07-02).
 - Importes en formato español "1.997,32" → 1997.32 (número, punto decimal).
-- Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
+- Si el total de una partida no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
       const rIa = await pedirIA({
@@ -15343,6 +15350,21 @@ Reglas:
         console.error("analizar-impagado: respuesta no parseable:", raw);
         return res.status(422).json({ success: false, message: "No se pudieron extraer datos de la imagen." });
       }
+
+      // Normalizar: partidas siempre como array, y la primera aplanada en el
+      // nivel superior por compatibilidad con el formato antiguo de un solo recobro.
+      const partidas = Array.isArray(datos?.partidas) && datos.partidas.length
+        ? datos.partidas
+        : [{
+            numeroFactura: datos?.numeroFactura ?? null,
+            vencimiento: datos?.vencimiento ?? null,
+            numeroVencimiento: datos?.numeroVencimiento ?? null,
+            fechaFactura: datos?.fechaFactura ?? null,
+            nominal: datos?.nominal ?? null,
+            gastos: datos?.gastos ?? null,
+            total: datos?.total ?? null,
+          }];
+      datos = { ...datos, partidas, ...partidas[0] };
 
       return res.json({ success: true, datos });
     } catch (error) {
