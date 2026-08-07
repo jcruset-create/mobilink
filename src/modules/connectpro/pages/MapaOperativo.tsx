@@ -5,12 +5,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
-import { PageTitle, ErrorBanner, Badge } from "../components/ui";
+import { PageTitle, ErrorBanner, Badge, Input, Button, Th, Td } from "../components/ui";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 /** De dónde sale la posición de la unidad, para saber en qué confiar. */
@@ -36,6 +36,20 @@ type RutaCarretera = {
   distanceKm: number;
   etaMinutes: number;
   computedAtMs: number;
+};
+
+/** Punto encontrado por la búsqueda de ubicación, con sus talleres cercanos. */
+type Busqueda = {
+  punto: { lat: number; lng: number };
+  etiqueta: string;
+  tipo: "coordenadas" | "enlace" | "codigo_postal" | "punto_kilometrico" | "texto";
+  precision: "exacta" | "interpolada" | "aproximada";
+  avisos: string[];
+  workshops: Array<{
+    id: number; name: string; providerName: string | null; phone: string | null;
+    city: string | null; province: string | null; distanceKm: number; enCobertura: boolean;
+    integrationType: string; connectStatus: string; networkParticipation: boolean;
+  }>;
 };
 
 type MapWorkshop = {
@@ -211,6 +225,48 @@ function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
   return null;
 }
 
+/**
+ * Punto buscado: chincheta amarilla con la etiqueta de lo que se buscó, para
+ * que no se confunda con una asistencia real ni con un taller.
+ */
+function searchIcon(zoom: number, etiqueta: string) {
+  const f = zoomFactor(zoom);
+  const s = Math.round(30 * f);
+  const font = Math.max(9, Math.round(11 * f));
+  const w = Math.max(s, 160);
+  const texto = etiqueta.length > 34 ? `${etiqueta.slice(0, 33)}…` : etiqueta;
+  return L.divIcon({
+    html: `
+      <div style="text-align:center;width:${w}px">
+        <div style="width:${s}px;height:${s}px;margin:0 auto;border-radius:50% 50% 50% 0;
+             transform:rotate(-45deg);background:#facc15;border:${Math.max(2, Math.round(3 * f))}px solid #0f172a;
+             box-shadow:0 2px 6px rgba(0,0,0,.5)"></div>
+        <div style="display:inline-block;background:rgba(15,23,42,.95);color:#facc15;border:1px solid #facc15;
+             font:800 ${font}px/1.5 system-ui;padding:1px 6px;border-radius:4px;margin-top:3px;
+             white-space:nowrap">📍 ${texto}</div>
+      </div>`,
+    className: "",
+    iconSize: [w, s + Math.round(font * 1.9)],
+    iconAnchor: [w / 2, s],
+    popupAnchor: [0, -s],
+  });
+}
+
+/** Lleva el mapa al punto buscado cada vez que cambia. */
+function IrAlPunto({ punto }: { punto: { lat: number; lng: number } | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (punto) map.flyTo([punto.lat, punto.lng], Math.max(map.getZoom(), 12), { duration: 0.8 });
+  }, [punto, map]);
+  return null;
+}
+
+const PRECISION_TEXTO: Record<string, string> = {
+  exacta: "posición exacta",
+  interpolada: "posición interpolada en la vía",
+  aproximada: "posición aproximada",
+};
+
 export default function MapaOperativo() {
   const { user } = useConnectAuth();
   const canEdit = hasRole(user, "cc_admin");
@@ -221,6 +277,17 @@ export default function MapaOperativo() {
   const [zoom, setZoom] = useState(9);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [consulta, setConsulta] = useState("");
+  const [busqueda, setBusqueda] = useState<Busqueda | null>(null);
+  const [buscando, setBuscando] = useState(false);
+
+  const buscar = async () => {
+    if (!consulta.trim()) return;
+    setBuscando(true); setError(null);
+    try {
+      setBusqueda(await boFetch<Busqueda>(`/geo/search?q=${encodeURIComponent(consulta.trim())}`));
+    } catch (e: any) { setError(e.message); setBusqueda(null); } finally { setBuscando(false); }
+  };
 
   const moveWorkshop = async (w: MapWorkshop, lat: number, lng: number) => {
     const ok = window.confirm(
@@ -313,13 +380,108 @@ export default function MapaOperativo() {
         </div>
       )}
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Input
+          value={consulta}
+          onChange={(e) => setConsulta(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") buscar(); }}
+          placeholder="Localidad, código postal, AP-7 km 234, coordenadas o enlace de Google Maps"
+          className="w-[520px] max-w-full"
+        />
+        <Button onClick={buscar} disabled={buscando}>{buscando ? "Buscando…" : "Buscar en el mapa"}</Button>
+        {busqueda && (
+          <Button variant="ghost" onClick={() => { setBusqueda(null); setConsulta(""); }}>Quitar</Button>
+        )}
+      </div>
+
+      {busqueda && (
+        <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
+            <span className="font-semibold text-amber-200">📍 {busqueda.etiqueta}</span>
+            <span className="text-slate-400">
+              {busqueda.punto.lat.toFixed(5)}, {busqueda.punto.lng.toFixed(5)} · {PRECISION_TEXTO[busqueda.precision]}
+            </span>
+          </div>
+          {busqueda.avisos.map((a, i) => (
+            <p key={i} className="mb-1 text-[12px] text-amber-300">⚠ {a}</p>
+          ))}
+
+          {busqueda.workshops.length === 0 ? (
+            <p className="text-[13px] text-slate-400">No hay talleres en la red para comparar.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr className="border-b border-slate-700">
+                  <Th>Taller más cercano</Th><Th>Empresa</Th><Th>Distancia</Th><Th>Cobertura</Th><Th>Teléfono</Th>
+                </tr></thead>
+                <tbody>
+                  {busqueda.workshops.map((w) => (
+                    <tr key={w.id} className="border-b border-slate-700/50">
+                      <Td className="font-semibold text-slate-100">
+                        {w.name}
+                        {[w.city, w.province].filter(Boolean).length > 0 && (
+                          <div className="text-[11px] font-normal text-slate-500">
+                            {[w.city, w.province].filter(Boolean).join(" · ")}
+                          </div>
+                        )}
+                      </Td>
+                      <Td>{w.providerName ?? "-"}</Td>
+                      <Td className="whitespace-nowrap">{w.distanceKm} km</Td>
+                      <Td>
+                        {!w.networkParticipation || w.connectStatus !== "active" ? (
+                          <Badge className="border-slate-600 text-slate-400">No disponible</Badge>
+                        ) : w.enCobertura ? (
+                          <Badge className="border-emerald-500/40 bg-emerald-500/10 text-emerald-300">Dentro del radio</Badge>
+                        ) : (
+                          <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-300">Fuera del radio</Badge>
+                        )}
+                      </Td>
+                      <Td>{w.phone ? <a className="text-cyan-300 hover:underline" href={`tel:${w.phone}`}>{w.phone}</a> : "-"}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-slate-500">
+            Distancia en línea recta, para ordenar. La ETA real por carretera se calcula al asignar.
+          </p>
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-xl border border-slate-700" style={{ height: "calc(100vh - 220px)" }}>
         <MapContainer center={center} zoom={9} style={{ height: "100%", width: "100%" }}>
           <ZoomWatcher onZoom={setZoom} />
+          <IrAlPunto punto={busqueda?.punto ?? null} />
           <TileLayer
             attribution='&copy; OpenStreetMap'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+          {busqueda && (
+            <>
+              <Marker position={[busqueda.punto.lat, busqueda.punto.lng]} icon={searchIcon(zoom, busqueda.etiqueta)}>
+                <Popup>
+                  <b>{busqueda.etiqueta}</b><br />
+                  {busqueda.punto.lat.toFixed(5)}, {busqueda.punto.lng.toFixed(5)} · {PRECISION_TEXTO[busqueda.precision]}<br />
+                  {busqueda.workshops[0]
+                    ? <>Taller más cercano: {busqueda.workshops[0].name} ({busqueda.workshops[0].distanceKm} km)</>
+                    : "Sin talleres con los que comparar"}
+                </Popup>
+              </Marker>
+              {/* Líneas al punto buscado desde los tres talleres más cercanos */}
+              {busqueda.workshops.slice(0, 3).map((w) => {
+                const taller = data?.workshops.find((x) => x.id === w.id);
+                if (!taller) return null;
+                return (
+                  <Polyline
+                    key={`b${w.id}`}
+                    positions={[[busqueda.punto.lat, busqueda.punto.lng], [taller.latitude, taller.longitude]]}
+                    pathOptions={{ color: w.enCobertura ? "#facc15" : "#64748b", weight: 2, dashArray: "4 6", opacity: 0.8 }}
+                  />
+                );
+              })}
+            </>
+          )}
           {data?.workshops.map((w) => (
             <span key={`w${w.id}`}>
               <Marker

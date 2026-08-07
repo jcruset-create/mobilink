@@ -55,6 +55,9 @@ services:
         value: gpt-5-mini
       - key: OPENAI_API_KEY
         sync: false
+      # Geocodificacion (busqueda de ubicacion del mapa) y ETAs por carretera
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
