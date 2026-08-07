@@ -26,7 +26,7 @@ más cinco huecos declarados.
 | 9 | Finalización y retorno | Hecho | `validateFinish`, `DEFAULT_FINISH_RULES`, estados `returning_to_workshop` y `at_workshop` |
 | 10 | Modo offline | Hecho (parcial) | `queue.dart` + `connect_lite_actions` (idempotencia por `clientActionId`). **Fotos y firma no se encolan** |
 | 11 | KPIs y auditoría | Hecho | `computeLiteKpis`, `statusQualityScore`, `connect_audit_logs` con `actorType = 'lite'` |
-| 12 | Pruebas, endurecimiento y lanzamiento | En curso | Bloque A hecho; B a G pendientes |
+| 12 | Pruebas, endurecimiento y lanzamiento | En curso | Bloques A y B hechos; C a G pendientes |
 
 Cobertura de pruebas actual: 23 pruebas unitarias de reglas de dominio
 (`liteRules.test.ts`), dentro de las 310 del repositorio. No hay pruebas de
@@ -57,7 +57,13 @@ están declarados en ningún manifiesto.
 Tampoco hay workflow de CI: `.github/workflows/` compila Assist y TyreControl,
 no Lite.
 
-### H2. Sin notificaciones push en la aplicación (bloqueante para el modelo)
+### H2. Sin notificaciones push — CÓDIGO HECHO, FALTA EL ALTA EN FIREBASE
+
+> El bloque B deja el código puesto en los dos lados. Queda una acción que solo
+> puede hacer el dueño de la cuenta: dar de alta `com.mobilink.assist_lite` en
+> el proyecto de Firebase y guardar su `google-services.json` como el secret
+> `LITE_GOOGLE_SERVICES_BASE64`.
+
 
 El backend ya envía FCM v1 (`server/core/push.ts`, `litePush.ts`) y guarda el
 token del dispositivo. La aplicación **no lo recibe**: no hay `firebase_core` ni
@@ -147,7 +153,7 @@ Es lo primero porque sin esto nada de lo demás se puede probar en un teléfono.
 Verificable: el workflow produce un APK instalable y `flutter analyze` sigue sin
 incidencias.
 
-### Bloque B — Notificaciones push reales
+### Bloque B — Notificaciones push reales — HECHO (pendiente el alta en Firebase)
 
 El backend ya envía; falta recibir.
 

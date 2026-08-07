@@ -25,6 +25,15 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Canal por defecto de los avisos de Central. Sin declararlo, Android
+             8+ descarta las notificaciones que llegan con la app cerrada. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="mobilink_lite_asistencias" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
     </application>
 
     <!-- Solo los permisos que el código pide hoy:
@@ -39,6 +48,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 13+: sin esto los avisos de Central no se muestran nunca. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- La app funciona igual en un móvil sin cámara trasera o sin GPS propio,
          así que no se exige hardware: sin esto Play ocultaría la app en tablets. -->
