@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/api.dart';
+import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
@@ -39,6 +40,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // tiene GPS, Central lo ve antes de asignarle un servicio.
     _api.registerDevice({
       'gpsPermission': gps,
+      'notifPermission': Push.permiso,
+      'fcmToken': Push.token,
       'platform': Platform.operatingSystem,
       'osVersion': Platform.operatingSystemVersion,
       'appVersion': kAppVersion,
@@ -126,6 +129,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
           title: const Text('Permiso de ubicación'),
           subtitle: Text(_gpsTexto(_gps)),
           trailing: TextButton(onPressed: _permisos, child: const Text('Revisar')),
+        ),
+        ListTile(
+          leading: Icon(
+            Push.disponible && Push.permiso == 'granted'
+                ? Icons.notifications_active
+                : Icons.notifications_off,
+            color: Push.disponible && Push.permiso == 'granted'
+                ? AppColors.ok
+                : AppColors.warn,
+          ),
+          title: const Text('Avisos de la central'),
+          subtitle: Text(!Push.disponible
+              ? 'Sin avisos automáticos: la bandeja se actualiza sola cada 25 s '
+                  'mientras la app esté abierta'
+              : Push.permiso == 'granted'
+                  ? 'Activados: llega aviso al asignarte una asistencia'
+                  : 'Bloqueados en el móvil: actívalos en los ajustes del sistema '
+                      'o no verás las asistencias nuevas con la app cerrada'),
         ),
         ListTile(
           leading: Icon(pendientes > 0 || conflictos.isNotEmpty

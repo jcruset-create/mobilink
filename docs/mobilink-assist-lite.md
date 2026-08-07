@@ -253,11 +253,12 @@ Consulta: `GET /api/connect/bo/workshops/:id/kpis?days=30` y, por servicio,
 
 ### Pendiente (declarado, no oculto)
 
-1. **Notificaciones push en la APK.** El backend ya envía (FCM v1) y guarda el
-   token; falta añadir `firebase_core` + `firebase_messaging` y el
-   `google-services.json`. Mientras tanto la app sondea cada 25 s, y solo
-   abierta: con la aplicación cerrada no llega ningún aviso. Conviene hacerlo a
-   la vez para todas las APKs del ecosistema.
+1. **Notificaciones push: falta el alta en Firebase.** El código ya está en los
+   dos lados (backend con FCM v1 y app con `firebase_core` +
+   `firebase_messaging`). Lo que falta es dar de alta la app
+   `com.mobilink.assist_lite` en el proyecto de Firebase y guardar su
+   `google-services.json` como secret `LITE_GOOGLE_SERVICES_BASE64`. Hasta
+   entonces la APK se compila igual, sin avisos, y la app lo dice en Perfil.
 2. **Pruebas de integración y end-to-end.** Las reglas están cubiertas con
    tests unitarios; el flujo completo contra base de datos requiere levantar
    un Postgres de pruebas, que hoy el repositorio no tiene.

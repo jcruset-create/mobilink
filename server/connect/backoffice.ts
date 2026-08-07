@@ -21,6 +21,7 @@ import {
 } from "./liteRules.ts";
 import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
 import { interpretarBusqueda, talleresCercanos } from "./geoSearch.ts";
+import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
@@ -2498,6 +2499,33 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
         toRef ?? null, body.trim(), u.id, u.name, Date.now(),
       ],
     );
+
+    // Si el taller es Lite, el mensaje de Central le llega como aviso al
+    // operario. Antes el chat era de ida: el taller escribia y Central leia,
+    // pero la respuesta se quedaba esperando a que alguien abriera la app.
+    // El aviso no lleva el texto: solo el identificador, y el operario lo lee
+    // ya autenticado (misma regla de privacidad que el resto de push).
+    try {
+      const a = await db.query(
+        `SELECT ca.id, ca."expedientNumber", ca."liteUserId", w."integrationType"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE ca.id = $1`,
+        [Number(req.params.id)],
+      );
+      const fila = a.rows[0];
+      if (fila?.integrationType === "lite" && fila.liteUserId) {
+        await notifyLiteUser(Number(fila.liteUserId), {
+          title: "Mensaje de la central",
+          body: `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,
+          data: { type: "assistance_message", assistanceId: String(fila.id) },
+        });
+      }
+    } catch (e: any) {
+      // Un fallo de aviso nunca puede tumbar el registro de la comunicacion
+      console.error("[Connect] aviso de mensaje a Lite:", e?.message);
+    }
+
     res.status(201).json(r.rows[0]);
   });
 

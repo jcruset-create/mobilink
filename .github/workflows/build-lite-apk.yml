@@ -30,6 +30,9 @@ jobs:
       # secrets no está disponible en los `if:` de los steps; via env sí.
       KS_B64: ${{ secrets.MOBILINK_KEYSTORE_BASE64 }}
       KS_PASS: ${{ secrets.MOBILINK_KEYSTORE_PASSWORD }}
+      # google-services.json en base64. Sin él la APK sale SIN notificaciones
+      # push y la app se queda con el sondeo de la bandeja (no falla el build).
+      GS_B64: ${{ secrets.LITE_GOOGLE_SERVICES_BASE64 }}
     defaults:
       run:
         working-directory: lite_app
@@ -66,6 +69,25 @@ jobs:
             echo "version=$NOMBRE+$BUILD"
           } >> "$GITHUB_OUTPUT"
           echo "$ACTUAL → $NOMBRE+$BUILD"
+
+      # El fichero de Firebase nunca entra en el repositorio: lleva la clave de
+      # API del proyecto y este repositorio es público.
+      - name: Preparar google-services.json
+        run: |
+          if [ -z "$GS_B64" ]; then
+            echo "::warning::Falta el secret LITE_GOOGLE_SERVICES_BASE64." \
+                 "La APK saldrá SIN notificaciones push: la app avisará de ello" \
+                 "en Perfil y seguirá sondeando la bandeja cada 25 s."
+            exit 0
+          fi
+          echo "$GS_B64" | base64 -d > android/app/google-services.json
+          # Un base64 cortado al pegar da un JSON corrupto que Gradle rechaza
+          # mucho más tarde con un error críptico.
+          python3 -c "import json,sys; d=json.load(open('android/app/google-services.json')); \
+            print('Proyecto Firebase:', d['project_info']['project_id']); \
+            ids=[c['client_info']['android_client_info']['package_name'] for c in d['client']]; \
+            print('Apps declaradas:', ids); \
+            sys.exit(0 if 'com.mobilink.assist_lite' in ids else 'El google-services.json no incluye com.mobilink.assist_lite')"
 
       - run: flutter pub get
 
@@ -147,9 +169,11 @@ jobs:
             Assist Central Pro. El operario entra con el código de taller, su
             usuario y su PIN; los tres los facilita la central.
 
-            Esta versión NO trae notificaciones push: la aplicación consulta las
-            asistencias nuevas cada 25 segundos mientras está abierta. Manténla
-            en primer plano mientras se espera un aviso.
+            Avisos: si la build llevaba el fichero de Firebase, la aplicación
+            recibe notificación al asignarle Central una asistencia, también con
+            la app cerrada. Si no, la bandeja se actualiza sola cada 25 segundos
+            mientras la aplicación esté abierta. La pantalla de Perfil dice cuál
+            de los dos casos es.
           files: lite_app/build/app/outputs/flutter-apk/mobilink-assist-lite-*.apk
 
       # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el

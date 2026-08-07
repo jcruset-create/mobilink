@@ -13,7 +13,7 @@ import db from "../db.ts";
 import { enqueueWebhookEvent } from "./webhooks.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
-import { notifyLiteWorkshop } from "./litePush.ts";
+import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
 
 // ---------------------------------------------------------------------------
 // Máquina de estados
@@ -107,6 +107,33 @@ export async function transition(
     void import("./report.ts")
       .then(({ generarYGuardarInforme }) => generarYGuardarInforme(assistanceId))
       .catch((err) => console.error("[Connect] informe:", err?.message));
+  }
+
+  // Cancelacion: el operario del taller Lite puede estar ya en camino, asi que
+  // se le avisa en el momento en vez de esperar a que abra la app y descubra
+  // que conduce hacia un servicio que ya no existe.
+  if (toStatus === "cancelled") {
+    try {
+      const w = await db.query(
+        `SELECT ca."liteUserId", ca."workshopId", ca."expedientNumber", w."integrationType"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE ca.id = $1`,
+        [assistanceId],
+      );
+      const fila = w.rows[0];
+      if (fila?.integrationType === "lite") {
+        const aviso = {
+          title: "Asistencia cancelada",
+          body: `${fila.expedientNumber ?? `#${assistanceId}`} · No hace falta acudir`,
+          data: { type: "assistance_cancelled", assistanceId: String(assistanceId) },
+        };
+        if (fila.liteUserId) await notifyLiteUser(Number(fila.liteUserId), aviso);
+        else if (fila.workshopId) await notifyLiteWorkshop(Number(fila.workshopId), aviso);
+      }
+    } catch (e: any) {
+      console.error("[Connect] aviso de cancelacion a Lite:", e?.message);
+    }
   }
 
   if (toStatus === "assignment_failed" || toStatus === "no_coverage") {

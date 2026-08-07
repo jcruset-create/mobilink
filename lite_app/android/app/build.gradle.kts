@@ -7,6 +7,18 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Firebase solo si hay fichero de configuración. La CI lo escribe desde un
+// secret; en un clon recién hecho no está, y aplicar el plugin sin él aborta
+// el build con "File google-services.json is missing". Así el proyecto compila
+// en cualquier máquina y la app se queda sin push, que es justo lo que
+// contempla lib/services/push.dart.
+val googleServices = file("google-services.json")
+if (googleServices.exists()) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.lifecycle("google-services.json no encontrado: se compila SIN notificaciones push.")
+}
+
 // Firma de la casa. El fichero lo escribe la CI a partir de los secrets y está
 // en .gitignore: la clave privada nunca entra en el repositorio, que es público.
 val keyPropertiesFile = rootProject.file("key.properties")

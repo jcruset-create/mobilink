@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api.dart';
+import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../theme.dart';
@@ -9,8 +10,10 @@ import 'login_screen.dart';
 import 'profile_screen.dart';
 
 /// Bandeja del operario: pendientes, activas y finalizadas.
-/// Refresca sola cada 25 s y al volver a primer plano; mientras no haya
-/// notificaciones push instaladas, este sondeo es lo que trae los avisos.
+///
+/// Los avisos llegan por push (Central asigna → suena el móvil). El sondeo se
+/// queda como red de seguridad por si el push falla o el dispositivo no lo
+/// tiene disponible: cada 25 s sin push, cada 2 min con él.
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key, required this.session});
   final Session session;
@@ -22,6 +25,7 @@ class InboxScreen extends StatefulWidget {
 class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   late final Api _api = Api(widget.session.token);
   Timer? _timer;
+  StreamSubscription<PushEvent>? _push;
   int _tab = 0;
   bool _loading = true;
   bool _offline = false;
@@ -37,13 +41,52 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
-    _timer = Timer.periodic(const Duration(seconds: 25), (_) => _load(silent: true));
+    // Con push, el sondeo solo cubre el hueco de un aviso perdido; sin él, es
+    // lo único que trae las asistencias nuevas.
+    _timer = Timer.periodic(
+      Duration(seconds: Push.disponible ? 120 : 25),
+      (_) => _load(silent: true),
+    );
+    _push = Push.events.listen(_alRecibirAviso);
+    _registrarDispositivo();
+  }
+
+  /// El token de push viaja con el resto del estado del dispositivo, que es
+  /// donde Central lo espera (connect_lite_devices).
+  Future<void> _registrarDispositivo() async {
+    if (Push.token == null) return;
+    await _api.registerDevice({
+      'fcmToken': Push.token,
+      'notifPermission': Push.permiso,
+    }).catchError((_) {});
+  }
+
+  Future<void> _alRecibirAviso(PushEvent e) async {
+    // Token nuevo: si no se reenvía, los avisos se van a un dispositivo muerto
+    if (e.type == 'token_refresh') {
+      await _registrarDispositivo();
+      return;
+    }
+    await _load(silent: true);
+    if (!mounted) return;
+    // Solo se navega si el operario ha tocado la notificación. Un aviso con la
+    // app abierta no puede sacarle de lo que esté haciendo.
+    if (e.abrir && e.assistanceId != null) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => AssistanceScreen(
+          session: widget.session,
+          assistanceId: e.assistanceId!,
+        ),
+      ));
+      _load();
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _push?.cancel();
     super.dispose();
   }
 

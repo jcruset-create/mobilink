@@ -56,3 +56,8 @@ lite_app/.gitignore
 *.jks
 *.p12
 key.properties
+
+# Configuracion de Firebase de las apps: lleva la clave de API del proyecto y
+# este repositorio es PUBLICO. La CI la escribe desde un secret.
+google-services.json
+GoogleService-Info.plist
