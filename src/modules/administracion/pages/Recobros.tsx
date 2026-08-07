@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil, CalendarClock, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil, CalendarClock, X, UserPlus } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import { sessionHeaders } from "../../sessionHeaders";
 import {
@@ -361,10 +362,18 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <SelectField label="Cliente" value={customerId} onChange={(v) => { setCustomerId(v); setInvoiceId(""); }}>
-          <option value="">— Selecciona —</option>
-          {clientes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </SelectField>
+        <div>
+          <SelectField label="Cliente" value={customerId} onChange={(v) => { setCustomerId(v); setInvoiceId(""); }}>
+            <option value="">— Selecciona —</option>
+            {clientes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </SelectField>
+          <Link
+            to="/administracion/clientes"
+            className="mt-1.5 inline-flex items-center gap-1 text-[12px] font-bold text-sky-400 hover:underline"
+          >
+            <UserPlus className="h-3.5 w-3.5" /> Crear cliente
+          </Link>
+        </div>
         <SelectField label="Factura existente (opcional)" value={invoiceId} onChange={setInvoiceId}>
           <option value="">— Crear factura nueva —</option>
           {facturas.map((f) => <option key={f.id} value={f.id}>{f.invoice_number} · pendiente {fmtEur(f.pending_amount)}</option>)}
