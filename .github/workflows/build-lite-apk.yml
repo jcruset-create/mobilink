@@ -1,0 +1,174 @@
+# Compila la APK de Mobilink Assist Lite (talleres colaboradores de Central Pro)
+# y la publica:
+#  - como artifact del run (pestaña Actions)
+#  - como GitHub Release "assist-lite-vX.Y.Z+N", que es de donde la lee el
+#    centro de descargas (/descargas.html → APK_APPS en server/index.ts).
+#
+# Hermano de build-assist-apk.yml y build-tyrecontrol-apk.yml, con el MISMO
+# keystore: las tres apps van firmadas con la clave de la casa, de modo que cada
+# actualización se instala encima de la anterior.
+#
+# La firma se resuelve en android/key.properties (ver
+# lite_app/android/app/build.gradle.kts), que está en .gitignore: aquí se
+# escribe en el runner a partir del secret y nunca se guarda en el repositorio.
+name: Build Assist Lite APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "lite_app/**"
+      - ".github/workflows/build-lite-apk.yml"
+
+permissions:
+  contents: write # crear el release con la APK
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # secrets no está disponible en los `if:` de los steps; via env sí.
+      KS_B64: ${{ secrets.MOBILINK_KEYSTORE_BASE64 }}
+      KS_PASS: ${{ secrets.MOBILINK_KEYSTORE_PASSWORD }}
+    defaults:
+      run:
+        working-directory: lite_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # Misma numeración que Assist y TyreControl: sube un tramo por build y
+      # desborda al de al lado (0.1.0 → 0.1.1 → … → 0.1.9 → 0.2.0). El pubspec
+      # se reescribe ANTES de compilar y se guarda al final, solo si fue bien.
+      - name: Subir la versión
+        id: ver
+        run: |
+          ACTUAL=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          IFS=. read -r MA MI PA <<< "$ACTUAL"
+          PA=$((PA + 1))
+          if [ "$PA" -gt 9 ]; then PA=0; MI=$((MI + 1)); fi
+          if [ "$MI" -gt 99 ]; then MI=0; MA=$((MA + 1)); fi
+          NOMBRE="$MA.$MI.$PA"
+          BUILD=${{ github.run_number }}
+          sed -i "s/^version: .*/version: $NOMBRE+$BUILD/" pubspec.yaml
+          grep '^version:' pubspec.yaml
+          {
+            echo "nombre=$NOMBRE"
+            echo "build=$BUILD"
+            echo "version=$NOMBRE+$BUILD"
+          } >> "$GITHUB_OUTPUT"
+          echo "$ACTUAL → $NOMBRE+$BUILD"
+
+      - run: flutter pub get
+
+      - run: flutter analyze --no-fatal-infos
+
+      # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir
+      # "el secret no existe" de "existe pero está mal pegado".
+      - name: Estado de los secrets de firma
+        run: |
+          echo "MOBILINK_KEYSTORE_BASE64: ${#KS_B64} caracteres (se esperan ~3536)"
+          echo "MOBILINK_KEYSTORE_PASSWORD: ${#KS_PASS} caracteres (se esperan 20)"
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::El secret MOBILINK_KEYSTORE_BASE64 llega vacío." \
+                 "Sin él la APK sale firmada con la clave de DEBUG y no se" \
+                 "publica release."
+          fi
+
+      - name: Preparar keystore de firma
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          echo "$KS_B64" | base64 -d > /tmp/mobilink.keystore
+          # Un base64 cortado al pegar produce un fichero corrupto que Gradle
+          # rechaza mucho más tarde con un error críptico.
+          keytool -list -keystore /tmp/mobilink.keystore -storepass "$KS_PASS" >/dev/null
+          echo "Keystore válido y contraseña correcta."
+          # Ruta ABSOLUTA: rootProject.file() la resolvería contra
+          # lite_app/android si fuese relativa.
+          cat > android/key.properties <<PROPS
+          storeFile=/tmp/mobilink.keystore
+          storePassword=$KS_PASS
+          keyAlias=mobilink
+          keyPassword=$KS_PASS
+          PROPS
+
+      - name: Build APK
+        run: flutter build apk --release
+          --build-name=${{ steps.ver.outputs.nombre }}
+          --build-number=${{ steps.ver.outputs.build }}
+
+      # Sin esto, un secret mal pegado produce un build VERDE con un APK que no
+      # se puede instalar encima del anterior — el fallo aparecería en el móvil
+      # del operario del taller colaborador, no aquí.
+      - name: Comprobar que la APK va firmada con la clave de Mobilink
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          CERTS=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$CERTS"
+          if echo "$CERTS" | grep -q "CN=Android Debug"; then
+            echo "::error::La APK está firmada con la clave de DEBUG pese a existir el secret." \
+                 "Revisa MOBILINK_KEYSTORE_BASE64 y MOBILINK_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+      # El nombre lleva el prefijo que espera el centro de descargas
+      # (APK_APPS en server/index.ts: mobilink-assist-lite-).
+      - name: Renombrar APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk
+          "build/app/outputs/flutter-apk/mobilink-assist-lite-${{ steps.ver.outputs.version }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobilink-assist-lite-${{ steps.ver.outputs.version }}
+          path: lite_app/build/app/outputs/flutter-apk/mobilink-assist-lite-*.apk
+
+      # Solo se publica release si la APK va firmada con la clave estable. Una
+      # release que no se puede instalar encima de la anterior es peor que no
+      # tener release: el artifact del run sigue disponible para depurar.
+      - name: Publicar release con la APK
+        if: ${{ env.KS_B64 != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: assist-lite-v${{ steps.ver.outputs.version }}
+          name: Mobilink Assist Lite ${{ steps.ver.outputs.version }}
+          body: |
+            APK de Mobilink Assist Lite generada por CI desde ${{ github.sha }}.
+
+            Para talleres colaboradores que reciben asistencias de Mobilink
+            Assist Central Pro. El operario entra con el código de taller, su
+            usuario y su PIN; los tres los facilita la central.
+
+            Esta versión NO trae notificaciones push: la aplicación consulta las
+            asistencias nuevas cada 25 segundos mientras está abierta. Manténla
+            en primer plano mientras se espera un aviso.
+          files: lite_app/build/app/outputs/flutter-apk/mobilink-assist-lite-*.apk
+
+      # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el
+      # número no se quema. El [skip ci] evita que este commit dispare otro
+      # build (pubspec.yaml está dentro de las rutas que vigila el workflow) y
+      # con él, un bucle infinito.
+      - name: Guardar la versión nueva en el repositorio
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          if git diff --cached --quiet; then
+            echo "El pubspec no ha cambiado; nada que guardar."
+            exit 0
+          fi
+          git commit -m "chore(lite): version ${{ steps.ver.outputs.version }} [skip ci]"
+          if ! git push origin HEAD:${{ github.ref_name }}; then
+            echo "::warning::No se ha podido guardar la versión" \
+                 "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}" \
+                 "(seguramente otro push llegó antes). La APK publicada es válida."
+          fi

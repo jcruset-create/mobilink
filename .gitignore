@@ -38,6 +38,12 @@ supabase/.temp/
 */.dart_tool/
 */.flutter-plugins-dependencies
 */android/
+# Excepcion: las apps que compila la CI SI necesitan su carpeta android/ en el
+# repositorio (manifiesto, permisos, firma y applicationId). Sin esto, un
+# `flutter create --platforms=android` se ignora en silencio y el APK no se
+# puede compilar: es lo que le habia pasado a lite_app.
+!lite_app/android/
+!lite_app/android/**
 */build/
 */.metadata
 */analysis_options.yaml
