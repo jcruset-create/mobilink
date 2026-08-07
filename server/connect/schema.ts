@@ -864,7 +864,14 @@ export async function initConnect(): Promise<void> {
   `);
 
   await seedConnectDefaults();
-  await seedNetworkWorkshops();
+  // El catálogo de talleres depende de red (geocodificación): si falla, se
+  // deja constancia y se sigue arrancando. Un alta pendiente no puede tumbar
+  // el servidor entero, y en el próximo arranque se vuelve a intentar.
+  try {
+    await seedNetworkWorkshops();
+  } catch (e: any) {
+    console.error("[Connect] catálogo de talleres de red:", e?.message);
+  }
 }
 
 /**
