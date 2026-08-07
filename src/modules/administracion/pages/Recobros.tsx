@@ -21,6 +21,17 @@ import {
   type PaymentMethod, type Centro, type Customer, type Invoice,
 } from "../types";
 
+// Partida extraída de la imagen del aviso (una por factura/recibo)
+interface PartidaImport {
+  numeroFactura: string | null;
+  vencimiento: string | null;
+  numeroVencimiento: string | null;
+  fechaFactura: string | null;
+  nominal: number | null;
+  gastos: number | null;
+  total: number | null;
+}
+
 export default function Recobros() {
   const { perfil } = useAdminAuth();
   const puedeGestionar = perfil ? ["admin", "administracion"].includes(perfil.rol) : false;
@@ -179,6 +190,9 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
   const [error, setError] = useState("");
   const [analizando, setAnalizando] = useState(false);
   const [avisoImport, setAvisoImport] = useState("");
+  // Partidas adicionales importadas de la imagen (a partir de la 2ª): se crea
+  // un expediente por cada una además del que describe el formulario.
+  const [partidasExtra, setPartidasExtra] = useState<PartidaImport[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -204,7 +218,12 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
         vencimiento: string | null; fechaFactura: string | null; fechaContabilizacion: string | null;
         numeroVencimiento: string | null;
         nominal: number | null; gastos: number | null; total: number | null; confianza: string;
+        partidas?: PartidaImport[];
       };
+
+      // Varias partidas → la 1ª va al formulario y el resto se crean aparte
+      const extras = (d.partidas ?? []).slice(1).filter((p) => p.numeroFactura || p.total || p.nominal);
+      setPartidasExtra(extras);
 
       if (d.numeroFactura) setNumero(d.numeroFactura);
       if (d.fechaContabilizacion) setFechaConta(d.fechaContabilizacion);
@@ -308,6 +327,34 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
         numeroVencimiento: numVto.trim() || null,
         fechaContabilizacion: fechaConta || null,
       });
+
+      // Partidas adicionales de la imagen: un expediente por cada una
+      let creadasExtra = 0;
+      for (const p of partidasExtra) {
+        const totalP = p.total ?? ((p.nominal ?? 0) + (p.gastos ?? 0));
+        if (!p.numeroFactura || !totalP || totalP <= 0 || !p.vencimiento) {
+          throw new Error(`Creados ${1 + creadasExtra} expedientes, pero la partida "${p.numeroFactura ?? "sin nº"}" no tiene factura, total o vencimiento legibles: créala a mano.`);
+        }
+        await crearRecobroDirecto({
+          customerId,
+          invoiceId: null,
+          nuevaFactura: {
+            invoice_number: p.numeroFactura,
+            invoice_date: p.fechaFactura || null,
+            due_date: p.vencimiento,
+            total_amount: totalP,
+          },
+          dueDate: p.vencimiento,
+          priority: prioridad,
+          notes: notas.trim() || null,
+          userId,
+          nominal: p.nominal ?? null,
+          gastos: p.gastos ?? null,
+          numeroVencimiento: p.numeroVencimiento?.trim() || null,
+          fechaContabilizacion: fechaConta || null,
+        });
+        creadasExtra++;
+      }
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error creando el recobro");
@@ -320,13 +367,35 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
       footer={
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className={btnSecondary}>Cancelar</button>
-          <button onClick={guardar} disabled={guardando} className={btnPrimary}>{guardando ? "Creando…" : "Crear expediente"}</button>
+          <button onClick={guardar} disabled={guardando} className={btnPrimary}>
+            {guardando ? "Creando…" : partidasExtra.length > 0 ? `Crear ${partidasExtra.length + 1} expedientes` : "Crear expediente"}
+          </button>
         </div>
       }
     >
       {error && <ErrorBox>{error}</ErrorBox>}
       {avisoImport && (
         <div className="mb-3 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm text-sky-300">{avisoImport}</div>
+      )}
+      {partidasExtra.length > 0 && (
+        <div className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+          <div className="font-bold">La captura contiene {partidasExtra.length + 1} partidas: se crearán {partidasExtra.length + 1} expedientes.</div>
+          <div className="mt-1 text-[12px]">El formulario muestra la primera; además se crearán:</div>
+          <ul className="mt-1 space-y-0.5 text-[12px]">
+            {partidasExtra.map((p, i) => (
+              <li key={i} className="flex items-center justify-between gap-2">
+                <span>· Fra. {p.numeroFactura ?? "¿?"} · vto. {p.vencimiento ?? "¿?"} · {(p.total ?? ((p.nominal ?? 0) + (p.gastos ?? 0))).toFixed(2).replace(".", ",")} €</span>
+                <button
+                  type="button"
+                  onClick={() => setPartidasExtra((prev) => prev.filter((_, j) => j !== i))}
+                  className="shrink-0 text-[11px] font-bold text-amber-400 hover:underline"
+                >
+                  quitar
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Importar desde imagen (captura de WhatsApp / email del banco) */}
