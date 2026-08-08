@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api.dart';
+import '../services/file_queue.dart';
 import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
@@ -100,6 +101,8 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     // Antes de leer, se intenta vaciar lo que quedó pendiente sin cobertura
     try {
       await OfflineQueue.flush(_api);
+      // Las evidencias van aparte: son binarios y se suben de una en una
+      await FileQueue.flush(_api);
     } catch (_) {/* seguimos: se reintentará en el próximo ciclo */}
     try {
       final rows = await _api.assistances(_scopes[_tab]);
