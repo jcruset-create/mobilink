@@ -9,11 +9,19 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL no está configurada");
 }
 
+/**
+ * Supabase exige TLS; un PostgreSQL local (desarrollo o el contenedor de las
+ * pruebas de integración) no lo ofrece y rechaza la conexión con "The server
+ * does not support SSL connections". Se decide por la propia URL, así que en
+ * producción no cambia nada.
+ */
+const esLocal =
+  /@(localhost|127\.0\.0\.1|::1|postgres)[:/]/i.test(process.env.DATABASE_URL) ||
+  process.env.PGSSLMODE === "disable";
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: esLocal ? false : { rejectUnauthorized: false },
 });
 
 export async function initDb() {
