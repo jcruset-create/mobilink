@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/inbox_screen.dart';
 import 'services/api.dart';
+import 'services/file_queue.dart';
 import 'services/push.dart';
 import 'services/queue.dart';
 import 'services/session.dart';
@@ -10,6 +11,7 @@ import 'theme.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await OfflineQueue.init();
+  await FileQueue.init();
   // No bloquea el arranque: si Firebase no está configurado, Push.init() lo
   // registra y la app se queda con el sondeo de la bandeja.
   await Push.init();
