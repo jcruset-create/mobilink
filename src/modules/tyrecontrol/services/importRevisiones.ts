@@ -135,36 +135,66 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
   // 6a. Neumáticos genéricos (lote) y sus montajes.
   //
   // El número interno se construye a partir de la matrícula y la posición
-  // (IMP-1234ABC-P3) y tiene un índice único global (uq_tc_neu_numero_interno,
-  // fase8). Si una importación se quedó a medias —o se repite el mismo Excel—
-  // esas fichas YA existen, y volver a insertarlas rompía todo con
-  // "duplicate key value violates unique constraint". Un import que no se
-  // puede repetir es un import que no se puede arreglar cuando falla, así que
-  // primero se mira qué hay y solo se da de alta lo que falta.
+  // (IMP-1234ABC-P3) y tiene un índice único GLOBAL (uq_tc_neu_numero_interno,
+  // fase8): global de verdad, no por empresa. Si una importación se quedó a
+  // medias —o se repite el mismo Excel— esas fichas YA existen, y volver a
+  // insertarlas rompía todo con "duplicate key value violates unique
+  // constraint".
+  //
+  // Mirar antes qué hay no basta: tc_neumaticos filtra por empresa (política
+  // tc_neu_select, fase4), así que una ficha del mismo número interno creada
+  // bajo OTRA empresa —una duplicada por un import anterior con el nombre de
+  // cliente mal escrito, por ejemplo— no se ve en el select pero sí choca
+  // contra el índice. Por eso el alta va con "no hagas nada si ya existe" y
+  // los ids se releen después: lo que no aparezca es que pertenece a otro,
+  // y eso se avisa y se salta, sin tumbar el resto de la importación.
   if (neuCrear.length) {
     const chunk = 200;
     const nuevoNeuId = new Map<string, string>(); // codigo_interno -> id
 
+    const numeroDe = (codigo: string) => `IMP-${codigo}`;
+    const leerExistentes = async (codigos: string[]) => {
+      for (let i = 0; i < codigos.length; i += chunk) {
+        const { data, error } = await supabase.from("tc_neumaticos")
+          .select("id, codigo_interno").in("numero_interno", codigos.slice(i, i + chunk).map(numeroDe));
+        if (error) throw new Error("Neumáticos existentes: " + error.message);
+        for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
+      }
+    };
+
     // Lo que ya existe de importaciones anteriores: se reutiliza.
-    const numeros = neuCrear.map((n) => `IMP-${n.codigo_interno}`);
-    for (let i = 0; i < numeros.length; i += chunk) {
-      const { data, error } = await supabase.from("tc_neumaticos")
-        .select("id, codigo_interno").in("numero_interno", numeros.slice(i, i + chunk));
-      if (error) throw new Error("Neumáticos existentes: " + error.message);
-      for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
-    }
+    await leerExistentes(neuCrear.map((n) => n.codigo_interno));
     const yaEstaban = nuevoNeuId.size;
     if (yaEstaban) avisos.add(`${yaEstaban} neumáticos ya existían de una importación anterior: se reutilizan en vez de duplicarlos.`);
 
     const porCrear = neuCrear.filter((n) => !nuevoNeuId.has(n.codigo_interno));
     for (let i = 0; i < porCrear.length; i += chunk) {
       const parte = porCrear.slice(i, i + chunk).map((n) => ({
-        empresa_id: n.empresa_id, numero_interno: `IMP-${n.codigo_interno}`, codigo_interno: n.codigo_interno,
+        empresa_id: n.empresa_id, numero_interno: numeroDe(n.codigo_interno), codigo_interno: n.codigo_interno,
         marca: n.marca, modelo: n.modelo, medida: n.medida, estado: n.estado, activo: n.activo,
       }));
-      const { data, error } = await supabase.from("tc_neumaticos").insert(parte).select("id, codigo_interno");
+      const { data, error } = await supabase.from("tc_neumaticos")
+        .upsert(parte, { onConflict: "numero_interno", ignoreDuplicates: true })
+        .select("id, codigo_interno");
       if (error) throw new Error("Alta de neumáticos: " + error.message);
       for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
+    }
+
+    // Las que el alta se saltó por chocar con una ficha ajena no vuelven en el
+    // select del upsert: se releen por si eran visibles y simplemente se
+    // habían creado entre medias.
+    const sinResolver = porCrear.filter((n) => !nuevoNeuId.has(n.codigo_interno));
+    if (sinResolver.length) {
+      await leerExistentes(sinResolver.map((n) => n.codigo_interno));
+      const ajenas = sinResolver.filter((n) => !nuevoNeuId.has(n.codigo_interno));
+      if (ajenas.length) {
+        const mats = [...new Set(ajenas.map((n) => n.codigo_interno.split("-P")[0]))];
+        avisos.add(
+          `${ajenas.length} neumáticos no se han podido dar de alta: su número interno ya existe en otra empresa ` +
+          `(seguramente una empresa duplicada de un import anterior). Sus mediciones se guardan igual, pero sin ficha ` +
+          `de neumático. Vehículos afectados: ${mats.slice(0, 10).join(", ")}${mats.length > 10 ? ` y ${mats.length - 10} más` : ""}.`,
+        );
+      }
     }
 
     // Los montajes tienen sus propios índices únicos —uno por neumático y uno
