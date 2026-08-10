@@ -27,9 +27,13 @@ class AppColors {
 
   static const disabledBtn = Color(0xFF2A3441);
 
-  // Gris de los botones de portada que no son la accion principal ni una
-  // alerta: se distingue de la tarjeta normal (surface) sin llamar la atencion.
-  static const tileGris = Color(0xFF4B5563);
+  // Botones de la portada de la APK, en tonos pastel. Son claros a proposito
+  // sobre el fondo oscuro: cada acción se reconoce por su color antes de leer
+  // la etiqueta. El texto y el icono los pone _BigTile en oscuro, calculando
+  // el contraste, para que se lean sobre estos fondos.
+  static const tileVerdePastel = Color(0xFFA8D5BA); // Operaciones
+  static const tileGrisPastel  = Color(0xFFC9CFD8); // Planificacion
+  static const tileRojoPastel  = Color(0xFFF2B0AC); // Incidencias
 
   // Estados de posicion de neumatico (color + significado, nunca solo color)
   static const tirePendiente    = Color(0xFF4B5563); // gris
