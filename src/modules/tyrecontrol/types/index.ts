@@ -430,6 +430,73 @@ export interface UmbralesEmpresa {
   presion_tolerancia_bar: number;
 }
 
+// Modo de identificación de neumáticos de una empresa.
+//   generico     → nada se identifica (comportamiento histórico)
+//   identificado → todo lleva número de serie o RFID
+//   mixto        → solo las medidas con excepción
+export type ModoIdentificacion = "generico" | "identificado" | "mixto";
+
+export const MODO_IDENTIFICACION_LABELS: Record<ModoIdentificacion, string> = {
+  generico: "Genérico",
+  identificado: "Todo identificado",
+  mixto: "Mixto",
+};
+
+export interface ConfigIdentificacion {
+  empresa_id: string;
+  modo: ModoIdentificacion;
+  // Cuando la política resuelve "identificable" y no llega ni RFID ni serie:
+  // true bloquea el montaje, false lo deja pasar como genérico.
+  exigir_identidad: boolean;
+}
+
+// Una goma concreta en el almacén: identidad, milímetros y de dónde viene.
+export interface UsadoEnAlmacen {
+  neumatico_id: string;
+  numero_interno: string | null;
+  numero_serie: string | null;
+  rfid_epc: string | null;
+  dot: string | null;
+  marca: string | null;
+  modelo: string | null;
+  medida: string | null;
+  profundidad_actual_mm: number | null;
+  profundidad_actualizada_en: string | null;
+  reesculturado: boolean;
+  estado: string;
+  origen: string | null;
+  fecha_desmontaje: string | null;
+  matricula_anterior: string | null;
+  km_acumulados: number | null;
+}
+
+// Cuántas gomas hay según cada mundo. Si no cuadran, es el doble conteo.
+export interface ResumenAlmacenUsados {
+  fichas: number;
+  con_identidad: number;
+  reesculturadas: number;
+  unidades_stock: number;
+}
+
+// Neumático al que le falta identidad y cuya medida sí debería llevarla.
+export interface PendienteIdentificar {
+  neumatico_id: string;
+  numero_interno: string | null;
+  marca: string | null;
+  medida: string | null;
+  profundidad_actual_mm: number | null;
+  estado: string;
+  matricula: string | null;
+  codigo_posicion: string | null;
+}
+
+// Excepción por medida del modo mixto.
+export interface IdentificacionMedida {
+  empresa_id: string;
+  medida: string;
+  identificable: boolean;
+}
+
 // Override de umbrales para una medida concreta dentro de una empresa.
 export interface UmbralMedida {
   empresa_id: string;

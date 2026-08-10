@@ -67,7 +67,11 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     ? (await supabase.from("tc_montajes_actuales").select("vehiculo_id, posicion_id, neumatico_id").in("vehiculo_id", vehIds)).data ?? []
     : [];
   const mapMontaje = new Map<string, string>(); // vehiculo|posicion -> neumatico
-  for (const m of montajes as any[]) mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
+  const neuMontados = new Set<string>();        // neumáticos que ya están puestos en algún sitio
+  for (const m of montajes as any[]) {
+    mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
+    neuMontados.add(m.neumatico_id);
+  }
 
   const revsExist = vehIds.length
     ? (await supabase.from("revisiones_vehiculo").select("id, vehiculo_id, fecha_revision").in("vehiculo_id", vehIds)).data ?? []
@@ -128,12 +132,33 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
   }
 
   // 6. EJECUTAR
-  // 6a. Crear neumáticos genéricos (lote) y sus montajes
+  // 6a. Neumáticos genéricos (lote) y sus montajes.
+  //
+  // El número interno se construye a partir de la matrícula y la posición
+  // (IMP-1234ABC-P3) y tiene un índice único global (uq_tc_neu_numero_interno,
+  // fase8). Si una importación se quedó a medias —o se repite el mismo Excel—
+  // esas fichas YA existen, y volver a insertarlas rompía todo con
+  // "duplicate key value violates unique constraint". Un import que no se
+  // puede repetir es un import que no se puede arreglar cuando falla, así que
+  // primero se mira qué hay y solo se da de alta lo que falta.
   if (neuCrear.length) {
     const chunk = 200;
     const nuevoNeuId = new Map<string, string>(); // codigo_interno -> id
-    for (let i = 0; i < neuCrear.length; i += chunk) {
-      const parte = neuCrear.slice(i, i + chunk).map((n) => ({
+
+    // Lo que ya existe de importaciones anteriores: se reutiliza.
+    const numeros = neuCrear.map((n) => `IMP-${n.codigo_interno}`);
+    for (let i = 0; i < numeros.length; i += chunk) {
+      const { data, error } = await supabase.from("tc_neumaticos")
+        .select("id, codigo_interno").in("numero_interno", numeros.slice(i, i + chunk));
+      if (error) throw new Error("Neumáticos existentes: " + error.message);
+      for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
+    }
+    const yaEstaban = nuevoNeuId.size;
+    if (yaEstaban) avisos.add(`${yaEstaban} neumáticos ya existían de una importación anterior: se reutilizan en vez de duplicarlos.`);
+
+    const porCrear = neuCrear.filter((n) => !nuevoNeuId.has(n.codigo_interno));
+    for (let i = 0; i < porCrear.length; i += chunk) {
+      const parte = porCrear.slice(i, i + chunk).map((n) => ({
         empresa_id: n.empresa_id, numero_interno: `IMP-${n.codigo_interno}`, codigo_interno: n.codigo_interno,
         marca: n.marca, modelo: n.modelo, medida: n.medida, estado: n.estado, activo: n.activo,
       }));
@@ -141,13 +166,26 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
       if (error) throw new Error("Alta de neumáticos: " + error.message);
       for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
     }
-    const montajesNuevos = neuCrear.map((n) => ({
-      empresa_id: n.empresa_id, vehiculo_id: n.vehiculo_id, neumatico_id: nuevoNeuId.get(n.codigo_interno)!, posicion_id: n.posicion_id,
-    })).filter((m) => m.neumatico_id);
+
+    // Los montajes tienen sus propios índices únicos —uno por neumático y uno
+    // por vehículo+posición (fase4)—, así que se salta lo que ya está puesto.
+    const montajesNuevos = neuCrear
+      .map((n) => ({
+        empresa_id: n.empresa_id, vehiculo_id: n.vehiculo_id,
+        neumatico_id: nuevoNeuId.get(n.codigo_interno)!, posicion_id: n.posicion_id,
+      }))
+      // Además del único por vehículo+posición, tc_montajes_actuales tiene uno
+      // por neumático: una goma reutilizada que ya esté puesta en otra posición
+      // no se puede montar otra vez sin desmontarla antes.
+      .filter((m) => m.neumatico_id
+        && !mapMontaje.has(`${m.vehiculo_id}|${m.posicion_id}`)
+        && !neuMontados.has(m.neumatico_id));
     for (let i = 0; i < montajesNuevos.length; i += chunk) {
-      const { error } = await supabase.from("tc_montajes_actuales").insert(montajesNuevos.slice(i, i + chunk));
+      const parte = montajesNuevos.slice(i, i + chunk);
+      const { error } = await supabase.from("tc_montajes_actuales")
+        .upsert(parte, { onConflict: "vehiculo_id,posicion_id", ignoreDuplicates: true });
       if (error) throw new Error("Montajes: " + error.message);
-      for (const m of montajesNuevos.slice(i, i + chunk)) mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
+      for (const m of parte) mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
     }
   }
 

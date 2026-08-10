@@ -5,6 +5,7 @@ import '../models/models.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/campo_identidad.dart';
 
 const _estadosVisuales = <String, String>{
   'correcto': 'Correcto',
@@ -48,6 +49,11 @@ class TireDetailScreen extends StatefulWidget {
 }
 
 class _TireDetailScreenState extends State<TireDetailScreen> {
+  // Identidad recién puesta desde esta pantalla. El modelo que llega por
+  // widget.neumatico es inmutable, así que se guarda aparte para poder
+  // refrescar la tarjeta sin recargar toda la revisión.
+  String? _rfidPuesto;
+  String? _seriePuesta;
   late final TextEditingController _profundidad;
   late final TextEditingController _presion;
   late final TextEditingController _observaciones;
@@ -157,6 +163,102 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     }
   }
 
+  /// Identidad de la goma: la que trae o la que se acaba de poner. Si no
+  /// lleva ninguna, el enlace para ponérsela.
+  Widget _lineaIdentidad(Neumatico n) {
+    final rfid = _rfidPuesto ?? n.rfidEpc;
+    final serie = _seriePuesta ?? n.numeroSerie;
+    final tiene = (rfid ?? '').isNotEmpty || (serie ?? '').isNotEmpty;
+    if (tiene) {
+      final txt = (rfid ?? '').isNotEmpty ? 'RFID $rfid' : 'Nº $serie';
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(children: [
+          const Icon(Icons.verified_outlined, size: 13, color: AppColors.success),
+          const SizedBox(width: 4),
+          Flexible(child: Text(txt,
+              style: const TextStyle(color: AppColors.success, fontSize: 12),
+              maxLines: 1, overflow: TextOverflow.ellipsis)),
+        ]),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: InkWell(
+        onTap: _identificar,
+        child: const Row(children: [
+          Icon(Icons.nfc, size: 13, color: AppColors.info),
+          SizedBox(width: 4),
+          Text('Identificar esta rueda',
+              style: TextStyle(color: AppColors.info, fontSize: 12, fontWeight: FontWeight.w600)),
+        ]),
+      ),
+    );
+  }
+
+  /// Pone identidad a la rueda sin desmontarla. Es lo que permite que un
+  /// cliente que pasa a modo identificado no tenga que esperar años a que
+  /// caiga cada goma para tenerla registrada.
+  Future<void> _identificar() async {
+    final n = widget.neumatico;
+    if (n == null) return;
+    final rfid = TextEditingController();
+    final serie = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Identificar esta rueda'),
+        content: SizedBox(
+          width: 360,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('${n.numeroInterno ?? ''} · ${n.medidaCompleta}',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            const SizedBox(height: 12),
+            CampoIdentidad(rfid: rfid, serie: serie, autofocus: true),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Guardar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final r = rfid.text.trim();
+    final s = serie.text.trim();
+    if (r.isEmpty && s.isEmpty) {
+      _avisar('Hace falta un RFID o un número de serie.', ok: false);
+      return;
+    }
+    try {
+      await TyreControlApi.identificarNeumatico(
+        neumaticoId: n.id, rfidEpc: r, numeroSerie: s,
+        observaciones: 'Identificada en la revisión de ${widget.vehiculo.matricula}',
+      );
+      if (!mounted) return;
+      setState(() { _rfidPuesto = r; _seriePuesta = s; });
+      _avisar('Rueda identificada', ok: true);
+    } catch (e) {
+      final t = '$e';
+      final txt = t.contains('IDENTIDAD_DUPLICADA')
+          ? 'Esa identidad ya es de otra goma. Comprueba la etiqueta.'
+          : t.contains('IDENTIDAD_YA_TIENE')
+              ? 'Esta rueda ya tenía identidad y no se pisa. Avisa a oficina si ha cambiado.'
+              : 'No se ha podido identificar: $t';
+      _avisar(txt, ok: false);
+    }
+  }
+
+  void _avisar(String txt, {required bool ok}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(txt),
+      backgroundColor: ok ? AppColors.success : AppColors.danger,
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = widget.posicion;
@@ -202,6 +304,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
                             Text('${n.marca ?? ''} ${n.modelo ?? ''}'.trim(), style: const TextStyle(color: AppColors.textSecondary)),
                             Text(n.medidaCompleta, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
                             if (n.dot != null) Text('DOT ${n.dot}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                            _lineaIdentidad(n),
                           ],
                         ),
                       ),
