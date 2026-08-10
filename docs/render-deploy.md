@@ -32,6 +32,12 @@ Usa `.env.example` como plantilla. Como minimo, antes del primer deploy deben es
 
 Para cobros y WhatsApp tambien hacen falta las claves de Stripe y Twilio.
 
+Para las notificaciones push de las APKs (incluida Mobilink Assist Lite) hace
+falta `FIREBASE_SERVICE_ACCOUNT`: el JSON de la cuenta de servicio de Firebase,
+pegado en una sola linea. Sin ella el backend no envia ningun aviso y las apps
+se quedan sondeando. `FIREBASE_PROJECT_ID` solo hace falta si el proyecto no
+coincide con el del JSON.
+
 Para el WhatsApp automatico al finalizar un trabajo, configura
 `TWILIO_JOB_FINISHED_CONTENT_SID` con la plantilla aprobada en Twilio. La app
 envia estas variables a la plantilla: `1` cliente, `2` matricula y `3` trabajo.
@@ -58,3 +64,5 @@ El modulo de almacen depende de las tablas, policies, buckets y funciones ya cre
 - Crear una asistencia y abrir `/seguimiento/:token`.
 - Abrir `/almacen-neumaticos` y confirmar login/carga con Supabase.
 - Probar una lectura PDF/OCR si `OPENAI_API_KEY` esta configurada.
+- Abrir Central Pro → **Salud de Assist Lite** y confirmar que responde. Los
+  contadores empiezan a cero en cada despliegue: eso es lo normal, no un fallo.

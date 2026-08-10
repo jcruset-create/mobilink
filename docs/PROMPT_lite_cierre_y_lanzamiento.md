@@ -24,9 +24,9 @@ más cinco huecos declarados.
 | 7 | Navegación y mapa | Hecho | `url_launcher` + `flutter_map`; `POST /assistances/:id/navigation` deja rastro en auditoría |
 | 8 | Evidencias (fotos, observaciones, firma) | Hecho | `photos_screen.dart`, `signature_screen.dart`, `connect_assistance_files`, `connect_assistance_signatures` |
 | 9 | Finalización y retorno | Hecho | `validateFinish`, `DEFAULT_FINISH_RULES`, estados `returning_to_workshop` y `at_workshop` |
-| 10 | Modo offline | Hecho (parcial) | `queue.dart` + `connect_lite_actions` (idempotencia por `clientActionId`). **Fotos y firma no se encolan** |
+| 10 | Modo offline | Hecho | `queue.dart` + `file_queue.dart` + `connect_lite_actions`. Fotos y firma también se encolan (bloque D) |
 | 11 | KPIs y auditoría | Hecho | `computeLiteKpis`, `statusQualityScore`, `connect_audit_logs` con `actorType = 'lite'` |
-| 12 | Pruebas, endurecimiento y lanzamiento | En curso | Bloques A y B hechos; C a G pendientes |
+| 12 | Pruebas, endurecimiento y lanzamiento | En curso | Bloques A, B, D, E, F y G hechos; **solo queda C** |
 
 Cobertura de pruebas actual: 23 pruebas unitarias de reglas de dominio
 (`liteRules.test.ts`), dentro de las 310 del repositorio. No hay pruebas de
@@ -75,7 +75,7 @@ aplicación está abierta y en primer plano; con la aplicación cerrada, no lleg
 nada. Para un producto de asistencia en carretera esto no es aceptable en
 producción.
 
-### H3. El seguimiento se detiene con la pantalla bloqueada (bloqueante en la práctica)
+### H3. El seguimiento se detiene con la pantalla bloqueada — PENDIENTE, y es lo único que bloquea
 
 `tracker.dart` usa `geolocator` en primer plano. Android detiene la entrega de
 posiciones cuando la aplicación pasa a segundo plano un rato o se bloquea la
@@ -84,19 +84,30 @@ falta un servicio en primer plano con notificación persistente — que además 
 lo que exige la política de Google Play para ubicación en segundo plano, y que
 encaja con el requisito de "aviso persistente mientras se comparte ubicación".
 
-### H4. Sin pruebas de integración ni end-to-end
+### H4. Sin pruebas de integración ni end-to-end — RESUELTO
+
+> Cerrado por el bloque E: 22 casos recorren el ciclo completo por HTTP contra
+> un PostgreSQL real, y la CI levanta un contenedor desechable para ejecutarlos.
+> Por el camino aparecieron dos fallos de esquema que impedían levantar el
+> proyecto desde cero, y un guardián de CI que daba verde en falso.
 
 Las reglas puras están cubiertas. El ciclo real (Central asigna → Lite recibe →
 estados → GPS → evidencias → firma → cierre → retorno) no se prueba nunca contra
 una base de datos. El repositorio no tiene hoy un PostgreSQL de pruebas.
 
-### H5. Fotos y firma no sobreviven a la falta de cobertura
+### H5. Fotos y firma no sobreviven a la falta de cobertura — RESUELTO
+
+> Cerrado por el bloque D: `file_queue.dart` copia el binario al almacenamiento
+> privado de la app y lo sube al recuperar señal, con el mismo `clientActionId`.
 
 `queue.dart` encola cambios de estado, observaciones, mensajes y posiciones. Las
 fotografías y la firma no: se avisa al operario de que no hay conexión. Falta
 copiar el binario a almacenamiento persistente y una cola de ficheros aparte.
 
-### H6. El chat es de ida
+### H6. El chat es de ida — PARCIAL
+
+> El aviso de Central ya llega al operario como push (bloque B). Sigue sin
+> haber hilo de conversación en la ficha.
 
 La aplicación envía mensajes (`sendMessage`) y los lee al sondear (`messages`),
 y Central los ve. Lo que falta es que la respuesta de Central llegue como aviso
@@ -173,7 +184,7 @@ El backend ya envía; falta recibir.
 Verificable: con la aplicación cerrada, asignar una asistencia desde Central Pro
 hace sonar el teléfono y abrirla lleva a esa asistencia.
 
-### Bloque C — Seguimiento con la pantalla bloqueada
+### Bloque C — Seguimiento con la pantalla bloqueada — PENDIENTE (única cosa que queda)
 
 1. Sustituye el seguimiento en primer plano por un servicio en primer plano de
    Android con notificación persistente que diga que se está compartiendo la
@@ -191,7 +202,7 @@ hace sonar el teléfono y abrirla lleva a esa asistencia.
 Verificable: con el móvil bloqueado en el bolsillo durante un trayecto, Central
 Pro ve el rastro continuo, sin huecos mayores que el intervalo configurado.
 
-### Bloque D — Cola de ficheros sin cobertura
+### Bloque D — Cola de ficheros sin cobertura — HECHO
 
 Cierra H5 con el mismo patrón que ya usa `queue.dart`.
 
@@ -205,7 +216,7 @@ Cierra H5 con el mismo patrón que ya usa `queue.dart`.
 Verificable: en modo avión, hacer cuatro fotos y firmar; al recuperar cobertura
 todo aparece en Central Pro una sola vez.
 
-### Bloque E — Pruebas de verdad
+### Bloque E — Pruebas de verdad — HECHO
 
 1. Levanta un PostgreSQL de pruebas (contenedor en CI) y ejecuta contra él
    `initConnect()`. Sin esto no hay pruebas de integración posibles.
@@ -226,7 +237,7 @@ todo aparece en Central Pro una sola vez.
 Verificable: `npm test` en verde, incluyendo los nuevos casos, y CI ejecutando
 las pruebas de integración.
 
-### Bloque F — Endurecimiento y observabilidad
+### Bloque F — Endurecimiento y observabilidad — HECHO
 
 1. Revisa `rate limiting` en `/api/connect/lite/*`. Hoy hay bloqueo por intentos
    fallidos de login; comprueba que también lo hay en subida de ficheros y envío
@@ -237,7 +248,7 @@ las pruebas de integración.
 3. Verifica que en los registros no acaba ningún dato personal, token, firma ni
    documento completo.
 
-### Bloque G — Documentación y entrega
+### Bloque G — Documentación y entrega — HECHO
 
 1. Actualiza `docs/mobilink-assist-lite.md`: mueve a "entregado" lo que se
    cierre y deja en "pendiente" lo que quede, sin maquillarlo.
