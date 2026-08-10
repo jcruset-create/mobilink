@@ -25,6 +25,29 @@ const pool = new Pool({
 });
 
 export async function initDb() {
+  // `payments` (cobros con Stripe) solo existía en la base de producción: nadie
+  // la creaba desde el código, así que en una base nueva todos los endpoints de
+  // /api/payments reventaban y el ALTER de abajo fallaba en silencio. En la base
+  // que ya existe esto es un no-op.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      reference TEXT NOT NULL,
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_phone TEXT NOT NULL DEFAULT '',
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      stripe_session_id TEXT,
+      stripe_payment_intent_id TEXT,
+      payment_url TEXT,
+      paid_at_ms BIGINT,
+      created_at_ms BIGINT NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS payments_reference_idx ON payments (reference);
+    CREATE INDEX IF NOT EXISTS payments_session_idx ON payments (stripe_session_id);
+  `);
+
   await pool.query(`
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
