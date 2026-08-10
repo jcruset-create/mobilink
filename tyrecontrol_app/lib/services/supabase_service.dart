@@ -1108,7 +1108,10 @@ class TyreControlApi {
   /// [montajeAntes] = estado del vehículo al abrir la pantalla (posición →
   /// neumático) para el plano "antes"; [incidencias] = las averías de origen.
   /// El backend calcula el estado "después" y redacta el informe con IA.
-  static Future<void> cerrarIntervencion(
+  /// Cierra la sesión de cambio y devuelve el NÚMERO DE PARTE asignado
+  /// (OP-2026-000143), o null si el servidor no respondió. No lanza: el
+  /// informe se puede regenerar y no debe bloquear al técnico.
+  static Future<String?> cerrarIntervencion(
     String vehiculoId,
     DateTime desde, {
     List<Map<String, dynamic>>? montajeAntes,
@@ -1118,7 +1121,7 @@ class TyreControlApi {
     int? nPausas,
   }) async {
     try {
-      await http.post(
+      final res = await http.post(
         Uri.parse('$kBackendUrl/api/tyrecontrol/intervencion/cerrar'),
         headers: {
           'Content-Type': 'application/json',
@@ -1140,7 +1143,12 @@ class TyreControlApi {
           if (imagenChasis != null) 'imagenChasis': imagenChasis,
         }),
       ).timeout(const Duration(seconds: 25));
+      if (res.statusCode == 200) {
+        final j = jsonDecode(res.body);
+        if (j is Map && j['numero'] is String) return j['numero'] as String;
+      }
     } catch (_) {/* el informe se puede regenerar; no bloquea */}
+    return null;
   }
 
   /// Deshace la última operación de montaje/desmontaje del vehículo desde
