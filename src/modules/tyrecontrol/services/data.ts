@@ -991,6 +991,9 @@ export interface IncidenciaOrigen {
 }
 export interface Intervencion {
   id: string; empresa_id: string; vehiculo_id: string | null; fecha: string;
+  /** Número de parte legible: OP-2026-000143. Lo pone la base de datos por
+   *  DEFAULT, así que falta en registros anteriores a esa migración. */
+  numero?: string | null;
   resumen: string | null; resumen_ia: string | null; n_operaciones: number; created_at?: string;
   montaje_antes?: MontajeSnapshot[] | null;
   montaje_despues?: MontajeSnapshot[] | null;
