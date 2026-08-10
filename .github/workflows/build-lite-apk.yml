@@ -63,6 +63,11 @@ jobs:
           BUILD=${{ github.run_number }}
           sed -i "s/^version: .*/version: $NOMBRE+$BUILD/" pubspec.yaml
           grep '^version:' pubspec.yaml
+          # La app manda kAppVersion a Central en cada arranque: si no se
+          # actualizara aqui, el panel veria todos los moviles en la version
+          # inicial y "versiones antiguas en uso" no serviria de nada.
+          sed -i "s/^const String kAppVersion = .*/const String kAppVersion = '$NOMBRE+$BUILD';/" lib/config.dart
+          grep 'kAppVersion' lib/config.dart
           {
             echo "nombre=$NOMBRE"
             echo "build=$BUILD"
@@ -185,7 +190,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pubspec.yaml
+          git add pubspec.yaml lib/config.dart
           if git diff --cached --quiet; then
             echo "El pubspec no ha cambiado; nada que guardar."
             exit 0

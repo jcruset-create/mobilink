@@ -17,6 +17,7 @@ on:
       - "src/**"
       - "package.json"
       - "package-lock.json"
+      - "tsconfig*.json"
       - ".github/workflows/tests.yml"
   pull_request:
 
@@ -69,6 +70,11 @@ jobs:
 
       - name: Typecheck del panel
         run: npx tsc -b
+
+      # El backend se ejecuta con `tsx`, que borra los tipos sin comprobarlos:
+      # sin esto, un error de tipos en server/ llega a producción.
+      - name: Typecheck del servidor (Central Pro y Lite)
+        run: npx tsc -p tsconfig.server.json
 
       # Una sola pasada: el informe JSON sirve para la comprobación siguiente.
       - name: Pruebas (unitarias + integración contra PostgreSQL)
