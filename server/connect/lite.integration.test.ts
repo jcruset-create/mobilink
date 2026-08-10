@@ -53,6 +53,9 @@ async function api(
 /** Identificador único por ejecución: la base puede reutilizarse entre runs. */
 const sufijo = String(process.hrtime.bigint()).slice(-9);
 
+/** Instante de referencia de las posiciones, compartido entre pruebas. */
+const tsPrimerPunto = Date.now();
+
 describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL", () => {
   beforeAll(async () => {
     const { initDb } = await import("../db.ts");
@@ -218,7 +221,7 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
   });
 
   it("las posiciones se guardan con hora de servidor, no solo la del móvil", async () => {
-    const ahora = Date.now();
+    const ahora = tsPrimerPunto;
     const r = await api(`/assistances/${asistenciaId}/locations-batch`, {
       method: "POST",
       body: {
@@ -247,7 +250,10 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
       `SELECT COUNT(*)::int AS n FROM connect_assistance_tracks WHERE "assistanceId" = $1`,
       [asistenciaId],
     );
-    const ahora = Date.now();
+    // El MISMO instante que la primera vez: es lo que hace la cola offline al
+    // reintentar. Con un Date.now() nuevo serían posiciones legítimamente
+    // distintas y la prueba no probaría nada.
+    const ahora = tsPrimerPunto;
     await api(`/assistances/${asistenciaId}/locations-batch`, {
       method: "POST",
       body: {
@@ -270,6 +276,19 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
     expect(r.status).toBeLessThan(300);
   });
 
+  it("el cierre se rechaza si no hay ninguna fotografía", async () => {
+    const r = await api(`/assistances/${asistenciaId}/finish`, {
+      method: "POST",
+      body: {
+        result: "repaired_on_site",
+        resolutionNotes: "Sustituida por la de repuesto",
+        clientActionId: `fin-sin-fotos-${sufijo}`,
+      },
+    });
+    expect(r.status).toBe(422);
+    expect(JSON.stringify(r.body)).toMatch(/fotograf/i);
+  });
+
   it("el cierre exige la observación de resolución", async () => {
     const r = await api(`/assistances/${asistenciaId}/finish`, {
       method: "POST",
@@ -279,6 +298,15 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
   });
 
   it("cierra el servicio con los requisitos cumplidos", async () => {
+    // La evidencia se registra directamente: la subida real sube el binario a
+    // Supabase Storage, que en CI no existe. Lo que se prueba aquí es la
+    // validación de cierre, no el almacenamiento.
+    await db.query(
+      `INSERT INTO connect_assistance_files
+         ("assistanceId", "workshopId", category, url, "fileName", "mimeType", "createdAtMs")
+       VALUES ($1,$2,'work','http://ficticio/foto.jpg','foto.jpg','image/jpeg',$3)`,
+      [asistenciaId, tallerId, Date.now()],
+    );
     const r = await api(`/assistances/${asistenciaId}/finish`, {
       method: "POST",
       body: {
