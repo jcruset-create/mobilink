@@ -30,6 +30,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
@@ -15965,25 +15966,6 @@ const APK_APPS: Record<
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
 };
-
-// Orden por versión descendente. El "+build" (0.31.6+80) cuenta como un tramo
-// más al final: sin esto, "6+80" se parseaba como 6 y dos builds del mismo
-// 0.31.6 empataban, así que ganaba el que devolviera primero el sistema de
-// ficheros — es decir, cualquiera.
-function versionPartes(v: string): number[] {
-  const [nombre, build] = v.split("+");
-  const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
-  out.push(parseInt(build ?? "0", 10) || 0);
-  return out;
-}
-function masNuevaPrimero(a: string, b: string): number {
-  const pa = versionPartes(a);
-  const pb = versionPartes(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
-  }
-  return 0;
-}
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
 function latestApkFor(prefix: string): { file: string; version: string } | null {
