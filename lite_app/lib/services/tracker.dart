@@ -220,7 +220,7 @@ class Tracker {
 
     final enMovimiento = _status == 'en_route' || _status == 'returning_to_workshop';
     final mudoMs = DateTime.now().millisecondsSinceEpoch - _ultimaPosicionMs;
-    final caido = _sub == null || (enMovimiento && mudoMs > 180_000);
+    final caido = _sub == null || (enMovimiento && mudoMs > 180000);
     if (!caido) return;
 
     _sub?.cancel();
