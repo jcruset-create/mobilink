@@ -9,6 +9,7 @@ import { ROL_LABELS } from "../types";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { EmpresaFormFields, EMPRESA_VACIA, DelegacionFormFields, delegacionVacia } from "../components/forms";
 import UmbralesEmpresa from "../components/UmbralesEmpresa";
+import IdentificacionEmpresa from "../components/IdentificacionEmpresa";
 import StockAlmacen from "../components/StockAlmacen";
 import PreciosMedida from "../components/PreciosMedida";
 import WebfleetEmpresa from "../components/WebfleetEmpresa";
@@ -118,6 +119,11 @@ export default function EmpresaDetalle() {
       {/* Stock de almacén (nuevo / usado) */}
       <div className="mb-3">
         <StockAlmacen empresaId={id} enlazado={!!empresa.cliente_almacen_id} />
+      </div>
+
+      {/* Identificación de neumáticos (genérico / identificado / mixto) */}
+      <div className="mb-3">
+        <IdentificacionEmpresa empresaId={id} />
       </div>
 
       {/* Umbrales de profundidad */}
