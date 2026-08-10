@@ -372,6 +372,57 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
     expect(kpis.acceptMin).not.toBeNull();
   });
 
+  it("la APK informa del estado de su cola y Central lo guarda", async () => {
+    const r = await api("/device", {
+      method: "POST",
+      body: { appVersion: "0.1.4+5", queuePending: 3, queueFailed: 1, queueOldestAtMs: 1_700_000_000_000 },
+    });
+    expect(r.status).toBe(200);
+    const d = await db.query(
+      `SELECT "queuePending", "queueFailed", "queueOldestAtMs", "appVersion"
+         FROM connect_lite_devices WHERE "workshopId" = $1 AND "revokedAtMs" IS NULL`,
+      [tallerId],
+    );
+    expect(d.rows[0].queuePending).toBe(3);
+    expect(d.rows[0].queueFailed).toBe(1);
+    expect(d.rows[0].appVersion).toBe("0.1.4+5");
+
+    // Una cola ya vaciada tiene que poder volver a cero: si se guardara con
+    // COALESCE, el dispositivo se quedaría marcado como atascado para siempre.
+    await api("/device", { method: "POST", body: { queuePending: 0, queueFailed: 0 } });
+    const d2 = await db.query(
+      `SELECT "queuePending" FROM connect_lite_devices WHERE "workshopId" = $1 AND "revokedAtMs" IS NULL`,
+      [tallerId],
+    );
+    expect(d2.rows[0].queuePending).toBe(0);
+  });
+
+  it("un dispositivo desbocado se frena con 429 y sabe cuándo reintentar", async () => {
+    // El lote de posiciones admite 20 por minuto. Se manda vacío: interesa el
+    // freno, no lo que se guarda.
+    let ultima = { status: 200, body: {} as any };
+    for (let i = 0; i < 25 && ultima.status !== 429; i++) {
+      ultima = await api(`/assistances/${asistenciaId}/locations-batch`, {
+        method: "POST",
+        body: { points: [] },
+      });
+    }
+    expect(ultima.status).toBe(429);
+    expect(ultima.body.error.code).toBe("rate_limited");
+    expect(ultima.body.error.detail.retryAfterSec).toBeGreaterThan(0);
+  });
+
+  it("la salud de la red recoge el tráfico que acaba de pasar", async () => {
+    const { liteMetrics } = await import("./liteMetrics.ts");
+    const s = liteMetrics.snapshot();
+    const lote = s.api.find((e) => e.endpoint.endsWith("/locations-batch"));
+    expect(lote).toBeTruthy();
+    expect(lote!.total).toBeGreaterThan(0);
+    // El 429 de la prueba anterior se cuenta como freno, no como fallo.
+    expect(lote!.limitados).toBeGreaterThan(0);
+    expect(lote!.errores).toBe(0);
+  });
+
   it("la sesión revocada deja de servir", async () => {
     await db.query(
       `UPDATE connect_lite_devices SET "revokedAtMs" = $1

@@ -106,10 +106,14 @@ export async function drivingRoute(
       }),
     });
     if (!res.ok) {
-      console.error(`[Connect] Routes API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      // Solo el código: el cuerpo del error repite origen y destino, es decir
+      // dónde está el cliente averiado.
+      console.error(`[Connect] Routes API ${res.status}`);
       return null;
     }
-    const data = await res.json();
+    const data = (await res.json()) as {
+      routes?: { polyline?: { encodedPolyline?: string }; distanceMeters?: number; duration?: string }[];
+    };
     const route = data.routes?.[0];
     const encoded = route?.polyline?.encodedPolyline;
     if (!encoded) return null;
