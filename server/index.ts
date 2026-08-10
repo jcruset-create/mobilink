@@ -1802,11 +1802,14 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
         imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
       })
-      .select("id").single();
+      // El número lo pone la base de datos por DEFAULT; se lee de vuelta para
+      // poder enseñárselo al técnico nada más finalizar, que es cuando puede
+      // apuntarlo en el albarán.
+      .select("id, numero").single();
     if (e2) throw e2;
     await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
 
-    res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
+    res.json({ id: interv.id, numero: (interv as any).numero ?? null, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
