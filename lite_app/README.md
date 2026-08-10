@@ -84,9 +84,27 @@ y aproximada, cámara y notificaciones, los `<queries>` de `url_launcher`
 `ndkVersion` y la memoria del demonio de Gradle bajada a 2 GB, porque el valor
 que genera Flutter (`-Xmx8G`) no cabe en equipos de 16 GB.
 
-**No** se declara `ACCESS_BACKGROUND_LOCATION`: hoy el seguimiento funciona con
-la app en primer plano o en segundo plano reciente. Pedir ese permiso sin usarlo
-complica la revisión de Google Play y no aporta nada.
+### Seguimiento con la pantalla bloqueada
+
+El flujo de posiciones se arranca como **servicio en primer plano** de Android
+(`AndroidSettings.foregroundNotificationConfig` en `tracker.dart`), con aviso
+persistente que no se puede ocultar. Lo levanta el propio `geolocator`
+—`GeolocatorLocationService` ya viene declarado con
+`foregroundServiceType="location"` en el manifiesto del plugin—, así que no hay
+ninguna dependencia extra ni de pago. De ahí los permisos `FOREGROUND_SERVICE`,
+`FOREGROUND_SERVICE_LOCATION` (obligatorio desde Android 14) y `WAKE_LOCK`.
+
+**No** se declara `ACCESS_BACKGROUND_LOCATION`, y es deliberado: el servicio
+arranca con la app en primer plano —el operario pulsa "En camino"— y en ese caso
+basta el permiso de "mientras se usa la app". Pedir el de segundo plano
+obligaría a pasar la revisión aparte de Google Play sin ganar nada.
+
+Limitación conocida: el servicio mantiene el seguimiento con la pantalla
+bloqueada y la app en segundo plano, pero **no sobrevive a que Android destruya
+la actividad** por falta de memoria. `Tracker._vigilar` reabre el flujo cuando
+detecta que se ha caído; el rastro del hueco no se recupera. La alternativa que
+sí lo cubriría es un servicio con motor Flutter propio
+(`flutter_background_geolocation`, de pago).
 
 `google-services.json` y `key.properties` no están en el repositorio, que es
 público: los inyecta la CI desde secretos.

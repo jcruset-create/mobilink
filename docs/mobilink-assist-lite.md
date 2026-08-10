@@ -228,8 +228,15 @@ Consulta: `GET /api/connect/bo/workshops/:id/kpis?days=30` y, por servicio,
 - Desactivar un usuario o cambiarle el PIN revoca sus sesiones abiertas.
 - Subidas: whitelist de MIME, 12 MB, normalización con `sharp`, SHA-256 de
   integridad y ruta de almacenamiento no adivinable.
-- Seguimiento GPS solo durante asistencia activa y en los estados definidos;
-  la app muestra permanentemente que está compartiendo ubicación.
+- Seguimiento GPS solo durante asistencia activa y en los estados definidos.
+  Mientras dura, un servicio en primer plano muestra un aviso permanente que no
+  se puede ocultar: nadie comparte su posición sin saberlo. Al detenerse el
+  seguimiento, el aviso desaparece.
+- No se pide `ACCESS_BACKGROUND_LOCATION`. El servicio arranca con la app en
+  primer plano —el operario acaba de pulsar "En camino"—, y en ese caso Android
+  permite seguir recibiendo posiciones con el permiso de "mientras se usa la
+  app". Pedir el de segundo plano obligaría a pasar la revisión aparte de
+  Google Play sin ganar nada.
 - Auditoría en `connect_audit_logs` con `actorType = 'lite'`: login (y login
   fallido), logout, aceptación, rechazo, cambios de estado, correcciones,
   navegación abierta, evidencias añadidas y eliminadas, firma, observaciones,
@@ -324,6 +331,14 @@ patrón de ruta (`POST /assistances/:id/files`), no la URL real.
   recorren el ciclo completo por HTTP contra el router real, más el workflow
   `tests.yml` con un contenedor de PostgreSQL desechable y un guardián que
   falla si las de integración no llegan a ejecutarse.
+- **Seguimiento con la pantalla bloqueada (bloque C)**: el flujo de posiciones
+  se arranca como servicio en primer plano de Android, con notificación
+  persistente "Compartiendo ubicación durante la asistencia". Lo levanta el
+  propio `geolocator` (`GeolocatorLocationService`, ya declarado con
+  `foregroundServiceType="location"`), así que **no hace falta ninguna
+  dependencia de pago**. Un vigilante reabre el flujo si se cae. Sin esto,
+  Android dejaba de entregar posiciones a los pocos minutos de bloquear la
+  pantalla y el rastro llegaba a Central con agujeros.
 - **Endurecimiento y observabilidad (bloque F)**: límites de uso, página de
   salud, revisión de datos personales en registros y retención de
   `connect_lite_actions` (todo detallado en §7 y §8).
@@ -342,13 +357,14 @@ patrón de ruta (`POST /assistances/:id/files`), no la URL real.
    `LITE_GOOGLE_SERVICES_BASE64` en GitHub, y poner `FIREBASE_SERVICE_ACCOUNT`
    en Render. Hasta entonces la APK se compila igual, sin avisos, y la app lo
    dice en Perfil. **Es trabajo de administración, no de programación.**
-2. **Seguimiento en segundo plano con pantalla bloqueada.** `geolocator`
-   funciona en primer plano y con la app en segundo plano reciente; para
-   garantizarlo con el móvil bloqueado hace falta un servicio en primer plano
-   Android. Hay que decidir entre `flutter_background_geolocation` (de pago,
-   licencia por aplicación) y `foreground_service` + `geolocator` (gratis, más
-   trabajo). **Sin esto no se cumple el criterio de aceptación del rastro GPS
-   completo durante un trayecto real.**
+2. **El servicio en primer plano no sobrevive a que Android mate la
+   actividad.** Es la limitación conocida del enfoque gratuito: mantiene el
+   seguimiento con la pantalla bloqueada y la app en segundo plano, que es el
+   caso real, pero si el sistema destruye la actividad por falta de memoria el
+   flujo muere. El vigilante lo reabre en cuanto la app vuelve, y el rastro
+   perdido en ese hueco no se recupera. La alternativa que sí lo cubre es un
+   servicio con motor Flutter propio (`flutter_background_geolocation`, de
+   pago). Conviene comprobar en un trayecto real si el hueco llega a darse.
 3. **El estado de la cola offline aún no llega de los móviles instalados.** El
    backend y la página de salud están listos; la APK lo empieza a informar a
    partir de la próxima versión compilada. Hasta entonces la tabla de colas
@@ -441,8 +457,9 @@ en el resumen del build y en la pantalla de Perfil de la app.
 - **Instalar**: abrir el enlace de descarga que ha dado la central, permitir la
   instalación desde el navegador e instalar el APK.
 - **Permisos**: al primer arranque la app pide **ubicación** y **cámara**. En
-  ubicación, elegir *Permitir siempre* — con *Solo mientras se usa la app*, el
-  rastro se corta en cuanto la pantalla se apaga. También conviene aceptar las
+  ubicación basta con *Mientras se usa la app*: durante el servicio aparece un
+  aviso permanente en la barra de notificaciones y el rastro sigue llegando
+  aunque se bloquee la pantalla. También hay que aceptar las
   **notificaciones**: es como suena el aviso de una asistencia nueva.
 - **Batería**: si el móvil tiene ahorro de energía agresivo (Xiaomi, Huawei,
   Samsung), excluir la app de la optimización de batería. Si no, Android la
@@ -455,7 +472,10 @@ en el resumen del build y en la pantalla de Perfil de la app.
    pulsar **Aceptar**, o **Rechazar** indicando el motivo. Si no se acepta a
    tiempo, la central la ofrece a otro taller.
 3. **En camino**: al pulsarlo empieza a compartirse la ubicación con la
-   central. Desde ahí se abre la navegación hacia el punto.
+   central y aparece el aviso permanente "Compartiendo ubicación durante la
+   asistencia". **No se puede quitar mientras dura el servicio, y es a
+   propósito**: es la garantía de que nadie comparte su posición sin saberlo.
+   Desde ahí se abre la navegación hacia el punto.
 4. **En punto**: al llegar, la app lo sugiere sola si el GPS es fiable; el
    operario confirma.
 5. **Trabajando**: hacer las fotografías por categoría (vehículo, daños,
@@ -488,8 +508,9 @@ bueno.
 ### Privacidad
 
 La ubicación se comparte **solo durante una asistencia activa** y en los
-estados de camino, trabajo y vuelta. Fuera de eso, la app no envía posición. La
-pantalla lo indica en todo momento mientras está compartiendo.
+estados de camino, trabajo y vuelta. Fuera de eso, la app no envía posición: al
+llegar al taller el seguimiento se detiene y el aviso desaparece de la barra de
+notificaciones, que es la señal de que ya no se está compartiendo nada.
 
 ---
 
@@ -547,9 +568,10 @@ desde cero**. En la base que ya existe los arreglos son un no-op.
 
 1. Cerrar el alta en Firebase y comprobar el push de extremo a extremo con un
    móvil real.
-2. Servicio en primer plano para el seguimiento con pantalla bloqueada, con
-   notificación persistente ("compartiendo ubicación"), que además es lo que
-   pide Google Play si algún día se publica ahí.
+2. Si en un trayecto real se ve que Android llega a matar la actividad y el
+   rastro se corta, valorar `flutter_background_geolocation` (de pago), que
+   levanta un motor Flutter propio y sobrevive a eso. Hoy no está justificado
+   pagarlo sin haberlo medido.
 3. Persistir las métricas de salud: hoy se pierden en cada despliegue. Un
    volcado horario a una tabla bastaría para tener tendencia.
 4. Ampliar `tsconfig.server.json` al resto de `server/` según se vayan

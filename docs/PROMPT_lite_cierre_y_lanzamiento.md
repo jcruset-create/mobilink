@@ -26,7 +26,7 @@ más cinco huecos declarados.
 | 9 | Finalización y retorno | Hecho | `validateFinish`, `DEFAULT_FINISH_RULES`, estados `returning_to_workshop` y `at_workshop` |
 | 10 | Modo offline | Hecho | `queue.dart` + `file_queue.dart` + `connect_lite_actions`. Fotos y firma también se encolan (bloque D) |
 | 11 | KPIs y auditoría | Hecho | `computeLiteKpis`, `statusQualityScore`, `connect_audit_logs` con `actorType = 'lite'` |
-| 12 | Pruebas, endurecimiento y lanzamiento | En curso | Bloques A, B, D, E, F y G hechos; **solo queda C** |
+| 12 | Pruebas, endurecimiento y lanzamiento | Hecho | Bloques A a G completos; queda el alta en Firebase y la prueba en campo |
 
 Cobertura de pruebas actual: 23 pruebas unitarias de reglas de dominio
 (`liteRules.test.ts`), dentro de las 310 del repositorio. No hay pruebas de
@@ -75,7 +75,11 @@ aplicación está abierta y en primer plano; con la aplicación cerrada, no lleg
 nada. Para un producto de asistencia en carretera esto no es aceptable en
 producción.
 
-### H3. El seguimiento se detiene con la pantalla bloqueada — PENDIENTE, y es lo único que bloquea
+### H3. El seguimiento se detiene con la pantalla bloqueada — RESUELTO
+
+> Cerrado por el bloque C con la opción gratuita: el servicio en primer plano
+> del propio `geolocator`, sin dependencias de pago. Queda la limitación
+> conocida del enfoque: no sobrevive a que Android destruya la actividad.
 
 `tracker.dart` usa `geolocator` en primer plano. Android detiene la entrega de
 posiciones cuando la aplicación pasa a segundo plano un rato o se bloquea la
@@ -184,7 +188,7 @@ El backend ya envía; falta recibir.
 Verificable: con la aplicación cerrada, asignar una asistencia desde Central Pro
 hace sonar el teléfono y abrirla lleva a esa asistencia.
 
-### Bloque C — Seguimiento con la pantalla bloqueada — PENDIENTE (única cosa que queda)
+### Bloque C — Seguimiento con la pantalla bloqueada — HECHO (opción gratuita)
 
 1. Sustituye el seguimiento en primer plano por un servicio en primer plano de
    Android con notificación persistente que diga que se está compartiendo la
