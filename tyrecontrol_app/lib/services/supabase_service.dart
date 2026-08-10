@@ -974,6 +974,14 @@ class TyreControlApi {
 
   /// Intervenciones (sesiones de cambio con su informe) de un vehículo.
   static Future<List<Map<String, dynamic>>> listarIntervencionesVehiculo(String vehiculoId) async {
+    // Antes de listar se envuelven las operaciones que se quedaron sueltas
+    // (las del panel y las de resolver incidencias, que no pasan por
+    // Finalizar): así salen con su número de parte. Solo toca lo que lleva más
+    // de media hora huérfano, para no romper una sesión de Cambios abierta.
+    // Best-effort: si falla, el histórico se enseña igual.
+    try {
+      await _db.rpc('tc_agrupar_operaciones_sueltas', params: {'p_minutos': 30});
+    } catch (_) {/* se consolidará en la siguiente visita */}
     final data = await _db.from('tc_intervenciones').select()
         .eq('vehiculo_id', vehiculoId).order('created_at', ascending: false);
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
