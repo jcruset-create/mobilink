@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../config.dart';
 import '../services/api.dart';
 import '../services/file_queue.dart';
 import '../services/push.dart';
