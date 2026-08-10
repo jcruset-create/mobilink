@@ -1148,6 +1148,21 @@ export default function RoadsideAssistanceView({
             </div>
           )}
 
+          {/* Errores de acciones sobre las tarjetas (En camino, etc.): visibles
+              en cualquier pestaña, no solo dentro del formulario de alta. */}
+          {localError && panelTab !== "nueva" && (
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-300">
+              <span>{localError}</span>
+              <button
+                type="button"
+                onClick={() => setLocalError("")}
+                className="shrink-0 rounded p-0.5 text-red-300 hover:bg-red-500/20"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
         <div className="space-y-5">
           {panelTab === "nueva" && (
           <div className="mx-auto w-full max-w-3xl">
@@ -1823,12 +1838,16 @@ export default function RoadsideAssistanceView({
                             onClick={() => handleEnCamino(assistance)}
                             disabled={
                               changingId === assistance.id ||
-                              !assistance.webfleetVehicleId
+                              !assistance.webfleetVehicleId ||
+                              assistance.latitude == null ||
+                              assistance.longitude == null
                             }
                             title={
                               !assistance.webfleetVehicleId
                                 ? "Asigna una furgoneta Webfleet primero"
-                                : undefined
+                                : assistance.latitude == null || assistance.longitude == null
+                                  ? "Falta la dirección del punto: edita la asistencia y añade la ubicación para calcular la ETA"
+                                  : undefined
                             }
                             className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-3 py-2 text-sm font-black text-white hover:bg-blue-800 disabled:opacity-50"
                           >

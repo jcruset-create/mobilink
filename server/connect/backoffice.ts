@@ -19,6 +19,9 @@ import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
 import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
+import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
+import { interpretarBusqueda, talleresCercanos } from "./geoSearch.ts";
+import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
 import { connectBus } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
@@ -759,6 +762,87 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  /**
+   * Búsqueda de ubicación del mapa operativo: municipio, código postal, punto
+   * kilométrico de carretera, coordenadas o enlace de Google Maps. Devuelve el
+   * punto y los talleres más cercanos, que es la pregunta real ("¿a quién le
+   * mando esto?").
+   *
+   * La geocodificación se hace en el servidor y no en el navegador para no
+   * publicar la clave de Google en el panel.
+   */
+  router.get("/geo/search", ...requireConnectRole("operator"), async (req, res) => {
+    const consulta = String(req.query.q ?? "");
+    const plan = interpretarBusqueda(consulta);
+    if (!plan) return err(res, 422, "validation_failed", "Escribe una localidad, un código postal o un punto kilométrico");
+
+    const talleres = await db.query(
+      `SELECT w.id, w.name, w.latitude, w.longitude, w."radiusKm", w.phone, w."integrationType",
+              w."connectStatus", w."networkParticipation", w.city, w.province, pc.name AS "providerName"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"`,
+    );
+    const responder = (punto: { lat: number; lng: number }, etiqueta: string, precision: string, avisos: string[]) =>
+      res.json({
+        punto, etiqueta, tipo: plan.tipo, precision, avisos,
+        workshops: talleresCercanos(punto, talleres.rows.map((w: any) => ({
+          ...w, latitude: Number(w.latitude), longitude: Number(w.longitude), radiusKm: Number(w.radiusKm),
+        }))),
+      });
+
+    // Coordenadas y enlaces no hace falta preguntárselos a nadie
+    if (plan.punto) return responder(plan.punto, plan.etiqueta, "exacta", plan.avisos);
+    if (!plan.consultas.length) {
+      return err(res, 422, "not_geocodable", plan.avisos[0] ?? "No se puede situar eso en el mapa");
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return err(res, 503, "geocoder_unavailable", "GOOGLE_MAPS_API_KEY no configurada en el servidor");
+
+    // Se prueban las consultas en orden: de la más precisa a la de repliegue
+    for (let i = 0; i < plan.consultas.length; i++) {
+      const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+      url.searchParams.set("address", plan.consultas[i]);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("language", "es");
+      if (plan.componentes) url.searchParams.set("components", plan.componentes);
+
+      let data: any;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        data = await r.json();
+      } catch (e: any) {
+        console.error("[Connect] geocodificación:", e?.message);
+        return err(res, 502, "geocoder_error", "El geocodificador no responde ahora mismo");
+      }
+      if (data.status === "ZERO_RESULTS") continue;
+      if (data.status !== "OK" || !data.results?.[0]) {
+        console.error(`[Connect] geocodificación ${data.status}: ${data.error_message ?? ""}`);
+        return err(res, 502, "geocoder_error", `El geocodificador devolvió ${data.status}`);
+      }
+
+      const r0 = data.results[0];
+      const avisos = [...plan.avisos];
+      // Un repliegue ya no es lo que pidió el operador: hay que decírselo
+      if (i > 0) avisos.unshift(`No se encontró "${plan.consultas[0]}"; se muestra "${r0.formatted_address}".`);
+      const precision = r0.geometry?.location_type === "ROOFTOP" ? "exacta"
+        : r0.geometry?.location_type === "RANGE_INTERPOLATED" ? "interpolada"
+        : "aproximada";
+      if (precision === "aproximada" && plan.tipo === "punto_kilometrico") {
+        avisos.push("Google no ha situado el kilómetro exacto: el punto es orientativo.");
+      }
+      return responder(
+        { lat: r0.geometry.location.lat, lng: r0.geometry.location.lng },
+        r0.formatted_address ?? plan.etiqueta,
+        precision,
+        avisos,
+      );
+    }
+
+    return err(res, 404, "not_found", `No se ha encontrado "${consulta}"`);
+  });
+
   // ── Talleres de la red ────────────────────────────────────
 
   router.get("/workshops", ...requireConnectRole("analyst"), async (_req, res) => {
@@ -772,6 +856,49 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  /**
+   * Propuestas de alta leídas de una captura de WhatsApp, ya en el formato de
+   * `connect_workshops` y con los posibles duplicados marcados. No crea nada:
+   * el alta la sigue confirmando el operador campo a campo.
+   */
+  router.get("/whatsapp-capture/:id/workshops", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT ai_suggestions, ai_status, ai_error FROM whatsapp_capture_sessions WHERE id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+
+    let bruto = r.rows[0].ai_suggestions;
+    if (typeof bruto === "string") { try { bruto = JSON.parse(bruto); } catch { bruto = null; } }
+    if (!bruto) {
+      return res.json({
+        data: [], avisos: [], resumen: null,
+        aiStatus: r.rows[0].ai_status, aiError: r.rows[0].ai_error,
+      });
+    }
+
+    const existentes = await db.query(
+      `SELECT id, name, phone, address, latitude, longitude FROM connect_workshops`,
+    );
+    const data = (Array.isArray(bruto.talleres) ? bruto.talleres : []).map((t: any) => {
+      const campos = normalizarPropuesta(t);
+      return {
+        campos,
+        duplicados: buscarDuplicados(campos, existentes.rows),
+        datosDetectados: Array.isArray(t.datosDetectados) ? t.datosDetectados : [],
+        confidence: ["high", "medium", "low"].includes(t.confidence) ? t.confidence : null,
+      };
+    });
+
+    res.json({
+      data,
+      avisos: Array.isArray(bruto.avisos) ? bruto.avisos : [],
+      resumen: typeof bruto.resumen === "string" ? bruto.resumen : null,
+      aiStatus: r.rows[0].ai_status,
+      aiError: r.rows[0].ai_error,
+    });
+  });
+
   router.post("/workshops", ...requireConnectRole("cc_admin"), async (req, res) => {
     const b = req.body ?? {};
     if (!b.name?.trim() || typeof b.latitude !== "number" || typeof b.longitude !== "number") {
@@ -781,16 +908,16 @@ export function createConnectBackofficeRouter(): Router {
     const r = await db.query(
       `INSERT INTO connect_workshops
          ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType",
-          address, "postalCode", city, province, email, "commercialNetwork", "openingHours",
+          address, "postalCode", city, province, email, "commercialNetwork", "openingHours", notes,
           "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19) RETURNING *`,
       [
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
         WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : "assist",
         b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
-        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null,
+        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null,
         now,
       ],
     );
@@ -830,6 +957,7 @@ export function createConnectBackofficeRouter(): Router {
          email = COALESCE($18, email),
          "commercialNetwork" = COALESCE($19, "commercialNetwork"),
          "openingHours" = COALESCE($20, "openingHours"),
+         notes = COALESCE($21, notes),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -841,7 +969,7 @@ export function createConnectBackofficeRouter(): Router {
        b.features ? JSON.stringify(b.features) : null,
        b.coreWorkshopId != null ? String(b.coreWorkshopId) : null,
        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
-       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null],
+       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -1340,6 +1468,8 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.post("/whatsapp-capture/start", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const assistanceId = req.body?.assistanceId != null ? Number(req.body.assistanceId) : null;
+    // 'workshop' cambia el prompt del análisis: alta de taller, no incidencia.
+    const purpose = req.body?.purpose === "workshop" ? "workshop" : "assistance";
 
     const activa = await activeCaptureSession();
     if (activa) {
@@ -1358,9 +1488,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
     const now = Date.now();
     const ins = await db.query(
-      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, status, started_at, created_by)
-       VALUES (NULL, $1, 'ACTIVE', $2, $3) RETURNING *`,
-      [assistanceId, now, u.name],
+      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, purpose, status, started_at, created_by)
+       VALUES (NULL, $1, $4, 'ACTIVE', $2, $3) RETURNING *`,
+      [assistanceId, now, u.name, purpose],
     );
     await auditConnect({
       req, action: "whatsapp.capture_started", resourceType: "assistance",
@@ -2369,6 +2499,33 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
         toRef ?? null, body.trim(), u.id, u.name, Date.now(),
       ],
     );
+
+    // Si el taller es Lite, el mensaje de Central le llega como aviso al
+    // operario. Antes el chat era de ida: el taller escribia y Central leia,
+    // pero la respuesta se quedaba esperando a que alguien abriera la app.
+    // El aviso no lleva el texto: solo el identificador, y el operario lo lee
+    // ya autenticado (misma regla de privacidad que el resto de push).
+    try {
+      const a = await db.query(
+        `SELECT ca.id, ca."expedientNumber", ca."liteUserId", w."integrationType"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE ca.id = $1`,
+        [Number(req.params.id)],
+      );
+      const fila = a.rows[0];
+      if (fila?.integrationType === "lite" && fila.liteUserId) {
+        await notifyLiteUser(Number(fila.liteUserId), {
+          title: "Mensaje de la central",
+          body: `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,
+          data: { type: "assistance_message", assistanceId: String(fila.id) },
+        });
+      }
+    } catch (e: any) {
+      // Un fallo de aviso nunca puede tumbar el registro de la comunicacion
+      console.error("[Connect] aviso de mensaje a Lite:", e?.message);
+    }
+
     res.status(201).json(r.rows[0]);
   });
 

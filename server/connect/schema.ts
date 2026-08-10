@@ -693,6 +693,10 @@ export async function initConnect(): Promise<void> {
     -- Horario de apertura tal cual lo declara el taller, en texto libre
     -- ("L-V 08:30-13:30|15:00-18:30; Sáb 09:00-13:00").
     ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "openingHours" TEXT;
+    -- Observaciones internas del taller. Recoge además lo que la importación
+    -- por WhatsApp lee de Google y Central no guarda en columna propia
+    -- (valoración, reseñas, web, URL de Maps, categorías…).
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS notes TEXT;
 
     -- Resultado y datos de cierre reportados por el taller (Lite o externo)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resultCode" TEXT;
@@ -860,7 +864,14 @@ export async function initConnect(): Promise<void> {
   `);
 
   await seedConnectDefaults();
-  await seedNetworkWorkshops();
+  // El catálogo de talleres depende de red (geocodificación): si falla, se
+  // deja constancia y se sigue arrancando. Un alta pendiente no puede tumbar
+  // el servidor entero, y en el próximo arranque se vuelve a intentar.
+  try {
+    await seedNetworkWorkshops();
+  } catch (e: any) {
+    console.error("[Connect] catálogo de talleres de red:", e?.message);
+  }
 }
 
 /**

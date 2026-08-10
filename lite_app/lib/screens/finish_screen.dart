@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api.dart';
+import '../services/file_queue.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
@@ -52,6 +53,12 @@ class _FinishScreenState extends State<FinishScreen> {
     }
     setState(() { _busy = true; _errores = const []; });
     try {
+      // Las evidencias que quedaron en cola tienen que llegar ANTES del cierre:
+      // si no, la central rechaza el cierre por "faltan fotos" mientras las
+      // fotos están en el móvil del operario.
+      try {
+        await FileQueue.flush(_api);
+      } catch (_) {/* si sigue sin cobertura, el cierre dirá lo que falta */}
       final pos = await Tracker.currentPosition();
       await _api.finish(
         widget.assistanceId,
@@ -67,9 +74,13 @@ class _FinishScreenState extends State<FinishScreen> {
     } on ApiError catch (e) {
       setState(() => _errores = e.detail.isNotEmpty ? e.detail : [e.message]);
     } on OfflineError {
+      final evidencias = FileQueue.forAssistance(widget.assistanceId).length;
       setState(() => _errores = [
             'Sin conexión. El cierre necesita conexión porque la central debe '
-                'validar los requisitos; se conservan tus datos para reintentarlo.'
+                'validar los requisitos; se conservan tus datos para reintentarlo.',
+            if (evidencias > 0)
+              '$evidencias evidencia(s) están guardadas en el móvil y se '
+                  'enviarán solas al recuperar cobertura.',
           ]);
     } finally {
       if (mounted) setState(() => _busy = false);
