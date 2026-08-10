@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/api.dart';
+import '../services/file_queue.dart';
+import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
@@ -39,6 +41,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // tiene GPS, Central lo ve antes de asignarle un servicio.
     _api.registerDevice({
       'gpsPermission': gps,
+      'notifPermission': Push.permiso,
+      'fcmToken': Push.token,
       'platform': Platform.operatingSystem,
       'osVersion': Platform.operatingSystemVersion,
       'appVersion': kAppVersion,
@@ -49,6 +53,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _busy = true);
     try {
       final res = await OfflineQueue.flush(_api);
+      await FileQueue.flush(_api);
       final conflictos = res.where((r) => r['status'] == 'conflict').length;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -102,7 +107,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final s = widget.session;
-    final pendientes = OfflineQueue.pendingCount;
+    // Las evidencias cuentan igual que las operaciones: para el operario "me
+    // falta por enviar" es una sola idea, no dos colas.
+    final pendientes = OfflineQueue.pendingCount + FileQueue.pendingCount;
+    final fallidas = FileQueue.failedCount;
     final conflictos = OfflineQueue.conflicts();
     final gpsOk = _gps == 'always' || _gps == 'while_in_use';
 
@@ -128,6 +136,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
           trailing: TextButton(onPressed: _permisos, child: const Text('Revisar')),
         ),
         ListTile(
+          leading: Icon(
+            Push.disponible && Push.permiso == 'granted'
+                ? Icons.notifications_active
+                : Icons.notifications_off,
+            color: Push.disponible && Push.permiso == 'granted'
+                ? AppColors.ok
+                : AppColors.warn,
+          ),
+          title: const Text('Avisos de la central'),
+          subtitle: Text(!Push.disponible
+              ? 'Sin avisos automáticos: la bandeja se actualiza sola cada 25 s '
+                  'mientras la app esté abierta'
+              : Push.permiso == 'granted'
+                  ? 'Activados: llega aviso al asignarte una asistencia'
+                  : 'Bloqueados en el móvil: actívalos en los ajustes del sistema '
+                      'o no verás las asistencias nuevas con la app cerrada'),
+        ),
+        ListTile(
           leading: Icon(pendientes > 0 || conflictos.isNotEmpty
               ? Icons.cloud_upload : Icons.cloud_done,
               color: conflictos.isNotEmpty ? AppColors.danger : AppColors.ok),
@@ -135,9 +161,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           subtitle: Text(conflictos.isNotEmpty
               ? '${conflictos.length} conflicto(s) de estado: la central ya había '
                   'cambiado la asistencia'
-              : pendientes > 0
-                  ? '$pendientes operación(es) pendientes de enviar'
-                  : 'Todo enviado'),
+              : fallidas > 0
+                  ? '$fallidas evidencia(s) que la central ha rechazado: '
+                      'revísalas en la asistencia'
+                  : pendientes > 0
+                      ? '$pendientes pendiente(s) de enviar '
+                          '(${FileQueue.pendingCount} evidencia(s))'
+                      : 'Todo enviado'),
           trailing: TextButton(
             onPressed: _busy ? null : _sincronizar,
             child: const Text('Enviar'),

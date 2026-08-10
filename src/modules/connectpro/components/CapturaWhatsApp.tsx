@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { boFetch } from "../services/api";
+import { ApiError, boFetch } from "../services/api";
 import { Card, Button, Badge } from "./ui";
 import { fmtDateTime } from "../types";
 
@@ -32,11 +32,34 @@ type CaptureSession = {
   id: number;
   job_id: number | null;
   connect_assistance_id: number | null;
+  purpose: "assistance" | "workshop";
   status: "ACTIVE" | "CLOSED";
   started_at: number;
   created_by: string | null;
   ai_suggestions: Record<string, any> | null;
   messages: CaptureMessage[];
+};
+
+/** Campos de un taller propuestos por la IA: los de connect_workshops, tal cual. */
+export type TallerPropuesto = {
+  campos: {
+    name: string | null; companyName: string | null; commercialNetwork: string | null;
+    address: string | null; postalCode: string | null; city: string | null; province: string | null;
+    latitude: number | null; longitude: number | null;
+    phone: string | null; email: string | null; openingHours: string | null;
+    services: string[];
+  };
+  duplicados: Array<{ id: number; name: string; motivos: string[] }>;
+  datosDetectados: Array<{ campo: string; valor: string }>;
+  confidence: "high" | "medium" | "low" | null;
+};
+
+export type ImportacionTalleres = {
+  data: TallerPropuesto[];
+  avisos: string[];
+  resumen: string | null;
+  aiStatus: "pending" | "done" | "error" | null;
+  aiError: string | null;
 };
 
 const TIPO_ICONO: Record<string, string> = {
@@ -70,11 +93,15 @@ function aFormulario(s: Record<string, any>): Record<string, any> {
   };
 }
 
-export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion }: {
+export default function CapturaWhatsApp({ assistanceId, purpose = "assistance", onSugerencias, onTalleres, onSesion }: {
   /** Si ya existe la asistencia, la captura queda vinculada desde el principio. */
   assistanceId?: number;
-  /** Datos extraídos, ya con las claves del formulario. */
+  /** Qué se está dando de alta: decide el prompt del análisis. */
+  purpose?: "assistance" | "workshop";
+  /** Datos extraídos, ya con las claves del formulario (solo asistencias). */
   onSugerencias?: (datos: Record<string, any>) => void;
+  /** Talleres propuestos, en el formato de connect_workshops (solo purpose="workshop"). */
+  onTalleres?: (resultado: ImportacionTalleres) => void;
   /** Id de la sesión, para vincularla al crear la asistencia. */
   onSesion?: (sessionId: number | null) => void;
 }) {
@@ -82,6 +109,8 @@ export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  /** El número estaba ocupado: se queda a la espera y abre en cuanto se libere. */
+  const [enCola, setEnCola] = useState(false);
   const finRef = useRef<HTMLDivElement>(null);
 
   const cargar = useCallback(async () => {
@@ -105,23 +134,66 @@ export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion 
     finRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [session?.messages.length]);
 
-  const abrir = async () => {
-    setBusy(true); setError(null);
+  /**
+   * Abre la captura. El número de WhatsApp es uno solo para todo el
+   * ecosistema, así que puede estar ocupado: en ese caso no se falla, se avisa
+   * y se queda en cola hasta que se libere (`silencioso` son los reintentos).
+   */
+  const abrir = useCallback(async (silencioso = false) => {
+    setBusy(true);
+    if (!silencioso) setError(null);
     try {
       const r = await boFetch<{ session: CaptureSession }>("/whatsapp-capture/start", {
-        method: "POST", body: { assistanceId: assistanceId ?? null },
+        method: "POST", body: { assistanceId: assistanceId ?? null, purpose },
       });
       setSession(r.session);
       onSesion?.(r.session.id);
+      setEnCola(false);
       setAviso("Captura abierta: los WhatsApp que lleguen al número de la central se recogerán aquí.");
-    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
-  };
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === "capture_busy") {
+        setEnCola(true);
+        setAviso(`${e.message} Te quedas en espera: la captura se abrirá sola en cuanto el número quede libre.`);
+      } else if (!silencioso) {
+        setError(e.message);
+      }
+    } finally { setBusy(false); }
+  }, [assistanceId, purpose, onSesion]);
+
+  // En espera: se vigila el número y se entra en cuanto la otra captura cierra
+  useEffect(() => {
+    if (!enCola) return;
+    const t = setInterval(async () => {
+      try {
+        const r = await boFetch<{ session: CaptureSession | null }>("/whatsapp-capture/active");
+        if (!r.session || r.session.status === "CLOSED") await abrir(true);
+      } catch { /* se reintenta en el siguiente ciclo */ }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [enCola, abrir]);
 
   const cerrarYAnalizar = async () => {
     if (!session) return;
     setBusy(true); setError(null); setAviso("Analizando la conversación…");
     try {
       await boFetch(`/whatsapp-capture/${session.id}/close`, { method: "POST" });
+
+      // Alta de taller: el análisis vuelve ya en formato connect_workshops
+      if (purpose === "workshop") {
+        let r: ImportacionTalleres | null = null;
+        for (let intento = 0; intento < 12; intento++) {
+          await new Promise((res) => setTimeout(res, 2000));
+          r = await boFetch<ImportacionTalleres>(`/whatsapp-capture/${session.id}/workshops`);
+          if (r.aiStatus === "done" || r.aiStatus === "error") break;
+        }
+        if (r?.aiStatus === "error") setAviso(r.aiError ?? "La IA no pudo analizar la conversación.");
+        else if (!r?.data.length) setAviso("La IA no ha encontrado ningún taller en la conversación.");
+        else setAviso("Revisa los talleres detectados y confirma cuáles quieres dar de alta.");
+        if (r) onTalleres?.(r);
+        onSesion?.(session.id);
+        return;
+      }
+
       // El análisis va en segundo plano: se espera a que aparezca
       let sugerencias: Record<string, any> | null = null;
       for (let intento = 0; intento < 12 && !sugerencias; intento++) {
@@ -141,7 +213,9 @@ export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion 
   };
 
   const activaDeAssist = session?.status === "ACTIVE" && session.job_id != null;
-  const activaAqui = session?.status === "ACTIVE" && session.job_id == null;
+  // Ocupada por otra pantalla de Central: misma sesión, distinto propósito
+  const activaDeOtro = session?.status === "ACTIVE" && session.job_id == null && session.purpose !== purpose;
+  const activaAqui = session?.status === "ACTIVE" && session.job_id == null && session.purpose === purpose;
 
   return (
     <Card className="mb-4 border-emerald-500/30 p-4">
@@ -154,8 +228,19 @@ export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion 
         )}
         {activaDeAssist && (
           <span className="text-[12px] text-amber-300">
-            La captura activa es de Mobilink Assist (asistencia #{session!.job_id}); ciérrala allí para usarla aquí.
+            El número lo está usando Mobilink Assist (asistencia #{session!.job_id}).
           </span>
+        )}
+        {activaDeOtro && (
+          <span className="text-[12px] text-amber-300">
+            El número lo está usando otra alta de Central
+            ({session!.purpose === "workshop" ? "taller" : "asistencia"}).
+          </span>
+        )}
+        {enCola && (
+          <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-300">
+            ⏳ En espera del número
+          </Badge>
         )}
       </div>
 
@@ -164,20 +249,36 @@ export default function CapturaWhatsApp({ assistanceId, onSugerencias, onSesion 
 
       {!activaAqui ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={abrir} disabled={busy || activaDeAssist}>
-            {busy ? "Abriendo…" : "Abrir captura de WhatsApp"}
-          </Button>
-          <span className="text-[12px] text-slate-500">
-            Mismo número que Mobilink Assist. Todo lo que llegue mientras esté abierta
-            (fotos, ubicación, audios) se recoge en esta asistencia.
-          </span>
+          {enCola ? (
+            <>
+              <Button variant="ghost" onClick={() => { setEnCola(false); setAviso(null); }}>
+                Cancelar la espera
+              </Button>
+              <span className="text-[12px] text-amber-300">
+                En cuanto se cierre la captura en curso, esta se abre sola y ya puedes
+                mandar el WhatsApp.
+              </span>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => abrir()} disabled={busy}>
+                {busy ? "Abriendo…" : "Abrir captura de WhatsApp"}
+              </Button>
+              <span className="text-[12px] text-slate-500">
+                Mismo número que Mobilink Assist. Todo lo que llegue mientras esté abierta
+                (fotos, ubicación, audios) se recoge aquí.
+              </span>
+            </>
+          )}
         </div>
       ) : (
         <>
           <div className="mb-2 max-h-64 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900/60 p-2">
             {session!.messages.length === 0 ? (
               <p className="p-3 text-center text-[13px] text-slate-500">
-                Esperando mensajes… Pide al cliente que escriba al WhatsApp de la central.
+                {purpose === "workshop"
+                  ? "Esperando mensajes… Reenvía al WhatsApp de la central la ficha de Google del taller, una captura o sus datos."
+                  : "Esperando mensajes… Pide al cliente que escriba al WhatsApp de la central."}
               </p>
             ) : (
               session!.messages.map((m) => {

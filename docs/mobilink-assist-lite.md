@@ -241,14 +241,24 @@ Consulta: `GET /api/connect/bo/workshops/:id/kpis?days=30` y, por servicio,
   operario con aviso de "desactualizada", estado del dispositivo y sus
   permisos, evidencias, firma, cierre y KPIs; corrección de estados auditada.
 - APK `lite_app` completa (`flutter analyze` sin incidencias).
+- Andamiaje Android de `lite_app` (`android/`), con identificador propio
+  `com.mobilink.assist_lite`, los permisos que el codigo usa, icono y tema de
+  arranque oscuro. Antes no existia: la regla `*/android/` del `.gitignore` lo
+  descartaba en silencio y por eso la APK no se podia compilar.
+- Workflow `build-lite-apk.yml`: compila, firma con la clave de la casa,
+  comprueba que no salga firmada en depuracion y publica la release
+  `assist-lite-vX.Y.Z+N`.
+- Alta en el centro de descargas (`/descargas.html`).
 - 23 pruebas unitarias de las reglas de dominio (`npm test`).
 
 ### Pendiente (declarado, no oculto)
 
-1. **Notificaciones push en la APK.** El backend ya envía (FCM v1) y guarda el
-   token; falta añadir `firebase_core` + `firebase_messaging` y el
-   `google-services.json`. Mientras tanto la app sondea cada 25 s. Conviene
-   hacerlo a la vez para todas las APKs del ecosistema.
+1. **Notificaciones push: falta el alta en Firebase.** El código ya está en los
+   dos lados (backend con FCM v1 y app con `firebase_core` +
+   `firebase_messaging`). Lo que falta es dar de alta la app
+   `com.mobilink.assist_lite` en el proyecto de Firebase y guardar su
+   `google-services.json` como secret `LITE_GOOGLE_SERVICES_BASE64`. Hasta
+   entonces la APK se compila igual, sin avisos, y la app lo dice en Perfil.
 2. **Pruebas de integración y end-to-end.** Las reglas están cubiertas con
    tests unitarios; el flujo completo contra base de datos requiere levantar
    un Postgres de pruebas, que hoy el repositorio no tiene.
