@@ -271,11 +271,23 @@ class TyreControlApi {
   }
 
   /// Actualiza el kilometraje del vehículo (best-effort; si RLS no lo permite
-  /// no pasa nada, el km ya queda en la propia revisión).
-  static Future<void> actualizarKmVehiculo(String vehiculoId, int km) async {
+  /// no pasa nada, el km ya queda en la propia revisión u operación).
+  ///
+  /// [origen] distingue de dónde salió el dato: 'webfleet' cuando lo da la
+  /// plataforma y 'manual' cuando lo teclea el técnico porque el vehículo no
+  /// está enlazado con ninguna. Sin esa distinción no habría forma de saber
+  /// qué km son de odómetro y cuáles de alguien mirando el cuadro.
+  static Future<void> actualizarKmVehiculo(String vehiculoId, int km, {String origen = 'webfleet'}) async {
     try {
-      await _db.from('tc_vehiculos').update({'km_actual': km, 'origen_km': 'webfleet'}).eq('id', vehiculoId);
+      await _db.from('tc_vehiculos').update({'km_actual': km, 'origen_km': origen}).eq('id', vehiculoId);
     } catch (_) {}
+  }
+
+  /// Corrige los km de una revisión ya creada. Hace falta cuando el técnico
+  /// los informa después de empezar, o cuando arrastra una revisión que se
+  /// creó sin ellos.
+  static Future<void> actualizarKmRevision(String revisionId, num km) async {
+    await _db.from('revisiones_vehiculo').update({'km_vehiculo': km}).eq('id', revisionId);
   }
 
   /// Imagen del plano del vehículo, con el mismo orden que el panel web:
@@ -875,6 +887,7 @@ class TyreControlApi {
     String condicion = 'nuevo',
     double? profundidadUsado,
     bool forzarMedida = false,
+    num? km,
     String? rfidEpc,
     String? numeroSerie,
     String? dot,
@@ -889,7 +902,7 @@ class TyreControlApi {
       'p_referencia': referenciaId,
       'p_control_individual': null,
       'p_datos': datos,
-      'p_km': null,
+      'p_km': km,
       'p_fecha': null,
       'p_obs': 'Montaje sin control de stock (APK)',
       'p_forzar_medida': forzarMedida,

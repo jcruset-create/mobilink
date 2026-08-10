@@ -78,6 +78,13 @@ class Vehiculo {
     this.tipo,
   });
 
+  /// ¿Los km llegan solos de una plataforma de telemática?
+  ///
+  /// Hoy la única es Webfleet. Si mañana hay otra, se añade aquí y las
+  /// pantallas no se enteran: solo preguntan por este flag para decidir si hay
+  /// que pedirle los kilómetros al técnico.
+  bool get kmAutomaticos => (webfleetVehicleId ?? '').isNotEmpty;
+
   factory Vehiculo.fromJson(Map<String, dynamic> j) => Vehiculo(
         id: j['id'],
         empresaId: j['empresa_id'],

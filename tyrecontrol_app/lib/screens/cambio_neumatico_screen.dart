@@ -12,6 +12,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/campo_identidad.dart';
 import '../widgets/etiqueta_neumatico.dart';
+import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
 
@@ -47,6 +48,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   String? _error;
   String _matricula = '';
   String? _empresaId;
+  Vehiculo? _vehiculo;
+  /// Km del vehículo para las operaciones de esta sesión. De la plataforma si
+  /// está enlazado; si no, los informa el técnico. Viajan en cada montaje y
+  /// desmontaje: sin ellos no se puede saber cuánto ha durado una goma.
+  num? _km;
   List<PosicionVehiculo> _posiciones = [];
   Map<String, MontajeActual> _montajePorPosicion = {};
   String? _imagenChasis;
@@ -161,6 +167,20 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         );
       }
       _matricula = (v['matricula'] as String?) ?? '';
+      final veh = Vehiculo.fromJson(v);
+      _vehiculo = veh;
+      // Km para las operaciones: de la plataforma si el vehículo está
+      // enlazado; si no, los pide el técnico (no se arrastra el km viejo de la
+      // ficha, igual que en Revisión).
+      if (veh.kmAutomaticos) {
+        final kmWf = await TyreControlApi.obtenerKmWebfleet(veh.empresaId, veh.webfleetVehicleId!);
+        if (kmWf != null) {
+          _km = kmWf;
+          await TyreControlApi.actualizarKmVehiculo(veh.id, kmWf);
+        } else {
+          _km = veh.kmActual > 0 ? veh.kmActual : null;
+        }
+      }
       final tipoId = v['tipo_vehiculo_id'] as String?;
 
       final results = await Future.wait([
@@ -305,7 +325,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _desmontar(MontajeActual m, String destino) async {
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino);
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino, km: _km);
       HapticFeedback.mediumImpact();
       await _cargar();
       final msg = destino == 'almacen'
@@ -445,7 +465,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _marcarIrreparable(PosicionVehiculo p, MontajeActual m) async {
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje');
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje', km: _km);
       HapticFeedback.mediumImpact();
       await _cargar();
       _aviso('Neumático a la papelera de reciclaje. Monta ahora la rueda de sustitución.', ok: true);
@@ -499,7 +519,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<String?> _montarStock(_DragStock d, PosicionVehiculo p, _DatosMontaje datos) =>
       TyreControlApi.montarDesdeAlmacen(
         vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
-        condicion: d.condicion, profundidadUsado: datos.mm,
+        condicion: d.condicion, profundidadUsado: datos.mm, km: _km,
         rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie,
       );
 
@@ -616,6 +636,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return i >= 0 && i + 2 < t.length ? t.substring(i + 2) : t;
   }
 
+  /// Informa o corrige los km del vehículo para las operaciones de la sesión.
+  Future<void> _editarKm() async {
+    final veh = _vehiculo;
+    if (veh == null) return;
+    final v = await pedirKmVehiculo(context, matricula: _matricula, actual: _km?.round());
+    if (v == null || !mounted) return;
+    setState(() => _km = v);
+    // Se guardan en la ficha para que la próxima operación parta de ahí.
+    await TyreControlApi.actualizarKmVehiculo(veh.id, v, origen: 'manual');
+  }
+
   void _aviso(String txt, {required bool ok, bool conDeshacer = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -634,7 +665,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
+            // Los km viajan en cada montaje y desmontaje. Sin plataforma que
+            // los dé, aquí es donde el técnico los informa.
+            if (_vehiculo != null)
+              ChipKmVehiculo(km: _km, automaticos: _vehiculo!.kmAutomaticos, onEditar: _editarKm),
+          ],
+        ),
         actions: [
           if (_pausas != null) BotonPausa(controller: _pausas!),
           IconButton(
@@ -1722,6 +1763,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             referenciaId: refId,
             condicion: condicion,
             profundidadUsado: datos.mm,
+            km: _km,
             rfidEpc: datos.rfidEpc,
             numeroSerie: datos.numeroSerie,
           );
