@@ -99,7 +99,7 @@ class _InicioTab extends StatelessWidget {
             // botón) y repetirlo aquí despistaría.
             icon: Icons.swap_horiz,
             label: 'Operaciones',
-            color: AppColors.tileGris,
+            color: AppColors.tileVerdePastel,
             onTap: () async {
               await Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => const IdentifyVehicleScreen(destino: DestinoVehiculo.operaciones)));
@@ -116,6 +116,7 @@ class _InicioTab extends StatelessWidget {
                 child: _BigTile(
                   icon: Icons.event_note,
                   label: 'Planificación',
+                  color: AppColors.tileGrisPastel,
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
                 ),
               ),
@@ -127,6 +128,7 @@ class _InicioTab extends StatelessWidget {
             builder: (_, n, __) => _BigTile(
               icon: Icons.warning_amber,
               label: n > 0 ? 'Incidencias ($n)' : 'Incidencias',
+              color: AppColors.tileRojoPastel,
               onTap: () async {
                 await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IncidenciasScreen()));
                 await TyreControlApi.contarIncidenciasPendientes();
@@ -212,7 +214,12 @@ class _BigTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = color ?? (primary ? AppColors.primary : AppColors.surface);
-    final fg = primary ? AppColors.onPrimary : AppColors.textPrimary;
+    // Sobre un fondo claro (los pasteles) el texto claro no se lee. Se decide
+    // por la luminancia del propio fondo, asi que vale para cualquier color
+    // que se ponga despues sin tener que acordarse de nada.
+    final fg = bg.computeLuminance() > 0.5
+        ? AppColors.background
+        : (primary ? AppColors.onPrimary : AppColors.textPrimary);
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(16),
