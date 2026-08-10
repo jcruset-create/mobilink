@@ -111,17 +111,24 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
     await crearOperario(tallerId, `op${sufijo}`);
     await crearOperario(tallerAjenoId, `aj${sufijo}`);
 
+    // Se crea en "searching" y se asigna con transition(), como hace Central de
+    // verdad. Insertarla ya en "assigned" era un atajo que dejaba el historial
+    // sin esa fila, y con ello los KPIs de ciclo salían nulos: el fixture no
+    // reproducía el flujo real.
+    const { transition } = await import("./service.ts");
     const crearAsistencia = async (workshopId: number) => {
       const r = await db.query(
         `INSERT INTO connect_assistances
            (uuid, status, "serviceType", address, latitude, longitude, "customerName",
             "customerPhone", "workshopId", "expedientNumber", origin, "createdAtMs", "updatedAtMs")
-         VALUES ($1,'assigned','tyres','Ctra. N-340 km 1170, Tarragona',41.12,1.25,
+         VALUES ($1,'searching','tyres','Ctra. N-340 km 1170, Tarragona',41.12,1.25,
                  'Cliente de pruebas','600000000',$2,$3,'manual',$4,$4)
          RETURNING id`,
         [`ita-${workshopId}-${sufijo}`, workshopId, `IT-${workshopId}-${sufijo}`, now],
       );
-      return Number(r.rows[0].id);
+      const id = Number(r.rows[0].id);
+      await transition(id, "assigned", "system", "Asignada por Central (prueba de integración)");
+      return id;
     };
     asistenciaId = await crearAsistencia(tallerId);
     asistenciaAjenaId = await crearAsistencia(tallerAjenoId);
@@ -342,7 +349,7 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
     );
     const recorrido = h.rows.map((r: any) => r.toStatus);
     expect(recorrido).toEqual([
-      "technician_assigned", "en_route", "arrived", "in_progress",
+      "assigned", "technician_assigned", "en_route", "arrived", "in_progress",
       "finished", "returning_to_workshop", "at_workshop",
     ]);
   });
@@ -357,8 +364,12 @@ describe.skipIf(!RUN)("Mobilink Assist Lite · ciclo completo contra PostgreSQL"
     const kpis = computeLiteKpis(
       h.rows.map((r: any) => ({ toStatus: r.toStatus, occurredAtMs: Number(r.occurredAtMs) })),
     );
+    // Sin la fila "assigned" en el historial estos dos son nulos: es la prueba
+    // de que los tiempos se miden desde que Central asigna, no desde que la
+    // APK toca algo.
     expect(kpis.cycleMin).not.toBeNull();
     expect(kpis.totalMin).not.toBeNull();
+    expect(kpis.acceptMin).not.toBeNull();
   });
 
   it("la sesión revocada deja de servir", async () => {
