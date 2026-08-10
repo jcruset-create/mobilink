@@ -716,7 +716,6 @@ export async function initDb() {
     -- (ambas a null; se vincula al crear la asistencia).
     ALTER TABLE whatsapp_capture_sessions ALTER COLUMN job_id DROP NOT NULL;
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS connect_assistance_id INTEGER;
-    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
     CREATE INDEX IF NOT EXISTS wcs_connect_idx
       ON whatsapp_capture_sessions(connect_assistance_id);
 
@@ -753,6 +752,11 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS transcript TEXT;
     ALTER TABLE whatsapp_capture_messages
       ADD COLUMN IF NOT EXISTS transcript_status TEXT DEFAULT 'none';
+    -- Va DESPUES de crear la tabla, no antes: sobre una base ya existente daba
+    -- igual el orden, pero sobre una vacia rompia el arranque entero con
+    -- 'relation "whatsapp_capture_messages" does not exist'. Lo destapo el
+    -- contenedor de PostgreSQL de las pruebas de integracion.
+    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
   `);
 
   await pool.query(`
