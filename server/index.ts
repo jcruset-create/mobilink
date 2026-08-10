@@ -30,6 +30,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
@@ -1801,11 +1802,14 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
         imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
       })
-      .select("id").single();
+      // El número lo pone la base de datos por DEFAULT; se lee de vuelta para
+      // poder enseñárselo al técnico nada más finalizar, que es cuando puede
+      // apuntarlo en el albarán.
+      .select("id, numero").single();
     if (e2) throw e2;
     await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
 
-    res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
+    res.json({ id: interv.id, numero: (interv as any).numero ?? null, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
@@ -15965,25 +15969,6 @@ const APK_APPS: Record<
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
 };
-
-// Orden por versión descendente. El "+build" (0.31.6+80) cuenta como un tramo
-// más al final: sin esto, "6+80" se parseaba como 6 y dos builds del mismo
-// 0.31.6 empataban, así que ganaba el que devolviera primero el sistema de
-// ficheros — es decir, cualquiera.
-function versionPartes(v: string): number[] {
-  const [nombre, build] = v.split("+");
-  const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
-  out.push(parseInt(build ?? "0", 10) || 0);
-  return out;
-}
-function masNuevaPrimero(a: string, b: string): number {
-  const pa = versionPartes(a);
-  const pb = versionPartes(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
-  }
-  return 0;
-}
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
 function latestApkFor(prefix: string): { file: string; version: string } | null {

@@ -3,6 +3,7 @@ import '../models/models.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/km_vehiculo.dart';
 import 'review_screen.dart';
 
 /// Ficha de confirmacion tras identificar el vehiculo. Un solo boton
@@ -20,6 +21,9 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
   RevisionVehiculo? _ultimaRevision;
   int _numNeumaticos = 0;
   bool _verificarPresiones = true;
+  /// Km que teclea el técnico cuando el vehículo no los da solo. Null hasta
+  /// que los informa; entonces viajan a la revisión.
+  int? _kmManual;
 
   @override
   void initState() {
@@ -45,6 +49,15 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
     }
   }
 
+  Future<void> _pedirKm() async {
+    final v = await pedirKmVehiculo(context, matricula: widget.vehiculo.matricula, actual: _kmManual);
+    if (v == null || !mounted) return;
+    setState(() => _kmManual = v);
+    // Se guardan ya en la ficha del vehículo: aunque el técnico se salga sin
+    // empezar la revisión, el dato no se pierde.
+    await TyreControlApi.actualizarKmVehiculo(widget.vehiculo.id, v, origen: 'manual');
+  }
+
   Future<void> _confirmar() async {
     setState(() => _cargando = true);
     try {
@@ -58,7 +71,10 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
       });
       if (!mounted) return;
       Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => ReviewScreen(vehiculo: widget.vehiculo, verificarPresiones: _verificarPresiones)));
+          builder: (_) => ReviewScreen(
+              vehiculo: widget.vehiculo,
+              verificarPresiones: _verificarPresiones,
+              kmManual: _kmManual)));
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
@@ -95,7 +111,11 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
                     _Fila('Tipo', v.tipo?.descripcion ?? v.tipo?.nombre),
                     _Fila('Configuración de ejes', v.tipo?.configuracionEjes),
                     _Fila('Nº de neumáticos', _numNeumaticos > 0 ? '$_numNeumaticos' : null),
-                    _Fila('Km actuales', '${v.kmActual}'),
+                    _FilaKm(
+                      vehiculo: v,
+                      km: _kmManual ?? (v.kmActual > 0 ? v.kmActual : null),
+                      onEditar: _pedirKm,
+                    ),
                     _Fila('Última revisión', _ultimaRevision?.fechaRevision),
                   ],
                 ),
@@ -143,6 +163,55 @@ class _Fila extends StatelessWidget {
         children: [
           SizedBox(width: 150, child: Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13))),
           Expanded(child: Text(texto, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+  }
+}
+
+/// Fila de kilómetros. Con plataforma enlazada solo informa; sin ella es un
+/// campo que hay que rellenar, y se nota que falta.
+class _FilaKm extends StatelessWidget {
+  final Vehiculo vehiculo;
+  final num? km;
+  final VoidCallback onEditar;
+  const _FilaKm({required this.vehiculo, required this.km, required this.onEditar});
+
+  @override
+  Widget build(BuildContext context) {
+    final auto = vehiculo.kmAutomaticos;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(width: 150, child: Text('Km actuales', style: TextStyle(color: AppColors.textSecondary, fontSize: 13))),
+          Expanded(
+            child: auto
+                ? Row(children: [
+                    Text('${(km ?? 0).round()}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.satellite_alt, size: 14, color: AppColors.textSecondary),
+                    const SizedBox(width: 4),
+                    const Text('automáticos', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  ])
+                : OutlinedButton.icon(
+                    onPressed: onEditar,
+                    icon: Icon((km ?? 0) > 0 ? Icons.edit : Icons.speed,
+                        size: 16, color: (km ?? 0) > 0 ? AppColors.textPrimary : AppColors.warning),
+                    label: Text(
+                      (km ?? 0) > 0 ? '${km!.round()} km' : 'Informar kilómetros',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: (km ?? 0) > 0 ? AppColors.textPrimary : AppColors.warning),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: (km ?? 0) > 0 ? AppColors.cardBorder : AppColors.warning),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    ),
+                  ),
+          ),
         ],
       ),
     );
