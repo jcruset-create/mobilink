@@ -23,7 +23,7 @@ import {
 import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
 import { interpretarBusqueda, talleresCercanos } from "./geoSearch.ts";
 import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
-import { connectBus } from "./bus.ts";
+import { connectBus, publish } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
@@ -31,6 +31,7 @@ import { drivingRoute } from "./routing.ts";
 import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
 import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
 import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
+import { normalizarVehiculo, descripcionVehiculo } from "./vehicle.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
 import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
 import {
@@ -39,6 +40,13 @@ import {
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
+}
+
+/** Columnas JSON: según el driver llegan ya parseadas o como texto. */
+function leerJson(value: unknown): Record<string, any> {
+  if (value == null) return {};
+  if (typeof value !== "string") return value as Record<string, any>;
+  try { return JSON.parse(value); } catch { return {}; }
 }
 
 /**
@@ -1767,6 +1775,60 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     );
     await auditConnect({ req, action: "assistance.updated", resourceType: "assistance", resourceId: id, detail: Object.keys(b) });
     res.json(r.rows[0]);
+  });
+
+  /**
+   * Datos del vehículo, editables en cualquier momento.
+   *
+   * El PATCH general solo admite borrador o pendiente de asignación, y con
+   * razón: cambiar la ubicación o el tipo de servicio con el taller ya en
+   * camino descuadra la operación. Pero la ficha del vehículo no es
+   * operativa, es descriptiva, y en la práctica llega tarde: se abre la
+   * asistencia con una llamada, y la matrícula, la marca y el modelo se
+   * confirman después. Con la restricción general, esas fichas se quedaban
+   * incompletas para siempre.
+   *
+   * Se mezcla con lo que ya hubiera: mandar solo la matrícula no borra el
+   * resto. Y si la asistencia ya está inyectada en el core, la matrícula y la
+   * descripción se actualizan también allí, que es de donde beben el taller
+   * FULL y el informe.
+   */
+  router.patch("/assistances/:id/vehicle", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = await db.query(
+      `SELECT status, vehicle, "coreAssistanceId" FROM connect_assistances WHERE id = $1`, [id],
+    );
+    if (!cur.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (cur.rows[0].status === "cancelled") {
+      return err(res, 409, "invalid_state", "La asistencia está cancelada");
+    }
+
+    const vehiculo = normalizarVehiculo(leerJson(cur.rows[0].vehicle), req.body ?? {});
+
+    const r = await db.query(
+      `UPDATE connect_assistances SET vehicle = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING vehicle`,
+      [JSON.stringify(vehiculo), Date.now(), id],
+    );
+
+    if (cur.rows[0].coreAssistanceId) {
+      await db.query(
+        `UPDATE roadside_assistances
+            SET plate = $1, "vehicleDescription" = COALESCE($2, "vehicleDescription"), "updatedAtMs" = $3
+          WHERE id = $4`,
+        [
+          vehiculo.plate ?? "",
+          descripcionVehiculo(vehiculo),
+          Date.now(), cur.rows[0].coreAssistanceId,
+        ],
+      ).catch((e: any) => console.error("[Connect] vehículo → core:", e?.message));
+    }
+
+    await auditConnect({
+      req, action: "assistance.vehicle_updated", resourceType: "assistance", resourceId: id,
+      detail: { plate: vehiculo.plate, make: vehiculo.make, model: vehiculo.model },
+    });
+    publish({ kind: "status", assistanceId: id, status: cur.rows[0].status });
+    res.json(leerJson(r.rows[0].vehicle));
   });
 
   // Enviar borrador
