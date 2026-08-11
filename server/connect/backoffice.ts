@@ -16,6 +16,7 @@ import {
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
+import { liteMetrics } from "./liteMetrics.ts";
 import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
@@ -818,7 +819,9 @@ export function createConnectBackofficeRouter(): Router {
       }
       if (data.status === "ZERO_RESULTS") continue;
       if (data.status !== "OK" || !data.results?.[0]) {
-        console.error(`[Connect] geocodificación ${data.status}: ${data.error_message ?? ""}`);
+        // Sin `error_message`: Google repite en él la dirección consultada, que
+        // es la ubicación del cliente, y acabaría en los registros del servidor.
+        console.error(`[Connect] geocodificación: ${data.status}`);
         return err(res, 502, "geocoder_error", `El geocodificador devolvió ${data.status}`);
       }
 
@@ -1103,6 +1106,76 @@ export function createConnectBackofficeRouter(): Router {
     if (!r.rows[0]) return err(res, 404, "not_found", "Dispositivo no encontrado o ya revocado");
     await auditConnect({ req, action: "lite.device_revoked", resourceType: "lite_device", resourceId: Number(req.params.id) });
     res.json({ ok: true });
+  });
+
+  /**
+   * Salud de la red Lite: lo que el encargo pide vigilar y hasta ahora no se
+   * medía. La mitad sale de los contadores del proceso (última hora) y la otra
+   * mitad de la base, que es donde vive el estado de los dispositivos.
+   */
+  router.get("/lite/health", ...requireConnectRole("analyst"), async (_req, res) => {
+    const now = Date.now();
+    const metricas = liteMetrics.snapshot(now);
+
+    const versiones = await db.query(
+      `SELECT COALESCE(d."appVersion", 'desconocida') AS version,
+              COUNT(*)::int AS dispositivos,
+              MAX(d."lastSeenAtMs") AS "ultimoUsoMs"
+         FROM connect_lite_devices d
+         JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."revokedAtMs" IS NULL AND u.active
+          AND d."lastSeenAtMs" > $1
+        GROUP BY 1 ORDER BY 2 DESC`,
+      [now - 30 * 24 * 3600_000],
+    );
+
+    // Cola atascada: la APK dice que le quedan cosas por subir y su último
+    // parte ya no es reciente, o arrastra evidencias que ha dado por fallidas.
+    const colas = await db.query(
+      `SELECT d.id, d."deviceId", d."appVersion", d."queuePending", d."queueFailed",
+              d."queueOldestAtMs", d."queueReportedAtMs", d."lastSeenAtMs",
+              u.name AS "userName", w.id AS "workshopId", w.name AS "workshopName"
+         FROM connect_lite_devices d
+         JOIN connect_lite_users u ON u.id = d."userId"
+         JOIN connect_workshops w ON w.id = d."workshopId"
+        WHERE d."revokedAtMs" IS NULL
+          AND (COALESCE(d."queueFailed", 0) > 0
+               OR (COALESCE(d."queuePending", 0) > 0 AND d."queueOldestAtMs" < $1))
+        ORDER BY COALESCE(d."queueFailed", 0) DESC, d."queueOldestAtMs" LIMIT 50`,
+      [now - 30 * 60_000],
+    );
+
+    // Dispositivos activos sin token push: no recibirán ningún aviso, por muy
+    // bien que funcione el envío.
+    const sinPush = await db.query(
+      `SELECT COUNT(*)::int AS total
+         FROM connect_lite_devices d JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."revokedAtMs" IS NULL AND u.active AND d."fcmToken" IS NULL
+          AND d."lastSeenAtMs" > $1`,
+      [now - 7 * 24 * 3600_000],
+    );
+
+    // Servicios en curso cuyo seguimiento se ha quedado mudo.
+    const seguimientoMudo = await db.query(
+      `SELECT ca.id, ca."expedientNumber", ca.status, ca."liteUserName",
+              w.id AS "workshopId", w.name AS "workshopName", ca."operatorLocationAtMs"
+         FROM connect_assistances ca
+         JOIN connect_workshops w ON w.id = ca."workshopId"
+        WHERE w."integrationType" = 'lite'
+          AND ca.status IN ('en_route','in_progress','returning_to_workshop')
+          AND (ca."operatorLocationAtMs" IS NULL OR ca."operatorLocationAtMs" < $1)
+        ORDER BY ca."updatedAtMs" DESC LIMIT 50`,
+      [now - 15 * 60_000],
+    );
+
+    res.json({
+      generadoEnMs: now,
+      metricas,
+      versiones: versiones.rows,
+      colasAtascadas: colas.rows,
+      dispositivosSinPush: sinPush.rows[0]?.total ?? 0,
+      seguimientoMudo: seguimientoMudo.rows,
+    });
   });
 
   /** Todo lo que el taller ha reportado: rastro GPS, evidencias, firma y KPIs. */

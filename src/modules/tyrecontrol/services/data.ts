@@ -991,6 +991,9 @@ export interface IncidenciaOrigen {
 }
 export interface Intervencion {
   id: string; empresa_id: string; vehiculo_id: string | null; fecha: string;
+  /** Número de parte legible: OP-2026-000143. Lo pone la base de datos por
+   *  DEFAULT, así que falta en registros anteriores a esa migración. */
+  numero?: string | null;
   resumen: string | null; resumen_ia: string | null; n_operaciones: number; created_at?: string;
   montaje_antes?: MontajeSnapshot[] | null;
   montaje_despues?: MontajeSnapshot[] | null;
@@ -998,6 +1001,17 @@ export interface Intervencion {
   imagen_chasis?: string | null;
 }
 export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
+  // Antes de listar, se envuelven las operaciones que se quedaron sueltas (las
+  // del panel y las de resolver incidencias, que no pasan por Finalizar): así
+  // salen con su número de parte en vez de quedarse fuera del histórico.
+  //
+  // Solo toca lo que lleva más de media hora huérfano, para no romper una
+  // sesión de Cambios abierta. Es best-effort: si falla, el histórico se
+  // muestra igual y ya se consolidará en la siguiente visita.
+  await supabase.rpc("tc_agrupar_operaciones_sueltas", { p_minutos: 30 }).then(
+    () => undefined,
+    () => undefined,
+  );
   const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as Intervencion[];

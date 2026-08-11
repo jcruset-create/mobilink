@@ -72,6 +72,15 @@ services:
         sync: false
       - key: TWILIO_JOB_FINISHED_CONTENT_SID
         sync: false
+      # Bucket de evidencias (fotos y firmas de asistencias, tambien las de Lite)
+      - key: SUPABASE_ROADSIDE_BUCKET
+        value: roadside
+      # Notificaciones push de las APKs (FCM v1). El JSON de la cuenta de
+      # servicio se pega en el dashboard, nunca en el repositorio.
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET

@@ -346,7 +346,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     setState(() => _trabajando = true);
     // Cronometraje: una pausa sin reanudar se cierra al finalizar la sesión.
     await _pausas?.cerrarSiActiva();
-    await TyreControlApi.cerrarIntervencion(
+    // El número de parte que asigna la base de datos: es lo que el técnico
+    // apunta en el albarán y lo que el cliente cita por teléfono.
+    final numeroParte = await TyreControlApi.cerrarIntervencion(
       widget.vehiculoId, _abiertoEn,
       montajeAntes: _montajeAntes,
       incidencias: _incidenciasOrigen(),
@@ -366,11 +368,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
     if (aResolver.isEmpty) {
       if (yaResueltas > 0) {
-        _aviso('$yaResueltas incidencia(s) solucionada(s)', ok: true);
+        _aviso(_conParte('$yaResueltas incidencia(s) solucionada(s)', numeroParte), ok: true);
       } else if (_incidencias.isNotEmpty) {
         _aviso('No se ha actuado sobre las posiciones con incidencia; siguen pendientes.', ok: false);
       } else {
-        _aviso('Cambios guardados', ok: true);
+        _aviso(_conParte('Cambios guardados', numeroParte), ok: true);
       }
       if (mounted) Navigator.of(context).pop(true);
       return;
@@ -393,9 +395,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final total = ok + yaResueltas;
     final pendientes = _incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - total;
     _aviso(
-      total > 0
-          ? '$total incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
-          : 'No se solucionó ninguna incidencia',
+      _conParte(
+        total > 0
+            ? '$total incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
+            : 'No se solucionó ninguna incidencia',
+        numeroParte),
       ok: total > 0,
     );
     if (mounted) Navigator.of(context).pop(true);
@@ -646,6 +650,12 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     // Se guardan en la ficha para que la próxima operación parta de ahí.
     await TyreControlApi.actualizarKmVehiculo(veh.id, v, origen: 'manual');
   }
+
+  /// Añade el número de parte al aviso de cierre. Si el servidor no respondió
+  /// (sin cobertura), el trabajo YA está guardado en la base de datos: solo se
+  /// queda sin número a la vista, así que no se avisa de nada raro.
+  String _conParte(String txt, String? numero) =>
+      numero == null ? txt : '$txt · Parte $numero';
 
   void _aviso(String txt, {required bool ok, bool conDeshacer = false}) {
     if (!mounted) return;

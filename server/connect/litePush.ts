@@ -8,6 +8,7 @@
 
 import db from "../db.ts";
 import { sendPushToTokens, type PushMessage } from "../core/push.ts";
+import { liteMetrics } from "./liteMetrics.ts";
 
 async function dropInvalidTokens(tokens: string[]): Promise<void> {
   if (tokens.length === 0) return;
@@ -26,8 +27,7 @@ export async function notifyLiteWorkshop(workshopId: number, msg: PushMessage): 
         AND d."fcmToken" IS NOT NULL AND u.active`,
     [workshopId],
   );
-  const res = await sendPushToTokens(r.rows.map((x: any) => x.fcmToken), msg);
-  await dropInvalidTokens(res.invalidTokens);
+  await enviar(r.rows.map((x: any) => x.fcmToken), msg);
 }
 
 /** Envía a los dispositivos de un operario concreto. */
@@ -37,6 +37,18 @@ export async function notifyLiteUser(userId: number, msg: PushMessage): Promise<
       WHERE "userId" = $1 AND "revokedAtMs" IS NULL AND "fcmToken" IS NOT NULL`,
     [userId],
   );
-  const res = await sendPushToTokens(r.rows.map((x: any) => x.fcmToken), msg);
+  await enviar(r.rows.map((x: any) => x.fcmToken), msg);
+}
+
+/**
+ * Envío común: manda, limpia los tokens que FCM ya no reconoce y deja la cuenta
+ * en las métricas. Un aviso que no llega a ningún dispositivo es un fallo
+ * operativo real —el operario no se entera del servicio— y hasta ahora no se
+ * veía en ninguna parte.
+ */
+async function enviar(tokens: string[], msg: PushMessage): Promise<void> {
+  const destinos = tokens.filter((t) => typeof t === "string" && t.trim().length > 0);
+  const res = await sendPushToTokens(destinos, msg);
+  liteMetrics.recordPush(destinos.length, res.sent, res.invalidTokens.length);
   await dropInvalidTokens(res.invalidTokens);
 }

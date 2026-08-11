@@ -96,8 +96,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _gpsTexto(String v) => switch (v) {
-        'always' => 'Concedido siempre (ideal para el seguimiento en segundo plano)',
-        'while_in_use' => 'Solo con la app abierta',
+        'always' => 'Concedido siempre',
+        // Con el servicio en primer plano basta este permiso: el seguimiento
+        // arranca con la app abierta y sigue con la pantalla bloqueada.
+        'while_in_use' => 'Mientras se usa la app (suficiente para el seguimiento)',
         'denied' => 'Denegado: no podrás compartir tu ubicación',
         'denied_forever' => 'Denegado permanentemente: actívalo en los ajustes del móvil',
         'service_disabled' => 'La ubicación del dispositivo está apagada',
@@ -192,7 +194,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           subtitle: const Text(
             'Tu ubicación solo se comparte durante una asistencia activa '
             '(en camino, en punto, trabajando y vuelta al taller). Nunca fuera '
-            'de un servicio.',
+            'de un servicio. Mientras se comparte verás un aviso permanente en '
+            'la barra de notificaciones.',
           ),
         ),
         ListTile(

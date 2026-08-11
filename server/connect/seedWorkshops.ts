@@ -47,7 +47,10 @@ async function geocodificar(w: SeedWorkshop): Promise<{ lat: number; lng: number
 
   const r = await fetch(url);
   if (!r.ok) throw new Error(`geocoding HTTP ${r.status}`);
-  const data = await r.json();
+  const data = (await r.json()) as {
+    status?: string;
+    results?: { geometry?: { location?: { lat: number; lng: number } } }[];
+  };
   if (data.status === "ZERO_RESULTS" || !data.results?.[0]) return null;
   if (data.status !== "OK") throw new Error(`geocoding ${data.status}`);
   const loc = data.results[0].geometry?.location;
