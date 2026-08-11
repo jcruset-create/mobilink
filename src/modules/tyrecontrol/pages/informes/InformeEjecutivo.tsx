@@ -221,12 +221,35 @@ function conclusiones(d: Datos): string[] {
   const out: string[] = [];
   const { cabecera: c, comparativa: k, prediccion: p, anomalias: a } = d;
 
-  const cobertura = c.vehiculos_total > 0 ? (c.vehiculos_revisados / c.vehiculos_total) * 100 : null;
-  if (cobertura != null) {
+  // Lo que importa no es cuántos se revisaron este mes, sino cuántos van al
+  // día con su periodicidad: con revisión bimestral, un informe de once días
+  // siempre diría que falta el 65% de la flota.
+  const cob = d.cobertura;
+  if (cob && cob.total > 0) {
+    const alDia = ((cob.al_dia + cob.proximos) / cob.total) * 100;
+    const cada = cob.intervalo_habitual ? ` (cada ${cob.intervalo_habitual} días)` : "";
     out.push(
-      `Se ha revisado el ${cobertura.toFixed(0)}% de la flota (${c.vehiculos_revisados} de ${c.vehiculos_total} vehículos)` +
-      (c.vehiculos_pendientes > 0 ? `; queda${c.vehiculos_pendientes === 1 ? "" : "n"} ${plural(c.vehiculos_pendientes, "vehículo", "vehículos")} sin revisar en el periodo.` : "."),
+      `El ${alDia.toFixed(0)}% de la flota está al día con su revisión${cada}: ` +
+      `${cob.al_dia} al día, ${cob.proximos} a punto de tocarles` +
+      (cob.vencidos > 0 ? ` y ${plural(cob.vencidos, "vencido", "vencidos")}` : "") + ".",
     );
+    if (cob.sin_revision > 0) {
+      out.push(`${plural(cob.sin_revision, "vehículo", "vehículos")} sin ninguna revisión registrada.`);
+    }
+    if (cob.sin_intervalo > 0) {
+      out.push(
+        `${plural(cob.sin_intervalo, "vehículo", "vehículos")} sin periodicidad configurada: ` +
+        `no cuentan ni como al día ni como vencidos. Se pone en Configuración o en la ficha del vehículo.`,
+      );
+    }
+  } else {
+    const cobertura = c.vehiculos_total > 0 ? (c.vehiculos_revisados / c.vehiculos_total) * 100 : null;
+    if (cobertura != null) {
+      out.push(
+        `Se ha revisado el ${cobertura.toFixed(0)}% de la flota en el periodo ` +
+        `(${c.vehiculos_revisados} de ${c.vehiculos_total} vehículos).`,
+      );
+    }
   }
 
   const vRev = variacion(k.revisiones_actual, k.revisiones_previo);
@@ -345,6 +368,10 @@ export default function InformeEjecutivo() {
   if (!d) return null;
 
   const c = d.cabecera;
+  const cob = d.cobertura;
+  // El titular es la flota al día con su periodicidad. "Revisados en el
+  // periodo" sigue estando, pero como dato de actividad, no como nota.
+  const alDia = cob && cob.total > 0 ? ((cob.al_dia + cob.proximos) / cob.total) * 100 : null;
   const pctRevisado = c.vehiculos_total > 0 ? (c.vehiculos_revisados / c.vehiculos_total) * 100 : 0;
   const criticos = d.niveles.critico ?? 0;
   const bajos = d.niveles.bajo ?? 0;
@@ -381,13 +408,24 @@ export default function InformeEjecutivo() {
 
       {/* ── KPIs con tendencia ── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <KpiCard title="Vehículos" value={nf(c.vehiculos_total)} hint={`${c.vehiculos_pendientes} sin revisar`} />
-        <KpiCard
-          title="Flota revisada"
-          value={`${pctRevisado.toFixed(0)}%`}
-          hint={`${c.vehiculos_revisados} de ${c.vehiculos_total}`}
-          tono={pctRevisado >= 80 ? "ok" : pctRevisado >= 50 ? "warn" : "danger"}
-        />
+        <KpiCard title="Vehículos" value={nf(c.vehiculos_total)} hint={`${c.vehiculos_revisados} revisados en el periodo`} />
+        {alDia != null && cob ? (
+          <KpiCard
+            title="Flota al día"
+            value={`${alDia.toFixed(0)}%`}
+            hint={cob.vencidos > 0
+              ? `${cob.vencidos} vencidos${cob.intervalo_habitual ? ` · cada ${cob.intervalo_habitual} días` : ""}`
+              : `al día${cob.intervalo_habitual ? ` · cada ${cob.intervalo_habitual} días` : ""}`}
+            tono={alDia >= 90 ? "ok" : alDia >= 70 ? "warn" : "danger"}
+          />
+        ) : (
+          <KpiCard
+            title="Flota revisada"
+            value={`${pctRevisado.toFixed(0)}%`}
+            hint={`${c.vehiculos_revisados} de ${c.vehiculos_total} en el periodo`}
+            tono={pctRevisado >= 80 ? "ok" : pctRevisado >= 50 ? "warn" : "danger"}
+          />
+        )}
         <KpiCard title="Neumáticos medidos" value={nf(c.neumaticos_medidos)} hint={`${c.revisiones} revisiones`} />
         <KpiCard
           title="Bajo mínimo"

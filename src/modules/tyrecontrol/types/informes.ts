@@ -200,6 +200,17 @@ export interface InformeEjecutivo {
     recauchutados: number;
     rees_y_recau: number;
   }[];
+  /**
+   * La flota medida contra SU periodicidad de revisión, no contra el periodo
+   * del informe. Con revisión bimestral, un informe mensual siempre daría un
+   * porcentaje malo y dejaría de mirarse.
+   */
+  cobertura?: {
+    total: number; al_dia: number; proximos: number; vencidos: number;
+    sin_revision: number; sin_intervalo: number;
+    intervalo_habitual: number | null;
+    mas_vencidos: { matricula: string; ultima: string | null; dias_vencido: number }[];
+  };
   por_medida: { medida: string; unidades: number; prof_media: number | null; criticos: number }[];
   por_marca: { marca: string; unidades: number; prof_media: number | null; criticos: number; reesculturados: number }[];
   por_base: {
