@@ -42,3 +42,20 @@ export async function saveScheduledTechStatusesToBackend(
 
   return response.json().catch(() => null);
 }
+
+/** Borra un estado programado concreto (antes iba implícito en el PUT de la lista). */
+export async function deleteScheduledTechStatusFromBackend(id: string) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/scheduled-tech-statuses/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+      headers: getAdminHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Error eliminando el estado técnico: ${response.status}`);
+  }
+
+  return response.json().catch(() => null);
+}
