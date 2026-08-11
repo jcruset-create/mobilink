@@ -113,7 +113,15 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: TabBarView(
                 children: [
-                  _buildList(_misTareas, 'No tienes tareas asignadas.'),
+                  // El vacío dice de quién está hablando: si el nombre no es
+                  // el esperado, el problema es el usuario con el que se ha
+                  // entrado, no que falten tareas.
+                  _buildList(
+                    _misTareas,
+                    'No hay tareas asignadas a ${widget.api.techName}.\n'
+                    'Si crees que deberías tener alguna, comprueba en oficina '
+                    'que el trabajo está asignado a tu nombre.',
+                  ),
                   if (widget.esSupervisor) _buildGestion(),
                 ],
               ),
