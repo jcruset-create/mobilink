@@ -210,7 +210,9 @@ import {
 import {
   loadScheduledTechStatusesFromBackend,
   saveScheduledTechStatusesToBackend,
+  deleteScheduledTechStatusFromBackend,
 } from "./modules/scheduledTechStatusApi";
+import { elementosCambiados } from "./modules/deltaSync";
 import RoadsideAssistanceView from "./components/RoadsideAssistanceView";
 import RoadsideAssistanceAdminView from "./components/RoadsideAssistanceAdminView";
 import WhatsAppInboxView from "./components/WhatsAppInboxView";
@@ -1213,23 +1215,44 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [isAuthenticated]);
 
+// Citas: se envía SOLO lo que ha cambiado desde la última sincronización.
+// Mandar la agenda entera en cada cambio hacía que una pestaña con datos
+// antiguos reescribiera citas editadas desde otra.
+const citasSincronizadasRef = useRef<Map<string, string>>(new Map());
+
 useEffect(() => {
   if (!agenda.scheduledJobsLoaded) return;
+
+  const payload = agenda.scheduledJobs.map((job) =>
+    applyScheduledJobV2PayloadFields(job, job)
+  );
+
+  const { cambiados, instantanea } = elementosCambiados(
+    payload as unknown as { id: string | number }[],
+    citasSincronizadasRef.current
+  );
+
+  if (cambiados.length === 0) {
+    citasSincronizadasRef.current = instantanea;
+    return;
+  }
 
   fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
     method: "PUT",
     headers: getAdminHeaders({
       "Content-Type": "application/json",
     }),
-    body: JSON.stringify(
-  agenda.scheduledJobs.map((job) =>
-    applyScheduledJobV2PayloadFields(job, job)
-  )
-),
-  }).catch((error) => {
-    console.error("Error guardando agenda:", error);
-  });
+    body: JSON.stringify(cambiados),
+  })
+    .then(() => {
+      citasSincronizadasRef.current = instantanea;
+    })
+    .catch((error) => {
+      console.error("Error guardando agenda:", error);
+    });
 }, [agenda.scheduledJobs, agenda.scheduledJobsLoaded]);
+
+const estadosSincronizadosRef = useRef<Map<string, string>>(new Map());
 
 useEffect(() => {
   saveScheduledTechStatuses(scheduledTechStatuses);
@@ -1240,16 +1263,37 @@ useEffect(() => {
   // Los roles de solo lectura (pantallas/tv75) no deben intentar el PUT (daría 403).
   if (!isSupervisor) return;
 
-  void saveScheduledTechStatusesToBackend(scheduledTechStatuses).catch(
-    (error) => {
-      if (String(error?.message ?? error).includes("401")) {
+  // Igual que la agenda: sólo lo que ha cambiado, y los borrados por id.
+  const { cambiados, eliminados, instantanea } = elementosCambiados(
+    scheduledTechStatuses,
+    estadosSincronizadosRef.current
+  );
+
+  if (cambiados.length === 0 && eliminados.length === 0) {
+    estadosSincronizadosRef.current = instantanea;
+    return;
+  }
+
+  void (async () => {
+    try {
+      if (cambiados.length > 0) {
+        await saveScheduledTechStatusesToBackend(cambiados);
+      }
+
+      for (const id of eliminados) {
+        await deleteScheduledTechStatusFromBackend(id);
+      }
+
+      estadosSincronizadosRef.current = instantanea;
+    } catch (error) {
+      if (String((error as Error)?.message ?? error).includes("401")) {
         forceLogout("Tu sesión ha caducado. Vuelve a iniciar sesión.");
         return;
       }
       console.error("Error guardando estados técnicos en backend:", error);
       appendLog("Error guardando estados programados de técnicos.");
     }
-  );
+  })();
 }, [scheduledTechStatuses, scheduledTechStatusesLoaded]);
 
 

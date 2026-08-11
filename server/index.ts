@@ -9935,9 +9935,10 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo: vaciar la tabla hacía que una pestaña con datos
+    // antiguos borrase los estados creados desde otra. Los borrados van por
+    // DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM scheduled_tech_statuses`);
 
     for (const item of items) {
       await db.query(
@@ -10006,6 +10007,20 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
     res.status(500).json({
       error: "Error guardando estados técnicos programados",
     });
+  }
+});
+
+/** Borrado por elemento del estado programado de un técnico. */
+app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "ID de estado no válido" });
+
+    await db.query(`DELETE FROM scheduled_tech_statuses WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/scheduled-tech-statuses/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el estado programado" });
   }
 });
 
