@@ -234,3 +234,27 @@ export interface InformeEjecutivo {
     dias_30: number; dias_60: number; dias_90: number; dias_180: number;
   };
 }
+
+/**
+ * Una fila del control de revisiones: un vehículo con su última revisión.
+ * `estado` sale de comparar esa fecha con la periodicidad del vehículo (o la
+ * de su tipo), el mismo criterio que la planificación y el ejecutivo.
+ */
+export interface ControlRevision {
+  vehiculo_id: string;
+  matricula: string;
+  numero_unidad: string | null;
+  base: string | null;
+  tipo: string | null;
+  ultima_revision: string | null;
+  medido_at: string | null;
+  /** 'checkpoint' si todas las ruedas las midió el arco, 'tecnico' si no. */
+  origen: "checkpoint" | "tecnico" | null;
+  n_neumaticos: number;
+  min_mm: number | null;
+  dias_desde: number | null;
+  intervalo_dias: number | null;
+  proxima_revision: string | null;
+  dias_vencido: number | null;
+  estado: "sin_revision" | "vencido" | "proximo" | "al_dia" | "sin_intervalo";
+}

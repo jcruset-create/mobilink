@@ -41,6 +41,7 @@ import InformeEjecutivo from "./pages/informes/InformeEjecutivo";
 import InformeAlertas from "./pages/informes/InformeAlertas";
 import InformeInventario from "./pages/informes/InformeInventario";
 import InformeEstadoFlota from "./pages/informes/InformeEstadoFlota";
+import InformeControlRevisiones from "./pages/informes/InformeControlRevisiones";
 import InformeHistorialNeumatico from "./pages/informes/InformeHistorialNeumatico";
 import InformeHistorialVehiculo from "./pages/informes/InformeHistorialVehiculo";
 import InformeEconomico from "./pages/informes/InformeEconomico";
@@ -81,6 +82,7 @@ export default function TyreControlApp() {
               <Route path="ejecutivo" element={<InformeEjecutivo />} />
               <Route path="alertas" element={<InformeAlertas />} />
               <Route path="estado-flota" element={<InformeEstadoFlota />} />
+              <Route path="control-revisiones" element={<InformeControlRevisiones />} />
               <Route path="inventario" element={<InformeInventario />} />
               <Route path="historial-vehiculo" element={<InformeHistorialVehiculo />} />
               <Route path="desgaste" element={<InformeDesgaste />} />
