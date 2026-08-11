@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/job.dart';
+import '../nombres.dart';
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../theme.dart';
+import '../widgets/bloqueo_inactividad.dart';
 import '../workshops.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
@@ -23,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   String? _error;
   String _tallerFilter = 'all'; // 'all' | id de taller
+  Job? _seleccionado; // panel derecho en tablet
 
   @override
   void initState() {
@@ -61,8 +64,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Comparación tolerante: el backend ya filtra, pero aquí se volvía a filtrar
+  // con igualdad exacta y un acento bastaba para dejar la lista vacía.
   List<Job> get _misTareas => _jobs
-      .where((j) => j.assignedNames.contains(widget.api.techName) && !j.isClosed)
+      .where((j) => estaAsignado(j.assignedNames, widget.api.techName) && !j.isClosed)
       .toList();
 
   List<Job> get _gestionJobs => _tallerFilter == 'all'
@@ -76,7 +81,14 @@ class _HomeScreenState extends State<HomeScreen> {
       if (widget.esSupervisor) const Tab(text: 'Gestión'),
     ];
 
-    return DefaultTabController(
+    // A partir de ~900 px (tablet en horizontal) la lista y el detalle caben a
+    // la vez: el técnico deja de perder el contexto cada vez que abre una
+    // tarea, que es el gesto que más repite en el puesto.
+    final anchoTablet = MediaQuery.of(context).size.width >= 900;
+
+    return BloqueoInactividad(
+      api: widget.api,
+      child: DefaultTabController(
       length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
@@ -116,23 +128,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   // El vacío dice de quién está hablando: si el nombre no es
                   // el esperado, el problema es el usuario con el que se ha
                   // entrado, no que falten tareas.
-                  _buildList(
+                  _panel(
                     _misTareas,
                     'No hay tareas asignadas a ${widget.api.techName}.\n'
                     'Si crees que deberías tener alguna, comprueba en oficina '
                     'que el trabajo está asignado a tu nombre.',
+                    anchoTablet,
                   ),
-                  if (widget.esSupervisor) _buildGestion(),
+                  if (widget.esSupervisor) _buildGestion(anchoTablet),
                 ],
               ),
             ),
           ],
         ),
       ),
+      ),
     );
   }
 
-  Widget _buildGestion() {
+  Widget _buildGestion(bool anchoTablet) {
     return Column(
       children: [
         Padding(
@@ -156,13 +170,50 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         Expanded(
-          child: _buildList(_gestionJobs, 'No hay trabajos en este taller.'),
+          child: _panel(_gestionJobs, 'No hay trabajos en este taller.', anchoTablet),
         ),
       ],
     );
   }
 
-  Widget _buildList(List<Job> jobs, String emptyMsg) {
+  /// Lista sola (móvil) o lista + detalle (tablet en horizontal).
+  Widget _panel(List<Job> jobs, String emptyMsg, bool anchoTablet) {
+    if (!anchoTablet) return _buildList(jobs, emptyMsg);
+
+    // Si el trabajo seleccionado ya no está en la lista (se ha cerrado, o ha
+    // cambiado el filtro), se cae al primero en vez de dejar el panel colgado
+    // enseñando algo que ya no existe.
+    final seleccion = jobs.any((j) => j.id == _seleccionado?.id)
+        ? jobs.firstWhere((j) => j.id == _seleccionado!.id)
+        : (jobs.isNotEmpty ? jobs.first : null);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: 380,
+          child: _buildList(jobs, emptyMsg, seleccionado: seleccion),
+        ),
+        const VerticalDivider(width: 1, color: AppColors.border),
+        Expanded(
+          child: seleccion == null
+              ? const _CenteredMessage(text: 'Selecciona una tarea de la lista.')
+              : TaskDetailScreen(
+                  // La key fuerza a reconstruir el detalle al cambiar de tarea:
+                  // sin ella se quedarían las fotos y el estado de la anterior.
+                  key: ValueKey(seleccion.id),
+                  api: widget.api,
+                  job: seleccion,
+                  esSupervisor: widget.esSupervisor,
+                  embebido: true,
+                  onCambio: _load,
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildList(List<Job> jobs, String emptyMsg, {Job? seleccionado}) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator(color: AppColors.primary));
     }
@@ -182,7 +233,12 @@ class _HomeScreenState extends State<HomeScreen> {
               itemCount: jobs.length,
               itemBuilder: (_, i) => _JobCard(
                 job: jobs[i],
+                seleccionada: seleccionado?.id == jobs[i].id,
                 onTap: () async {
+                  if (seleccionado != null || MediaQuery.of(context).size.width >= 900) {
+                    setState(() => _seleccionado = jobs[i]);
+                    return;
+                  }
                   final changed = await Navigator.of(context).push<bool>(
                     MaterialPageRoute(
                       builder: (_) => TaskDetailScreen(
@@ -203,7 +259,12 @@ class _HomeScreenState extends State<HomeScreen> {
 class _JobCard extends StatelessWidget {
   final Job job;
   final VoidCallback onTap;
-  const _JobCard({required this.job, required this.onTap});
+  final bool seleccionada;
+  const _JobCard({
+    required this.job,
+    required this.onTap,
+    this.seleccionada = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -212,7 +273,10 @@ class _JobCard extends StatelessWidget {
       color: AppColors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: AppColors.border),
+        side: BorderSide(
+          color: seleccionada ? AppColors.primary : AppColors.border,
+          width: seleccionada ? 2 : 1,
+        ),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
