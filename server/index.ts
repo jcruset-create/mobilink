@@ -9824,9 +9824,11 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo. Antes esto hacía DELETE de toda la tabla y volvía a
+    // insertar la lista del cliente: la última pestaña que guardaba imponía su
+    // copia y borraba lo que hubieran creado las demás (se perdieron
+    // recordatorios reales así). Los borrados van por DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM agenda_date_reminders`);
 
     for (const item of items) {
       await db.query(
@@ -9903,6 +9905,25 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
     res.status(500).json({
       error: "Error guardando recordatorios de agenda",
     });
+
+  }
+});
+
+/** Borrado por elemento: sustituye al antiguo reemplazo completo de la tabla. */
+app.delete("/api/agenda-date-reminders/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de recordatorio no válido" });
+    }
+
+    await db.query(`DELETE FROM agenda_date_reminders WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/agenda-date-reminders/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el recordatorio" });
+
+
   }
 });
 
