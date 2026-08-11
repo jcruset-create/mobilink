@@ -28,6 +28,20 @@
 
 export const HOJA_DETALLE = "Neumáticos Detalle";
 
+/**
+ * ¿Es este adjunto el informe?
+ *
+ * Vive aquí y no junto al buzón porque es conocimiento del FORMATO, no del
+ * correo: un mensaje reenviado arrastra la firma del remitente, logos
+ * incrustados y a veces el mismo informe en PDF, y coger el adjunto
+ * equivocado hace que la importación falle cada semana con un error que no
+ * dice nada.
+ */
+export function esAdjuntoInforme(nombre: string | undefined | null): boolean {
+  const n = String(nombre ?? "").toLowerCase();
+  return n.endsWith(".xlsx") || n.endsWith(".xlsm");
+}
+
 /** Una rueda medida por el arco, ya traducida a nuestros términos. */
 export interface FilaCheckpoint {
   matricula: string;
