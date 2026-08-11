@@ -55,3 +55,26 @@ export async function saveAgendaDateRemindersToBackend(
 
   return response.json().catch(() => null);
 }
+
+/**
+ * Borra un recordatorio concreto.
+ *
+ * Antes el borrado se hacía enviando la lista entera con PUT, y el servidor
+ * vaciaba la tabla para reinsertarla: dos pestañas abiertas se pisaban y se
+ * perdían recordatorios ajenos.
+ */
+export async function deleteAgendaDateReminderFromBackend(id: number) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/agenda-date-reminders/${id}`,
+    {
+      method: "DELETE",
+      headers: getAdminHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Error eliminando el recordatorio: ${response.status}`);
+  }
+
+  return response.json().catch(() => null);
+}
