@@ -1555,6 +1555,45 @@ async function getAssistPanelUser(req: express.Request): Promise<AssistPanelUser
   };
 }
 
+/**
+ * Credenciales válidas para la APK de taller (WorkPlanner Taller).
+ *
+ * Un técnico de taller puede identificarse de dos formas históricas:
+ *   · código de operario (techs.roadsideOperatorCode) — lo que usaba la APK
+ *   · PIN de taller      (techs.workshopPin)          — lo que usa /operario/taller
+ *
+ * Se aceptan las dos: exigir solo la primera dejaba fuera de la app a los
+ * técnicos que únicamente tienen PIN, que son la mayoría de los de taller.
+ * Los endpoints de asistencias en carretera siguen pidiendo el código, para no
+ * ampliar por la puerta de atrás quién puede tocar una asistencia.
+ */
+async function getTallerOperatorFromRequest(req: express.Request) {
+  return (
+    (await getRoadsideOperatorFromRequest(req)) ??
+    (await getWorkshopOperatorFromRequest(req))
+  );
+}
+
+function requireTallerOperator(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const operator = await getTallerOperatorFromRequest(req);
+
+    if (!operator) {
+      return res.status(401).json({ error: "Operario no autorizado" });
+    }
+
+    (req as any).roadsideOperator = operator;
+    next();
+  })().catch((error) => {
+    console.error("requireTallerOperator error:", error);
+    res.status(500).json({ error: "Error validando operario" });
+  });
+}
+
 function requireRoadsideOperator(
   req: express.Request,
   res: express.Response,
@@ -2651,7 +2690,70 @@ async function getTallerOperator(techName: string) {
 }
 
 // Ficha del operario logueado (para pintar el rol en la APK)
-app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => {
+/**
+ * Público: nombres que pueden entrar en la APK de taller.
+ *
+ * La APK usaba /api/roadside-operator/techs, que solo devuelve operarios con
+ * código de asistencia en carretera: los técnicos de taller no salían y el
+ * desplegable de la pantalla de login aparecía vacío.
+ */
+app.get("/api/taller-operator/techs-list", async (_req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT name
+      FROM techs
+      WHERE NULLIF(TRIM(COALESCE("workshopPin", '')), '') IS NOT NULL
+         OR NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      ORDER BY name ASC
+    `);
+
+    res.json(result.rows.map((r: any) => ({ name: r.name })));
+  } catch (error) {
+    console.error("GET /api/taller-operator/techs-list error:", error);
+    res.status(500).json({ error: "Error obteniendo operarios de taller" });
+  }
+});
+
+/**
+ * Público: login de la APK. Acepta el PIN de taller o el código de operario,
+ * sin que el técnico tenga que saber cuál de los dos tiene.
+ */
+app.post("/api/taller-operator/login", async (req, res) => {
+  try {
+    const techName = String(req.body?.techName || "").trim();
+    const code = String(req.body?.code || "").trim();
+
+    if (!techName || !code) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+
+    const porPin = await db.query(
+      `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+      [techName, code]
+    );
+
+    const esperado = await getExpectedRoadsideOperatorCode(techName);
+    const porCodigo = Boolean(esperado) && code === esperado;
+
+    if (porPin.rows.length === 0 && !porCodigo) {
+      return res.status(401).json({ error: "PIN incorrecto" });
+    }
+
+    // El código de operario da además sesión unificada (Bearer) porque es la
+    // que ya montaba /api/roadside-operator/login; con PIN de taller se entra
+    // igual, solo con las cabeceras de operario.
+    res.json({
+      ok: true,
+      techName,
+      metodo: porPin.rows.length > 0 ? "pin" : "codigo",
+    });
+  } catch (error) {
+    console.error("POST /api/taller-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2664,7 +2766,7 @@ app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => 
 });
 
 // Trabajos visibles (scope=live). Operario: solo los suyos. Supervisor: todos.
-app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2692,7 +2794,7 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
 });
 
 // Lista de técnicos para asignar (solo supervisor)
-app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/techs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2716,7 +2818,7 @@ app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) 
 });
 
 // Crear/asignar trabajo (solo supervisor)
-app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2762,7 +2864,7 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
 });
 
 // Reasignar trabajo (solo supervisor)
-app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/assign", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2790,7 +2892,7 @@ app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (
 
 // Cambiar estado del trabajo (operario: solo los suyos; supervisor: cualquiera)
 // status admitido: activo (empezar/reanudar) | parado (pausar) | cerrado (finalizar) | espera
-app.put("/api/taller-operator/jobs/:id/status", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/status", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2876,7 +2978,7 @@ async function tallerCanAccessJob(op: { name: string; esSupervisor: boolean }, j
 }
 
 // Listar fotos de un trabajo
-app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2909,7 +3011,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
 // Subir foto a un trabajo
 app.post(
   "/api/taller-operator/jobs/:id/files",
-  requireRoadsideOperator,
+  requireTallerOperator,
   upload.single("file"),
   async (req, res) => {
     try {
@@ -12252,7 +12354,12 @@ Reglas obligatorias:
 ========================================================= */
 
 async function getWorkshopOperatorFromRequest(req: express.Request) {
-  const techName = String(req.headers["x-operator-name"] ?? "").trim();
+  const bruto = String(req.headers["x-operator-name"] ?? "").trim();
+  // La APK codifica el nombre: las cabeceras HTTP no admiten acentos y un
+  // "Jesús" sin codificar se pierde por el camino. El panel web lo manda tal
+  // cual, así que se acepta de las dos formas.
+  let techName = bruto;
+  try { techName = decodeURIComponent(bruto); } catch { /* nombre sin codificar */ }
   const pin = String(req.headers["x-operator-pin"] ?? "").trim();
   if (!techName || !pin) return null;
   const result = await db.query(
