@@ -16004,6 +16004,12 @@ const APK_APPS: Record<
     pubspec: "tyrecontrol_app/pubspec.yaml",
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  taller: {
+    prefix: "mobilink-taller-",
+    label: "WorkPlanner Taller",
+    releaseTag: "taller-v",
+    pubspec: "taller_app/pubspec.yaml",
+  },
 };
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
