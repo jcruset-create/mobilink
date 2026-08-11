@@ -13,7 +13,13 @@ class Empresa {
   final String id;
   final String nombre;
   Empresa({required this.id, required this.nombre});
-  factory Empresa.fromJson(Map<String, dynamic> j) => Empresa(id: j['id'], nombre: j['nombre'] ?? '');
+  /// Varios selects traen la empresa embebida solo por el nombre
+  /// (`empresa:tc_empresas(nombre)`), porque es lo único que se pinta. Sin el
+  /// `?? ''` esa embebida a medias tiraba la pantalla entera con "type 'Null'
+  /// is not a subtype of type 'String'", y nadie lee el id de una empresa
+  /// embebida: el de verdad va en `Vehiculo.empresaId`.
+  factory Empresa.fromJson(Map<String, dynamic> j) =>
+      Empresa(id: j['id'] ?? '', nombre: j['nombre'] ?? '');
 }
 
 class TipoVehiculo {
