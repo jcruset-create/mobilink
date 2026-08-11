@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ejesDeTipo, medidaDeTipo, codigoPosicion, senasPosicion, fechaHora, leerCheckpoint, filtrarNuevas,
+  esAdjuntoInforme,
 } from "./checkpoint";
 
 // Una fila del informe tal cual sale del Excel del arco.
@@ -251,5 +252,32 @@ describe("senasPosicion — el fallo de los 116 avisos", () => {
 
   it("un hueco sin lado no tiene señas", () => {
     expect(senasPosicion(1, "N/A", 2)).toBeNull();
+  });
+});
+
+describe("esAdjuntoInforme", () => {
+  // Un correo reenviado arrastra la firma del remitente, logos incrustados y
+  // a veces el mismo informe en PDF. Coger el adjunto equivocado haría que la
+  // importación fallara cada semana con un error que no dice nada.
+  it("el informe del arco es un Excel", () => {
+    expect(esAdjuntoInforme("Estado_general Informe general de la flota.xlsx")).toBe(true);
+    expect(esAdjuntoInforme("informe.xlsm")).toBe(true);
+    expect(esAdjuntoInforme("INFORME.XLSX")).toBe(true);
+  });
+
+  it("la firma, el logo y el PDF que acompaña no valen", () => {
+    for (const n of ["image001.png", "logo.jpg", "informe.pdf", "firma.gif", "detalle.csv"]) {
+      expect(esAdjuntoInforme(n)).toBe(false);
+    }
+  });
+
+  it("sin nombre no se toma por el informe", () => {
+    expect(esAdjuntoInforme(undefined)).toBe(false);
+    expect(esAdjuntoInforme(null)).toBe(false);
+    expect(esAdjuntoInforme("")).toBe(false);
+  });
+
+  it("no basta con que la extensión aparezca en medio del nombre", () => {
+    expect(esAdjuntoInforme("informe.xlsx.exe")).toBe(false);
   });
 });
