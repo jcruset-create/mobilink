@@ -2677,12 +2677,38 @@ app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res
    NO tocan los /api/jobs del panel web.
 ========================================================= */
 
+/**
+ * ¿Es el mismo técnico? Los nombres viajan por tres sitios (columna `techs`,
+ * lista `assignedNames` del trabajo y cabecera de la APK) y basta un acento,
+ * una mayúscula o un espacio de más para que la comparación exacta falle y el
+ * técnico vea "no tienes tareas" teniendo trabajo asignado.
+ */
+function mismoNombreTecnico(a: unknown, b: unknown) {
+  const normaliza = (v: unknown) =>
+    String(v ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+  const na = normaliza(a);
+  return na !== "" && na === normaliza(b);
+}
+
 async function getTallerOperator(techName: string) {
-  const r = await db.query(
+  let r = await db.query(
     `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
     [techName]
   );
-  if (r.rows.length === 0) return null;
+
+  // Repliegue tolerante: mismo nombre con otra caja o sin acentos.
+  if (r.rows.length === 0) {
+    const todos = await db.query(`SELECT name, "es_supervisor" FROM techs`);
+    const encontrado = todos.rows.find((t: any) => mismoNombreTecnico(t.name, techName));
+    if (!encontrado) return null;
+    r = { rows: [encontrado] } as any;
+  }
+
   return {
     name: String(r.rows[0].name),
     esSupervisor: r.rows[0].es_supervisor === true,
@@ -2783,7 +2809,9 @@ app.get("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => 
     let jobs = result.rows.map(normalizeJobRow);
     if (!op.esSupervisor) {
       jobs = jobs.filter(
-        (j: any) => Array.isArray(j.assignedNames) && j.assignedNames.includes(op.name)
+        (j: any) =>
+          Array.isArray(j.assignedNames) &&
+          j.assignedNames.some((n: unknown) => mismoNombreTecnico(n, op.name))
       );
     }
     res.json(jobs);
