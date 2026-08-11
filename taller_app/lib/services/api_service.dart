@@ -37,9 +37,15 @@ class ApiService {
       _tokenExpiresAt == null ||
       DateTime.now().isAfter(_tokenExpiresAt!);
 
+  /// Se envían las dos credenciales posibles: el backend acepta el PIN de
+  /// taller (techs.workshopPin) o el código de operario
+  /// (techs.roadsideOperatorCode), y el técnico no tiene por qué saber cuál de
+  /// los dos tiene asignado.
   Map<String, String> get _operatorHeaders => {
         'x-roadside-operator-name': Uri.encodeComponent(techName),
         'x-roadside-operator-code': code,
+        'x-operator-name': Uri.encodeComponent(techName),
+        'x-operator-pin': code,
         if (_accessToken != null) 'Authorization': 'Bearer $_accessToken',
       };
 
@@ -60,7 +66,7 @@ class ApiService {
   // ── Login ────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> login(String techName, String code) async {
     final res = await http.post(
-      Uri.parse('$kBackendUrl/api/roadside-operator/login'),
+      Uri.parse('$kBackendUrl/api/taller-operator/login'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'techName': techName, 'code': code}),
     );
@@ -73,7 +79,8 @@ class ApiService {
   }
 
   static Future<List<String>> techNames() async {
-    final res = await http.get(Uri.parse('$kBackendUrl/api/roadside-operator/techs'));
+    final res = await http.get(
+        Uri.parse('$kBackendUrl/api/taller-operator/techs-list'));
     if (res.statusCode != 200) return [];
     final list = jsonDecode(res.body) as List<dynamic>;
     return list
