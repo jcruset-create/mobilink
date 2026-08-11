@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
+import { medidaCanonica } from "./medidas";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
@@ -1128,7 +1129,15 @@ export async function listarMarcas(): Promise<MarcaNeumatico[]> {
   return (data ?? []) as MarcaNeumatico[];
 }
 export async function crearMarca(nombre: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: nombre.trim() });
+  const n = nombre.trim().replace(/\s+/g, " ");
+  if (!n) throw new Error("El nombre de la marca es obligatorio");
+  // Las marcas no distinguen mayúsculas: "hankook" y "HANKOOK" son la misma y
+  // el catálogo solo admite una. Sin esta comprobación el usuario recibiría un
+  // "duplicate key value violates unique constraint" y no sabría qué hacer.
+  const { data: ya } = await supabase.from("tc_cat_marcas_neumatico")
+    .select("nombre").ilike("nombre", n).limit(1).maybeSingle();
+  if (ya) throw new Error(`Esa marca ya está en el catálogo como "${(ya as { nombre: string }).nombre}".`);
+  const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: n });
   if (error) throw new Error(error.message);
 }
 export async function actualizarMarca(id: string, patch: {
@@ -1615,8 +1624,11 @@ export async function fijarTiposDeMedida(medidaId: string, tipoVehiculoIds: stri
   if (error) throw new Error(error.message);
 }
 export async function crearMedida(valor: string): Promise<string> {
-  const v = valor.trim();
-  // Reutiliza si ya existe (evita duplicados por unique).
+  // En canónico: la base de datos lo va a normalizar de todas formas (hay un
+  // disparador), así que buscar por el texto tal cual no encontraría
+  // "295/80R22.5" al pedir "295/80R22,5" y el insert chocaría contra el unique.
+  const v = medidaCanonica(valor);
+  if (!v) throw new Error("La medida es obligatoria");
   const { data: ya } = await supabase.from("tc_cat_medidas_neumatico").select("id").eq("valor", v).limit(1).maybeSingle();
   if (ya) return (ya as { id: string }).id;
   const { data, error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: v }).select("id").single();
