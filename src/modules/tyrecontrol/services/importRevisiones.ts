@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import { listarVehiculos, listarPosiciones } from "./data";
 import type { PosicionVehiculo, Vehiculo } from "../types";
+import { medidaCanonica } from "./medidas";
 
 export interface ReporteRev {
   resumen: { filas: number; revisiones: number; detalles: number; neumaticosNuevos: number; errores: number };
@@ -20,7 +21,10 @@ function fechaISO(v: any): string | null {
 }
 const numOrNull = (v: any) => { const s = String(v ?? "").trim().replace(",", "."); return s && !isNaN(Number(s)) ? Number(s) : null; };
 const txt = (v: any) => { const s = String(v ?? "").trim(); return s || null; };
-const medN = (v: any) => { const s = String(v ?? "").trim().replace(/\s+/g, "").toUpperCase(); return s || null; }; // medida sin espacios
+// Medida en forma canónica, la misma que impone el disparador de la base de
+// datos: si no, "295/80R22,5" y "295/80R22.5" salen como dos medidas
+// distintas en el informe.
+const medN = (v: any) => medidaCanonica(String(v ?? "")) || null;
 
 interface Grupo { matricula: string; fecha: string; rows: any[]; }
 
