@@ -91,8 +91,10 @@ export async function importCheckpoint(filas: any[], ejecutar: boolean): Promise
           matricula: v.matricula,
           numero_unidad: v.idFlota,
           tipo_vehiculo_id: tipoId,
+          // El arco no lee kilómetros: no hay km que apuntar ni origen que
+          // presumir. Los pondrá un técnico o la plataforma de telemática.
           km_actual: 0,
-          origen_km: "checkpoint",
+          origen_km: "manual",
           activo: true,
         };
         await crearVehiculo(input as VehiculoInput);
