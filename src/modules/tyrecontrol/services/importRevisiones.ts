@@ -28,10 +28,28 @@ const medN = (v: any) => medidaCanonica(String(v ?? "")) || null;
 
 interface Grupo { matricula: string; fecha: string; rows: any[]; }
 
+/** El momento de la medición del grupo, si las filas lo traen. */
+function momentoDeGrupo(g: Grupo): string | null {
+  const t = g.rows.map((r) => r._medidoAt).filter((d) => d instanceof Date) as Date[];
+  if (!t.length) return null;
+  return new Date(Math.max(...t.map((d) => d.getTime()))).toISOString();
+}
+
 // Importa (o simula) revisiones desde la plantilla. Agrupa por matrícula+fecha,
 // resuelve posiciones por el tipo del vehículo, crea un neumático genérico por
 // posición si no hay montaje, y registra el detalle de cada rueda.
-export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<ReporteRev> {
+export interface OpcionesRev {
+  /**
+   * De dónde vienen las mediciones. Cambia el método que se apunta en cada
+   * rueda, para poder comparar luego el arco contra la sonda.
+   */
+  origen?: "importacion_excel" | "checkpoint";
+}
+
+export async function importRevisiones(
+  rows: any[], ejecutar: boolean, opciones: OpcionesRev = {},
+): Promise<ReporteRev> {
+  const metodo = opciones.origen ?? "importacion_excel";
   const errores: ReporteRev["errores"] = [];
   const avisos = new Set<string>();
   const hoy = fechaISO(new Date())!;
@@ -47,7 +65,13 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     if (!fecha) { fecha = hoy; sinFecha++; }
     const key = `${mat}||${fecha}`;
     if (!grupos.has(key)) grupos.set(key, { matricula: mat, fecha, rows: [] });
-    grupos.get(key)!.rows.push({ ...r, _fila: i + 2, posN: parseInt(String(r.posicion).trim(), 10) });
+    grupos.get(key)!.rows.push({
+      ...r, _fila: i + 2, posN: parseInt(String(r.posicion).trim(), 10),
+      // El CheckPoint no numera las ruedas: las nombra (E3_IZQ). Es más
+      // seguro, porque el número depende de que el tipo tenga las posiciones
+      // en el mismo orden y el código no.
+      _codigo: String(r.codigo_posicion ?? "").trim().toUpperCase() || null,
+    });
   }
   if (sinFecha > 0) avisos.add(`${sinFecha} filas sin fecha: se usó la fecha de hoy (${hoy}). Cámbiala luego si conoces la real.`);
 
@@ -108,9 +132,18 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     const ps = posByTipo.get(v.tipo_vehiculo_id)!;
     const posMap = new Map<number, string>();
     for (const row of g.rows) {
-      const n = row.posN;
-      if (!n || n < 1 || n > ps.length) { avisos.add(`${g.matricula}: posición ${row.posicion} fuera de rango (el tipo tiene ${ps.length})`); continue; }
-      const posId = ps[n - 1].id;
+      let posId: string | undefined;
+      let n = row.posN;
+      if (row._codigo) {
+        const p = ps.find((x) => String(x.codigo_posicion).toUpperCase() === row._codigo);
+        if (!p) { avisos.add(`${g.matricula}: su tipo no tiene la posición ${row._codigo}`); continue; }
+        posId = p.id;
+        n = ps.indexOf(p) + 1;
+        row.posN = n;
+      } else {
+        if (!n || n < 1 || n > ps.length) { avisos.add(`${g.matricula}: posición ${row.posicion} fuera de rango (el tipo tiene ${ps.length})`); continue; }
+        posId = ps[n - 1].id;
+      }
       posMap.set(n, posId);
       // ¿hay que crear neumático genérico?
       const mk = `${v.id}|${posId}`;
@@ -229,6 +262,9 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     const nuevas = gruposSinRev.map((p) => ({
       empresa_id: p.vehiculo.empresa_id, vehiculo_id: p.vehiculo.id, fecha_revision: p.grupo.fecha,
       tecnico_id: mapTec.get(String(p.grupo.rows[0].tecnico ?? "").trim()) ?? null, estado_revision: "completada",
+      // Cuándo se midió de verdad, no cuándo se graba esto. Es lo que evita
+      // reimportar la misma pasada por el arco la semana que viene.
+      medido_at: momentoDeGrupo(p.grupo),
     }));
     const chunk = 200;
     for (let i = 0; i < nuevas.length; i += chunk) {
@@ -252,8 +288,8 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
         revision_id: revId, empresa_id: p.vehiculo.empresa_id, vehiculo_id: p.vehiculo.id, posicion_id: posId,
         neumatico_id: mapMontaje.get(`${p.vehiculo.id}|${posId}`) ?? null,
         profundidad_mm: prof, presion_bar: pres, temperatura: numOrNull(row.temperatura_c),
-        metodo_profundidad: prof != null ? "importacion_excel" : null,
-        metodo_presion: pres != null ? "importacion_excel" : null,
+        metodo_profundidad: prof != null ? metodo : null,
+        metodo_presion: pres != null ? metodo : null,
         estado_visual: txt(row.estado_visual), observaciones: txt(row.observaciones),
         no_accesible: false, neumatico_ausente: false,
       });
