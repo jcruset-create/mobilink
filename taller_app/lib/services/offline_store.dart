@@ -35,12 +35,21 @@ class OfflineStore {
     return [];
   }
 
+  /// ¿Es este el trabajo `jobId`? El backend serializa algunos números como
+  /// cadena, así que comparar con `==` directamente falla en silencio y el
+  /// cambio optimista no se aplica.
+  static bool mismoJob(dynamic idCacheado, int jobId) {
+    if (idCacheado is num) return idCacheado.toInt() == jobId;
+    if (idCacheado is String) return int.tryParse(idCacheado.trim()) == jobId;
+    return false;
+  }
+
   /// Actualiza el estado de un trabajo en la caché (optimista).
   static Future<Map<String, dynamic>?> applyLocalStatus(int jobId, String status) async {
     final list = cachedJobs();
     Map<String, dynamic>? updated;
     for (final j in list) {
-      if (j['id'] == jobId) {
+      if (mismoJob(j['id'], jobId)) {
         j['status'] = status;
         updated = j;
       }

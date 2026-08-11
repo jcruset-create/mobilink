@@ -18,7 +18,7 @@ class TallerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Mobilink Taller',
+      title: 'WorkPlanner Taller',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
       home: const SplashScreen(),
