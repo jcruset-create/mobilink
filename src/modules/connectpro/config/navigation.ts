@@ -7,7 +7,7 @@
 import {
   LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
   AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, type LucideIcon,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -36,6 +36,7 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },
   { key: "sla", path: "sla", label: "SLA y alertas", icon: BellRing, minRole: "operator" },
   { key: "clientes", path: "clientes", label: "Clientes", icon: Contact, minRole: "operator" },
+  { key: "salud-lite", path: "salud-lite", label: "Salud de Assist Lite", icon: HeartPulse, minRole: "analyst" },
   { key: "integraciones", path: "integraciones", label: "Partners e integraciones", icon: Plug, minRole: "cc_admin" },
   { key: "estadisticas", path: "estadisticas", label: "Estadísticas", icon: BarChart3, minRole: "analyst" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, minRole: "analyst" },

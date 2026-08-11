@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:geolocator/geolocator.dart';
 import 'api.dart';
 import 'queue.dart';
@@ -51,6 +53,7 @@ class Tracker {
   Position? _last;
   int _lastSentMs = 0;
   int _intervalSec = 30;
+  int _ultimaPosicionMs = 0;
 
   final _controller = StreamController<TrackerState>.broadcast();
   Stream<TrackerState> get stream => _controller.stream;
@@ -123,16 +126,66 @@ class Tracker {
       return;
     }
     _sub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 15,
-      ),
-    ).listen(_onPosition, onError: (_) {});
-    // Latido: garantiza envíos periódicos aunque el operario esté parado
+      locationSettings: _ajustes(),
+    ).listen(
+      _onPosition,
+      // El flujo se puede cortar solo: si Android mata la actividad y la
+      // recrea, o si el usuario desactiva y reactiva la ubicación. Antes se
+      // tragaba el error y el seguimiento se quedaba muerto sin que nadie lo
+      // supiera; ahora el latido lo levanta.
+      onError: (_) => _sub = null,
+      onDone: () => _sub = null,
+      cancelOnError: true,
+    );
+    _ultimaPosicionMs = DateTime.now().millisecondsSinceEpoch;
+    // Latido: garantiza envíos periódicos aunque el operario esté parado, y
+    // vigila que el flujo siga vivo.
     _ticker = Timer.periodic(const Duration(seconds: 20), (_) {
+      _vigilar();
       if (_last != null) _maybeSend(_last!);
     });
     _controller.add(TrackerState(active: true, assistanceId: _assistanceId, status: _status));
+  }
+
+  /// Ajustes del flujo de posiciones.
+  ///
+  /// En Android se arranca como **servicio en primer plano** con notificación
+  /// persistente. Sin él, el sistema deja de entregar posiciones a los pocos
+  /// minutos de bloquear la pantalla, que es exactamente lo que hace un
+  /// operario mientras conduce: el rastro llegaba a Central con agujeros.
+  ///
+  /// El servicio lo arranca el propio `geolocator` (`GeolocatorLocationService`,
+  /// ya declarado con `foregroundServiceType="location"` en su manifiesto), así
+  /// que no hace falta ninguna dependencia de pago. Como se arranca con la app
+  /// en primer plano —el operario acaba de pulsar "En camino"—, basta con el
+  /// permiso de ubicación "mientras se usa la app" y no hace falta el de
+  /// segundo plano.
+  ///
+  /// La notificación no se puede ocultar (`setOngoing`), y eso es intencionado:
+  /// es el aviso permanente de que se está compartiendo ubicación.
+  LocationSettings _ajustes() {
+    if (!Platform.isAndroid) {
+      return const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 15,
+      );
+    }
+    return AndroidSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 15,
+      // El sistema entrega como mucho una posición cada 10 s; el filtrado fino
+      // por velocidad lo hace `_intervalFor` antes de enviar a Central.
+      intervalDuration: const Duration(seconds: 10),
+      foregroundNotificationConfig: const ForegroundNotificationConfig(
+        notificationTitle: 'Mobilink Assist Lite',
+        notificationText: 'Compartiendo ubicación durante la asistencia',
+        notificationChannelName: 'Seguimiento de asistencias',
+        // Sin wakelock el sistema duerme entre posiciones y las entrega todas
+        // de golpe al despertar: el rastro llega, pero tarde y a saltos.
+        enableWakeLock: true,
+        setOngoing: true,
+      ),
+    );
   }
 
   Future<void> stop() async {
@@ -146,7 +199,35 @@ class Tracker {
 
   void _onPosition(Position p) {
     _last = p;
+    _ultimaPosicionMs = DateTime.now().millisecondsSinceEpoch;
     _maybeSend(p);
+  }
+
+  /// Vuelve a abrir el flujo si se ha caído.
+  ///
+  /// El servicio en primer plano evita que Android corte el GPS con la pantalla
+  /// bloqueada, pero no impide que el sistema mate la actividad si va justo de
+  /// memoria. En ese caso el flujo muere en silencio y el rastro se queda a
+  /// medias, que es justo lo que se quería arreglar.
+  ///
+  /// El silencio solo cuenta como avería en los estados de movimiento: parado
+  /// en el punto de la avería es normal que no llegue ninguna posición nueva
+  /// con el filtro de 15 m, y reabrir el flujo cada tres minutos solo serviría
+  /// para parpadear la notificación y gastar batería.
+  void _vigilar() {
+    if (_assistanceId == 0) return;
+    if (!shouldTrack(_status, trackWhileWorking: _trackWhileWorking)) return;
+
+    final enMovimiento = _status == 'en_route' || _status == 'returning_to_workshop';
+    final mudoMs = DateTime.now().millisecondsSinceEpoch - _ultimaPosicionMs;
+    final caido = _sub == null || (enMovimiento && mudoMs > 180000);
+    if (!caido) return;
+
+    _sub?.cancel();
+    _sub = null;
+    _ticker?.cancel();
+    _ticker = null;
+    start();
   }
 
   int _intervalFor(double speedKmh) {

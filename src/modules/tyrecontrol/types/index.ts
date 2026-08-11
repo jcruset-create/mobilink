@@ -675,6 +675,9 @@ export interface OperacionNeumatico {
   almacen_movimiento_id?: string | null;
   tecnico_id?: string | null;
   observaciones?: string | null;
+  /** Intervención (parte de trabajo) a la que pertenece. Las operaciones de
+   *  una misma sesión de Cambios comparten la suya y salen bajo un solo número. */
+  intervencion_id?: string | null;
   created_at?: string;
   // Ciclo de vida (módulo Operaciones)
   numero_operacion?: number | null;

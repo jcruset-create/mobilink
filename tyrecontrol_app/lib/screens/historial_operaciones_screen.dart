@@ -72,8 +72,14 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
           controller: scroll,
           padding: const EdgeInsets.all(16),
           children: [
-            Text('Intervención · ${_fecha(iv['fecha'] as String?)}',
+            Text(
+                iv['numero'] != null
+                    ? 'Parte ${iv['numero']}'
+                    : 'Intervención · ${_fecha(iv['fecha'] as String?)}',
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            if (iv['numero'] != null)
+              Text(_fecha(iv['fecha'] as String?),
+                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
@@ -230,8 +236,26 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                                 color: AppColors.surface,
                                 margin: const EdgeInsets.only(bottom: 8),
                                 child: ListTile(
-                                  title: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
-                                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                                  // El número de parte va PRIMERO y destacado:
+                                  // es lo que el técnico apunta en el albarán y
+                                  // lo que el cliente cita por teléfono. Puede
+                                  // faltar en intervenciones anteriores a la
+                                  // migración que lo introdujo.
+                                  title: Row(children: [
+                                    if (iv['numero'] != null) ...[
+                                      Text('${iv['numero']}',
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800,
+                                              color: AppColors.info)),
+                                      const SizedBox(width: 8),
+                                    ],
+                                    Expanded(
+                                      child: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
+                                          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    ),
+                                  ]),
                                   subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
                                   trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
                                   onTap: () => _verDetalle(iv),

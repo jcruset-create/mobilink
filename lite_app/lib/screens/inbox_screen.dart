@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../config.dart';
 import '../services/api.dart';
 import '../services/file_queue.dart';
 import '../services/push.dart';
@@ -53,12 +54,15 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   }
 
   /// El token de push viaja con el resto del estado del dispositivo, que es
-  /// donde Central lo espera (connect_lite_devices).
+  /// donde Central lo espera (connect_lite_devices). De paso va el estado de
+  /// las colas: es lo que permite a Central detectar un móvil que lleva horas
+  /// sin poder subir sus evidencias.
   Future<void> _registrarDispositivo() async {
-    if (Push.token == null) return;
     await _api.registerDevice({
-      'fcmToken': Push.token,
+      if (Push.token != null) 'fcmToken': Push.token,
       'notifPermission': Push.permiso,
+      'appVersion': kAppVersion,
+      ...estadoDeColas(),
     }).catchError((_) {});
   }
 

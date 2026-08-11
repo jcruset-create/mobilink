@@ -39,14 +39,26 @@
     <!-- Solo los permisos que el código pide hoy:
          · INTERNET             → api.dart contra /api/connect/lite
          · ACCESS_FINE/COARSE   → tracker.dart (Geolocator) durante la asistencia
+         · FOREGROUND_SERVICE   → el servicio en primer plano que mantiene el
+                                  seguimiento con la pantalla bloqueada
+         · ..._LOCATION         → Android 14 exige declarar el tipo del servicio;
+                                  sin él la app revienta al arrancarlo
+         · WAKE_LOCK            → el servicio pide un wakelock para que el
+                                  sistema no duerma entre posiciones
          · CAMERA               → image_picker para las evidencias
-         Deliberadamente NO se declara ACCESS_BACKGROUND_LOCATION: hoy el
-         seguimiento es en primer plano, y pedirlo sin usarlo obliga a
-         justificarlo ante Google Play sin ganar nada. Entrará con el servicio en
-         primer plano (bloque C del plan de cierre). -->
+
+         Sigue SIN declararse ACCESS_BACKGROUND_LOCATION, y es deliberado: el
+         servicio se arranca con la app en primer plano (el operario pulsa "En
+         camino"), y en ese caso Android permite seguir recibiendo posiciones
+         con el permiso normal de "mientras se usa la app". Pedir el de segundo
+         plano obligaría a pasar la revisión aparte de Google Play sin ganar
+         nada. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Android 13+: sin esto los avisos de Central no se muestran nunca. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

@@ -9,14 +9,45 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL no está configurada");
 }
 
+/**
+ * Supabase exige TLS; un PostgreSQL local (desarrollo o el contenedor de las
+ * pruebas de integración) no lo ofrece y rechaza la conexión con "The server
+ * does not support SSL connections". Se decide por la propia URL, así que en
+ * producción no cambia nada.
+ */
+const esLocal =
+  /@(localhost|127\.0\.0\.1|::1|postgres)[:/]/i.test(process.env.DATABASE_URL) ||
+  process.env.PGSSLMODE === "disable";
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: esLocal ? false : { rejectUnauthorized: false },
 });
 
 export async function initDb() {
+  // `payments` (cobros con Stripe) solo existía en la base de producción: nadie
+  // la creaba desde el código, así que en una base nueva todos los endpoints de
+  // /api/payments reventaban y el ALTER de abajo fallaba en silencio. En la base
+  // que ya existe esto es un no-op.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      reference TEXT NOT NULL,
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_phone TEXT NOT NULL DEFAULT '',
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      stripe_session_id TEXT,
+      stripe_payment_intent_id TEXT,
+      payment_url TEXT,
+      paid_at_ms BIGINT,
+      created_at_ms BIGINT NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS payments_reference_idx ON payments (reference);
+    CREATE INDEX IF NOT EXISTS payments_session_idx ON payments (stripe_session_id);
+  `);
+
   await pool.query(`
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
@@ -708,7 +739,6 @@ export async function initDb() {
     -- (ambas a null; se vincula al crear la asistencia).
     ALTER TABLE whatsapp_capture_sessions ALTER COLUMN job_id DROP NOT NULL;
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS connect_assistance_id INTEGER;
-    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
     CREATE INDEX IF NOT EXISTS wcs_connect_idx
       ON whatsapp_capture_sessions(connect_assistance_id);
 
@@ -745,6 +775,11 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS transcript TEXT;
     ALTER TABLE whatsapp_capture_messages
       ADD COLUMN IF NOT EXISTS transcript_status TEXT DEFAULT 'none';
+    -- Va DESPUES de crear la tabla, no antes: sobre una base ya existente daba
+    -- igual el orden, pero sobre una vacia rompia el arranque entero con
+    -- 'relation "whatsapp_capture_messages" does not exist'. Lo destapo el
+    -- contenedor de PostgreSQL de las pruebas de integracion.
+    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
   `);
 
   await pool.query(`

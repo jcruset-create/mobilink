@@ -284,3 +284,29 @@ class FileQueue {
 extension _FirstOrNull<E> on Iterable<E> {
   E? get firstOrNull => isEmpty ? null : first;
 }
+
+/// Resumen de las dos colas (operaciones y evidencias) para enviarlo a Central.
+///
+/// Una cola atascada no la ve nadie desde el móvil: el operario cree que la
+/// foto está subida y Central no sabe que le falta. Informando del pendiente y
+/// de la marca más antigua, el panel puede avisar antes de que el servicio se
+/// cierre sin su documentación. No viaja ningún contenido, solo cuentas.
+Map<String, dynamic> estadoDeColas() {
+  final ops = OfflineQueue.all();
+  final ficheros = FileQueue.all();
+  final pendientes = [
+    ...ops.where((o) => o.state == 'pending').map((o) => o.createdAtMs),
+    ...ficheros.where((f) => f.state == 'pending').map((f) => f.createdAtMs),
+  ];
+  final atascados = ops.where((o) => o.state != 'pending').length +
+      ficheros.where((f) => f.state != 'pending').length;
+
+  return {
+    'queuePending': pendientes.length,
+    // Conflictos y evidencias descartadas: no se reintentan solas, hace falta
+    // que alguien mire.
+    'queueFailed': atascados,
+    'queueOldestAtMs':
+        pendientes.isEmpty ? null : pendientes.reduce((a, b) => a < b ? a : b),
+  };
+}
