@@ -884,6 +884,19 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
   `).catch(() => {});
 
+  // Idempotencia de la APK de taller. La app reintenta lo que quedó en la cola
+  // offline, y un envío que llegó al servidor pero cuya respuesta se perdió por
+  // un timeout se repetiría: dos veces la misma foto, o dos veces el mismo
+  // trabajo. La clave la genera el cliente y es la que decide si algo ya se
+  // hizo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS taller_idempotencia (
+      clave        TEXT PRIMARY KEY,
+      respuesta    JSONB NOT NULL,
+      "createdAtMs" BIGINT NOT NULL
+    );
+  `);
+
   // ── SaaS: módulo "workplanner" licenciable ────────────────────────────
   // Equivale a supabase/migrations/saas_fase1c_modulo_workplanner.sql. Se
   // aplica en el arranque para no depender de ejecutarlo a mano en el SQL

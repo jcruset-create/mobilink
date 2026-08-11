@@ -54,6 +54,13 @@ class ApiService {
         ..._operatorHeaders,
       };
 
+  /// Cabeceras con clave de idempotencia: el servidor descarta el reintento de
+  /// algo que ya aplicó en vez de duplicarlo.
+  Map<String, String> _headersCon(String? clave) => {
+        ..._headers,
+        if (clave != null) 'x-idempotency-key': clave,
+      };
+
   Future<Map<String, String>> _authHeaders() async {
     if (_tokenCaducado) {
       try {
@@ -219,20 +226,24 @@ class ApiService {
 
   /// Sube una foto (comprimida). Offline → se encola para reenvío.
   Future<void> uploadPhoto(int jobId, String localPath) async {
+    // La clave se crea aquí y se reutiliza si hay que encolar: así el envío
+    // directo y su posterior reintento son la misma operación para el servidor.
+    final clave = OfflineStore.nuevaClave('up-$jobId');
     try {
-      await _uploadFromPath(jobId, localPath);
+      await _uploadFromPath(jobId, localPath, clave: clave);
       OfflineStore.offline.value = false;
     } catch (e) {
       if (_isNetworkError(e)) {
         OfflineStore.offline.value = true;
-        await OfflineStore.enqueueUpload(jobId: jobId, localPath: localPath);
+        await OfflineStore.enqueueUpload(
+            jobId: jobId, localPath: localPath, clave: clave);
         return;
       }
       rethrow;
     }
   }
 
-  Future<bool> _uploadFromPath(int jobId, String path) async {
+  Future<bool> _uploadFromPath(int jobId, String path, {String? clave}) async {
     final compressed = await FlutterImageCompress.compressWithFile(
       path,
       quality: 70,
@@ -245,6 +256,7 @@ class ApiService {
       Uri.parse('$kBackendUrl/api/taller-operator/jobs/$jobId/files'),
     );
     req.headers.addAll(_operatorHeaders);
+    if (clave != null) req.headers['x-idempotency-key'] = clave;
     req.files.add(http.MultipartFile.fromBytes(
       'file',
       bytes,
@@ -255,6 +267,85 @@ class ApiService {
     final res = await http.Response.fromStream(streamed);
     if (res.statusCode != 200) throw Exception('Error subiendo foto');
     return true;
+  }
+
+  // ── Pausas ───────────────────────────────────────────────────
+  // Son las mismas que registra la pantalla /operario/taller: comparten
+  // endpoint y tabla, así que el tiempo real del trabajo sale igual se marque
+  // desde la tablet o desde el kiosko. No tienen nada que ver con el fichaje
+  // de jornada del módulo Presencia, que es otra cosa.
+
+  static const tiposPausa = <String, String>{
+    'cigarro': 'Cigarro',
+    'cafe': 'Café',
+    'descanso': 'Descanso',
+    'otro': 'Otro',
+  };
+
+  Map<String, String> get _headersPausa => {
+        'Content-Type': 'application/json',
+        'x-operator-name': Uri.encodeComponent(techName),
+        'x-operator-pin': code,
+      };
+
+  /// Pausa abierta ahora mismo, o null. Devuelve null también si el técnico
+  /// entró con código de operario y no tiene PIN de taller: en ese caso las
+  /// pausas no le aplican y no tiene sentido dar un error.
+  Future<Map<String, dynamic>?> pausaActual() async {
+    try {
+      final res = await http
+          .get(Uri.parse('$kBackendUrl/api/workshop-operator/breaks/today'),
+              headers: _headersPausa)
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return null;
+
+      final data = jsonDecode(res.body);
+      final lista = data is List
+          ? data
+          : (data is Map ? (data['breaks'] as List<dynamic>? ?? const []) : const []);
+
+      for (final item in lista) {
+        if (item is Map && item['endedAtMs'] == null) {
+          return Map<String, dynamic>.from(item);
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> iniciarPausa(String tipo) async {
+    final res = await http
+        .post(Uri.parse('$kBackendUrl/api/workshop-operator/break/start'),
+            headers: _headersPausa, body: jsonEncode({'breakType': tipo}))
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode != 200) {
+      throw Exception(_errorDe(res.body, 'No se ha podido iniciar la pausa'));
+    }
+  }
+
+  /// Termina la pausa abierta y devuelve los minutos que ha durado.
+  Future<int> terminarPausa() async {
+    final res = await http
+        .post(Uri.parse('$kBackendUrl/api/workshop-operator/break/end'),
+            headers: _headersPausa)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode != 200) {
+      throw Exception(_errorDe(res.body, 'No se ha podido cerrar la pausa'));
+    }
+    final data = jsonDecode(res.body);
+    return data is Map && data['durationMin'] is num
+        ? (data['durationMin'] as num).toInt()
+        : 0;
+  }
+
+  String _errorDe(String cuerpo, String porDefecto) {
+    try {
+      final data = jsonDecode(cuerpo);
+      if (data is Map && data['error'] != null) return data['error'].toString();
+    } catch (_) {/* respuesta no JSON */}
+    return porDefecto;
   }
 
   // ── Cola offline ─────────────────────────────────────────────
@@ -273,7 +364,7 @@ class ApiService {
             final res = await http
                 .put(
                   Uri.parse('$kBackendUrl/api/taller-operator/jobs/$jobId/status'),
-                  headers: _headers,
+                  headers: _headersCon(item['actionId'] as String?),
                   body: jsonEncode({'status': item['status']}),
                 )
                 .timeout(const Duration(seconds: 15));
@@ -284,7 +375,8 @@ class ApiService {
               await OfflineStore.removePending(entry.key);
             }
           } else if (type == 'upload_file') {
-            await _uploadFromPath(jobId, item['localPath'] as String);
+            await _uploadFromPath(jobId, item['localPath'] as String,
+                clave: item['actionId'] as String?);
             await OfflineStore.removePending(entry.key);
           }
         } catch (e) {
