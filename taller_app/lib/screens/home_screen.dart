@@ -80,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
       length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Mobilink Taller'),
+          title: const Text('WorkPlanner Taller'),
           actions: [
             IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
             IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
