@@ -135,7 +135,14 @@ export async function importRevisiones(
       let posId: string | undefined;
       let n = row.posN;
       if (row._codigo) {
-        const p = ps.find((x) => String(x.codigo_posicion).toUpperCase() === row._codigo);
+        // Por código primero; si el tipo usa otra nomenclatura (los sembrados
+        // en la Fase 3 llaman DEL_IZQ a lo que aquí es E1_IZQ), por las señas
+        // de la rueda, que son las mismas se llame como se llame.
+        const p = ps.find((x) => String(x.codigo_posicion).toUpperCase() === row._codigo)
+          ?? (row._eje ? ps.find((x) =>
+                x.eje === row._eje
+                && String(x.lado ?? "") === String(row._lado ?? "")
+                && (x.interior_exterior ?? null) === (row._io ?? null)) : undefined);
         if (!p) { avisos.add(`${g.matricula}: su tipo no tiene la posición ${row._codigo}`); continue; }
         posId = p.id;
         n = ps.indexOf(p) + 1;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  ejesDeTipo, medidaDeTipo, codigoPosicion, fechaHora, leerCheckpoint, filtrarNuevas,
+  ejesDeTipo, medidaDeTipo, codigoPosicion, senasPosicion, fechaHora, leerCheckpoint, filtrarNuevas,
 } from "./checkpoint";
 
 // Una fila del informe tal cual sale del Excel del arco.
@@ -177,7 +177,8 @@ describe("leerCheckpoint", () => {
 describe("filtrarNuevas", () => {
   const f = (matricula: string, t: Date) => ({
     matricula, idFlota: null, tipoCheckpoint: "BUS 2X4 22,5", ejes: [2, 4],
-    codigoPosicion: "E1_IZQ", medidoAt: t, profundidadMm: 5, presionBar: 8,
+    codigoPosicion: "E1_IZQ", eje: 1, lado: "izq" as const, interiorExterior: null,
+    medidoAt: t, profundidadMm: 5, presionBar: 8,
   });
 
   it("lo ya cargado no se vuelve a importar", () => {
@@ -208,5 +209,47 @@ describe("filtrarNuevas", () => {
   it("sin momento no se puede saber si es nueva: fuera", () => {
     const sinFecha = { ...f("EEE", new Date()), medidoAt: null };
     expect(filtrarNuevas([sinFecha], new Map()).nuevas).toHaveLength(0);
+  });
+});
+
+describe("senasPosicion — el fallo de los 116 avisos", () => {
+  // La búsqueda por código dejaba fuera a turismos y furgonetas: los tipos
+  // sembrados en la Fase 3 llaman DEL_IZQ y TRAS_IZQ a lo que
+  // generarPosiciones() llama E1_IZQ y E2_IZQ. Las señas (eje, lado,
+  // interior/exterior) son las mismas se llame como se llame la posición, y
+  // son las que permiten casar una con otra.
+  it("da las señas además del código", () => {
+    expect(senasPosicion(1, "Exterior izquierda", 2))
+      .toEqual({ codigo: "E1_IZQ", lado: "izq", interiorExterior: null });
+    expect(senasPosicion(2, "Exterior derecha", 2))
+      .toEqual({ codigo: "E2_DER", lado: "der", interiorExterior: null });
+  });
+
+  it("en un eje gemelo distingue interior de exterior", () => {
+    expect(senasPosicion(2, "Interior izquierda", 4))
+      .toEqual({ codigo: "E2_IZQ_INT", lado: "izq", interiorExterior: "int" });
+    expect(senasPosicion(2, "Exterior izquierda", 4))
+      .toEqual({ codigo: "E2_IZQ_EXT", lado: "izq", interiorExterior: "ext" });
+  });
+
+  it("las señas casan con DEL_IZQ y TRAS_IZQ, que es de lo que se trata", () => {
+    // Así están sembradas turismo y furgoneta en la Fase 3.
+    const posiciones = [
+      { codigo_posicion: "DEL_IZQ", eje: 1, lado: "izq", interior_exterior: null },
+      { codigo_posicion: "DEL_DER", eje: 1, lado: "der", interior_exterior: null },
+      { codigo_posicion: "TRAS_IZQ", eje: 2, lado: "izq", interior_exterior: null },
+      { codigo_posicion: "TRAS_DER", eje: 2, lado: "der", interior_exterior: null },
+    ];
+    const buscar = (eje: number, texto: string) => {
+      const s = senasPosicion(eje, texto, 2)!;
+      return posiciones.find((p) => p.eje === eje && p.lado === s.lado
+        && p.interior_exterior === s.interiorExterior)?.codigo_posicion;
+    };
+    expect(buscar(1, "Exterior izquierda")).toBe("DEL_IZQ");
+    expect(buscar(2, "Exterior derecha")).toBe("TRAS_DER");
+  });
+
+  it("un hueco sin lado no tiene señas", () => {
+    expect(senasPosicion(1, "N/A", 2)).toBeNull();
   });
 });
