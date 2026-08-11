@@ -44,6 +44,8 @@ supabase/.temp/
 # puede compilar: es lo que le habia pasado a lite_app.
 !lite_app/android/
 !lite_app/android/**
+!taller_app/android/
+!taller_app/android/**
 */build/
 */.metadata
 */analysis_options.yaml
