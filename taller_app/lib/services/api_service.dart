@@ -147,7 +147,8 @@ class ApiService {
         OfflineStore.offline.value = true;
         await OfflineStore.enqueueStatus(jobId: id, status: status);
         final cached = OfflineStore.cachedJobs()
-            .firstWhere((j) => j['id'] == id, orElse: () => <String, dynamic>{});
+            .firstWhere((j) => OfflineStore.mismoJob(j['id'], id),
+                orElse: () => <String, dynamic>{});
         if (cached.isNotEmpty) return Job.fromJson(cached);
         return Job.fromJson({'id': id, 'status': status, 'assignedNames': const []});
       }
