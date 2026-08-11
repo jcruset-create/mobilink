@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../theme.dart';
 import '../widgets/bloqueo_inactividad.dart';
+import '../widgets/boton_pausa.dart';
 import '../workshops.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
@@ -94,6 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
         appBar: AppBar(
           title: const Text('WorkPlanner Taller'),
           actions: [
+            BotonPausa(api: widget.api),
             IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
             IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
           ],

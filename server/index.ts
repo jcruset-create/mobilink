@@ -2695,6 +2695,47 @@ function mismoNombreTecnico(a: unknown, b: unknown) {
   return na !== "" && na === normaliza(b);
 }
 
+/**
+ * Idempotencia para la APK de taller.
+ *
+ * La cola offline reintenta lo que no pudo enviar. Si una petición llegó al
+ * servidor pero la respuesta se perdió (timeout, cambio de red al salir del
+ * taller), el reintento la aplicaría otra vez: dos fotos idénticas en el mismo
+ * trabajo, o dos trabajos iguales. La clave viaja en la cabecera
+ * `x-idempotency-key` y la genera el cliente al encolar, así que sobrevive al
+ * reintento.
+ *
+ * Devuelve la respuesta ya guardada si esa clave se procesó antes.
+ */
+async function respuestaIdempotente(req: express.Request) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return null;
+
+  const r = await db.query(
+    `SELECT respuesta FROM taller_idempotencia WHERE clave = $1 LIMIT 1`,
+    [clave]
+  );
+
+  return r.rows.length > 0 ? r.rows[0].respuesta : null;
+}
+
+async function guardarIdempotencia(req: express.Request, respuesta: unknown) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return;
+
+  try {
+    await db.query(
+      `INSERT INTO taller_idempotencia (clave, respuesta, "createdAtMs")
+       VALUES ($1, $2, $3)
+       ON CONFLICT (clave) DO NOTHING`,
+      [clave, JSON.stringify(respuesta), Date.now()]
+    );
+  } catch (error) {
+    // Que falle el registro no debe tumbar la operación, que sí se ha hecho.
+    console.error("guardarIdempotencia error:", error);
+  }
+}
+
 async function getTallerOperator(techName: string) {
   let r = await db.query(
     `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
@@ -2848,6 +2889,12 @@ app.get("/api/taller-operator/techs", requireTallerOperator, async (req, res) =>
 // Crear/asignar trabajo (solo supervisor)
 app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
+    // Sin esto, un reintento de la cola crea un segundo trabajo idéntico: el id
+    // se genera con Date.now() en cada intento, así que no colisiona y pasan los
+    // dos.
+    const yaCreado = await respuestaIdempotente(req);
+    if (yaCreado) return res.json(yaCreado);
+
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2884,7 +2931,9 @@ app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) =>
         workshopId,
       ]
     );
-    res.json(normalizeJobRow(result.rows[0]));
+    const creado = normalizeJobRow(result.rows[0]);
+    await guardarIdempotencia(req, creado);
+    res.json(creado);
   } catch (error) {
     console.error("POST /api/taller-operator/jobs error:", error);
     res.status(500).json({ error: "Error creando trabajo" });
@@ -3043,6 +3092,11 @@ app.post(
   upload.single("file"),
   async (req, res) => {
     try {
+      // Reintento de la cola offline: la foto ya se subió, se devuelve la
+      // misma respuesta en vez de dejar dos copias en el trabajo.
+      const yaHecho = await respuestaIdempotente(req);
+      if (yaHecho) return res.json(yaHecho);
+
       const { techName } = (req as any).roadsideOperator as { techName: string };
       const op = await getTallerOperator(techName);
       if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -3079,13 +3133,15 @@ app.post(
         [id, publicData.publicUrl, req.file.originalname, op.name, Date.now()]
       );
       const row = result.rows[0];
-      res.json({
+      const respuesta = {
         id: Number(row.id),
         url: row.url,
         fileName: row.fileName ?? null,
         techName: row.techName ?? null,
         createdAtMs: Number(row.createdAtMs),
-      });
+      };
+      await guardarIdempotencia(req, respuesta);
+      res.json(respuesta);
     } catch (error) {
       console.error("POST /api/taller-operator/jobs/:id/files error:", error);
       res.status(500).json({ error: "Error subiendo foto" });
