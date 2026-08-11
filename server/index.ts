@@ -13,6 +13,8 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
+import { getMailTransport } from "./mail.ts";
+import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
 import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -5127,6 +5129,14 @@ app.post("/api/tyrecontrol/webfleet/sync", authenticate, requireModule("tyrecont
   res.json(r);
 });
 
+// Mira el buzón del CheckPoint ahora mismo, sin esperar al temporizador. Para
+// probar la configuración del buzón sin quedarse quince minutos mirando.
+app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
+  const r = await revisarBuzonCheckpoint();
+  if ("error" in r) return res.status(502).json(r);
+  res.json(r);
+});
+
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
@@ -8448,23 +8458,6 @@ app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRo
   }
 });
 
-let mailTransport: import("nodemailer").Transporter | null = null;
-function getMailTransport() {
-  if (mailTransport) return mailTransport;
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return null;
-  }
-  mailTransport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: Number(process.env.SMTP_PORT || 587) === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-  return mailTransport;
-}
 
 app.post(
   "/api/roadside-assistances/:id/send-report",
@@ -16391,6 +16384,7 @@ initDb()
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
+      startCheckpointMail(); // informe del arco CheckPoint por correo (apagado sin credenciales)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
