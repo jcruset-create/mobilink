@@ -48,6 +48,34 @@ void main() {
       expect(job.workshopId, isNull);
     });
 
+    // Este es el caso que tumbaba la app al abrirla en la tablet: las columnas
+    // de tiempo de `jobs` son BIGINT y el driver de Postgres las serializa como
+    // cadena para no perder precisión.
+    test('acepta números serializados como cadena (BIGINT de Postgres)', () {
+      final job = Job.fromJson({
+        'id': '812',
+        'status': 'activo',
+        'createdAtMs': '1750000000000',
+        'startedAtMs': '1750000600000',
+        'actualMinutes': '90',
+        'closedAtMs': '',
+      });
+
+      expect(job.id, 812);
+      expect(job.createdAtMs, 1750000000000);
+      expect(job.startedAtMs, 1750000600000);
+      expect(job.actualMinutes, 90);
+      // Cadena vacía no es un cero: es "no hay dato".
+      expect(job.closedAtMs, isNull);
+    });
+
+    test('un número ilegible no revienta la lista entera', () {
+      final job = Job.fromJson({'id': 7, 'createdAtMs': 'ayer'});
+
+      expect(job.id, 7);
+      expect(job.createdAtMs, isNull);
+    });
+
     test('acepta ids y tiempos que llegan como double', () {
       final job = Job.fromJson({
         'id': 42.0,

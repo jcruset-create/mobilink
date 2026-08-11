@@ -84,7 +84,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const Icon(Icons.build_circle, size: 64, color: AppColors.primary),
                 const SizedBox(height: 12),
                 const Text(
-                  'Mobilink Taller',
+                  'WorkPlanner Taller',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 ),
