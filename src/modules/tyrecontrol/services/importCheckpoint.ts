@@ -112,6 +112,8 @@ export async function importCheckpoint(filas: any[], ejecutar: boolean): Promise
       matricula: f.matricula,
       fecha_revision: f.medidoAt,
       codigo_posicion: f.codigoPosicion,
+      // Las señas de la posición, por si el tipo la llama de otra manera.
+      _eje: f.eje, _lado: f.lado, _io: f.interiorExterior,
       profundidad_mm: f.profundidadMm,
       presion_bar: f.presionBar,
       medida: medidaCanonica(porMedida.get(f.matricula) ?? "") || null,

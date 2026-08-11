@@ -37,6 +37,15 @@ export interface FilaCheckpoint {
   ejes: number[];
   /** Código de posición nuestro: E1_IZQ, E2_IZQ_EXT, E3_DER_INT… */
   codigoPosicion: string;
+  /**
+   * La misma posición descrita por sus señas, que es lo que de verdad la
+   * identifica. Los tipos sembrados en la Fase 3 llaman DEL_IZQ y TRAS_IZQ a
+   * lo que generarPosiciones() llama E1_IZQ y E2_IZQ: buscar solo por código
+   * dejaba fuera a turismos y furgonetas.
+   */
+  eje: number;
+  lado: "izq" | "der";
+  interiorExterior: "int" | "ext" | null;
   medidoAt: Date | null;
   profundidadMm: number | null;
   presionBar: number | null;
@@ -95,16 +104,20 @@ export function medidaDeTipo(tipo: string): string | null {
  *
  * Devuelve null cuando la fila es uno de esos huecos.
  */
-export function codigoPosicion(eje: number, posicion: string, ruedasDelEje: number): string | null {
+export function senasPosicion(eje: number, posicion: string, ruedasDelEje: number):
+  { codigo: string; lado: "izq" | "der"; interiorExterior: "int" | "ext" | null } | null {
   const p = String(posicion ?? "").trim().toLowerCase();
-  const lado = p.includes("izquierda") ? "IZQ" : p.includes("derecha") ? "DER" : null;
+  const lado = p.includes("izquierda") ? "izq" : p.includes("derecha") ? "der" : null;
   if (!lado || !eje) return null;
-  const interior = p.includes("interior");
+  const io = ruedasDelEje === 4 ? (p.includes("interior") ? "int" : "ext") : null;
+  const codigo = ruedasDelEje === 4
+    ? `E${eje}_${lado.toUpperCase()}_${io === "int" ? "INT" : "EXT"}`
+    : `E${eje}_${lado.toUpperCase()}`;
+  return { codigo, lado, interiorExterior: io };
+}
 
-  if (ruedasDelEje === 4) return `E${eje}_${lado}_${interior ? "INT" : "EXT"}`;
-  // Eje de rueda simple. El arco lo llama "Exterior" cuando solo manda dos
-  // filas (el eje delantero) e "Interior" cuando manda cuatro y dos sobran.
-  return `E${eje}_${lado}`;
+export function codigoPosicion(eje: number, posicion: string, ruedasDelEje: number): string | null {
+  return senasPosicion(eje, posicion, ruedasDelEje)?.codigo ?? null;
 }
 
 /**
@@ -171,8 +184,9 @@ export function leerCheckpoint(filas: any[]): LecturaCheckpoint {
       continue;
     }
 
-    const cod = codigoPosicion(eje, String(r["Posición de la rueda"] ?? ""), ruedasDelEje);
-    if (!cod) {
+    const senas = senasPosicion(eje, String(r["Posición de la rueda"] ?? ""), ruedasDelEje);
+    const cod = senas?.codigo ?? null;
+    if (!senas || !cod) {
       avisos.add(`${matricula}: no sé dónde va "${r["Posición de la rueda"]}" del eje ${eje}, se salta`);
       continue;
     }
@@ -185,7 +199,11 @@ export function leerCheckpoint(filas: any[]): LecturaCheckpoint {
       continue;
     }
 
-    out.push({ matricula, idFlota: v.idFlota, tipoCheckpoint, ejes, codigoPosicion: cod, medidoAt, profundidadMm, presionBar });
+    out.push({
+      matricula, idFlota: v.idFlota, tipoCheckpoint, ejes, codigoPosicion: cod,
+      eje, lado: senas.lado, interiorExterior: senas.interiorExterior,
+      medidoAt, profundidadMm, presionBar,
+    });
     v.ruedasMedidas++;
   }
 
