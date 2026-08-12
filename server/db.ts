@@ -904,6 +904,38 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
   `).catch(() => {});
 
+  // Checklists de trabajo. Las plantillas se editan desde WorkPlanner y el
+  // técnico las marca en la tablet.
+  //
+  // Los ítems van en JSONB y no en tabla aparte a propósito: una plantilla son
+  // media docena de líneas que se leen y se guardan siempre enteras, así que
+  // una tabla hija solo añadiría joins y un orden que mantener a mano.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS checklist_plantillas (
+      id            SERIAL PRIMARY KEY,
+      nombre        TEXT NOT NULL,
+      area          TEXT,
+      items         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      activo        BOOLEAN NOT NULL DEFAULT true,
+      "workshopId"  TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+  `);
+
+  // Estado del checklist EN un trabajo concreto. Se copia de la plantilla al
+  // instanciarlo: si mañana alguien edita la plantilla, el trabajo ya hecho no
+  // cambia, que es lo que se espera de un registro de lo que se comprobó.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_checklists (
+      "jobId"       INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      "plantillaId" INTEGER,
+      nombre        TEXT,
+      items         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+  `);
+
   // Idempotencia de la APK de taller. La app reintenta lo que quedó en la cola
   // offline, y un envío que llegó al servidor pero cuya respuesta se perdió por
   // un timeout se repetiría: dos veces la misma foto, o dos veces el mismo
