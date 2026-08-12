@@ -13679,12 +13679,25 @@ app.post("/api/roadside-known-places", requireAdminRole, async (req, res) => {
     const b = req.body ?? {};
     const lat = Number(b.lat), lng = Number(b.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
-    const result = await createKnownPlaceDedup({
-      nombre: String(b.nombre ?? "").trim(), tipo: b.tipo, direccion: b.direccion ?? null,
-      lat, lng, clientId: b.clientId ?? null, clientName: b.clientName ?? null,
-      notas: b.notas ?? null, createdBy: "oficina",
-    });
-    res.json(result);
+    // Alta manual de oficina: SIN deduplicado (eso es para los altas
+    // automáticos de los operarios). Si la oficina crea una base con su
+    // nombre, se crea tal cual y se devuelve el lugar directamente.
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO roadside_known_places
+        (nombre, tipo, direccion, lat, lng, "clientId", "clientName", notas, "createdBy", active, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'oficina',true,$9,$9) RETURNING *`,
+      [
+        String(b.nombre ?? "").trim() || "Lugar sin nombre",
+        b.tipo || "otro",
+        b.direccion ?? null,
+        lat, lng,
+        b.clientId ?? null, b.clientName ?? null,
+        b.notas ?? null,
+        now,
+      ]
+    );
+    res.json(normalizeKnownPlace(r.rows[0]));
   } catch (e) {
     console.error("POST known-places error:", e);
     res.status(500).json({ error: "Error creando lugar" });
