@@ -253,7 +253,7 @@ export async function listarRevisionesHistorico(filtros: {
   let q = supabase
     .from("revisiones_vehiculo")
     .select(
-      "id, fecha_revision, created_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
+      "id, fecha_revision, created_at, medido_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
       "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
       "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado)"
     )
