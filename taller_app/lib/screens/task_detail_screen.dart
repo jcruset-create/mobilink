@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/job.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
+import '../widgets/checklist_trabajo.dart';
 import '../widgets/firma_cliente.dart';
 import '../workshops.dart';
 
@@ -233,6 +234,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ))
                     .toList(),
               ),
+
+            const SizedBox(height: 20),
+            const Divider(color: AppColors.border),
+            const SizedBox(height: 8),
+            ChecklistTrabajo(api: widget.api, jobId: _job.id),
 
             const SizedBox(height: 20),
             const Divider(color: AppColors.border),
