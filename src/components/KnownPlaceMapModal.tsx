@@ -135,11 +135,10 @@ export default function KnownPlaceMapModal({ place, onClose, onSaved }: Props) {
       const body = {
         nombre: nombre.trim(),
         tipo,
-        direccion: direccion.trim() || null,
-        clientName: clientName.trim() || null,
-        // El PUT del backend sobreescribe estos campos: enviarlos siempre
-        clientId: place?.clientId ?? null,
-        notas: place?.notas ?? null,
+        // El PUT hace COALESCE (null conserva el valor anterior); la cadena
+        // vacía sí sobreescribe, y así se puede vaciar el campo al editar.
+        direccion: direccion?.trim() ?? "",
+        clientName: clientName?.trim() ?? "",
         lat: pin[0],
         lng: pin[1],
       };
