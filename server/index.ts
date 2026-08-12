@@ -13754,9 +13754,9 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
       ? combineTrabajo(b.trabajoPlantilla, b.detalleManual) : null;
     const r = await db.query(
       `UPDATE otf_trabajos SET
-         plate = COALESCE($2,plate), "plateRemolque" = $3, "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
+         plate = COALESCE($2,plate), "plateRemolque" = COALESCE($3,"plateRemolque"), "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
          "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = COALESCE($7,trabajo),
-         status = COALESCE($8,status), observaciones = $9, "updatedAtMs" = $10
+         status = COALESCE($8,status), observaciones = COALESCE($9,observaciones), "updatedAtMs" = $10
        WHERE id = $1 RETURNING *`,
       [tid, b.plate != null ? String(b.plate).toUpperCase().trim() : null, b.plateRemolque ?? null,
        b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,

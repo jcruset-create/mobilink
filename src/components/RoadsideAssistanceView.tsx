@@ -31,6 +31,7 @@ import {
   Store,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
+import KnownPlaceMapModal from "./KnownPlaceMapModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
@@ -412,6 +413,8 @@ export default function RoadsideAssistanceView({
   const [showNewBackoffice, setShowNewBackoffice] = useState(false);
   const [knownPlaces, setKnownPlaces] = useState<KnownPlace[]>([]);
   const [showPlacesManager, setShowPlacesManager] = useState(false);
+  // Alta/edición de base con pin en el mapa: "new" = crear, KnownPlace = editar
+  const [placeMapTarget, setPlaceMapTarget] = useState<"new" | KnownPlace | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false); // cajón lateral en móvil
 
   useEffect(() => {
@@ -2878,14 +2881,23 @@ export default function RoadsideAssistanceView({
                 </div>
                 <h2 className="text-lg font-bold text-slate-100">📍 Lugares conocidos</h2>
               </div>
-              <button type="button" onClick={() => setShowPlacesManager(false)} className="rounded-full p-1 hover:bg-slate-700">
-                <X className="h-5 w-5 text-slate-400" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlaceMapTarget("new")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-1.5 text-sm font-bold text-red-300 hover:bg-red-500/25"
+                >
+                  <MapPin className="h-4 w-4" /> Nueva base
+                </button>
+                <button type="button" onClick={() => setShowPlacesManager(false)} className="rounded-full p-1 hover:bg-slate-700">
+                  <X className="h-5 w-5 text-slate-400" />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
               {knownPlaces.length === 0 ? (
                 <div className="py-10 text-center text-sm font-bold text-slate-400">
-                  Aún no hay lugares. Se crean automáticamente cuando el operario llega a un punto nuevo.
+                  Aún no hay lugares. Crea la primera base con «Nueva base» o se crean solos cuando el operario llega a un punto nuevo.
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -2909,6 +2921,14 @@ export default function RoadsideAssistanceView({
                       </div>
                       <button
                         type="button"
+                        onClick={() => setPlaceMapTarget(p)}
+                        title="Ver o ajustar la posición en el mapa"
+                        className="shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-xs font-bold text-sky-300 hover:bg-sky-500/25"
+                      >
+                        Mapa
+                      </button>
+                      <button
+                        type="button"
                         onClick={async () => {
                           if (!confirm(`¿Eliminar "${p.nombre}"?`)) return;
                           await deleteKnownPlace(p.id);
@@ -2925,6 +2945,22 @@ export default function RoadsideAssistanceView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Alta/edición de base con pin en el mapa */}
+      {placeMapTarget && (
+        <KnownPlaceMapModal
+          place={placeMapTarget === "new" ? null : placeMapTarget}
+          onClose={() => setPlaceMapTarget(null)}
+          onSaved={(saved) => {
+            setKnownPlaces((prev) => {
+              const existe = prev.some((x) => x.id === saved.id);
+              return existe
+                ? prev.map((x) => (x.id === saved.id ? saved : x))
+                : [saved, ...prev];
+            });
+          }}
+        />
       )}
 
       {/* Modal Back Office en creación (borrador) */}
