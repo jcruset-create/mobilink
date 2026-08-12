@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'offline_store.dart';
+import 'rfid_service.dart';
 import 'tlgx_probe_service.dart';
 
 /// Sesión de sonda TLGX3 a nivel de app (P0-A).
@@ -88,6 +89,30 @@ class ProbeSession extends ChangeNotifier {
 
   TlgxProbeService _asegurarProbe() =>
       _probe ??= TlgxProbeService(onLine: _onLine, onState: _onState);
+
+  // ── Lector RFID ────────────────────────────────────────────────────────────
+  //
+  // El canal con la sonda es único, así que la capa RFID no abre su propia
+  // conexión: se cuelga de esta y recibe las líneas desde [_onLine]. Es el uso
+  // que documenta RfidService ("o ProbeSession cuando la sesión está viva").
+  RfidService? _rfid;
+  RfidService _asegurarRfid() =>
+      _rfid ??= RfidService(enviar: (cmd) async => _asegurarProbe().enviar(cmd));
+
+  /// ¿Se puede pedir una lectura de etiqueta ahora mismo?
+  bool get puedeLeerRfid => conectada;
+
+  /// Lee el EPC de una etiqueta con la sonda ya enganchada.
+  ///
+  /// Lanza [StateError] si no hay sonda conectada: es responsabilidad de la
+  /// pantalla no ofrecer el botón en ese caso, pero conviene que falle claro.
+  Future<RfidMessage> leerEpc({Duration timeout = RfidService.timeoutPorDefecto}) {
+    if (!conectada) throw StateError('La sonda no está conectada');
+    return _asegurarRfid().leerEpc(timeout: timeout);
+  }
+
+  /// Cancela una lectura en curso y apaga la radio del lector.
+  Future<void> cancelarRfid() async => _rfid?.cancelar();
 
   Future<bool> pedirPermisos() => _asegurarProbe().pedirPermisos();
 
@@ -191,6 +216,9 @@ class ProbeSession extends ChangeNotifier {
   }
 
   void _onLine(String line) {
+    // La capa RFID consume sus propias respuestas y devuelve false para el
+    // resto, así que profundidad y presión siguen llegando con normalidad.
+    _rfid?.manejarLinea(line);
     final r = parsearLinea(line);
     LecturaSonda emitir = r;
     switch (r.tipo) {

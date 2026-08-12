@@ -11,6 +11,7 @@
 
 import crypto from "node:crypto";
 import db from "../db.ts";
+import { seedNetworkWorkshops } from "./seedWorkshops.ts";
 
 export async function initConnect(): Promise<void> {
   await db.query(`
@@ -678,6 +679,25 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteSettings" TEXT NOT NULL DEFAULT '{}';
     -- {arrivalRadiusUrbanM, arrivalRadiusRuralM, workshopRadiusM, trackWhileWorking, finishRules:{...}}
 
+    -- Ficha postal del taller. Hasta ahora solo se guardaban las coordenadas,
+    -- pero la central necesita la dirección escrita para llamar, facturar y
+    -- decirle al cliente dónde va (los talleres de red no son SEA Tarragona).
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS address TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "postalCode" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS province TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS email TEXT;
+    -- Red comercial o franquicia a la que pertenece (Confortauto, Euromaster…).
+    -- No confundir con "networkParticipation", que es la adhesión a la red Mobilink.
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "commercialNetwork" TEXT;
+    -- Horario de apertura tal cual lo declara el taller, en texto libre
+    -- ("L-V 08:30-13:30|15:00-18:30; Sáb 09:00-13:00").
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "openingHours" TEXT;
+    -- Observaciones internas del taller. Recoge además lo que la importación
+    -- por WhatsApp lee de Google y Central no guarda en columna propia
+    -- (valoración, reseñas, web, URL de Maps, categorías…).
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS notes TEXT;
+
     -- Resultado y datos de cierre reportados por el taller (Lite o externo)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resultCode" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resolutionNotes" TEXT;
@@ -734,6 +754,14 @@ export async function initConnect(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_user ON connect_lite_devices ("userId");
     CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_ws ON connect_lite_devices ("workshopId");
+
+    -- Estado de la cola offline que informa la propia APK. Sin esto, una cola
+    -- atascada (evidencias que nunca llegan) solo se descubre cuando falta la
+    -- documentación de un servicio ya cerrado.
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queuePending" INTEGER;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueFailed" INTEGER;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueOldestAtMs" BIGINT;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueReportedAtMs" BIGINT;
 
     -- Rastro GPS del operario durante la asistencia (solo servicios activos)
     CREATE TABLE IF NOT EXISTS connect_assistance_tracks (
@@ -844,6 +872,14 @@ export async function initConnect(): Promise<void> {
   `);
 
   await seedConnectDefaults();
+  // El catálogo de talleres depende de red (geocodificación): si falla, se
+  // deja constancia y se sigue arrancando. Un alta pendiente no puede tumbar
+  // el servidor entero, y en el próximo arranque se vuelve a intentar.
+  try {
+    await seedNetworkWorkshops();
+  } catch (e: any) {
+    console.error("[Connect] catálogo de talleres de red:", e?.message);
+  }
 }
 
 /**

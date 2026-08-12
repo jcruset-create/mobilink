@@ -4,7 +4,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api.dart';
-import '../services/queue.dart';
+import '../services/file_queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
@@ -45,6 +45,19 @@ class _PhotosScreenState extends State<PhotosScreen> {
     _load();
   }
 
+  List<PendingFile> get _pendientes =>
+      FileQueue.forAssistance(widget.assistanceId);
+
+  Future<void> _reintentar(String id) async {
+    setState(() => _busy = true);
+    await FileQueue.retry(id);
+    try {
+      await FileQueue.flush(_api);
+    } catch (_) {/* sigue en cola */}
+    await _load();
+    if (mounted) setState(() => _busy = false);
+  }
+
   Future<void> _load() async {
     try {
       final data = await _api.files(widget.assistanceId);
@@ -78,29 +91,30 @@ class _PhotosScreenState extends State<PhotosScreen> {
       if (archivo == null) return;
       setState(() => _progreso = 0.5);
       final pos = await Tracker.currentPosition();
-      await _api.uploadPhoto(
-        widget.assistanceId,
+
+      // Primero se guarda, luego se intenta subir. Así una foto hecha en un
+      // punto sin cobertura no se pierde: queda en la cola y sale sola al
+      // recuperar señal. El clientActionId evita que se duplique.
+      await FileQueue.addPhoto(
+        assistanceId: widget.assistanceId,
         file: archivo,
         category: _categoria,
-        actionId: OfflineQueue.newActionId(),
         lat: pos?.latitude,
         lng: pos?.longitude,
       );
+      setState(() => _progreso = 0.7);
+      await FileQueue.flush(_api);
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Fotografía subida')),
-        );
+        final quedan = FileQueue.forAssistance(widget.assistanceId).length;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(quedan == 0
+              ? 'Fotografía subida'
+              : 'Fotografía guardada. Se enviará al recuperar cobertura '
+                  '($quedan pendiente${quedan == 1 ? '' : 's'}).'),
+          backgroundColor: quedan == 0 ? null : AppColors.warn,
+        ));
       }
-    } on OfflineError {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text(
-          'Sin conexión: haz la foto de nuevo cuando recuperes cobertura, o '
-          'inténtalo desde aquí más tarde.',
-        ),
-        backgroundColor: AppColors.warn,
-      ));
     } on ApiError catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -173,6 +187,51 @@ class _PhotosScreenState extends State<PhotosScreen> {
           ]),
         ),
         const SizedBox(height: 8),
+        // Evidencias hechas y aún no subidas: el operario tiene que poder ver
+        // que están guardadas, no quedarse con la duda de si se han perdido.
+        if (_pendientes.isNotEmpty)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.warn.withValues(alpha: 0.12),
+              border: Border.all(color: AppColors.warn),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_pendientes.length} evidencia(s) guardadas en el móvil, '
+                  'pendientes de enviar',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                ..._pendientes.map((f) => Row(children: [
+                      Icon(
+                        f.state == 'failed' ? Icons.error_outline : Icons.schedule,
+                        size: 16,
+                        color: f.state == 'failed' ? AppColors.danger : AppColors.warn,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '${f.kind == 'signature' ? 'Firma' : kCategorias[f.category] ?? f.category}'
+                          '${f.state == 'failed' ? ' · la central la ha rechazado' : ''}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      if (f.state == 'failed')
+                        TextButton(
+                          onPressed: _busy ? null : () => _reintentar(f.id),
+                          child: const Text('Reintentar'),
+                        ),
+                    ])),
+              ],
+            ),
+          ),
+        if (_pendientes.isNotEmpty) const SizedBox(height: 8),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())

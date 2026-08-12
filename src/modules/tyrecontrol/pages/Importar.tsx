@@ -2,9 +2,11 @@ import { useState } from "react";
 import * as XLSX from "xlsx";
 import { importVehiculos, type ReporteImport } from "../services/importVehiculos";
 import { importRevisiones, type ReporteRev } from "../services/importRevisiones";
+import { importCheckpoint, type ReporteCheckpoint } from "../services/importCheckpoint";
+import { HOJA_DETALLE } from "../services/checkpoint";
 import { TableWrap, tdCls, thCls } from "../components/ui";
 
-type Modo = "vehiculos" | "revisiones";
+type Modo = "vehiculos" | "revisiones" | "checkpoint";
 
 export default function Importar() {
   const [nombreArchivo, setNombreArchivo] = useState("");
@@ -12,11 +14,12 @@ export default function Importar() {
   const [rows, setRows] = useState<any[]>([]);
   const [repVeh, setRepVeh] = useState<ReporteImport | null>(null);
   const [repRev, setRepRev] = useState<ReporteRev | null>(null);
+  const [repChk, setRepChk] = useState<ReporteCheckpoint | null>(null);
   const [ejecutado, setEjecutado] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
 
-  function reset() { setRepVeh(null); setRepRev(null); setEjecutado(false); setRows([]); setModo(null); setError(""); }
+  function reset() { setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); }
 
   async function onArchivo(file: File | undefined) {
     if (!file) return;
@@ -24,6 +27,16 @@ export default function Importar() {
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { cellDates: true });
+      // El informe del CheckPoint se reconoce por su hoja, y sus cabeceras
+      // están en la SEGUNDA fila: la primera es el título con la fecha del
+      // informe.
+      if (wb.SheetNames.includes(HOJA_DETALLE)) {
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[HOJA_DETALLE], { range: 1, defval: "" }) as any[];
+        const validas = data.filter((r) => String(r["Matrícula"] ?? "").trim());
+        if (validas.length === 0) throw new Error("El informe del CheckPoint no trae ninguna matrícula.");
+        setModo("checkpoint"); setRows(validas);
+        return;
+      }
       const tieneRev = wb.SheetNames.includes("Revisiones");
       const hoja = tieneRev ? "Revisiones" : (wb.Sheets["Vehiculos"] ? "Vehiculos" : wb.SheetNames[0]);
       const data = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: "" }) as any[];
@@ -39,27 +52,33 @@ export default function Importar() {
     setCargando(true); setError(""); setEjecutado(false);
     try {
       if (modo === "vehiculos") setRepVeh(await importVehiculos(rows, false));
+      else if (modo === "checkpoint") setRepChk(await importCheckpoint(rows, false));
       else setRepRev(await importRevisiones(rows, false));
     } catch (e: any) { setError(e?.message || "Error al analizar"); } finally { setCargando(false); }
   }
 
   async function importar() {
     const n = modo === "revisiones" ? (repRev?.resumen.revisiones ?? 0) : rows.length;
-    if (!window.confirm(`Vas a importar ${modo === "revisiones" ? rows.length + " filas de revisión" : n + " vehículos"}. ¿Continuar?`)) return;
+    const que = modo === "checkpoint"
+      ? `${repChk?.mediciones ?? 0} mediciones nuevas del CheckPoint` +
+        (repChk?.altas.length ? ` y el alta de ${repChk.altas.length} vehículos` : "")
+      : modo === "revisiones" ? `${rows.length} filas de revisión` : `${n} vehículos`;
+    if (!window.confirm(`Vas a importar ${que}. ¿Continuar?`)) return;
     setCargando(true); setError("");
     try {
       if (modo === "vehiculos") setRepVeh(await importVehiculos(rows, true));
+      else if (modo === "checkpoint") setRepChk(await importCheckpoint(rows, true));
       else setRepRev(await importRevisiones(rows, true));
       setEjecutado(true);
     } catch (e: any) { setError(e?.message || "Error al importar"); } finally { setCargando(false); }
   }
 
-  const reporte = modo === "vehiculos" ? repVeh : repRev;
+  const reporte = modo === "vehiculos" ? repVeh : modo === "checkpoint" ? repChk : repRev;
 
   return (
     <div>
       <h1 className="mb-1 text-lg font-black">Importar</h1>
-      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos o de Revisiones.</p>
+      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones o el informe del CheckPoint.</p>
 
       <div className="mb-3 rounded-lg bg-slate-800 p-3">
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300">
@@ -142,7 +161,42 @@ export default function Importar() {
         </>
       )}
 
+      {modo === "checkpoint" && repChk && (
+        <>
+          <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <Kpi t="Mediciones nuevas" v={repChk.mediciones} tono="text-sky-300" />
+            <Kpi t="Revisiones" v={repChk.rev.resumen.revisiones} />
+            <Kpi t="Altas de vehículo" v={repChk.altas.length} tono="text-emerald-300" />
+            <Kpi t="Ya cargados" v={repChk.yaCargados.length} tono="text-slate-400" />
+            <Kpi t="Sin cruzar el arco" v={repChk.sinMedir.length} tono="text-amber-300" />
+          </div>
+          {repChk.rev.empresa && <div className="mb-3 text-[12px] text-slate-400">Empresa: <b>{repChk.rev.empresa}</b></div>}
+          {repChk.altas.length > 0 && (
+            <div className="mb-3 rounded-lg border border-emerald-800 bg-emerald-950/40 p-3">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos que se dan de alta ({repChk.altas.length})</div>
+              <div className="font-mono text-[11px] text-emerald-100">{repChk.altas.join(", ")}</div>
+            </div>
+          )}
+          {repChk.rev.sinPosiciones.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-800 bg-amber-950/40 p-3">
+              <div className="mb-1 font-bold uppercase text-[11px]">Sin tipo con posiciones ({repChk.rev.sinPosiciones.length})</div>
+              <div className="font-mono text-[11px] text-amber-100">{repChk.rev.sinPosiciones.join(", ")}</div>
+            </div>
+          )}
+          {repChk.avisos.length > 0 && (
+            <div className="mb-3 rounded-lg bg-slate-900 p-3 text-[12px] text-slate-300">
+              <div className="mb-1 font-bold uppercase text-[11px] text-slate-400">Avisos ({repChk.avisos.length})</div>
+              {repChk.avisos.slice(0, 20).map((a, i) => <div key={i}>· {a}</div>)}
+              {repChk.avisos.length > 20 && <div className="text-slate-500">…y {repChk.avisos.length - 20} más</div>}
+            </div>
+          )}
+        </>
+      )}
+
       <div className="mt-3 text-[11px] text-slate-500">
+        CheckPoint: el informe es una foto de la última medición de cada vehículo, así que solo se carga lo medido después de lo que ya hay. Se guarda la hora real y las mediciones quedan marcadas como del arco, no de un técnico.
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
         Revisiones: se agrupan por matrícula + fecha. El vehículo debe existir y tener un tipo con posiciones. Si un neumático no tiene serie/RFID, se crea uno genérico por posición. Re-importar actualiza (no duplica).
       </div>
     </div>

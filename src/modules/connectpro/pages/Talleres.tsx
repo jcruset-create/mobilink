@@ -1,9 +1,10 @@
 /** Connect Pro — Talleres de la red (FULL / LITE / EXTERNAL). */
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
+import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
   WORKSHOP_TIER, WORKSHOP_TIER_LABELS, WORKSHOP_TIER_STYLES, fmtDateTime,
   type ProviderCompany, type WorkshopIntegrationType,
@@ -15,6 +16,8 @@ type Workshop = {
   providerName: string | null; branchName: string | null; providerCompanyId: number | null;
   networkParticipation: boolean; integrationType: WorkshopIntegrationType;
   networkChangedBy: string | null; liteCode: string | null;
+  address: string | null; postalCode: string | null; city: string | null; province: string | null;
+  email: string | null; commercialNetwork: string | null; openingHours: string | null;
 };
 
 type LiteUser = {
@@ -29,6 +32,13 @@ type LiteDevice = {
 };
 
 const TIERS: WorkshopIntegrationType[] = ["assist", "lite", "external"];
+
+const FORM_VACIO = {
+  name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "",
+  integrationType: "assist", commercialNetwork: "", address: "", postalCode: "", city: "",
+  province: "", email: "", openingHours: "", services: "", notes: "",
+};
+
 
 /** Panel de gestión del taller Lite: operarios, dispositivos y código de acceso. */
 export function LitePanel({ workshop, canEdit, onError }: {
@@ -193,7 +203,8 @@ export default function Talleres() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openLite, setOpenLite] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
+  const [form, setForm] = useState(FORM_VACIO);
+  const formRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(() => {
     boFetch<{ data: Workshop[] }>("/workshops").then((r) => setRows(r.data)).catch((e) => setError(e.message));
@@ -216,11 +227,49 @@ export default function Talleres() {
           radiusKm: Number(form.radiusKm) || 60, phone: form.phone || null,
           providerCompanyId: form.providerCompanyId ? Number(form.providerCompanyId) : null,
           integrationType: form.integrationType,
+          services: form.services.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
+          notes: form.notes.trim() || null,
+          commercialNetwork: form.commercialNetwork.trim() || null,
+          address: form.address.trim() || null,
+          postalCode: form.postalCode.trim() || null,
+          city: form.city.trim() || null,
+          province: form.province.trim() || null,
+          email: form.email.trim() || null,
+          openingHours: form.openingHours.trim() || null,
         },
       });
-      setForm({ name: "", providerCompanyId: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
+      setForm(FORM_VACIO);
       load();
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  /** Lo que ya hay escrito, para que la ventana avise de lo que pisaría. */
+  const valoresActuales = Object.fromEntries(
+    CAMPOS_IMPORTABLES.map(({ key }) => [key, form[key] === FORM_VACIO[key] ? "" : form[key]]),
+  );
+
+  /**
+   * Lo confirmado entra en el formulario de alta; el taller no se crea hasta
+   * que el operador revisa la ficha completa y pulsa Añadir.
+   */
+  const aplicarImportacion = (r: ImportacionConfirmada) => {
+    setForm((f) => {
+      const siguiente = { ...f };
+      for (const { key } of CAMPOS_IMPORTABLES) {
+        const v = r.campos[key];
+        if (v != null) siguiente[key] = v;
+      }
+      if (r.providerCompanyId && !siguiente.providerCompanyId) {
+        siguiente.providerCompanyId = String(r.providerCompanyId);
+      }
+      if (r.observaciones) siguiente.notes = [siguiente.notes, r.observaciones].filter(Boolean).join("\n");
+      return siguiente;
+    });
+
+    if (r.empresaDesconocida) {
+      setError(`La empresa "${r.empresaDesconocida}" no existe en Central: créala en Empresas o elige otra antes de dar de alta el taller.`);
+    }
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const cambiarTipo = async (w: Workshop, integrationType: WorkshopIntegrationType) => {
@@ -240,6 +289,15 @@ export default function Talleres() {
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
       {canEdit && (
+        <ImportarTallerWhatsApp
+          empresas={providers}
+          valoresActuales={valoresActuales}
+          onImportar={aplicarImportacion}
+        />
+      )}
+
+      {canEdit && (
+        <div ref={formRef}>
         <Card className="mb-4 p-4">
           <h2 className="mb-3 text-sm font-semibold text-slate-300">Añadir taller</h2>
           <div className="flex flex-wrap gap-2">
@@ -255,9 +313,34 @@ export default function Talleres() {
             <Select value={form.integrationType} onChange={(e) => setForm({ ...form, integrationType: e.target.value })}>
               {TIERS.map((t) => <option key={t} value={t}>{WORKSHOP_TIER_LABELS[t]}</option>)}
             </Select>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Input placeholder="Red comercial (Confortauto…)" value={form.commercialNetwork} onChange={(e) => setForm({ ...form, commercialNetwork: e.target.value })} className="w-44" />
+            <Input placeholder="Dirección" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="w-72" />
+            <Input placeholder="CP" value={form.postalCode} onChange={(e) => setForm({ ...form, postalCode: e.target.value })} className="w-20" />
+            <Input placeholder="Municipio" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} className="w-40" />
+            <Input placeholder="Provincia" value={form.province} onChange={(e) => setForm({ ...form, province: e.target.value })} className="w-36" />
+            <Input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-56" />
+            <Input placeholder="Horario" value={form.openingHours} onChange={(e) => setForm({ ...form, openingHours: e.target.value })} className="w-72" />
+            <Input placeholder="Servicios (tyres, mechanical…)" value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} className="w-64" />
+          </div>
+          {form.notes && (
+            <div className="mt-2">
+              <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Observaciones internas</div>
+              <textarea
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                rows={Math.min(6, form.notes.split("\n").length + 1)}
+                className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-[13px] text-slate-100"
+              />
+            </div>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button onClick={crear} disabled={busy}>Añadir</Button>
+            <Button variant="ghost" onClick={() => setForm(FORM_VACIO)} disabled={busy}>Vaciar</Button>
           </div>
         </Card>
+        </div>
       )}
 
       {rows.length === 0 ? (
@@ -266,7 +349,7 @@ export default function Talleres() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Taller</Th><Th>Empresa</Th><Th>Producto</Th><Th>Red Mobilink</Th><Th>Teléfono</Th><Th>Radio</Th><Th>Estado</Th><Th>Score</Th>
+              <Th>Taller</Th><Th>Empresa</Th><Th>Ubicación</Th><Th>Producto</Th><Th>Red Mobilink</Th><Th>Teléfono</Th><Th>Radio</Th><Th>Estado</Th><Th>Score</Th>
             </tr></thead>
             <tbody>
               {rows.map((w) => (
@@ -283,7 +366,14 @@ export default function Talleres() {
                         </button>
                       )}
                     </Td>
-                    <Td>{w.providerName ?? "-"}{w.branchName ? ` · ${w.branchName}` : ""}</Td>
+                    <Td>
+                      {w.providerName ?? "-"}{w.branchName ? ` · ${w.branchName}` : ""}
+                      {w.commercialNetwork && <div className="text-[11px] text-slate-500">{w.commercialNetwork}</div>}
+                    </Td>
+                    <Td>
+                      {[w.city, w.province].filter(Boolean).join(" · ") || "-"}
+                      {w.postalCode && <div className="text-[11px] text-slate-500">{w.postalCode}</div>}
+                    </Td>
                     <Td>
                       {canEdit ? (
                         <Select
@@ -331,7 +421,7 @@ export default function Talleres() {
                   </tr>
                   {openLite === w.id && (
                     <tr>
-                      <td colSpan={8} className="bg-slate-900/40 p-2">
+                      <td colSpan={9} className="bg-slate-900/40 p-2">
                         <LitePanel workshop={w} canEdit={canEdit} onError={setError} />
                       </td>
                     </tr>

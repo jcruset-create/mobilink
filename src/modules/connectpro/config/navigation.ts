@@ -7,7 +7,7 @@
 import {
   LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
   AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, type LucideIcon,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -28,12 +28,15 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "asistencias", path: "asistencias", label: "Asistencias", icon: ClipboardList, minRole: "analyst" },
   { key: "ofertas", path: "ofertas", label: "Ofertas", icon: Handshake, minRole: "provider_user" },
   { key: "mapa", path: "mapa", label: "Mapa operativo", icon: Map, minRole: "operator" },
-  // Empresas → Talleres → Unidades y Operarios: una sola entrada; las vistas
-  // transversales /talleres y /unidades siguen accesibles por URL directa.
+  // Empresas → Talleres → Unidades y Operarios es la jerarquía; "Talleres" es
+  // la vista transversal de toda la red, y desde ella se dan de alta talleres
+  // por WhatsApp sin tener que entrar antes en su empresa.
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
+  { key: "talleres", path: "talleres", label: "Talleres de la red", icon: Wrench, minRole: "analyst" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },
   { key: "sla", path: "sla", label: "SLA y alertas", icon: BellRing, minRole: "operator" },
   { key: "clientes", path: "clientes", label: "Clientes", icon: Contact, minRole: "operator" },
+  { key: "salud-lite", path: "salud-lite", label: "Salud de Assist Lite", icon: HeartPulse, minRole: "analyst" },
   { key: "integraciones", path: "integraciones", label: "Partners e integraciones", icon: Plug, minRole: "cc_admin" },
   { key: "estadisticas", path: "estadisticas", label: "Estadísticas", icon: BarChart3, minRole: "analyst" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, minRole: "analyst" },
