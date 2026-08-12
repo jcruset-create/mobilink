@@ -11,6 +11,7 @@ import {
   fetchRoadsideTechsSimple,
 } from "../modules/roadsideAssistanceApi";
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
+import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 
 const STATUS_OTF: Record<string, string> = {
   planificada: "border-amber-200 bg-amber-50 text-amber-800",
@@ -116,18 +117,26 @@ export default function OtfPage() {
       </div>
 
       {showNew && (
-        <NewOtfModal places={places} techs={techs} vehicles={vehicles} onClose={() => setShowNew(false)} onCreated={(o) => { setShowNew(false); loadList(); openOtf(o.id); }} />
+        <NewOtfModal
+          places={places}
+          techs={techs}
+          vehicles={vehicles}
+          onPlaceCreated={(p) => setPlaces((prev) => [p, ...prev])}
+          onClose={() => setShowNew(false)}
+          onCreated={(o) => { setShowNew(false); loadList(); openOtf(o.id); }}
+        />
       )}
     </div>
   );
 }
 
-function NewOtfModal({ places, techs, vehicles, onClose, onCreated }: { places: KnownPlace[]; techs: any[]; vehicles: any[]; onClose: () => void; onCreated: (o: any) => void }) {
+function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreated }: { places: KnownPlace[]; techs: any[]; vehicles: any[]; onPlaceCreated: (p: KnownPlace) => void; onClose: () => void; onCreated: (o: any) => void }) {
   const [clientName, setClientName] = useState("");
   const [placeId, setPlaceId] = useState("");
   const [tech, setTech] = useState("");
   const [vehicleName, setVehicleName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showPlaceMap, setShowPlaceMap] = useState(false);
 
   async function save() {
     if (!clientName.trim()) return;
@@ -159,10 +168,20 @@ function NewOtfModal({ places, techs, vehicles, onClose, onCreated }: { places: 
         <div className="space-y-3">
           <Field label="Cliente *"><input value={clientName} onChange={(e) => setClientName(e.target.value)} className={inputCls} /></Field>
           <Field label="Base (lugar conocido)">
-            <select value={placeId} onChange={(e) => setPlaceId(e.target.value)} className={inputCls}>
-              <option value="">— Elegir base —</option>
-              {places.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select>
+            <div className="flex gap-2">
+              <select value={placeId} onChange={(e) => setPlaceId(e.target.value)} className={inputCls}>
+                <option value="">— Elegir base —</option>
+                {places.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+              <button
+                type="button"
+                onClick={() => setShowPlaceMap(true)}
+                title="Crear una base nueva marcándola en el mapa"
+                className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+              >
+                + Mapa
+              </button>
+            </div>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Operario">
@@ -184,6 +203,17 @@ function NewOtfModal({ places, techs, vehicles, onClose, onCreated }: { places: 
           <button onClick={save} disabled={saving} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white disabled:opacity-50">{saving ? "…" : "Crear"}</button>
         </div>
       </div>
+
+      {/* Crear base nueva con pin en el mapa: queda seleccionada al guardar */}
+      {showPlaceMap && (
+        <KnownPlaceMapModal
+          onClose={() => setShowPlaceMap(false)}
+          onSaved={(p) => {
+            onPlaceCreated(p);
+            setPlaceId(String(p.id));
+          }}
+        />
+      )}
     </div>
   );
 }
