@@ -301,11 +301,33 @@ export function findCandidatesForArea(
 
     if (pa !== pb) return pa - pb;
 
-    return (
-      AREA_META[area].order.indexOf(a.name) -
-      AREA_META[area].order.indexOf(b.name)
-    );
+    const da = desempatePorArea(area, a.name);
+    const db = desempatePorArea(area, b.name);
+    if (da !== db) return da - db;
+
+    // Dos desconocidos (o dos en la misma posición) se ordenan por nombre: es
+    // estable entre recargas y no depende de en qué orden llegaron de la BD.
+    return a.name.localeCompare(b.name, "es");
   });
+}
+
+/**
+ * Desempate cuando dos técnicos tienen la misma prioridad en el área.
+ *
+ * El orden de referencia (`AREA_META[area].order`) es una lista de nombres
+ * escrita en el código y solo cubre a la plantilla histórica. Antes esto hacía
+ * `indexOf` directamente, y para alguien que no estuviera en la lista devolvía
+ * **-1**: es decir, un técnico recién dado de alta adelantaba a todos los demás
+ * en cualquier empate, sin que nadie lo hubiera decidido.
+ *
+ * Ahora quien no está en la lista va al final, y entre iguales manda el orden
+ * alfabético, que es estable y no depende de datos ocultos. La prioridad real
+ * de cada técnico se configura en la pantalla de Técnicos y vive en la base de
+ * datos: esto es solo el criterio de última instancia.
+ */
+export function desempatePorArea(area: AreaKey, nombre: string): number {
+  const posicion = AREA_META[area].order.indexOf(nombre);
+  return posicion >= 0 ? posicion : Number.MAX_SAFE_INTEGER;
 }
 
 export function getTechLoadPenalty(
