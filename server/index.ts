@@ -14438,21 +14438,47 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     const planificados = data.trabajos.filter((t: any) => t.origen !== "tecnico_campo");
     const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
 
-    const printT = (t: any) => {
+    const FOTO_LABELS: Record<string, string> = { matricula: "Matrícula", averia: "Avería" };
+    const printT = async (t: any) => {
+      if (doc.y > 700) doc.addPage();
       doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
       doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
+      if (t.observaciones) doc.fontSize(8).font("Helvetica").text(`   Observaciones: ${t.observaciones}`);
       if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
+      // Fotos del trabajo (matrícula, avería…): fila de miniaturas etiquetadas
+      const fotos = (t.fotos ?? []).slice(0, 4);
+      if (fotos.length > 0) {
+        if (doc.y > 640) doc.addPage();
+        const y0 = doc.y + 4;
+        let x = 50;
+        for (const f of fotos) {
+          try {
+            const buf = await fetchImageForPdf(f.url);
+            doc.image(buf, x, y0, { fit: [110, 80] });
+            const label = FOTO_LABELS[String(f.kind)] ?? "";
+            if (label) {
+              doc.fontSize(7).font("Helvetica").fillColor("#555555")
+                .text(label, x, y0 + 83, { width: 110, align: "center" });
+              doc.fillColor("#000000");
+            }
+            x += 120;
+          } catch { /* foto no accesible: se omite */ }
+        }
+        doc.x = 40;
+        doc.y = y0 + 96;
+      }
       doc.moveDown(0.2);
     };
 
     doc.fontSize(11).font("Helvetica-Bold").text("Planificados por oficina:");
     if (planificados.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
-    planificados.forEach(printT);
+    for (const t of planificados) await printT(t);
 
     doc.moveDown(0.4);
+    if (doc.y > 700) doc.addPage();
     doc.fontSize(11).font("Helvetica-Bold").text("Añadidos en campo por el técnico:");
     if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
-    enCampo.forEach(printT);
+    for (const t of enCampo) await printT(t);
 
     // Firma única
     if (data.firmaUrl || data.firmanteNombre) {
