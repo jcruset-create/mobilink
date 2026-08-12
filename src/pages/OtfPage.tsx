@@ -347,12 +347,26 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
   const [tipo, setTipo] = useState("Tractora");
   const [trabajoPlantilla, setTP] = useState("");
   const [detalle, setDetalle] = useState("");
+  const [observaciones, setObservaciones] = useState("");
+  const [adding, setAdding] = useState(false);
 
   async function add() {
+    if (adding) return; // evita el doble clic → trabajo duplicado
     if (!plate.trim() || (!trabajoPlantilla.trim() && !detalle.trim())) return;
-    await addOtfTrabajo(otf.id, { plate, tipoVehiculo: tipo, trabajoPlantilla, detalleManual: detalle });
-    setPlate(""); setTP(""); setDetalle("");
-    onChange();
+    setAdding(true);
+    try {
+      await addOtfTrabajo(otf.id, {
+        plate,
+        tipoVehiculo: tipo,
+        trabajoPlantilla,
+        detalleManual: detalle,
+        observaciones: observaciones.trim() || null,
+      });
+      setPlate(""); setTP(""); setDetalle(""); setObservaciones("");
+      onChange();
+    } finally {
+      setAdding(false);
+    }
   }
 
   return (
@@ -400,6 +414,7 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
                 )}
               </div>
               <div className="text-sm text-slate-700">{t.trabajo}</div>
+              {t.observaciones && <div className="text-xs font-semibold text-amber-700">📌 {t.observaciones}</div>}
               {t.motivoAltaCampo && <div className="text-xs italic text-slate-400">Motivo: {t.motivoAltaCampo}</div>}
               {(t.fotos ?? []).length > 0 && (
                 <div className="mt-1 flex gap-1">
@@ -435,8 +450,16 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
           </select>
           <input placeholder="Trabajo (plantilla)" value={trabajoPlantilla} onChange={(e) => setTP(e.target.value)} className={inputCls} />
           <input placeholder="Detalle manual" value={detalle} onChange={(e) => setDetalle(e.target.value)} className={inputCls} />
+          <input
+            placeholder="Observaciones (p. ej. remolque en plaza 27)"
+            value={observaciones}
+            onChange={(e) => setObservaciones(e.target.value)}
+            className={`${inputCls} col-span-2`}
+          />
         </div>
-        <button onClick={add} className="mt-2 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white">+ Añadir trabajo</button>
+        <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white disabled:opacity-50">
+          {adding ? "Añadiendo…" : "+ Añadir trabajo"}
+        </button>
       </div>
     </div>
   );
