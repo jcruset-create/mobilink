@@ -549,6 +549,18 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS otf_trabajos_otf_idx ON otf_trabajos("otfId");
 
+    -- Catálogo de plantillas de trabajos OTF ("Revisar presiones", etc.).
+    -- Sustituye el texto libre de trabajoPlantilla por opciones consistentes
+    -- (también de cara al código de línea al presupuestar en el ERP).
+    CREATE TABLE IF NOT EXISTS otf_plantillas (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL UNIQUE,
+      descripcion TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS otf_trabajo_files (
       id SERIAL PRIMARY KEY,
       "trabajoId" INTEGER NOT NULL REFERENCES otf_trabajos(id) ON DELETE CASCADE,
