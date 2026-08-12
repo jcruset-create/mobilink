@@ -145,8 +145,35 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
     }
   }
 
-  Future<void> _setStatus(int tid, String status) async {
+  final _statusPicker = ImagePicker();
+
+  Future<void> _setStatus(Map<String, dynamic> t, String status) async {
+    final tid = t['id'] as int;
     try {
+      // La foto de la matrícula es obligatoria para el informe: si el trabajo
+      // aún no la tiene (los planificados desde oficina no la traen), se abre
+      // la cámara antes de empezar o finalizar.
+      if (status == 'en_proceso' || status == 'finalizado') {
+        final fotos = (t['fotos'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+        final tieneMatricula = fotos.any((f) => f['kind'] == 'matricula');
+        if (!tieneMatricula) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Haz una foto de la matrícula del vehículo'),
+              duration: Duration(seconds: 2)));
+          }
+          final x = await _statusPicker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+          if (x == null) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('La foto de la matrícula es obligatoria para el informe'),
+                backgroundColor: Colors.red));
+            }
+            return;
+          }
+          await widget.api.uploadOtfTrabajoFile(tid, File(x.path), 'matricula');
+        }
+      }
       await widget.api.updateOtfTrabajoStatus(tid, status);
       _load();
     } catch (e) {
@@ -306,21 +333,21 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         ),
         const SizedBox(height: 10),
         Row(children: [
-          _statusBtn(t['id'] as int, 'en_proceso', 'Empezar', status),
+          _statusBtn(t, 'en_proceso', 'Empezar', status),
           const SizedBox(width: 8),
-          _statusBtn(t['id'] as int, 'finalizado', 'Finalizar', status),
+          _statusBtn(t, 'finalizado', 'Finalizar', status),
           const SizedBox(width: 8),
-          _statusBtn(t['id'] as int, 'no_realizado', 'No realizado', status),
+          _statusBtn(t, 'no_realizado', 'No realizado', status),
         ]),
       ]),
     );
   }
 
-  Widget _statusBtn(int tid, String target, String label, String current) {
+  Widget _statusBtn(Map<String, dynamic> t, String target, String label, String current) {
     final active = current == target;
     final color = _trabajoColor(target);
     return Expanded(child: OutlinedButton(
-      onPressed: active ? null : () => _setStatus(tid, target),
+      onPressed: active ? null : () => _setStatus(t, target),
       style: OutlinedButton.styleFrom(
         backgroundColor: active ? color.withValues(alpha: 0.18) : Colors.transparent,
         side: BorderSide(color: color.withValues(alpha: 0.5)),
