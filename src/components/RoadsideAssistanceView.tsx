@@ -2922,10 +2922,10 @@ export default function RoadsideAssistanceView({
                       <button
                         type="button"
                         onClick={() => setPlaceMapTarget(p)}
-                        title="Ver o ajustar la posición en el mapa"
+                        title="Editar la base: nombre, tipo, cliente, dirección y posición en el mapa"
                         className="shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-xs font-bold text-sky-300 hover:bg-sky-500/25"
                       >
-                        Mapa
+                        Editar
                       </button>
                       <button
                         type="button"

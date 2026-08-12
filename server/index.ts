@@ -13698,8 +13698,9 @@ app.put("/api/roadside-known-places/:id", requireAdminRole, async (req, res) => 
     const r = await db.query(
       `UPDATE roadside_known_places SET
          nombre = COALESCE($2, nombre), tipo = COALESCE($3, tipo),
-         direccion = $4, lat = COALESCE($5, lat), lng = COALESCE($6, lng),
-         "clientId" = $7, "clientName" = $8, notas = $9, "updatedAtMs" = $10
+         direccion = COALESCE($4, direccion), lat = COALESCE($5, lat), lng = COALESCE($6, lng),
+         "clientId" = COALESCE($7, "clientId"), "clientName" = COALESCE($8, "clientName"),
+         notas = COALESCE($9, notas), "updatedAtMs" = $10
        WHERE id = $1 RETURNING *`,
       [id, b.nombre ?? null, b.tipo ?? null, b.direccion ?? null,
        b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
