@@ -165,6 +165,8 @@ export type RoadsideTrackingResponse = {
   vanMarca?: string | null;
   vanModelo?: string | null;
   workshop?: { lat: number; lng: number } | null;
+  /** Teléfono del técnico asignado (para que el cliente pueda llamarle). */
+  techPhone?: string | null;
   events: Array<{
     status: RoadsideAssistanceStatus;
     createdAtMs: number;
