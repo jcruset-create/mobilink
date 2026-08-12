@@ -268,6 +268,14 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS job_files_job_idx ON job_files("jobId");
   `);
 
+  // Distingue la firma del cliente de las fotos del trabajo. Van a la misma
+  // tabla porque son el mismo tipo de adjunto, pero la firma es única por
+  // trabajo y se enseña aparte.
+  await pool.query(`
+    ALTER TABLE job_files
+    ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'foto';
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id BIGINT PRIMARY KEY,

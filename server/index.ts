@@ -3068,7 +3068,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req
       return res.status(403).json({ error: "Sin acceso a este trabajo" });
     }
     const result = await db.query(
-      `SELECT id, url, "fileName", "techName", "createdAtMs"
+      `SELECT id, url, "fileName", "techName", "createdAtMs", tipo
        FROM job_files WHERE "jobId" = $1 ORDER BY "createdAtMs" ASC`,
       [id]
     );
@@ -3079,6 +3079,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req
         fileName: r.fileName ?? null,
         techName: r.techName ?? null,
         createdAtMs: Number(r.createdAtMs),
+        tipo: r.tipo ?? "foto",
       }))
     );
   } catch (error) {
@@ -3115,7 +3116,12 @@ app.post(
         "image/webp": "webp",
       };
       const ext = mimeToExt[req.file.mimetype] ?? "jpg";
-      const storagePath = `taller/${id}/foto_${Date.now()}.${ext}`;
+      // 'firma' o 'foto'. La firma del cliente es única por trabajo: si se
+      // repite, la nueva sustituye a la anterior en vez de acumular garabatos.
+      const tipo = String((req.body as any)?.tipo ?? "foto").trim() === "firma"
+        ? "firma"
+        : "foto";
+      const storagePath = `taller/${id}/${tipo}_${Date.now()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from(SUPABASE_ROADSIDE_BUCKET)
@@ -3129,10 +3135,14 @@ app.post(
         .from(SUPABASE_ROADSIDE_BUCKET)
         .getPublicUrl(storagePath);
 
+      if (tipo === "firma") {
+        await db.query(`DELETE FROM job_files WHERE "jobId" = $1 AND tipo = 'firma'`, [id]);
+      }
+
       const result = await db.query(
-        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs")
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now()]
+        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs", tipo)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now(), tipo]
       );
       const row = result.rows[0];
       const respuesta = {
@@ -3141,6 +3151,7 @@ app.post(
         fileName: row.fileName ?? null,
         techName: row.techName ?? null,
         createdAtMs: Number(row.createdAtMs),
+        tipo: row.tipo ?? "foto",
       };
       await guardarIdempotencia(req, respuesta);
       res.json(respuesta);
