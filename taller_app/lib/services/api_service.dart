@@ -243,7 +243,8 @@ class ApiService {
     }
   }
 
-  Future<bool> _uploadFromPath(int jobId, String path, {String? clave}) async {
+  Future<bool> _uploadFromPath(int jobId, String path,
+      {String? clave, String tipo = 'foto'}) async {
     final compressed = await FlutterImageCompress.compressWithFile(
       path,
       quality: 70,
@@ -257,16 +258,36 @@ class ApiService {
     );
     req.headers.addAll(_operatorHeaders);
     if (clave != null) req.headers['x-idempotency-key'] = clave;
+    req.fields['tipo'] = tipo;
     req.files.add(http.MultipartFile.fromBytes(
       'file',
       bytes,
-      filename: 'foto_$jobId.jpg',
+      filename: '${tipo}_$jobId.jpg',
       contentType: MediaType('image', 'jpeg'),
     ));
     final streamed = await req.send().timeout(const Duration(seconds: 30));
     final res = await http.Response.fromStream(streamed);
     if (res.statusCode != 200) throw Exception('Error subiendo foto');
     return true;
+  }
+
+  /// Sube la firma del cliente. Va por la misma vía que las fotos —misma
+  /// tabla, misma cola offline, misma clave de idempotencia— pero marcada como
+  /// `firma`, y el servidor sustituye la anterior si ya había una.
+  Future<void> subirFirma(int jobId, String localPath) async {
+    final clave = OfflineStore.nuevaClave('firma-$jobId');
+    try {
+      await _uploadFromPath(jobId, localPath, clave: clave, tipo: 'firma');
+      OfflineStore.offline.value = false;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        OfflineStore.offline.value = true;
+        await OfflineStore.enqueueUpload(
+            jobId: jobId, localPath: localPath, clave: clave, tipo: 'firma');
+        return;
+      }
+      rethrow;
+    }
   }
 
   // ── Pausas ───────────────────────────────────────────────────
@@ -376,7 +397,8 @@ class ApiService {
             }
           } else if (type == 'upload_file') {
             await _uploadFromPath(jobId, item['localPath'] as String,
-                clave: item['actionId'] as String?);
+                clave: item['actionId'] as String?,
+                tipo: (item['tipo'] as String?) ?? 'foto');
             await OfflineStore.removePending(entry.key);
           }
         } catch (e) {
