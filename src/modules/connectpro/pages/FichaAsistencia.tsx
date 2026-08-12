@@ -13,6 +13,7 @@ import AsignacionTab from "../components/AsignacionTab";
 import ComunicacionesTab from "../components/ComunicacionesTab";
 import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
 import BackOfficeTab from "../components/BackOfficeTab";
+import VehiculoTab from "../components/VehiculoTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
 
 type Detail = {
@@ -160,6 +161,12 @@ export default function FichaAsistencia() {
         </div>
         <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-[12px] text-slate-400">
           <span>Cliente: <b className="text-slate-200">{a.clientName ?? a.partnerName ?? "—"}</b></span>
+          {/* El vehículo averiado, que es de lo que va el servicio: hasta ahora
+              en la cabecera solo salía la furgoneta del taller. */}
+          <span>Vehículo: <b className="text-slate-200">
+            {[vehicle.plate, [vehicle.make, vehicle.model].filter(Boolean).join(" ")]
+              .filter(Boolean).join(" · ") || "—"}
+          </b></span>
           <span>Proveedor: <b className="text-slate-200">{a.providerName ?? "—"}</b></span>
           <span>Taller: <b className="text-slate-200">{a.workshopName ?? "—"}</b></span>
           <span>Operario: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
@@ -245,18 +252,12 @@ export default function FichaAsistencia() {
           </div>
         )}
         {tab === "Vehículo" && (
-          <div>
-            <Row label="Tipo" value={vehicle.type} />
-            <Row label="Marca / modelo" value={[vehicle.make, vehicle.model].filter(Boolean).join(" ")} />
-            <Row label="Matrícula" value={vehicle.plate} />
-            <Row label="VIN" value={vehicle.vin} />
-            <Row label="Combustible" value={vehicle.fuel} />
-            <Row label="Eléctrico" value={vehicle.electric} />
-            <Row label="Remolque" value={vehicle.trailer} />
-            <Row label="Peso" value={vehicle.weight} />
-            <Row label="Carga" value={vehicle.cargo} />
-            <Row label="Mercancía peligrosa" value={vehicle.dangerousGoods} />
-          </div>
+          <VehiculoTab
+            assistanceId={a.id}
+            vehicle={vehicle}
+            editable={canOperate && a.status !== "cancelled"}
+            onSaved={load}
+          />
         )}
         {tab === "Ubicación" && (
           <div>

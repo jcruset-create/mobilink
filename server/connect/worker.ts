@@ -11,6 +11,7 @@ import { deliverPendingWebhooks, enqueueWebhookEvent } from "./webhooks.ts";
 import { computeWorkshopScores, notifySlaEvents, detectAnomalies } from "./score.ts";
 import { syncMobileUnits } from "./mobileunits.ts";
 import { storeDailyKpiSnapshot, predictDemand, backfillDemandActuals, generateRecommendations } from "./intelligence.ts";
+import { purgeLiteActions } from "./lite.ts";
 
 const TICK_MS = 15_000;
 const SCORE_EVERY_TICKS = 20; // recalcular el score cada ~5 min
@@ -40,6 +41,11 @@ export async function runConnectChecksOnce(): Promise<void> {
       if (recs > 0) console.log(`[Connect] worker: ${recs} recomendación(es) de IA generadas`);
     }
     if (tick % 240 === 3) await predictDemand(); // predicción de demanda cada hora
+    if (tick % 240 === 7) {
+      // Caducidad de las operaciones idempotentes de Lite, una vez por hora
+      const purgadas = await purgeLiteActions();
+      if (purgadas > 0) console.log(`[Connect] worker: ${purgadas} operación(es) de Lite caducadas`);
+    }
     await deliverPendingWebhooks();
   } catch (err: any) {
     console.error("[Connect] worker error:", err?.message);

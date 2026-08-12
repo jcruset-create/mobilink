@@ -1,0 +1,25 @@
+{
+  // Typecheck del servidor. El backend se ejecuta con `tsx`, que borra los
+  // tipos sin comprobarlos, así que hasta ahora un error de tipos en
+  // server/ llegaba a producción sin que nada lo parase: el `tsc -b` del
+  // proyecto solo mira el panel y vite.config.ts.
+  //
+  // Se empieza por Central Pro y Mobilink Assist Lite, que están limpios. El
+  // resto de server/ arrastra errores anteriores; según se vayan arreglando se
+  // amplía este `include` en vez de dejarlo todo fuera.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "module": "esnext",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": false,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["server/connect/**/*.ts"]
+}

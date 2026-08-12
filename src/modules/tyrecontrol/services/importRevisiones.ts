@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import { listarVehiculos, listarPosiciones } from "./data";
 import type { PosicionVehiculo, Vehiculo } from "../types";
+import { medidaCanonica } from "./medidas";
 
 export interface ReporteRev {
   resumen: { filas: number; revisiones: number; detalles: number; neumaticosNuevos: number; errores: number };
@@ -20,14 +21,35 @@ function fechaISO(v: any): string | null {
 }
 const numOrNull = (v: any) => { const s = String(v ?? "").trim().replace(",", "."); return s && !isNaN(Number(s)) ? Number(s) : null; };
 const txt = (v: any) => { const s = String(v ?? "").trim(); return s || null; };
-const medN = (v: any) => { const s = String(v ?? "").trim().replace(/\s+/g, "").toUpperCase(); return s || null; }; // medida sin espacios
+// Medida en forma canónica, la misma que impone el disparador de la base de
+// datos: si no, "295/80R22,5" y "295/80R22.5" salen como dos medidas
+// distintas en el informe.
+const medN = (v: any) => medidaCanonica(String(v ?? "")) || null;
 
 interface Grupo { matricula: string; fecha: string; rows: any[]; }
+
+/** El momento de la medición del grupo, si las filas lo traen. */
+function momentoDeGrupo(g: Grupo): string | null {
+  const t = g.rows.map((r) => r._medidoAt).filter((d) => d instanceof Date) as Date[];
+  if (!t.length) return null;
+  return new Date(Math.max(...t.map((d) => d.getTime()))).toISOString();
+}
 
 // Importa (o simula) revisiones desde la plantilla. Agrupa por matrícula+fecha,
 // resuelve posiciones por el tipo del vehículo, crea un neumático genérico por
 // posición si no hay montaje, y registra el detalle de cada rueda.
-export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<ReporteRev> {
+export interface OpcionesRev {
+  /**
+   * De dónde vienen las mediciones. Cambia el método que se apunta en cada
+   * rueda, para poder comparar luego el arco contra la sonda.
+   */
+  origen?: "importacion_excel" | "checkpoint";
+}
+
+export async function importRevisiones(
+  rows: any[], ejecutar: boolean, opciones: OpcionesRev = {},
+): Promise<ReporteRev> {
+  const metodo = opciones.origen ?? "importacion_excel";
   const errores: ReporteRev["errores"] = [];
   const avisos = new Set<string>();
   const hoy = fechaISO(new Date())!;
@@ -43,7 +65,13 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     if (!fecha) { fecha = hoy; sinFecha++; }
     const key = `${mat}||${fecha}`;
     if (!grupos.has(key)) grupos.set(key, { matricula: mat, fecha, rows: [] });
-    grupos.get(key)!.rows.push({ ...r, _fila: i + 2, posN: parseInt(String(r.posicion).trim(), 10) });
+    grupos.get(key)!.rows.push({
+      ...r, _fila: i + 2, posN: parseInt(String(r.posicion).trim(), 10),
+      // El CheckPoint no numera las ruedas: las nombra (E3_IZQ). Es más
+      // seguro, porque el número depende de que el tipo tenga las posiciones
+      // en el mismo orden y el código no.
+      _codigo: String(r.codigo_posicion ?? "").trim().toUpperCase() || null,
+    });
   }
   if (sinFecha > 0) avisos.add(`${sinFecha} filas sin fecha: se usó la fecha de hoy (${hoy}). Cámbiala luego si conoces la real.`);
 
@@ -67,7 +95,11 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     ? (await supabase.from("tc_montajes_actuales").select("vehiculo_id, posicion_id, neumatico_id").in("vehiculo_id", vehIds)).data ?? []
     : [];
   const mapMontaje = new Map<string, string>(); // vehiculo|posicion -> neumatico
-  for (const m of montajes as any[]) mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
+  const neuMontados = new Set<string>();        // neumáticos que ya están puestos en algún sitio
+  for (const m of montajes as any[]) {
+    mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
+    neuMontados.add(m.neumatico_id);
+  }
 
   const revsExist = vehIds.length
     ? (await supabase.from("revisiones_vehiculo").select("id, vehiculo_id, fecha_revision").in("vehiculo_id", vehIds)).data ?? []
@@ -100,9 +132,25 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     const ps = posByTipo.get(v.tipo_vehiculo_id)!;
     const posMap = new Map<number, string>();
     for (const row of g.rows) {
-      const n = row.posN;
-      if (!n || n < 1 || n > ps.length) { avisos.add(`${g.matricula}: posición ${row.posicion} fuera de rango (el tipo tiene ${ps.length})`); continue; }
-      const posId = ps[n - 1].id;
+      let posId: string | undefined;
+      let n = row.posN;
+      if (row._codigo) {
+        // Por código primero; si el tipo usa otra nomenclatura (los sembrados
+        // en la Fase 3 llaman DEL_IZQ a lo que aquí es E1_IZQ), por las señas
+        // de la rueda, que son las mismas se llame como se llame.
+        const p = ps.find((x) => String(x.codigo_posicion).toUpperCase() === row._codigo)
+          ?? (row._eje ? ps.find((x) =>
+                x.eje === row._eje
+                && String(x.lado ?? "") === String(row._lado ?? "")
+                && (x.interior_exterior ?? null) === (row._io ?? null)) : undefined);
+        if (!p) { avisos.add(`${g.matricula}: su tipo no tiene la posición ${row._codigo}`); continue; }
+        posId = p.id;
+        n = ps.indexOf(p) + 1;
+        row.posN = n;
+      } else {
+        if (!n || n < 1 || n > ps.length) { avisos.add(`${g.matricula}: posición ${row.posicion} fuera de rango (el tipo tiene ${ps.length})`); continue; }
+        posId = ps[n - 1].id;
+      }
       posMap.set(n, posId);
       // ¿hay que crear neumático genérico?
       const mk = `${v.id}|${posId}`;
@@ -128,26 +176,90 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
   }
 
   // 6. EJECUTAR
-  // 6a. Crear neumáticos genéricos (lote) y sus montajes
+  // 6a. Neumáticos genéricos (lote) y sus montajes.
+  //
+  // El número interno se construye a partir de la matrícula y la posición
+  // (IMP-1234ABC-P3) y tiene un índice único GLOBAL (uq_tc_neu_numero_interno,
+  // fase8): global de verdad, no por empresa. Si una importación se quedó a
+  // medias —o se repite el mismo Excel— esas fichas YA existen, y volver a
+  // insertarlas rompía todo con "duplicate key value violates unique
+  // constraint".
+  //
+  // Mirar antes qué hay no basta: tc_neumaticos filtra por empresa (política
+  // tc_neu_select, fase4), así que una ficha del mismo número interno creada
+  // bajo OTRA empresa —una duplicada por un import anterior con el nombre de
+  // cliente mal escrito, por ejemplo— no se ve en el select pero sí choca
+  // contra el índice. Por eso el alta va con "no hagas nada si ya existe" y
+  // los ids se releen después: lo que no aparezca es que pertenece a otro,
+  // y eso se avisa y se salta, sin tumbar el resto de la importación.
   if (neuCrear.length) {
     const chunk = 200;
     const nuevoNeuId = new Map<string, string>(); // codigo_interno -> id
-    for (let i = 0; i < neuCrear.length; i += chunk) {
-      const parte = neuCrear.slice(i, i + chunk).map((n) => ({
-        empresa_id: n.empresa_id, numero_interno: `IMP-${n.codigo_interno}`, codigo_interno: n.codigo_interno,
+
+    const numeroDe = (codigo: string) => `IMP-${codigo}`;
+    const leerExistentes = async (codigos: string[]) => {
+      for (let i = 0; i < codigos.length; i += chunk) {
+        const { data, error } = await supabase.from("tc_neumaticos")
+          .select("id, codigo_interno").in("numero_interno", codigos.slice(i, i + chunk).map(numeroDe));
+        if (error) throw new Error("Neumáticos existentes: " + error.message);
+        for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
+      }
+    };
+
+    // Lo que ya existe de importaciones anteriores: se reutiliza.
+    await leerExistentes(neuCrear.map((n) => n.codigo_interno));
+    const yaEstaban = nuevoNeuId.size;
+    if (yaEstaban) avisos.add(`${yaEstaban} neumáticos ya existían de una importación anterior: se reutilizan en vez de duplicarlos.`);
+
+    const porCrear = neuCrear.filter((n) => !nuevoNeuId.has(n.codigo_interno));
+    for (let i = 0; i < porCrear.length; i += chunk) {
+      const parte = porCrear.slice(i, i + chunk).map((n) => ({
+        empresa_id: n.empresa_id, numero_interno: numeroDe(n.codigo_interno), codigo_interno: n.codigo_interno,
         marca: n.marca, modelo: n.modelo, medida: n.medida, estado: n.estado, activo: n.activo,
       }));
-      const { data, error } = await supabase.from("tc_neumaticos").insert(parte).select("id, codigo_interno");
+      const { data, error } = await supabase.from("tc_neumaticos")
+        .upsert(parte, { onConflict: "numero_interno", ignoreDuplicates: true })
+        .select("id, codigo_interno");
       if (error) throw new Error("Alta de neumáticos: " + error.message);
       for (const d of data as any[]) nuevoNeuId.set(d.codigo_interno, d.id);
     }
-    const montajesNuevos = neuCrear.map((n) => ({
-      empresa_id: n.empresa_id, vehiculo_id: n.vehiculo_id, neumatico_id: nuevoNeuId.get(n.codigo_interno)!, posicion_id: n.posicion_id,
-    })).filter((m) => m.neumatico_id);
+
+    // Las que el alta se saltó por chocar con una ficha ajena no vuelven en el
+    // select del upsert: se releen por si eran visibles y simplemente se
+    // habían creado entre medias.
+    const sinResolver = porCrear.filter((n) => !nuevoNeuId.has(n.codigo_interno));
+    if (sinResolver.length) {
+      await leerExistentes(sinResolver.map((n) => n.codigo_interno));
+      const ajenas = sinResolver.filter((n) => !nuevoNeuId.has(n.codigo_interno));
+      if (ajenas.length) {
+        const mats = [...new Set(ajenas.map((n) => n.codigo_interno.split("-P")[0]))];
+        avisos.add(
+          `${ajenas.length} neumáticos no se han podido dar de alta: su número interno ya existe en otra empresa ` +
+          `(seguramente una empresa duplicada de un import anterior). Sus mediciones se guardan igual, pero sin ficha ` +
+          `de neumático. Vehículos afectados: ${mats.slice(0, 10).join(", ")}${mats.length > 10 ? ` y ${mats.length - 10} más` : ""}.`,
+        );
+      }
+    }
+
+    // Los montajes tienen sus propios índices únicos —uno por neumático y uno
+    // por vehículo+posición (fase4)—, así que se salta lo que ya está puesto.
+    const montajesNuevos = neuCrear
+      .map((n) => ({
+        empresa_id: n.empresa_id, vehiculo_id: n.vehiculo_id,
+        neumatico_id: nuevoNeuId.get(n.codigo_interno)!, posicion_id: n.posicion_id,
+      }))
+      // Además del único por vehículo+posición, tc_montajes_actuales tiene uno
+      // por neumático: una goma reutilizada que ya esté puesta en otra posición
+      // no se puede montar otra vez sin desmontarla antes.
+      .filter((m) => m.neumatico_id
+        && !mapMontaje.has(`${m.vehiculo_id}|${m.posicion_id}`)
+        && !neuMontados.has(m.neumatico_id));
     for (let i = 0; i < montajesNuevos.length; i += chunk) {
-      const { error } = await supabase.from("tc_montajes_actuales").insert(montajesNuevos.slice(i, i + chunk));
+      const parte = montajesNuevos.slice(i, i + chunk);
+      const { error } = await supabase.from("tc_montajes_actuales")
+        .upsert(parte, { onConflict: "vehiculo_id,posicion_id", ignoreDuplicates: true });
       if (error) throw new Error("Montajes: " + error.message);
-      for (const m of montajesNuevos.slice(i, i + chunk)) mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
+      for (const m of parte) mapMontaje.set(`${m.vehiculo_id}|${m.posicion_id}`, m.neumatico_id);
     }
   }
 
@@ -157,6 +269,9 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
     const nuevas = gruposSinRev.map((p) => ({
       empresa_id: p.vehiculo.empresa_id, vehiculo_id: p.vehiculo.id, fecha_revision: p.grupo.fecha,
       tecnico_id: mapTec.get(String(p.grupo.rows[0].tecnico ?? "").trim()) ?? null, estado_revision: "completada",
+      // Cuándo se midió de verdad, no cuándo se graba esto. Es lo que evita
+      // reimportar la misma pasada por el arco la semana que viene.
+      medido_at: momentoDeGrupo(p.grupo),
     }));
     const chunk = 200;
     for (let i = 0; i < nuevas.length; i += chunk) {
@@ -180,8 +295,8 @@ export async function importRevisiones(rows: any[], ejecutar: boolean): Promise<
         revision_id: revId, empresa_id: p.vehiculo.empresa_id, vehiculo_id: p.vehiculo.id, posicion_id: posId,
         neumatico_id: mapMontaje.get(`${p.vehiculo.id}|${posId}`) ?? null,
         profundidad_mm: prof, presion_bar: pres, temperatura: numOrNull(row.temperatura_c),
-        metodo_profundidad: prof != null ? "importacion_excel" : null,
-        metodo_presion: pres != null ? "importacion_excel" : null,
+        metodo_profundidad: prof != null ? metodo : null,
+        metodo_presion: pres != null ? metodo : null,
         estado_visual: txt(row.estado_visual), observaciones: txt(row.observaciones),
         no_accesible: false, neumatico_ausente: false,
       });

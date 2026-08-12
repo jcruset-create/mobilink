@@ -13,6 +13,8 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
+import { getMailTransport } from "./mail.ts";
+import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
 import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -30,6 +32,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
@@ -1554,6 +1557,45 @@ async function getAssistPanelUser(req: express.Request): Promise<AssistPanelUser
   };
 }
 
+/**
+ * Credenciales válidas para la APK de taller (WorkPlanner Taller).
+ *
+ * Un técnico de taller puede identificarse de dos formas históricas:
+ *   · código de operario (techs.roadsideOperatorCode) — lo que usaba la APK
+ *   · PIN de taller      (techs.workshopPin)          — lo que usa /operario/taller
+ *
+ * Se aceptan las dos: exigir solo la primera dejaba fuera de la app a los
+ * técnicos que únicamente tienen PIN, que son la mayoría de los de taller.
+ * Los endpoints de asistencias en carretera siguen pidiendo el código, para no
+ * ampliar por la puerta de atrás quién puede tocar una asistencia.
+ */
+async function getTallerOperatorFromRequest(req: express.Request) {
+  return (
+    (await getRoadsideOperatorFromRequest(req)) ??
+    (await getWorkshopOperatorFromRequest(req))
+  );
+}
+
+function requireTallerOperator(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const operator = await getTallerOperatorFromRequest(req);
+
+    if (!operator) {
+      return res.status(401).json({ error: "Operario no autorizado" });
+    }
+
+    (req as any).roadsideOperator = operator;
+    next();
+  })().catch((error) => {
+    console.error("requireTallerOperator error:", error);
+    res.status(500).json({ error: "Error validando operario" });
+  });
+}
+
 function requireRoadsideOperator(
   req: express.Request,
   res: express.Response,
@@ -1801,11 +1843,14 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
         imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
       })
-      .select("id").single();
+      // El número lo pone la base de datos por DEFAULT; se lee de vuelta para
+      // poder enseñárselo al técnico nada más finalizar, que es cuando puede
+      // apuntarlo en el albarán.
+      .select("id, numero").single();
     if (e2) throw e2;
     await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
 
-    res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
+    res.json({ id: interv.id, numero: (interv as any).numero ?? null, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
@@ -2634,12 +2679,79 @@ app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res
    NO tocan los /api/jobs del panel web.
 ========================================================= */
 
-async function getTallerOperator(techName: string) {
+/**
+ * ¿Es el mismo técnico? Los nombres viajan por tres sitios (columna `techs`,
+ * lista `assignedNames` del trabajo y cabecera de la APK) y basta un acento,
+ * una mayúscula o un espacio de más para que la comparación exacta falle y el
+ * técnico vea "no tienes tareas" teniendo trabajo asignado.
+ */
+function mismoNombreTecnico(a: unknown, b: unknown) {
+  const normaliza = (v: unknown) =>
+    String(v ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+  const na = normaliza(a);
+  return na !== "" && na === normaliza(b);
+}
+
+/**
+ * Idempotencia para la APK de taller.
+ *
+ * La cola offline reintenta lo que no pudo enviar. Si una petición llegó al
+ * servidor pero la respuesta se perdió (timeout, cambio de red al salir del
+ * taller), el reintento la aplicaría otra vez: dos fotos idénticas en el mismo
+ * trabajo, o dos trabajos iguales. La clave viaja en la cabecera
+ * `x-idempotency-key` y la genera el cliente al encolar, así que sobrevive al
+ * reintento.
+ *
+ * Devuelve la respuesta ya guardada si esa clave se procesó antes.
+ */
+async function respuestaIdempotente(req: express.Request) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return null;
+
   const r = await db.query(
+    `SELECT respuesta FROM taller_idempotencia WHERE clave = $1 LIMIT 1`,
+    [clave]
+  );
+
+  return r.rows.length > 0 ? r.rows[0].respuesta : null;
+}
+
+async function guardarIdempotencia(req: express.Request, respuesta: unknown) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return;
+
+  try {
+    await db.query(
+      `INSERT INTO taller_idempotencia (clave, respuesta, "createdAtMs")
+       VALUES ($1, $2, $3)
+       ON CONFLICT (clave) DO NOTHING`,
+      [clave, JSON.stringify(respuesta), Date.now()]
+    );
+  } catch (error) {
+    // Que falle el registro no debe tumbar la operación, que sí se ha hecho.
+    console.error("guardarIdempotencia error:", error);
+  }
+}
+
+async function getTallerOperator(techName: string) {
+  let r = await db.query(
     `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
     [techName]
   );
-  if (r.rows.length === 0) return null;
+
+  // Repliegue tolerante: mismo nombre con otra caja o sin acentos.
+  if (r.rows.length === 0) {
+    const todos = await db.query(`SELECT name, "es_supervisor" FROM techs`);
+    const encontrado = todos.rows.find((t: any) => mismoNombreTecnico(t.name, techName));
+    if (!encontrado) return null;
+    r = { rows: [encontrado] } as any;
+  }
+
   return {
     name: String(r.rows[0].name),
     esSupervisor: r.rows[0].es_supervisor === true,
@@ -2647,7 +2759,70 @@ async function getTallerOperator(techName: string) {
 }
 
 // Ficha del operario logueado (para pintar el rol en la APK)
-app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => {
+/**
+ * Público: nombres que pueden entrar en la APK de taller.
+ *
+ * La APK usaba /api/roadside-operator/techs, que solo devuelve operarios con
+ * código de asistencia en carretera: los técnicos de taller no salían y el
+ * desplegable de la pantalla de login aparecía vacío.
+ */
+app.get("/api/taller-operator/techs-list", async (_req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT name
+      FROM techs
+      WHERE NULLIF(TRIM(COALESCE("workshopPin", '')), '') IS NOT NULL
+         OR NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      ORDER BY name ASC
+    `);
+
+    res.json(result.rows.map((r: any) => ({ name: r.name })));
+  } catch (error) {
+    console.error("GET /api/taller-operator/techs-list error:", error);
+    res.status(500).json({ error: "Error obteniendo operarios de taller" });
+  }
+});
+
+/**
+ * Público: login de la APK. Acepta el PIN de taller o el código de operario,
+ * sin que el técnico tenga que saber cuál de los dos tiene.
+ */
+app.post("/api/taller-operator/login", async (req, res) => {
+  try {
+    const techName = String(req.body?.techName || "").trim();
+    const code = String(req.body?.code || "").trim();
+
+    if (!techName || !code) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+
+    const porPin = await db.query(
+      `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+      [techName, code]
+    );
+
+    const esperado = await getExpectedRoadsideOperatorCode(techName);
+    const porCodigo = Boolean(esperado) && code === esperado;
+
+    if (porPin.rows.length === 0 && !porCodigo) {
+      return res.status(401).json({ error: "PIN incorrecto" });
+    }
+
+    // El código de operario da además sesión unificada (Bearer) porque es la
+    // que ya montaba /api/roadside-operator/login; con PIN de taller se entra
+    // igual, solo con las cabeceras de operario.
+    res.json({
+      ok: true,
+      techName,
+      metodo: porPin.rows.length > 0 ? "pin" : "codigo",
+    });
+  } catch (error) {
+    console.error("POST /api/taller-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2660,7 +2835,7 @@ app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => 
 });
 
 // Trabajos visibles (scope=live). Operario: solo los suyos. Supervisor: todos.
-app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2677,7 +2852,9 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
     let jobs = result.rows.map(normalizeJobRow);
     if (!op.esSupervisor) {
       jobs = jobs.filter(
-        (j: any) => Array.isArray(j.assignedNames) && j.assignedNames.includes(op.name)
+        (j: any) =>
+          Array.isArray(j.assignedNames) &&
+          j.assignedNames.some((n: unknown) => mismoNombreTecnico(n, op.name))
       );
     }
     res.json(jobs);
@@ -2688,7 +2865,7 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
 });
 
 // Lista de técnicos para asignar (solo supervisor)
-app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/techs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2712,8 +2889,14 @@ app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) 
 });
 
 // Crear/asignar trabajo (solo supervisor)
-app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
+    // Sin esto, un reintento de la cola crea un segundo trabajo idéntico: el id
+    // se genera con Date.now() en cada intento, así que no colisiona y pasan los
+    // dos.
+    const yaCreado = await respuestaIdempotente(req);
+    if (yaCreado) return res.json(yaCreado);
+
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2750,7 +2933,9 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
         workshopId,
       ]
     );
-    res.json(normalizeJobRow(result.rows[0]));
+    const creado = normalizeJobRow(result.rows[0]);
+    await guardarIdempotencia(req, creado);
+    res.json(creado);
   } catch (error) {
     console.error("POST /api/taller-operator/jobs error:", error);
     res.status(500).json({ error: "Error creando trabajo" });
@@ -2758,7 +2943,7 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
 });
 
 // Reasignar trabajo (solo supervisor)
-app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/assign", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2786,7 +2971,7 @@ app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (
 
 // Cambiar estado del trabajo (operario: solo los suyos; supervisor: cualquiera)
 // status admitido: activo (empezar/reanudar) | parado (pausar) | cerrado (finalizar) | espera
-app.put("/api/taller-operator/jobs/:id/status", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/status", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2872,7 +3057,7 @@ async function tallerCanAccessJob(op: { name: string; esSupervisor: boolean }, j
 }
 
 // Listar fotos de un trabajo
-app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2905,10 +3090,15 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
 // Subir foto a un trabajo
 app.post(
   "/api/taller-operator/jobs/:id/files",
-  requireRoadsideOperator,
+  requireTallerOperator,
   upload.single("file"),
   async (req, res) => {
     try {
+      // Reintento de la cola offline: la foto ya se subió, se devuelve la
+      // misma respuesta en vez de dejar dos copias en el trabajo.
+      const yaHecho = await respuestaIdempotente(req);
+      if (yaHecho) return res.json(yaHecho);
+
       const { techName } = (req as any).roadsideOperator as { techName: string };
       const op = await getTallerOperator(techName);
       if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2945,13 +3135,15 @@ app.post(
         [id, publicData.publicUrl, req.file.originalname, op.name, Date.now()]
       );
       const row = result.rows[0];
-      res.json({
+      const respuesta = {
         id: Number(row.id),
         url: row.url,
         fileName: row.fileName ?? null,
         techName: row.techName ?? null,
         createdAtMs: Number(row.createdAtMs),
-      });
+      };
+      await guardarIdempotencia(req, respuesta);
+      res.json(respuesta);
     } catch (error) {
       console.error("POST /api/taller-operator/jobs/:id/files error:", error);
       res.status(500).json({ error: "Error subiendo foto" });
@@ -4933,6 +5125,14 @@ function webfleetOdometerKm(o: any): number | null {
 // de vehículos actualizados. Para el botón "Sincronizar ahora" de la config.
 app.post("/api/tyrecontrol/webfleet/sync", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
   const r = await syncWebfleetOnce();
+  if ("error" in r) return res.status(502).json(r);
+  res.json(r);
+});
+
+// Mira el buzón del CheckPoint ahora mismo, sin esperar al temporizador. Para
+// probar la configuración del buzón sin quedarse quince minutos mirando.
+app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
+  const r = await revisarBuzonCheckpoint();
   if ("error" in r) return res.status(502).json(r);
   res.json(r);
 });
@@ -8258,23 +8458,6 @@ app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRo
   }
 });
 
-let mailTransport: import("nodemailer").Transporter | null = null;
-function getMailTransport() {
-  if (mailTransport) return mailTransport;
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return null;
-  }
-  mailTransport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: Number(process.env.SMTP_PORT || 587) === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-  return mailTransport;
-}
 
 app.post(
   "/api/roadside-assistances/:id/send-report",
@@ -9824,9 +10007,11 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo. Antes esto hacía DELETE de toda la tabla y volvía a
+    // insertar la lista del cliente: la última pestaña que guardaba imponía su
+    // copia y borraba lo que hubieran creado las demás (se perdieron
+    // recordatorios reales así). Los borrados van por DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM agenda_date_reminders`);
 
     for (const item of items) {
       await db.query(
@@ -9903,6 +10088,25 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
     res.status(500).json({
       error: "Error guardando recordatorios de agenda",
     });
+
+  }
+});
+
+/** Borrado por elemento: sustituye al antiguo reemplazo completo de la tabla. */
+app.delete("/api/agenda-date-reminders/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de recordatorio no válido" });
+    }
+
+    await db.query(`DELETE FROM agenda_date_reminders WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/agenda-date-reminders/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el recordatorio" });
+
+
   }
 });
 
@@ -9910,9 +10114,10 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo: vaciar la tabla hacía que una pestaña con datos
+    // antiguos borrase los estados creados desde otra. Los borrados van por
+    // DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM scheduled_tech_statuses`);
 
     for (const item of items) {
       await db.query(
@@ -9981,6 +10186,20 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
     res.status(500).json({
       error: "Error guardando estados técnicos programados",
     });
+  }
+});
+
+/** Borrado por elemento del estado programado de un técnico. */
+app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "ID de estado no válido" });
+
+    await db.query(`DELETE FROM scheduled_tech_statuses WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/scheduled-tech-statuses/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el estado programado" });
   }
 });
 
@@ -12212,7 +12431,12 @@ Reglas obligatorias:
 ========================================================= */
 
 async function getWorkshopOperatorFromRequest(req: express.Request) {
-  const techName = String(req.headers["x-operator-name"] ?? "").trim();
+  const bruto = String(req.headers["x-operator-name"] ?? "").trim();
+  // La APK codifica el nombre: las cabeceras HTTP no admiten acentos y un
+  // "Jesús" sin codificar se pierde por el camino. El panel web lo manda tal
+  // cual, así que se acepta de las dos formas.
+  let techName = bruto;
+  try { techName = decodeURIComponent(bruto); } catch { /* nombre sin codificar */ }
   const pin = String(req.headers["x-operator-pin"] ?? "").trim();
   if (!techName || !pin) return null;
   const result = await db.query(
@@ -15947,6 +16171,16 @@ const APK_APPS: Record<
   { prefix: string; label: string; releaseTag?: string; pubspec?: string }
 > = {
   assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
+  // Sin "pubspec" a proposito: ese campo es el repliegue cuando la API de
+  // GitHub falla, y construye la URL de la release a partir de la version del
+  // repositorio. Mientras Lite no tenga su primera release publicada eso daria
+  // un enlace roto; mejor "No disponible" que un 404. Se anade en cuanto la CI
+  // publique la primera.
+  "assist-lite": {
+    prefix: "mobilink-assist-lite-",
+    label: "Mobilink Assist Lite",
+    releaseTag: "assist-lite-v",
+  },
   tyrecontrol: {
     prefix: "tyrecontrol-",
     label: "Mobilink TyreControl",
@@ -15954,26 +16188,13 @@ const APK_APPS: Record<
     pubspec: "tyrecontrol_app/pubspec.yaml",
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  taller: {
+    prefix: "mobilink-taller-",
+    label: "WorkPlanner Taller",
+    releaseTag: "taller-v",
+    pubspec: "taller_app/pubspec.yaml",
+  },
 };
-
-// Orden por versión descendente. El "+build" (0.31.6+80) cuenta como un tramo
-// más al final: sin esto, "6+80" se parseaba como 6 y dos builds del mismo
-// 0.31.6 empataban, así que ganaba el que devolviera primero el sistema de
-// ficheros — es decir, cualquiera.
-function versionPartes(v: string): number[] {
-  const [nombre, build] = v.split("+");
-  const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
-  out.push(parseInt(build ?? "0", 10) || 0);
-  return out;
-}
-function masNuevaPrimero(a: string, b: string): number {
-  const pa = versionPartes(a);
-  const pb = versionPartes(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
-  }
-  return 0;
-}
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
 function latestApkFor(prefix: string): { file: string; version: string } | null {
@@ -15981,7 +16202,11 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
     const dir = path.join(__dirname, "../public");
     const files = fs
       .readdirSync(dir)
-      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"));
+      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"))
+      // "mobilink-assist-" es prefijo de "mobilink-assist-lite-": sin esto, la
+      // APK de Lite se colaría en la fila de Assist. Detrás del prefijo va la
+      // versión, así que lo siguiente tiene que ser un dígito.
+      .filter((f) => /^\d/.test(f.slice(prefix.length)));
     if (!files.length) return null;
     const withVer = files.map((f) => ({
       file: f,
@@ -16159,6 +16384,7 @@ initDb()
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
+      startCheckpointMail(); // informe del arco CheckPoint por correo (apagado sin credenciales)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)

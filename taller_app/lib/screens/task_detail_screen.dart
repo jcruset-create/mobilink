@@ -9,11 +9,20 @@ class TaskDetailScreen extends StatefulWidget {
   final ApiService api;
   final Job job;
   final bool esSupervisor;
+
+  /// En tablet el detalle vive en la columna derecha, dentro de la pantalla de
+  /// lista: no lleva Scaffold ni barra propia, y avisa de los cambios por
+  /// [onCambio] en vez de devolverlos al cerrarse.
+  final bool embebido;
+  final VoidCallback? onCambio;
+
   const TaskDetailScreen({
     super.key,
     required this.api,
     required this.job,
     required this.esSupervisor,
+    this.embebido = false,
+    this.onCambio,
   });
 
   @override
@@ -73,6 +82,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         _busy = false;
         _changed = true;
       });
+      widget.onCambio?.call();
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -104,6 +114,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final contenido = _contenido();
+
+    if (widget.embebido) return contenido;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -112,7 +126,13 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       },
       child: Scaffold(
         appBar: AppBar(title: Text(_job.plate.isEmpty ? 'Tarea' : _job.plate)),
-        body: ListView(
+        body: contenido,
+      ),
+    );
+  }
+
+  Widget _contenido() {
+    return ListView(
           padding: const EdgeInsets.all(16),
           children: [
             Row(children: [
@@ -184,8 +204,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                     .toList(),
               ),
           ],
-        ),
-      ),
     );
   }
 

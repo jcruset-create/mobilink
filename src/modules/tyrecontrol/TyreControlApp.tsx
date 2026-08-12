@@ -17,6 +17,7 @@ import HistoricoRevisiones from "./pages/HistoricoRevisiones";
 import PlantillasMantenimiento from "./pages/PlantillasMantenimiento";
 import LotesRevision from "./pages/LotesRevision";
 import Neumaticos from "./pages/Neumaticos";
+import AlmacenUsados from "./pages/AlmacenUsados";
 import NeumaticoDetalle from "./pages/NeumaticoDetalle";
 import MontajesActuales from "./pages/MontajesActuales";
 import Operaciones from "./pages/Operaciones";
@@ -40,6 +41,7 @@ import InformeEjecutivo from "./pages/informes/InformeEjecutivo";
 import InformeAlertas from "./pages/informes/InformeAlertas";
 import InformeInventario from "./pages/informes/InformeInventario";
 import InformeEstadoFlota from "./pages/informes/InformeEstadoFlota";
+import InformeControlRevisiones from "./pages/informes/InformeControlRevisiones";
 import InformeHistorialNeumatico from "./pages/informes/InformeHistorialNeumatico";
 import InformeHistorialVehiculo from "./pages/informes/InformeHistorialVehiculo";
 import InformeEconomico from "./pages/informes/InformeEconomico";
@@ -80,6 +82,7 @@ export default function TyreControlApp() {
               <Route path="ejecutivo" element={<InformeEjecutivo />} />
               <Route path="alertas" element={<InformeAlertas />} />
               <Route path="estado-flota" element={<InformeEstadoFlota />} />
+              <Route path="control-revisiones" element={<InformeControlRevisiones />} />
               <Route path="inventario" element={<InformeInventario />} />
               <Route path="historial-vehiculo" element={<InformeHistorialVehiculo />} />
               <Route path="desgaste" element={<InformeDesgaste />} />
@@ -121,6 +124,7 @@ export default function TyreControlApp() {
               <Route path="lotes-revision" element={<LotesRevision />} />
               <Route path="neumaticos" element={<Neumaticos />} />
               <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
+              <Route path="almacen-usados" element={<AlmacenUsados />} />
               <Route path="autorizaciones" element={<Autorizaciones />} />
               <Route path="enlace-almacen" element={<EnlaceAlmacen />} />
               <Route path="medidas-neumaticos" element={<MedidasNeumaticos />} />

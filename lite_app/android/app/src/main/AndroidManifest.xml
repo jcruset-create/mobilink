@@ -1,0 +1,91 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="Mobilink Assist Lite"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Tema del arranque, visible mientras Flutter inicializa. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- Canal por defecto de los avisos de Central. Sin declararlo, Android
+             8+ descarta las notificaciones que llegan con la app cerrada. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="mobilink_lite_asistencias" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
+    </application>
+
+    <!-- Solo los permisos que el código pide hoy:
+         · INTERNET             → api.dart contra /api/connect/lite
+         · ACCESS_FINE/COARSE   → tracker.dart (Geolocator) durante la asistencia
+         · FOREGROUND_SERVICE   → el servicio en primer plano que mantiene el
+                                  seguimiento con la pantalla bloqueada
+         · ..._LOCATION         → Android 14 exige declarar el tipo del servicio;
+                                  sin él la app revienta al arrancarlo
+         · WAKE_LOCK            → el servicio pide un wakelock para que el
+                                  sistema no duerma entre posiciones
+         · CAMERA               → image_picker para las evidencias
+
+         Sigue SIN declararse ACCESS_BACKGROUND_LOCATION, y es deliberado: el
+         servicio se arranca con la app en primer plano (el operario pulsa "En
+         camino"), y en ese caso Android permite seguir recibiendo posiciones
+         con el permiso normal de "mientras se usa la app". Pedir el de segundo
+         plano obligaría a pasar la revisión aparte de Google Play sin ganar
+         nada. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 13+: sin esto los avisos de Central no se muestran nunca. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- La app funciona igual en un móvil sin cámara trasera o sin GPS propio,
+         así que no se exige hardware: sin esto Play ocultaría la app en tablets. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <queries>
+        <!-- url_launcher: abrir la navegación y llamar por teléfono. Sin esto,
+             canLaunchUrl devuelve false en Android 11 o superior. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>
