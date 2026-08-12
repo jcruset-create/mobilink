@@ -16,7 +16,8 @@ import {
 
 type Props = {
   techs: Tech[];
-  removeTech: (name: string) => void;
+  /** Baja del técnico: conserva la ficha y el histórico, pero deja de asignarse. */
+  darDeBaja: (name: string) => void;
   handleTechImageUpload: (
     event: ChangeEvent<HTMLInputElement>,
     techName: string
@@ -72,7 +73,7 @@ type ModalState =
 
 export default function TecnicosView({
   techs,
-  removeTech,
+  darDeBaja,
   handleTechImageUpload,
   onSetWorkshopPin,
   onSaveTech,
@@ -272,15 +273,18 @@ export default function TecnicosView({
                         onClick={() => {
                           if (
                             window.confirm(
-                              `¿Eliminar al técnico ${tech.name}? Esta acción no se puede deshacer.`
+                              `¿Dar de baja a ${tech.name}?\n\n` +
+                                "Deja de aparecer para asignar trabajos y no podrá " +
+                                "entrar en la tablet ni en la pantalla de operario.\n\n" +
+                                "Se conservan su histórico de trabajos, tiempos y pausas."
                             )
                           ) {
-                            removeTech(tech.name);
+                            darDeBaja(tech.name);
                           }
                         }}
                         className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-50"
                       >
-                        Eliminar
+                        Dar de baja
                       </button>
                     )}
                   </div>
