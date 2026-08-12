@@ -10,7 +10,9 @@ import '../services/probe_session.dart';
 import '../services/tlgx_probe_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/campo_identidad.dart';
 import '../widgets/etiqueta_neumatico.dart';
+import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
 
@@ -46,6 +48,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   String? _error;
   String _matricula = '';
   String? _empresaId;
+  Vehiculo? _vehiculo;
+  /// Km del vehículo para las operaciones de esta sesión. De la plataforma si
+  /// está enlazado; si no, los informa el técnico. Viajan en cada montaje y
+  /// desmontaje: sin ellos no se puede saber cuánto ha durado una goma.
+  num? _km;
   List<PosicionVehiculo> _posiciones = [];
   Map<String, MontajeActual> _montajePorPosicion = {};
   String? _imagenChasis;
@@ -160,6 +167,20 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         );
       }
       _matricula = (v['matricula'] as String?) ?? '';
+      final veh = Vehiculo.fromJson(v);
+      _vehiculo = veh;
+      // Km para las operaciones: de la plataforma si el vehículo está
+      // enlazado; si no, los pide el técnico (no se arrastra el km viejo de la
+      // ficha, igual que en Revisión).
+      if (veh.kmAutomaticos) {
+        final kmWf = await TyreControlApi.obtenerKmWebfleet(veh.empresaId, veh.webfleetVehicleId!);
+        if (kmWf != null) {
+          _km = kmWf;
+          await TyreControlApi.actualizarKmVehiculo(veh.id, kmWf);
+        } else {
+          _km = veh.kmActual > 0 ? veh.kmActual : null;
+        }
+      }
       final tipoId = v['tipo_vehiculo_id'] as String?;
 
       final results = await Future.wait([
@@ -304,7 +325,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _desmontar(MontajeActual m, String destino) async {
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino);
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino, km: _km);
       HapticFeedback.mediumImpact();
       await _cargar();
       final msg = destino == 'almacen'
@@ -325,7 +346,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     setState(() => _trabajando = true);
     // Cronometraje: una pausa sin reanudar se cierra al finalizar la sesión.
     await _pausas?.cerrarSiActiva();
-    await TyreControlApi.cerrarIntervencion(
+    // El número de parte que asigna la base de datos: es lo que el técnico
+    // apunta en el albarán y lo que el cliente cita por teléfono.
+    final numeroParte = await TyreControlApi.cerrarIntervencion(
       widget.vehiculoId, _abiertoEn,
       montajeAntes: _montajeAntes,
       incidencias: _incidenciasOrigen(),
@@ -345,11 +368,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
     if (aResolver.isEmpty) {
       if (yaResueltas > 0) {
-        _aviso('$yaResueltas incidencia(s) solucionada(s)', ok: true);
+        _aviso(_conParte('$yaResueltas incidencia(s) solucionada(s)', numeroParte), ok: true);
       } else if (_incidencias.isNotEmpty) {
         _aviso('No se ha actuado sobre las posiciones con incidencia; siguen pendientes.', ok: false);
       } else {
-        _aviso('Cambios guardados', ok: true);
+        _aviso(_conParte('Cambios guardados', numeroParte), ok: true);
       }
       if (mounted) Navigator.of(context).pop(true);
       return;
@@ -372,9 +395,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final total = ok + yaResueltas;
     final pendientes = _incidencias.where((i) => i.problemas.any((p) => p.abierto)).length - total;
     _aviso(
-      total > 0
-          ? '$total incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
-          : 'No se solucionó ninguna incidencia',
+      _conParte(
+        total > 0
+            ? '$total incidencia(s) solucionada(s)${pendientes > 0 ? ' · $pendientes sigue(n) pendiente(s)' : ''}'
+            : 'No se solucionó ninguna incidencia',
+        numeroParte),
       ok: total > 0,
     );
     if (mounted) Navigator.of(context).pop(true);
@@ -444,7 +469,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _marcarIrreparable(PosicionVehiculo p, MontajeActual m) async {
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje');
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje', km: _km);
       HapticFeedback.mediumImpact();
       await _cargar();
       _aviso('Neumático a la papelera de reciclaje. Monta ahora la rueda de sustitución.', ok: true);
@@ -464,24 +489,54 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   }
 
   Future<void> _soltarStockEnPosicion(_DragStock d, PosicionVehiculo p) async {
-    double? profUsado;
-    if (d.condicion == 'usado') {
-      final r = await _pedirProfundidad();
-      if (r == null) return; // canceló
-      profUsado = r.mm;
-    }
+    final pideIdentidad = _empresaId != null
+        && await TyreControlApi.pideIdentidad(empresaId: _empresaId!, medida: d.linea.medida);
+    if (!mounted) return;
+    final datos = await _pedirDatosMontaje(
+      pideProfundidad: d.condicion == 'usado', pideIdentidad: pideIdentidad);
+    if (datos == null) return; // canceló
+
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.montarDesdeAlmacen(
-        vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
-        condicion: d.condicion, profundidadUsado: profUsado,
-      );
+      String? neuId;
+      try {
+        neuId = await _montarStock(d, p, datos);
+      } on Exception catch (e) {
+        // Consta montada en otro camión: se ofrece resolverlo y se reintenta
+        // UNA vez. Si vuelve a fallar, el error sale tal cual.
+        if (!'$e'.contains('IDENTIDAD_YA_MONTADA')) rethrow;
+        setState(() => _trabajando = false);
+        final resuelto = await _ofrecerRegularizar(datos);
+        if (!resuelto || !mounted) return;
+        setState(() => _trabajando = true);
+        neuId = await _montarStock(d, p, datos);
+      }
       _posicionesMontadas.add(p.id);
       HapticFeedback.mediumImpact();
       await _cargar();
-      _aviso('Montado ${d.linea.marca} ${d.linea.medida} (${d.condicion}) en ${p.codigoPosicion}', ok: true);
-    } catch (e) { _aviso('Error al montar: $e', ok: false); }
+      final reconocida = await _textoReconocimiento(neuId, datos);
+      _aviso('Montado ${d.linea.marca} ${d.linea.medida} (${d.condicion}) en ${p.codigoPosicion}$reconocida', ok: true);
+    } catch (e) { _aviso('Error al montar: ${_mensajeError(e)}', ok: false); }
     finally { if (mounted) setState(() => _trabajando = false); }
+  }
+
+  Future<String?> _montarStock(_DragStock d, PosicionVehiculo p, _DatosMontaje datos) =>
+      TyreControlApi.montarDesdeAlmacen(
+        vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
+        condicion: d.condicion, profundidadUsado: datos.mm, km: _km,
+        rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie,
+      );
+
+  /// Confirma al técnico que la goma se ha RECONOCIDO en vez de darla de alta
+  /// otra vez. Es lo que hace visible que la trazabilidad funciona; sin esto,
+  /// montar una goma con historia se ve igual que montar una cualquiera.
+  Future<String> _textoReconocimiento(String? neumaticoId, _DatosMontaje datos) async {
+    final hayIdentidad = (datos.rfidEpc ?? '').isNotEmpty || (datos.numeroSerie ?? '').isNotEmpty;
+    if (neumaticoId == null || !hayIdentidad) return '';
+    final r = await TyreControlApi.reconocimiento(neumaticoId);
+    if (r == null) return '';
+    final de = r.matriculaAnterior != null ? ', venía del ${r.matriculaAnterior}' : '';
+    return ' · Reconocido ${r.numero}$de';
   }
 
   /// Profundidad del usado que se va a montar.
@@ -490,28 +545,117 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   /// los mm, que a su vez pueden ser null: "Sin medir" y un campo vacío
   /// significan "no se sabe", NO cero. Antes ambos casos guardaban 0.0, y una
   /// rueda con 0 mm sale roja y cuenta como bajo mínimo en el informe.
-  Future<({double? mm})?> _pedirProfundidad() async {
-    final ctrl = TextEditingController();
-    return showDialog<({double? mm})>(
+  /// Datos que hay que pedir antes de montar.
+  ///
+  /// [pideProfundidad] para los usados (los mm que le quedan) y [pideIdentidad]
+  /// cuando la política de la empresa controla individualmente esa medida. Si
+  /// no hace falta ninguno de los dos, no se abre nada y se monta directo.
+  ///
+  /// Devuelve null si el técnico cancela.
+  Future<_DatosMontaje?> _pedirDatosMontaje({
+    required bool pideProfundidad,
+    required bool pideIdentidad,
+  }) async {
+    if (!pideProfundidad && !pideIdentidad) return const _DatosMontaje();
+    return showDialog<_DatosMontaje>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Profundidad restante'),
-        content: TextField(
-          controller: ctrl, autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(suffixText: 'mm', hintText: 'p. ej. 8.5'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          TextButton(onPressed: () => Navigator.pop(ctx, (mm: null)), child: const Text('Sin medir')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, (mm: double.tryParse(ctrl.text.replaceAll(',', '.')))),
-            child: const Text('Montar'),
-          ),
-        ],
+      builder: (_) => _DialogoMontaje(
+        pideProfundidad: pideProfundidad,
+        pideIdentidad: pideIdentidad,
       ),
     );
   }
+
+  /// La goma leída consta montada en otro camión: casi siempre significa que
+  /// aquel desmontaje no se registró. En vez de dejar al técnico atascado con
+  /// la rueda en la mano, se le enseña el conflicto y decide él.
+  ///
+  /// Devuelve true si ha confirmado y la regularización ha ido bien, de modo
+  /// que quien llama pueda reintentar el montaje.
+  Future<bool> _ofrecerRegularizar(_DatosMontaje datos) async {
+    if (_empresaId == null) return false;
+    final info = await TyreControlApi.neumaticoPorIdentidad(
+      empresaId: _empresaId!, rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie);
+    final id = info?['id'] as String?;
+    if (!mounted || id == null) return false;
+
+    final matricula = (info?['matricula'] as String?) ?? '?';
+    final pos = (info?['codigo_posicion'] as String?) ?? '?';
+    final numero = (info?['numero_interno'] as String?) ?? '';
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Esa goma consta en otro camión'),
+        content: Text(
+          'El $numero figura montado en el $matricula, posición $pos.\n\n'
+          'Si la tienes aquí, es que aquel desmontaje no se registró. '
+          '¿La quito de ahí y la monto en este vehículo?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Quitar y montar')),
+        ],
+      ),
+    );
+    if (ok != true) return false;
+
+    try {
+      await TyreControlApi.regularizarDesmontaje(id,
+          observaciones: 'Regularizado desde la APK al montar en $_matricula');
+      return true;
+    } catch (e) {
+      _aviso('No se ha podido regularizar: ${_mensajeError(e)}', ok: false);
+      return false;
+    }
+  }
+
+  /// Traduce los errores de identidad del servidor a algo accionable en el
+  /// taller. Los IDENTIDAD_* los lanza tc_buscar_neumatico_identificado.
+  String _mensajeError(Object e) {
+    final t = e.toString();
+    if (t.contains('IDENTIDAD_YA_MONTADA')) {
+      return 'Esa goma consta montada en otro vehículo. ${_trasDosPuntos(t)}';
+    }
+    if (t.contains('IDENTIDAD_OTRA_EMPRESA')) {
+      return 'Esa goma está dada de alta en otra empresa. Avisa a oficina para traspasarla.';
+    }
+    if (t.contains('IDENTIDAD_DISCREPANTE')) {
+      return 'El RFID y el número de serie son de gomas distintas. ${_trasDosPuntos(t)}';
+    }
+    if (t.contains('IDENTIDAD_OTRA_MEDIDA')) {
+      return 'La goma leída no es de esta medida. ${_trasDosPuntos(t)}';
+    }
+    if (t.contains('IDENTIDAD_DE_BAJA')) {
+      return 'Esa goma está dada de baja. Avisa a oficina para reactivarla.';
+    }
+    if (t.contains('IDENTIDAD_REQUERIDA')) {
+      return 'Esta empresa exige identificar el neumático: lee el RFID o teclea el número de serie.';
+    }
+    return _trasDosPuntos(t);
+  }
+
+  static String _trasDosPuntos(String t) {
+    final i = t.indexOf(': ');
+    return i >= 0 && i + 2 < t.length ? t.substring(i + 2) : t;
+  }
+
+  /// Informa o corrige los km del vehículo para las operaciones de la sesión.
+  Future<void> _editarKm() async {
+    final veh = _vehiculo;
+    if (veh == null) return;
+    final v = await pedirKmVehiculo(context, matricula: _matricula, actual: _km?.round());
+    if (v == null || !mounted) return;
+    setState(() => _km = v);
+    // Se guardan en la ficha para que la próxima operación parta de ahí.
+    await TyreControlApi.actualizarKmVehiculo(veh.id, v, origen: 'manual');
+  }
+
+  /// Añade el número de parte al aviso de cierre. Si el servidor no respondió
+  /// (sin cobertura), el trabajo YA está guardado en la base de datos: solo se
+  /// queda sin número a la vista, así que no se avisa de nada raro.
+  String _conParte(String txt, String? numero) =>
+      numero == null ? txt : '$txt · Parte $numero';
 
   void _aviso(String txt, {required bool ok, bool conDeshacer = false}) {
     if (!mounted) return;
@@ -531,7 +675,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_matricula.isEmpty ? 'Cambiar neumáticos' : 'Cambiar · $_matricula'),
+            // Los km viajan en cada montaje y desmontaje. Sin plataforma que
+            // los dé, aquí es donde el técnico los informa.
+            if (_vehiculo != null)
+              ChipKmVehiculo(km: _km, automaticos: _vehiculo!.kmAutomaticos, onEditar: _editarKm),
+          ],
+        ),
         actions: [
           if (_pausas != null) BotonPausa(controller: _pausas!),
           IconButton(
@@ -1603,30 +1757,47 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       _aviso('Esta referencia del catálogo no se puede montar (sin id).', ok: false);
       return;
     }
-    double? profUsado;
-    if (condicion == 'usado') {
-      final r = await _pedirProfundidad();
-      if (r == null) return; // canceló
-      profUsado = r.mm;
-    }
+    final pideIdentidad = _empresaId != null
+        && await TyreControlApi.pideIdentidad(
+             empresaId: _empresaId!, medida: (ref['medida'] as String?) ?? '');
+    if (!mounted) return;
+    final datos = await _pedirDatosMontaje(
+      pideProfundidad: condicion == 'usado', pideIdentidad: pideIdentidad);
+    if (datos == null) return; // canceló
+
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.montarDesdeCatalogo(
-        vehiculoId: widget.vehiculoId,
-        posicionId: p.id,
-        referenciaId: refId,
-        condicion: condicion,
-        profundidadUsado: profUsado,
-      );
+      Future<String?> montar() => TyreControlApi.montarDesdeCatalogo(
+            vehiculoId: widget.vehiculoId,
+            posicionId: p.id,
+            referenciaId: refId,
+            condicion: condicion,
+            profundidadUsado: datos.mm,
+            km: _km,
+            rfidEpc: datos.rfidEpc,
+            numeroSerie: datos.numeroSerie,
+          );
+      String? neuId;
+      try {
+        neuId = await montar();
+      } on Exception catch (e) {
+        if (!'$e'.contains('IDENTIDAD_YA_MONTADA')) rethrow;
+        setState(() => _trabajando = false);
+        final resuelto = await _ofrecerRegularizar(datos);
+        if (!resuelto || !mounted) return;
+        setState(() => _trabajando = true);
+        neuId = await montar();
+      }
       _posicionesMontadas.add(p.id);
       HapticFeedback.mediumImpact();
       await _cargar();
       if (mounted) setState(() => _posSeleccionada = null);
-      _aviso('Montado ${ref['marca']} ${ref['modelo'] ?? ''} (${condicion == 'nuevo' ? 'nuevo' : 'usado'}, sin stock) en ${p.codigoPosicion}', ok: true);
+      final reconocida = await _textoReconocimiento(neuId, datos);
+      _aviso('Montado ${ref['marca']} ${ref['modelo'] ?? ''} (${condicion == 'nuevo' ? 'nuevo' : 'usado'}, sin stock) en ${p.codigoPosicion}$reconocida', ok: true);
     } catch (e) {
       final txt = '$e'.contains('MEDIDA_INCOMPATIBLE')
           ? 'Medida no homologada para este vehículo.'
-          : 'Error al montar: $e';
+          : 'Error al montar: ${_mensajeError(e)}';
       _aviso(txt, ok: false);
     } finally {
       if (mounted) setState(() => _trabajando = false);
@@ -1874,6 +2045,83 @@ class _CampoReesculturaState extends State<_CampoReescultura> {
                 style: TextStyle(color: _esperando ? AppColors.warning : AppColors.info, fontSize: 12)),
           ),
       ]),
+    );
+  }
+}
+
+/// Lo que el técnico informa antes de montar: los milímetros que le quedan al
+/// usado y la identidad de la goma cuando la empresa la controla una a una.
+class _DatosMontaje {
+  final double? mm;
+  final String? rfidEpc;
+  final String? numeroSerie;
+  const _DatosMontaje({this.mm, this.rfidEpc, this.numeroSerie});
+}
+
+/// Diálogo único para las dos vías de montaje (con stock y sin stock).
+///
+/// El botón «Leer etiqueta» habla con la sonda TLGX3 que el técnico ya lleva
+/// encima y que se engancha sola: una lectura y la goma queda identificada de
+/// por vida. Si no hay sonda conectada se puede teclear el número de serie.
+class _DialogoMontaje extends StatefulWidget {
+  final bool pideProfundidad;
+  final bool pideIdentidad;
+  const _DialogoMontaje({required this.pideProfundidad, required this.pideIdentidad});
+
+  @override
+  State<_DialogoMontaje> createState() => _DialogoMontajeState();
+}
+
+class _DialogoMontajeState extends State<_DialogoMontaje> {
+  final _mm = TextEditingController();
+  final _rfid = TextEditingController();
+  final _serie = TextEditingController();
+
+  @override
+  void dispose() {
+    _mm.dispose();
+    _rfid.dispose();
+    _serie.dispose();
+    super.dispose();
+  }
+
+  _DatosMontaje _resultado() => _DatosMontaje(
+        mm: double.tryParse(_mm.text.replaceAll(',', '.')),
+        rfidEpc: _rfid.text.trim(),
+        numeroSerie: _serie.text.trim(),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.pideProfundidad ? 'Profundidad restante' : 'Identificar el neumático'),
+      content: SizedBox(
+        width: 360,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (widget.pideProfundidad)
+            TextField(
+              controller: _mm, autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Profundidad', suffixText: 'mm', hintText: 'p. ej. 8.5'),
+            ),
+          if (widget.pideProfundidad && widget.pideIdentidad) const Divider(height: 24),
+          if (widget.pideIdentidad)
+            CampoIdentidad(rfid: _rfid, serie: _serie, autofocus: !widget.pideProfundidad),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+        // "Sin medir" solo tiene sentido cuando se piden milímetros: deja el
+        // dato en blanco a propósito, para medirlo en la revisión.
+        if (widget.pideProfundidad)
+          TextButton(
+            onPressed: () => Navigator.pop(context, _DatosMontaje(
+              rfidEpc: _rfid.text.trim(), numeroSerie: _serie.text.trim())),
+            child: const Text('Sin medir'),
+          ),
+        FilledButton(onPressed: () => Navigator.pop(context, _resultado()), child: const Text('Montar')),
+      ],
     );
   }
 }

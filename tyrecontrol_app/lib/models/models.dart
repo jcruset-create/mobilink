@@ -13,7 +13,13 @@ class Empresa {
   final String id;
   final String nombre;
   Empresa({required this.id, required this.nombre});
-  factory Empresa.fromJson(Map<String, dynamic> j) => Empresa(id: j['id'], nombre: j['nombre'] ?? '');
+  /// Varios selects traen la empresa embebida solo por el nombre
+  /// (`empresa:tc_empresas(nombre)`), porque es lo único que se pinta. Sin el
+  /// `?? ''` esa embebida a medias tiraba la pantalla entera con "type 'Null'
+  /// is not a subtype of type 'String'", y nadie lee el id de una empresa
+  /// embebida: el de verdad va en `Vehiculo.empresaId`.
+  factory Empresa.fromJson(Map<String, dynamic> j) =>
+      Empresa(id: j['id'] ?? '', nombre: j['nombre'] ?? '');
 }
 
 class TipoVehiculo {
@@ -77,6 +83,13 @@ class Vehiculo {
     this.empresa,
     this.tipo,
   });
+
+  /// ¿Los km llegan solos de una plataforma de telemática?
+  ///
+  /// Hoy la única es Webfleet. Si mañana hay otra, se añade aquí y las
+  /// pantallas no se enteran: solo preguntan por este flag para decidir si hay
+  /// que pedirle los kilómetros al técnico.
+  bool get kmAutomaticos => (webfleetVehicleId ?? '').isNotEmpty;
 
   factory Vehiculo.fromJson(Map<String, dynamic> j) => Vehiculo(
         id: j['id'],
@@ -157,6 +170,7 @@ class Neumatico {
   final String? indiceVelocidad;
   final String? dot;
   final String? rfidEpc;
+  final String? numeroSerie;
   final String estado;
   final num? profundidadActualMm;
   /// Cuándo se fijó [profundidadActualMm] (reescultura, montaje de usado…).
@@ -177,6 +191,7 @@ class Neumatico {
     this.indiceVelocidad,
     this.dot,
     this.rfidEpc,
+    this.numeroSerie,
     required this.estado,
     this.profundidadActualMm,
     this.profundidadActualizadaEn,
@@ -196,6 +211,7 @@ class Neumatico {
         indiceVelocidad: j['indice_velocidad'],
         dot: j['dot'],
         rfidEpc: j['rfid_epc'],
+        numeroSerie: j['numero_serie'],
         estado: j['estado'] ?? 'almacen',
         profundidadActualMm: j['profundidad_actual_mm'],
         profundidadActualizadaEn: DateTime.tryParse('${j['profundidad_actualizada_en'] ?? ''}'),
@@ -203,6 +219,12 @@ class Neumatico {
         reesculturado: j['reesculturado'] == true,
         giradoEnLlanta: j['girado_en_llanta'] == true,
       );
+
+  /// ¿La goma lleva identidad propia? El flag control_individual no basta:
+  /// una ficha marcada como individual pero sin RFID ni serie no identifica
+  /// nada. Lo que cuenta es tener uno de los dos.
+  bool get identificado =>
+      (rfidEpc ?? '').isNotEmpty || (numeroSerie ?? '').isNotEmpty;
 
   String get medidaCompleta {
     final idx = [indiceCarga, indiceVelocidad].where((e) => e != null && e.isNotEmpty).join('');

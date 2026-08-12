@@ -29,7 +29,7 @@ export async function getFcmAccessToken(): Promise<string | null> {
     cachedToken = { value: tokenResponse.token, expiresAtMs: Date.now() + 50 * 60_000 };
     return tokenResponse.token;
   } catch (error) {
-    console.error("getFcmAccessToken error:", error);
+    console.error("getFcmAccessToken error:", (error as any)?.message ?? error);
     return null;
   }
 }
@@ -90,7 +90,9 @@ export async function sendPushToTokens(tokens: string[], msg: PushMessage): Prom
         result.invalidTokens.push(token);
       }
     } catch (error) {
-      console.error("sendPushToTokens error:", error);
+      // Solo el mensaje: el objeto de error de `fetch` arrastra la petición
+      // entera, y ahí va el token del dispositivo.
+      console.error("sendPushToTokens error:", (error as any)?.message ?? error);
     }
   }
   return result;

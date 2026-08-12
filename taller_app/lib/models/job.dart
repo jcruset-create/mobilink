@@ -1,3 +1,21 @@
+/// Convierte a entero lo que llega del backend, venga como sea.
+///
+/// Las columnas de tiempo de `jobs` son BIGINT y el driver de Postgres las
+/// serializa como CADENA para no perder precisión, así que `createdAtMs` llega
+/// como "1750000000000" y no como número. Un `as num?` directo lanza
+/// "type 'String' is not a subtype of type 'num?'" y deja la app en la pantalla
+/// de error, que es exactamente lo que pasaba al abrirla.
+int? _entero(dynamic valor) {
+  if (valor == null) return null;
+  if (valor is num) return valor.toInt();
+  if (valor is String) {
+    final limpio = valor.trim();
+    if (limpio.isEmpty) return null;
+    return int.tryParse(limpio) ?? double.tryParse(limpio)?.toInt();
+  }
+  return null;
+}
+
 /// Trabajo del taller (tabla `jobs` del backend).
 class Job {
   final int id;
@@ -39,7 +57,7 @@ class Job {
         .map((e) => e.toString())
         .toList();
     return Job(
-      id: (j['id'] as num).toInt(),
+      id: _entero(j['id']) ?? 0,
       area: (j['area'] ?? '').toString(),
       plate: (j['plate'] ?? '').toString(),
       urgent: j['urgent'] == true,
@@ -48,11 +66,11 @@ class Job {
       reason: (j['reason'] ?? '').toString(),
       customerName: (j['customerName'] ?? '').toString(),
       customerPhone: (j['customerPhone'] ?? '').toString(),
-      createdAtMs: (j['createdAtMs'] as num?)?.toInt(),
-      startedAtMs: (j['startedAtMs'] as num?)?.toInt(),
-      closedAtMs: (j['closedAtMs'] as num?)?.toInt(),
-      pausedAtMs: (j['pausedAtMs'] as num?)?.toInt(),
-      actualMinutes: (j['actualMinutes'] as num?)?.toInt(),
+      createdAtMs: _entero(j['createdAtMs']),
+      startedAtMs: _entero(j['startedAtMs']),
+      closedAtMs: _entero(j['closedAtMs']),
+      pausedAtMs: _entero(j['pausedAtMs']),
+      actualMinutes: _entero(j['actualMinutes']),
       workshopId: (j['workshopId'])?.toString(),
     );
   }

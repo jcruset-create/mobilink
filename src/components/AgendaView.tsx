@@ -36,6 +36,7 @@ import ScheduledJobV2MiniLine from "./ScheduledJobV2MiniLine";
 import {
   loadAgendaDateRemindersFromBackend,
   saveAgendaDateRemindersToBackend,
+  deleteAgendaDateReminderFromBackend,
   type AgendaDateReminderPayload,
 } from "../modules/agendaDateReminderApi";
 
@@ -825,13 +826,21 @@ useEffect(() => {
     // Si localStorage no está disponible, la agenda seguirá funcionando.
   }
 
-  if (!dateRemindersLoaded) return;
-
-  void saveAgendaDateRemindersToBackend(dateReminders).catch((error) => {
-    console.error("Error guardando recordatorios de agenda:", error);
-    appendLog("Error guardando recordatorios de agenda.");
-  });
+  // Ojo: aquí NO se sube la lista al servidor. Hacerlo en cada cambio, con un
+  // PUT de la colección entera, provocaba que una pestaña con datos antiguos
+  // borrase los recordatorios creados desde otra. Cada alta o borrado persiste
+  // su propio elemento (guardarRecordatorioEnBackend / deleteDateReminder).
 }, [dateReminders, dateRemindersLoaded]);
+
+/** Persiste un único recordatorio (alta o edición). */
+function guardarRecordatorioEnBackend(reminder: DateReminder) {
+  void saveAgendaDateRemindersToBackend([
+    reminder as unknown as AgendaDateReminderPayload,
+  ]).catch((error) => {
+    console.error("Error guardando el recordatorio de agenda:", error);
+    appendLog("Error guardando el recordatorio de agenda.");
+  });
+}
 
   const [draft, setDraft] = useState({
   templateKey: quickTemplates[0]?.key ?? "",
@@ -1013,6 +1022,7 @@ function saveDateReminder() {
     }
 
     setDateReminders((prev) => [...prev, reminder]);
+    guardarRecordatorioEnBackend(reminder);
 
     appendLog(
       `Estado técnico programado: ${techName} · ${getTechStatusLabel(
@@ -1053,6 +1063,7 @@ function saveDateReminder() {
   };
 
   setDateReminders((prev) => [...prev, reminder]);
+  guardarRecordatorioEnBackend(reminder);
 
   appendLog(
     `Recordatorio creado: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
@@ -1080,6 +1091,11 @@ function deleteDateReminder(id: number) {
   if (!ok) return;
 
   setDateReminders((prev) => prev.filter((item) => item.id !== id));
+
+  void deleteAgendaDateReminderFromBackend(id).catch((error) => {
+    console.error("Error eliminando el recordatorio de agenda:", error);
+    appendLog("Error eliminando el recordatorio de agenda.");
+  });
 
   if (reminder.kind === "tech_status") {
     setScheduledTechStatuses((prev) =>

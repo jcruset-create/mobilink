@@ -16,11 +16,14 @@ import {
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
+import { liteMetrics } from "./liteMetrics.ts";
 import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
 import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
-import { connectBus } from "./bus.ts";
+import { interpretarBusqueda, talleresCercanos } from "./geoSearch.ts";
+import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
+import { connectBus, publish } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
@@ -28,6 +31,7 @@ import { drivingRoute } from "./routing.ts";
 import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
 import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
 import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
+import { normalizarVehiculo, descripcionVehiculo } from "./vehicle.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
 import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
 import {
@@ -36,6 +40,13 @@ import {
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
+}
+
+/** Columnas JSON: según el driver llegan ya parseadas o como texto. */
+function leerJson(value: unknown): Record<string, any> {
+  if (value == null) return {};
+  if (typeof value !== "string") return value as Record<string, any>;
+  try { return JSON.parse(value); } catch { return {}; }
 }
 
 /**
@@ -760,6 +771,89 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  /**
+   * Búsqueda de ubicación del mapa operativo: municipio, código postal, punto
+   * kilométrico de carretera, coordenadas o enlace de Google Maps. Devuelve el
+   * punto y los talleres más cercanos, que es la pregunta real ("¿a quién le
+   * mando esto?").
+   *
+   * La geocodificación se hace en el servidor y no en el navegador para no
+   * publicar la clave de Google en el panel.
+   */
+  router.get("/geo/search", ...requireConnectRole("operator"), async (req, res) => {
+    const consulta = String(req.query.q ?? "");
+    const plan = interpretarBusqueda(consulta);
+    if (!plan) return err(res, 422, "validation_failed", "Escribe una localidad, un código postal o un punto kilométrico");
+
+    const talleres = await db.query(
+      `SELECT w.id, w.name, w.latitude, w.longitude, w."radiusKm", w.phone, w."integrationType",
+              w."connectStatus", w."networkParticipation", w.city, w.province, pc.name AS "providerName"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"`,
+    );
+    const responder = (punto: { lat: number; lng: number }, etiqueta: string, precision: string, avisos: string[]) =>
+      res.json({
+        punto, etiqueta, tipo: plan.tipo, precision, avisos,
+        workshops: talleresCercanos(punto, talleres.rows.map((w: any) => ({
+          ...w, latitude: Number(w.latitude), longitude: Number(w.longitude), radiusKm: Number(w.radiusKm),
+        }))),
+      });
+
+    // Coordenadas y enlaces no hace falta preguntárselos a nadie
+    if (plan.punto) return responder(plan.punto, plan.etiqueta, "exacta", plan.avisos);
+    if (!plan.consultas.length) {
+      return err(res, 422, "not_geocodable", plan.avisos[0] ?? "No se puede situar eso en el mapa");
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return err(res, 503, "geocoder_unavailable", "GOOGLE_MAPS_API_KEY no configurada en el servidor");
+
+    // Se prueban las consultas en orden: de la más precisa a la de repliegue
+    for (let i = 0; i < plan.consultas.length; i++) {
+      const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+      url.searchParams.set("address", plan.consultas[i]);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("language", "es");
+      if (plan.componentes) url.searchParams.set("components", plan.componentes);
+
+      let data: any;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        data = await r.json();
+      } catch (e: any) {
+        console.error("[Connect] geocodificación:", e?.message);
+        return err(res, 502, "geocoder_error", "El geocodificador no responde ahora mismo");
+      }
+      if (data.status === "ZERO_RESULTS") continue;
+      if (data.status !== "OK" || !data.results?.[0]) {
+        // Sin `error_message`: Google repite en él la dirección consultada, que
+        // es la ubicación del cliente, y acabaría en los registros del servidor.
+        console.error(`[Connect] geocodificación: ${data.status}`);
+        return err(res, 502, "geocoder_error", `El geocodificador devolvió ${data.status}`);
+      }
+
+      const r0 = data.results[0];
+      const avisos = [...plan.avisos];
+      // Un repliegue ya no es lo que pidió el operador: hay que decírselo
+      if (i > 0) avisos.unshift(`No se encontró "${plan.consultas[0]}"; se muestra "${r0.formatted_address}".`);
+      const precision = r0.geometry?.location_type === "ROOFTOP" ? "exacta"
+        : r0.geometry?.location_type === "RANGE_INTERPOLATED" ? "interpolada"
+        : "aproximada";
+      if (precision === "aproximada" && plan.tipo === "punto_kilometrico") {
+        avisos.push("Google no ha situado el kilómetro exacto: el punto es orientativo.");
+      }
+      return responder(
+        { lat: r0.geometry.location.lat, lng: r0.geometry.location.lng },
+        r0.formatted_address ?? plan.etiqueta,
+        precision,
+        avisos,
+      );
+    }
+
+    return err(res, 404, "not_found", `No se ha encontrado "${consulta}"`);
+  });
+
   // ── Talleres de la red ────────────────────────────────────
 
   router.get("/workshops", ...requireConnectRole("analyst"), async (_req, res) => {
@@ -1020,6 +1114,76 @@ export function createConnectBackofficeRouter(): Router {
     if (!r.rows[0]) return err(res, 404, "not_found", "Dispositivo no encontrado o ya revocado");
     await auditConnect({ req, action: "lite.device_revoked", resourceType: "lite_device", resourceId: Number(req.params.id) });
     res.json({ ok: true });
+  });
+
+  /**
+   * Salud de la red Lite: lo que el encargo pide vigilar y hasta ahora no se
+   * medía. La mitad sale de los contadores del proceso (última hora) y la otra
+   * mitad de la base, que es donde vive el estado de los dispositivos.
+   */
+  router.get("/lite/health", ...requireConnectRole("analyst"), async (_req, res) => {
+    const now = Date.now();
+    const metricas = liteMetrics.snapshot(now);
+
+    const versiones = await db.query(
+      `SELECT COALESCE(d."appVersion", 'desconocida') AS version,
+              COUNT(*)::int AS dispositivos,
+              MAX(d."lastSeenAtMs") AS "ultimoUsoMs"
+         FROM connect_lite_devices d
+         JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."revokedAtMs" IS NULL AND u.active
+          AND d."lastSeenAtMs" > $1
+        GROUP BY 1 ORDER BY 2 DESC`,
+      [now - 30 * 24 * 3600_000],
+    );
+
+    // Cola atascada: la APK dice que le quedan cosas por subir y su último
+    // parte ya no es reciente, o arrastra evidencias que ha dado por fallidas.
+    const colas = await db.query(
+      `SELECT d.id, d."deviceId", d."appVersion", d."queuePending", d."queueFailed",
+              d."queueOldestAtMs", d."queueReportedAtMs", d."lastSeenAtMs",
+              u.name AS "userName", w.id AS "workshopId", w.name AS "workshopName"
+         FROM connect_lite_devices d
+         JOIN connect_lite_users u ON u.id = d."userId"
+         JOIN connect_workshops w ON w.id = d."workshopId"
+        WHERE d."revokedAtMs" IS NULL
+          AND (COALESCE(d."queueFailed", 0) > 0
+               OR (COALESCE(d."queuePending", 0) > 0 AND d."queueOldestAtMs" < $1))
+        ORDER BY COALESCE(d."queueFailed", 0) DESC, d."queueOldestAtMs" LIMIT 50`,
+      [now - 30 * 60_000],
+    );
+
+    // Dispositivos activos sin token push: no recibirán ningún aviso, por muy
+    // bien que funcione el envío.
+    const sinPush = await db.query(
+      `SELECT COUNT(*)::int AS total
+         FROM connect_lite_devices d JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."revokedAtMs" IS NULL AND u.active AND d."fcmToken" IS NULL
+          AND d."lastSeenAtMs" > $1`,
+      [now - 7 * 24 * 3600_000],
+    );
+
+    // Servicios en curso cuyo seguimiento se ha quedado mudo.
+    const seguimientoMudo = await db.query(
+      `SELECT ca.id, ca."expedientNumber", ca.status, ca."liteUserName",
+              w.id AS "workshopId", w.name AS "workshopName", ca."operatorLocationAtMs"
+         FROM connect_assistances ca
+         JOIN connect_workshops w ON w.id = ca."workshopId"
+        WHERE w."integrationType" = 'lite'
+          AND ca.status IN ('en_route','in_progress','returning_to_workshop')
+          AND (ca."operatorLocationAtMs" IS NULL OR ca."operatorLocationAtMs" < $1)
+        ORDER BY ca."updatedAtMs" DESC LIMIT 50`,
+      [now - 15 * 60_000],
+    );
+
+    res.json({
+      generadoEnMs: now,
+      metricas,
+      versiones: versiones.rows,
+      colasAtascadas: colas.rows,
+      dispositivosSinPush: sinPush.rows[0]?.total ?? 0,
+      seguimientoMudo: seguimientoMudo.rows,
+    });
   });
 
   /** Todo lo que el taller ha reportado: rastro GPS, evidencias, firma y KPIs. */
@@ -1611,6 +1775,60 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     );
     await auditConnect({ req, action: "assistance.updated", resourceType: "assistance", resourceId: id, detail: Object.keys(b) });
     res.json(r.rows[0]);
+  });
+
+  /**
+   * Datos del vehículo, editables en cualquier momento.
+   *
+   * El PATCH general solo admite borrador o pendiente de asignación, y con
+   * razón: cambiar la ubicación o el tipo de servicio con el taller ya en
+   * camino descuadra la operación. Pero la ficha del vehículo no es
+   * operativa, es descriptiva, y en la práctica llega tarde: se abre la
+   * asistencia con una llamada, y la matrícula, la marca y el modelo se
+   * confirman después. Con la restricción general, esas fichas se quedaban
+   * incompletas para siempre.
+   *
+   * Se mezcla con lo que ya hubiera: mandar solo la matrícula no borra el
+   * resto. Y si la asistencia ya está inyectada en el core, la matrícula y la
+   * descripción se actualizan también allí, que es de donde beben el taller
+   * FULL y el informe.
+   */
+  router.patch("/assistances/:id/vehicle", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = await db.query(
+      `SELECT status, vehicle, "coreAssistanceId" FROM connect_assistances WHERE id = $1`, [id],
+    );
+    if (!cur.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (cur.rows[0].status === "cancelled") {
+      return err(res, 409, "invalid_state", "La asistencia está cancelada");
+    }
+
+    const vehiculo = normalizarVehiculo(leerJson(cur.rows[0].vehicle), req.body ?? {});
+
+    const r = await db.query(
+      `UPDATE connect_assistances SET vehicle = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING vehicle`,
+      [JSON.stringify(vehiculo), Date.now(), id],
+    );
+
+    if (cur.rows[0].coreAssistanceId) {
+      await db.query(
+        `UPDATE roadside_assistances
+            SET plate = $1, "vehicleDescription" = COALESCE($2, "vehicleDescription"), "updatedAtMs" = $3
+          WHERE id = $4`,
+        [
+          vehiculo.plate ?? "",
+          descripcionVehiculo(vehiculo),
+          Date.now(), cur.rows[0].coreAssistanceId,
+        ],
+      ).catch((e: any) => console.error("[Connect] vehículo → core:", e?.message));
+    }
+
+    await auditConnect({
+      req, action: "assistance.vehicle_updated", resourceType: "assistance", resourceId: id,
+      detail: { plate: vehiculo.plate, make: vehiculo.make, model: vehiculo.model },
+    });
+    publish({ kind: "status", assistanceId: id, status: cur.rows[0].status });
+    res.json(leerJson(r.rows[0].vehicle));
   });
 
   // Enviar borrador
@@ -2416,6 +2634,33 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
         toRef ?? null, body.trim(), u.id, u.name, Date.now(),
       ],
     );
+
+    // Si el taller es Lite, el mensaje de Central le llega como aviso al
+    // operario. Antes el chat era de ida: el taller escribia y Central leia,
+    // pero la respuesta se quedaba esperando a que alguien abriera la app.
+    // El aviso no lleva el texto: solo el identificador, y el operario lo lee
+    // ya autenticado (misma regla de privacidad que el resto de push).
+    try {
+      const a = await db.query(
+        `SELECT ca.id, ca."expedientNumber", ca."liteUserId", w."integrationType"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE ca.id = $1`,
+        [Number(req.params.id)],
+      );
+      const fila = a.rows[0];
+      if (fila?.integrationType === "lite" && fila.liteUserId) {
+        await notifyLiteUser(Number(fila.liteUserId), {
+          title: "Mensaje de la central",
+          body: `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,
+          data: { type: "assistance_message", assistanceId: String(fila.id) },
+        });
+      }
+    } catch (e: any) {
+      // Un fallo de aviso nunca puede tumbar el registro de la comunicacion
+      console.error("[Connect] aviso de mensaje a Lite:", e?.message);
+    }
+
     res.status(201).json(r.rows[0]);
   });
 

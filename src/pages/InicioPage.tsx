@@ -2,6 +2,14 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, CalendarClock, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
+// Copias a la medida del hub: los originales pesan 350-670 KB cada uno y aquí
+// se ven a 36 px de alto. Con cinco tarjetas con logo eso eran 2,4 MB de
+// portada; estas versiones suman 306 KB y se ven igual.
+import logoPresencia from "../assets/hub/logo-presencia.png";
+import logoToolControl from "../assets/hub/logo-toolcontrol.png";
+import logoLicencias from "../assets/hub/logo-licencias.png";
+import logoSafety from "../assets/hub/logo-safety.png";
+import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 
@@ -21,6 +29,25 @@ const ICONOS: Record<string, LucideIcon> = {
   safety: HardHat,
   presencia: Clock,
   workplanner: CalendarClock,
+};
+
+/**
+ * Logotipo del módulo, para los que tienen uno propio. Son marcas completas
+ * (llevan el nombre dentro), así que sustituyen al icono y al rótulo en vez de
+ * meterse en el cuadradito: encajado en 36×36 no se leería.
+ *
+ * Los que no tienen logo -administración, almacén, Core, WorkPlanner,
+ * asistencias, Central Pro y panel de taller- se quedan con su icono.
+ */
+const LOGOS: Record<string, string> = {
+  presencia: logoPresencia,
+  toolcontrol: logoToolControl,
+  safety: logoSafety,
+};
+
+/** Emblemas cuadrados: estos sí van dentro del recuadro del icono. */
+const EMBLEMAS: Record<string, string> = {
+  tyrecontrol: emblemaTyreControl,
 };
 
 const COLORES: Record<string, { bg: string; text: string }> = {
@@ -192,12 +219,22 @@ export default function InicioPage() {
               return (
                 <div key={t.modulo.key} className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${color.bg}`}>
-                        <Icon className={`h-5 w-5 ${color.text}`} />
+                    {LOGOS[t.modulo.key] ? (
+                      // El logo ya lleva el nombre del módulo: no se repite al lado
+                      <img
+                        src={LOGOS[t.modulo.key]} alt={t.modulo.label}
+                        className="h-9 w-auto max-w-[200px] object-contain object-left"
+                      />
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className={`flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl ${color.bg}`}>
+                          {EMBLEMAS[t.modulo.key]
+                            ? <img src={EMBLEMAS[t.modulo.key]} alt="" className="h-full w-full object-cover" />
+                            : <Icon className={`h-5 w-5 ${color.text}`} />}
+                        </div>
+                        <span className="text-sm font-bold">{t.modulo.label}</span>
                       </div>
-                      <span className="text-sm font-bold">{t.modulo.label}</span>
-                    </div>
+                    )}
                     <span className="whitespace-nowrap rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-bold text-sky-300">{t.rolLabel}</span>
                   </div>
 
@@ -275,10 +312,7 @@ export default function InicioPage() {
             {MOSTRAR_LICENCIAS && esSuperadmin && (
               <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                 <div className="mb-2 flex items-center gap-2">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/15">
-                    <ShieldCheck className="h-5 w-5 text-indigo-400" />
-                  </div>
-                  <span className="text-sm font-bold">Licencias</span>
+                  <img src={logoLicencias} alt="Mobilink SW Licencias" className="h-9 w-auto max-w-[200px] object-contain object-left" />
                   <span className="ml-auto whitespace-nowrap rounded-full bg-indigo-500/15 px-2 py-0.5 text-[11px] font-bold text-indigo-300">Superadmin</span>
                 </div>
                 <p className="mb-3 text-[12px] text-slate-500">

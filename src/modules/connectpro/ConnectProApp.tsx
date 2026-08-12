@@ -18,6 +18,7 @@ import Talleres from "./pages/Talleres";
 import Integraciones from "./pages/Integraciones";
 import Usuarios from "./pages/Usuarios";
 import Auditoria from "./pages/Auditoria";
+import SaludLite from "./pages/SaludLite";
 import Configuracion from "./pages/Configuracion";
 import Ofertas from "./pages/Ofertas";
 import CentroControl from "./pages/CentroControl";
@@ -74,6 +75,7 @@ export default function ConnectProApp() {
             <Route path="talleres" element={<Talleres />} />
             <Route path="integraciones" element={<Integraciones />} />
             <Route path="usuarios" element={<Usuarios />} />
+            <Route path="salud-lite" element={<SaludLite />} />
             <Route path="auditoria" element={<Auditoria />} />
             <Route path="configuracion" element={<Configuracion />} />
             <Route path="*" element={<Home />} />

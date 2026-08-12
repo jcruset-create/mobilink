@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- slate-900: el mismo fondo que usa la app (lib/theme.dart), para que el
+         arranque no pegue un fogonazo blanco antes de pintar Flutter. -->
+    <color name="ic_launcher_background">#0F172A</color>
+    <color name="launch_background">#0F172A</color>
+    <!-- red-600: el color primario de la app (lib/theme.dart, AppColors.primary). -->
+    <color name="notification_color">#DC2626</color>
+</resources>

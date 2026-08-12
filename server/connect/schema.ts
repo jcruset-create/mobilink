@@ -755,6 +755,14 @@ export async function initConnect(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_user ON connect_lite_devices ("userId");
     CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_ws ON connect_lite_devices ("workshopId");
 
+    -- Estado de la cola offline que informa la propia APK. Sin esto, una cola
+    -- atascada (evidencias que nunca llegan) solo se descubre cuando falta la
+    -- documentación de un servicio ya cerrado.
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queuePending" INTEGER;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueFailed" INTEGER;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueOldestAtMs" BIGINT;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueReportedAtMs" BIGINT;
+
     -- Rastro GPS del operario durante la asistencia (solo servicios activos)
     CREATE TABLE IF NOT EXISTS connect_assistance_tracks (
       id SERIAL PRIMARY KEY,
@@ -864,7 +872,14 @@ export async function initConnect(): Promise<void> {
   `);
 
   await seedConnectDefaults();
-  await seedNetworkWorkshops();
+  // El catálogo de talleres depende de red (geocodificación): si falla, se
+  // deja constancia y se sigue arrancando. Un alta pendiente no puede tumbar
+  // el servidor entero, y en el próximo arranque se vuelve a intentar.
+  try {
+    await seedNetworkWorkshops();
+  } catch (e: any) {
+    console.error("[Connect] catálogo de talleres de red:", e?.message);
+  }
 }
 
 /**
