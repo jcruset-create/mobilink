@@ -142,7 +142,6 @@ import {
   fetchWithTimeout,
   loadJobsFromBackend,
   loadLogsFromBackend,
-  deleteTechFromBackend,
   loadQuickTemplatesFromBackend,
   loadTechsFromBackend,
   saveJobToBackend,
@@ -1574,7 +1573,20 @@ async function reloadTechsFromBackend(currentJobs = jobs) {
 if (!Array.isArray(data)) return;
 
     setTechs(() => {
-      const merged = INITIAL_TECHS.map((baseTech) => {
+      // La plantilla la manda el SERVIDOR, no la lista del código.
+      //
+      // Antes esto recorría INITIAL_TECHS y buscaba cada uno en la respuesta,
+      // así que dar de baja a alguien era imposible: se borrase o no en la base
+      // de datos, volvía a aparecer en cuanto se recargaba el panel. Ahora
+      // INITIAL_TECHS solo aporta los valores por defecto (competencias y
+      // prioridades) de quien aún no los tenga, y sirve de repliegue mientras
+      // la tabla esté vacía.
+      const conBaja = data.filter((tech: any) => tech?.activo !== false);
+      const plantilla = conBaja.length > 0 ? conBaja : INITIAL_TECHS;
+
+      const merged = plantilla.map((fila: any) => {
+        const baseTech =
+          INITIAL_TECHS.find((t) => t.name === fila.name) ?? createTech(fila.name);
         const found = data.find((tech: any) => tech.name === baseTech.name);
 
         const hasCompetencies =
@@ -4281,15 +4293,33 @@ function removeSupportFromActiveJob(jobId: number) {
   }
 }
 
-  function removeTech(name: string) {
+  /**
+   * Baja de un técnico. Sustituye al borrado: la ficha y su histórico se
+   * conservan —hacen falta para nóminas y reclamaciones— pero deja de
+   * ofrecerse para asignar y se le retiran el PIN y el código, así que tampoco
+   * puede entrar en la tablet.
+   */
+  async function darDeBaja(name: string) {
     if (name === "Ramón") return;
-    setTechs((prev) => prev.filter((t) => t.name !== name));
-    appendLog(`Técnico eliminado: ${name}.`);
-    deleteTechFromBackend(name).catch((error) => {
-      console.error("Error eliminando técnico:", error);
-      appendLog(`Error eliminando al técnico ${name} en el servidor.`);
-    });
+
+    try {
+      const res = await fetchWithTimeout(`${API_BASE}/api/techs/${encodeURIComponent(name)}/activo`, {
+        method: "PUT",
+        headers: getAdminHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ activo: false }),
+      });
+
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+
+      setTechs((prev) => prev.filter((t) => t.name !== name));
+      appendLog(`Técnico dado de baja: ${name}.`);
+    } catch (error) {
+      console.error("Error dando de baja al técnico:", error);
+      appendLog(`Error al dar de baja a ${name}.`);
+    }
   }
+
+
 
 
 
@@ -4337,7 +4367,7 @@ if (view === "tecnicos" && canView("tecnicos")) {
   return (
     <TecnicosView
       techs={visibleTechs}
-      removeTech={removeTech}
+      darDeBaja={darDeBaja}
       handleTechImageUpload={handleTechImageUpload}
       onSetWorkshopPin={(techName) => {
         setWorkshopPinModal({ techName });

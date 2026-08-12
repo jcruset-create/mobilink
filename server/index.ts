@@ -590,6 +590,9 @@ function normalizeTechRow(t: any) {
     phone: t.phone ?? null,
     statusChangedAtMs: t.statusChangedAtMs != null ? Number(t.statusChangedAtMs) : null,
     statusTotals: safeJsonParse(t.statusTotals, {}),
+    // Sin la columna (base antigua) se asume de alta: nadie está de baja por
+    // omisión.
+    activo: t.activo !== false,
   };
 }
 
@@ -2017,7 +2020,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals"
+             "statusChangedAtMs", "statusTotals", activo
       FROM techs
       ORDER BY id ASC
     `);
@@ -2162,6 +2165,45 @@ app.patch("/api/techs/:name/roadside-capable", requireAdminRole, async (req, res
   } catch (error) {
     console.error("PATCH /api/techs/:name/roadside-capable error:", error);
     res.status(500).json({ error: "Error actualizando apto para carretera" });
+  }
+});
+
+/**
+ * Alta o baja de un técnico.
+ *
+ * Sustituye al borrado: la ficha se conserva —con su histórico de trabajos,
+ * tiempos y pausas, que hacen falta para nóminas y reclamaciones— pero deja de
+ * ofrecerse para asignar y no puede entrar en las apps.
+ */
+app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const activo = req.body?.activo !== false;
+
+    const result = await db.query(
+      `UPDATE techs
+       SET activo = $1,
+           -- Al dar de baja se libera el trabajo en curso y se retiran las
+           -- credenciales: si no, seguiría pudiendo entrar en la tablet.
+           status = CASE WHEN $1 THEN status ELSE 'baja' END,
+           blocked = CASE WHEN $1 THEN blocked ELSE true END,
+           "currentJobId" = CASE WHEN $1 THEN "currentJobId" ELSE NULL END,
+           "roadsideOperatorCode" = CASE WHEN $1 THEN "roadsideOperatorCode" ELSE NULL END,
+           "workshopPin" = CASE WHEN $1 THEN "workshopPin" ELSE NULL END,
+           "statusChangedAtMs" = $2
+       WHERE name = $3
+       RETURNING *`,
+      [activo, Date.now(), name]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+
+    res.json(normalizeTechRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/techs/:name/activo error:", error);
+    res.status(500).json({ error: "Error cambiando el alta del técnico" });
   }
 });
 
@@ -2771,8 +2813,9 @@ app.get("/api/taller-operator/techs-list", async (_req, res) => {
     const result = await db.query(`
       SELECT name
       FROM techs
-      WHERE NULLIF(TRIM(COALESCE("workshopPin", '')), '') IS NOT NULL
-         OR NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      WHERE activo = true
+        AND (NULLIF(TRIM(COALESCE("workshopPin", '')), '') IS NOT NULL
+             OR NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL)
       ORDER BY name ASC
     `);
 
@@ -5746,7 +5789,8 @@ app.get("/api/roadside-operator/techs", async (_req, res) => {
     const result = await db.query(`
       SELECT *
       FROM techs
-      WHERE NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      WHERE activo = true
+        AND NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
       ORDER BY id ASC
     `);
 
@@ -12747,7 +12791,9 @@ async function getWorkshopOperatorFromRequest(req: express.Request) {
   const pin = String(req.headers["x-operator-pin"] ?? "").trim();
   if (!techName || !pin) return null;
   const result = await db.query(
-    `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+    `SELECT name FROM techs
+     WHERE name = $1 AND "workshopPin" = $2 AND activo = true
+     LIMIT 1`,
     [techName, pin]
   );
   if (result.rows.length === 0) return null;
@@ -12776,7 +12822,7 @@ function requireWorkshopOperatorAuth(
 app.get("/api/workshop-operator/techs-list", async (_req, res) => {
   try {
     const result = await db.query(
-      `SELECT name FROM techs ORDER BY name ASC`
+      `SELECT name FROM techs WHERE activo = true ORDER BY name ASC`
     );
     res.json(result.rows.map((r: any) => ({ name: r.name })));
   } catch (error) {
