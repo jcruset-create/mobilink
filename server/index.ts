@@ -13965,6 +13965,142 @@ async function checkTechDisponibleParaOtf(
   };
 }
 
+// ── Plantillas de trabajos OTF (catálogo) ──
+app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const incluirInactivas = String(req.query.all || "") === "true";
+    const r = await db.query(
+      `SELECT id, nombre, descripcion, activo FROM otf_plantillas
+       ${incluirInactivas ? "" : "WHERE activo = true"}
+       ORDER BY nombre ASC`
+    );
+    res.json(r.rows.map((p: any) => ({
+      id: Number(p.id),
+      nombre: p.nombre,
+      descripcion: p.descripcion ?? null,
+      activo: p.activo === true,
+    })));
+  } catch (e) {
+    console.error("GET /api/otf-plantillas error:", e);
+    res.status(500).json({ error: "Error obteniendo plantillas" });
+  }
+});
+
+app.post("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO otf_plantillas (nombre, descripcion, activo, "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, true, $3, $3)
+       ON CONFLICT (nombre) DO UPDATE SET activo = true, "updatedAtMs" = $3
+       RETURNING id, nombre, descripcion, activo`,
+      [nombre, req.body?.descripcion ? String(req.body.descripcion).trim() : null, now]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error("POST /api/otf-plantillas error:", e);
+    res.status(500).json({ error: "Error creando plantilla" });
+  }
+});
+
+app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE otf_plantillas SET
+         nombre = COALESCE($2, nombre),
+         descripcion = COALESCE($3, descripcion),
+         activo = COALESCE($4, activo),
+         "updatedAtMs" = $5
+       WHERE id = $1 RETURNING id, nombre, descripcion, activo`,
+      [id, typeof b.nombre === "string" ? b.nombre.trim() : null,
+       typeof b.descripcion === "string" ? b.descripcion.trim() : null,
+       typeof b.activo === "boolean" ? b.activo : null, Date.now()]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Plantilla no encontrada" });
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error("PATCH /api/otf-plantillas/:id error:", e);
+    res.status(500).json({ error: "Error actualizando plantilla" });
+  }
+});
+
+// ── TyreControl por matrícula: resumen para la tarjeta de la OTF ──
+// Busca el vehículo en TyreControl (normalizando la matrícula) y devuelve la
+// última revisión completada con sus alertas. Solo lectura.
+app.get("/api/otf-tyrecontrol-info", requireSupervisorRole, async (req, res) => {
+  try {
+    const plateRaw = String(req.query.plate ?? "").trim();
+    const norm = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!norm) return res.status(400).json({ error: "plate requerida" });
+
+    // tc_vehiculos guarda la matrícula en mayúsculas pero puede llevar guiones
+    // o espacios: se normaliza en JS para comparar.
+    const { data: vehiculos, error: vErr } = await supabase
+      .from("tc_vehiculos")
+      .select("id, matricula, marca, modelo, km_actual, activo")
+      .limit(2000);
+    if (vErr) throw new Error(vErr.message);
+    const veh = (vehiculos ?? []).find(
+      (v: any) => String(v.matricula ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "") === norm
+    );
+    if (!veh) return res.json({ found: false });
+
+    const { data: revs } = await supabase
+      .from("revisiones_vehiculo")
+      .select("id, fecha_revision, km_vehiculo, estado_revision")
+      .eq("vehiculo_id", veh.id)
+      .in("estado_revision", ["completada", "enviada"])
+      .order("fecha_revision", { ascending: false })
+      .limit(1);
+    const rev = revs?.[0] ?? null;
+
+    let alertas = 0;
+    let minProfundidad: number | null = null;
+    let posiciones = 0;
+    if (rev) {
+      const { data: det } = await supabase
+        .from("revisiones_neumaticos_detalle")
+        .select("profundidad_mm, alerta_generada, neumatico_ausente")
+        .eq("revision_id", rev.id);
+      for (const d of det ?? []) {
+        posiciones++;
+        if ((d as any).alerta_generada === true) alertas++;
+        const p = (d as any).profundidad_mm != null ? Number((d as any).profundidad_mm) : null;
+        if (p != null && (minProfundidad == null || p < minProfundidad)) minProfundidad = p;
+      }
+    }
+
+    res.json({
+      found: true,
+      vehiculo: {
+        id: veh.id,
+        matricula: veh.matricula,
+        marca: veh.marca ?? null,
+        modelo: veh.modelo ?? null,
+        kmActual: veh.km_actual != null ? Number(veh.km_actual) : null,
+        activo: veh.activo !== false,
+      },
+      ultimaRevision: rev
+        ? {
+            fecha: rev.fecha_revision,
+            km: rev.km_vehiculo != null ? Number(rev.km_vehiculo) : null,
+            posiciones,
+            alertas,
+            minProfundidadMm: minProfundidad,
+          }
+        : null,
+    });
+  } catch (e) {
+    console.error("GET /api/otf/tyrecontrol-info error:", e);
+    res.status(500).json({ error: "Error consultando TyreControl" });
+  }
+});
+
 app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   try {
     const b = req.body ?? {};

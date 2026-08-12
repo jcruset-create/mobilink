@@ -9,6 +9,12 @@ import {
   fetchKnownPlaces,
   fetchRoadsideVehiclesSimple,
   fetchRoadsideTechsSimple,
+  fetchOtfPlantillas,
+  createOtfPlantilla,
+  updateOtfPlantilla,
+  fetchTyreControlInfo,
+  type OtfPlantilla,
+  type TyreControlInfo,
 } from "../modules/roadsideAssistanceApi";
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
@@ -37,6 +43,8 @@ export default function OtfPage() {
   const [showNew, setShowNew] = useState(false);
   const [techs, setTechs] = useState<any[]>([]);
   const [vehicles, setVehicles] = useState<any[]>([]);
+  const [plantillas, setPlantillas] = useState<OtfPlantilla[]>([]);
+  const [showPlantillas, setShowPlantillas] = useState(false);
 
   async function loadList() {
     setLoading(true);
@@ -52,6 +60,7 @@ export default function OtfPage() {
     fetchKnownPlaces().then(setPlaces).catch(() => {});
     fetchRoadsideTechsSimple().then(setTechs).catch(() => {});
     fetchRoadsideVehiclesSimple().then(setVehicles).catch(() => {});
+    fetchOtfPlantillas().then(setPlantillas).catch(() => {});
   }, []);
 
   async function openOtf(id: number) {
@@ -71,6 +80,7 @@ export default function OtfPage() {
           </div>
           <div className="flex gap-2">
             <button onClick={() => setShowNew(true)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-800">+ Nueva OTF</button>
+            <button onClick={() => setShowPlantillas(true)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">🧩 Plantillas</button>
             <a href="/otf-tv" target="_blank" rel="noopener noreferrer" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">📺 Panel TV</a>
             <button onClick={loadList} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">↻ Actualizar</button>
             <a href="/asistencias" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">← Volver</a>
@@ -108,13 +118,20 @@ export default function OtfPage() {
           {/* Detalle */}
           <div>
             {sel ? (
-              <OtfDetail otf={sel} onChange={async () => { setSel(await fetchOtf(sel.id)); loadList(); }} />
+              <OtfDetail otf={sel} plantillas={plantillas} onChange={async () => { setSel(await fetchOtf(sel.id)); loadList(); }} />
             ) : (
               <div className="rounded-lg border border-slate-200 bg-white p-10 text-center text-sm text-slate-400">Selecciona una OTF</div>
             )}
           </div>
         </div>
       </div>
+
+      {showPlantillas && (
+        <PlantillasModal
+          onClose={() => setShowPlantillas(false)}
+          onChanged={() => fetchOtfPlantillas().then(setPlantillas).catch(() => {})}
+        />
+      )}
 
       {showNew && (
         <NewOtfModal
@@ -380,7 +397,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
   );
 }
 
-function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
+function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPlantilla[]; onChange: () => void }) {
   const [presupuestando, setPresupuestando] = useState(false);
   const [plate, setPlate] = useState("");
   const [tipo, setTipo] = useState("Tractora");
@@ -388,6 +405,19 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
   const [detalle, setDetalle] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [adding, setAdding] = useState(false);
+  const [tyreInfo, setTyreInfo] = useState<TyreControlInfo | null>(null);
+
+  // Tarjeta TyreControl: al escribir una matrícula completa (>= 6 caracteres)
+  // se consulta el vehículo y su última revisión. Con debounce para no
+  // disparar una petición por tecla.
+  useEffect(() => {
+    const p = plate.trim();
+    if (p.replace(/[^A-Z0-9]/gi, "").length < 6) { setTyreInfo(null); return; }
+    const timer = setTimeout(() => {
+      fetchTyreControlInfo(p).then(setTyreInfo).catch(() => setTyreInfo(null));
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [plate]);
 
   async function add() {
     if (adding) return; // evita el doble clic → trabajo duplicado
@@ -487,7 +517,10 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
           <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={inputCls}>
             {TIPOS_VEHICULO.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
-          <input placeholder="Trabajo (plantilla)" value={trabajoPlantilla} onChange={(e) => setTP(e.target.value)} className={inputCls} />
+          <select value={trabajoPlantilla} onChange={(e) => setTP(e.target.value)} className={inputCls}>
+            <option value="">— Trabajo (plantilla) —</option>
+            {plantillas.map((p) => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
+          </select>
           <input placeholder="Detalle manual" value={detalle} onChange={(e) => setDetalle(e.target.value)} className={inputCls} />
           <input
             placeholder="Observaciones (p. ej. remolque en plaza 27)"
@@ -496,9 +529,113 @@ function OtfDetail({ otf, onChange }: { otf: any; onChange: () => void }) {
             className={`${inputCls} col-span-2`}
           />
         </div>
+        {tyreInfo?.found && tyreInfo.vehiculo && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs">
+            <span className="font-black text-cyan-900">🛞 TyreControl</span>
+            <span className="font-bold text-cyan-800">
+              {tyreInfo.vehiculo.matricula}
+              {tyreInfo.vehiculo.marca ? ` · ${tyreInfo.vehiculo.marca}${tyreInfo.vehiculo.modelo ? ` ${tyreInfo.vehiculo.modelo}` : ""}` : ""}
+              {tyreInfo.vehiculo.kmActual != null ? ` · ${tyreInfo.vehiculo.kmActual.toLocaleString("es-ES")} km` : ""}
+            </span>
+            {tyreInfo.ultimaRevision ? (
+              <span className={tyreInfo.ultimaRevision.alertas > 0 ? "font-bold text-red-700" : "text-cyan-700"}>
+                Última revisión {new Date(tyreInfo.ultimaRevision.fecha).toLocaleDateString("es-ES")}
+                {tyreInfo.ultimaRevision.minProfundidadMm != null ? ` · mín. ${tyreInfo.ultimaRevision.minProfundidadMm} mm` : ""}
+                {tyreInfo.ultimaRevision.alertas > 0 ? ` · ⚠ ${tyreInfo.ultimaRevision.alertas} alerta${tyreInfo.ultimaRevision.alertas !== 1 ? "s" : ""}` : " · sin alertas"}
+              </span>
+            ) : (
+              <span className="text-cyan-700">Sin revisiones registradas</span>
+            )}
+          </div>
+        )}
+        {tyreInfo && !tyreInfo.found && (
+          <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            🛞 Matrícula no encontrada en TyreControl
+          </div>
+        )}
         <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-black text-white disabled:opacity-50">
           {adding ? "Añadiendo…" : "+ Añadir trabajo"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** Gestor del catálogo de plantillas de trabajos OTF. */
+function PlantillasModal({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+  const [items, setItems] = useState<OtfPlantilla[]>([]);
+  const [nuevo, setNuevo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setItems(await fetchOtfPlantillas(true));
+  }
+  useEffect(() => { load().catch(() => {}); }, []);
+
+  async function crear() {
+    const nombre = nuevo.trim();
+    if (!nombre || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await createOtfPlantilla(nombre);
+      setNuevo("");
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo crear");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-12">
+      <div className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white p-5 shadow-2xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-black">🧩 Plantillas de trabajos</h2>
+          <button onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-50">Cerrar</button>
+        </div>
+        <div className="mb-3 flex gap-2">
+          <input
+            value={nuevo}
+            onChange={(e) => setNuevo(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void crear(); }}
+            placeholder="P. ej. Revisar presiones"
+            className={inputCls}
+          />
+          <button onClick={() => void crear()} disabled={busy} className="shrink-0 rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white disabled:opacity-50">+ Crear</button>
+        </div>
+        {error && <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{error}</div>}
+        <div className="flex-1 space-y-2 overflow-y-auto">
+          {items.length === 0 ? (
+            <div className="py-8 text-center text-sm text-slate-400">Sin plantillas. Crea la primera arriba.</div>
+          ) : items.map((p) => (
+            <div key={p.id} className={`flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 ${p.activo ? "" : "opacity-50"}`}>
+              <input
+                defaultValue={p.nombre}
+                onBlur={async (e) => {
+                  const nombre = e.target.value.trim();
+                  if (nombre && nombre !== p.nombre) {
+                    await updateOtfPlantilla(p.id, { nombre });
+                    await load();
+                    onChanged();
+                  }
+                }}
+                className="w-full rounded border border-slate-200 px-2 py-1 text-sm font-bold outline-none focus:border-slate-400"
+              />
+              <button
+                onClick={async () => {
+                  await updateOtfPlantilla(p.id, { activo: !p.activo });
+                  await load();
+                  onChanged();
+                }}
+                className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-bold ${p.activo ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500"}`}
+              >
+                {p.activo ? "Activa" : "Inactiva"}
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

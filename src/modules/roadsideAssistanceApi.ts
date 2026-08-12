@@ -101,6 +101,57 @@ export async function updateOtf(id: number, body: Record<string, unknown>) {
   return res.json();
 }
 
+// ── Plantillas de trabajos OTF ──
+export type OtfPlantilla = { id: number; nombre: string; descripcion: string | null; activo: boolean };
+
+export async function fetchOtfPlantillas(all = false): Promise<OtfPlantilla[]> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf-plantillas${all ? "?all=true" : ""}`, {
+    headers: getAdminHeaders(),
+  });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
+}
+
+export async function createOtfPlantilla(nombre: string, descripcion?: string) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf-plantillas`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ nombre, descripcion: descripcion || null }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || "No se pudo crear la plantilla");
+  }
+  return res.json();
+}
+
+export async function updateOtfPlantilla(id: number, body: Record<string, unknown>) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf-plantillas/${id}`, {
+    method: "PATCH",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("No se pudo actualizar la plantilla");
+  return res.json();
+}
+
+// ── TyreControl por matrícula (tarjeta en la OTF) ──
+export type TyreControlInfo = {
+  found: boolean;
+  vehiculo?: { id: string; matricula: string; marca: string | null; modelo: string | null; kmActual: number | null; activo: boolean };
+  ultimaRevision?: { fecha: string; km: number | null; posiciones: number; alertas: number; minProfundidadMm: number | null } | null;
+};
+
+export async function fetchTyreControlInfo(plate: string): Promise<TyreControlInfo | null> {
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/otf-tyrecontrol-info?plate=${encodeURIComponent(plate)}`,
+    { headers: getAdminHeaders() }
+  );
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 export async function addOtfTrabajo(otfId: number, body: Record<string, unknown>) {
   const res = await fetchWithTimeout(`${API_BASE}/api/otf/${otfId}/trabajos`, {
     method: "POST",
