@@ -904,6 +904,14 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
   `).catch(() => {});
 
+  // Alta/baja de técnicos. Hasta ahora la única forma de quitar a alguien era
+  // borrar la fila, y el panel reconstruye su plantilla sobre INITIAL_TECHS
+  // (código), así que el borrado no servía: al recargar volvía a aparecer.
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS activo BOOLEAN NOT NULL DEFAULT true;
+  `);
+
   // Checklists de trabajo. Las plantillas se editan desde WorkPlanner y el
   // técnico las marca en la tablet.
   //
