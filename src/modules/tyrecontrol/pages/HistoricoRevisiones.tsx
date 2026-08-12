@@ -136,7 +136,13 @@ export default function HistoricoRevisiones() {
         tecnicoId: fTecnico || null,
       });
       setFilas(data.map((r: any) => {
-        const d = r.created_at ? new Date(r.created_at) : null;
+        // La hora de la MEDICIÓN, no la de la grabación. El CheckPoint la
+        // trae en el informe (13:14:52) y se guarda en medido_at; sin ella,
+        // una importación pintaba la misma hora —la de la importación— en
+        // todas sus revisiones. created_at sigue valiendo para lo que se hace
+        // con la APK, donde el técnico guarda al terminar.
+        const cuando = r.medido_at ?? r.created_at;
+        const d = cuando ? new Date(cuando) : null;
         const incs = (r.incidencias ?? []) as { estado: string }[];
         return {
           id: r.id,
