@@ -281,6 +281,18 @@ export async function importRevisiones(
     }
   }
 
+  // 6b bis. La revisión de ese día ya existía y no sabía a qué hora se midió.
+  // Pasa al reimportar y cuando el arco mide un vehículo que ese mismo día ya
+  // tenía revisión. Solo se rellena si está vacía: si ya hay una hora, la puso
+  // alguien que sabía más.
+  const conMomento = planes
+    .map((p) => ({ id: mapRevExist.get(`${p.vehiculo.id}|${p.grupo.fecha}`), momento: momentoDeGrupo(p.grupo) }))
+    .filter((x) => x.id && x.momento && !gruposSinRev.some((g) => mapRevExist.get(`${g.vehiculo.id}|${g.grupo.fecha}`) === x.id));
+  for (const x of conMomento) {
+    await supabase.from("revisiones_vehiculo")
+      .update({ medido_at: x.momento }).eq("id", x.id!).is("medido_at", null);
+  }
+
   // 6c. Detalles (upsert por revision+posicion)
   const detalles: any[] = [];
   for (const p of planes) {
