@@ -89,12 +89,14 @@ class OfflineStore {
     required int jobId,
     required String localPath,
     String? clave,
+    String tipo = 'foto',
   }) async {
     await _outbox.add({
       'actionId': clave ?? nuevaClave('up-$jobId'),
       'type': 'upload_file',
       'jobId': jobId,
       'localPath': localPath,
+      'tipo': tipo,
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
     pendingCount.value = _outbox.length;
