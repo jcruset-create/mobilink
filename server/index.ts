@@ -13916,10 +13916,65 @@ app.get("/api/otf/:id", requireAdminRole, async (req, res) => {
   }
 });
 
+/**
+ * Regla de asignación de OTF: un operario que ya está trabajando no puede
+ * recibir otra OTF, salvo que sea para AMPLIAR el trabajo en la MISMA base
+ * donde está ahora (mismo lugar conocido). Ocupado = tiene una OTF
+ * planificada/en curso o una asistencia de carretera activa.
+ */
+async function checkTechDisponibleParaOtf(
+  techName: string | null | undefined,
+  knownPlaceId: number | null,
+  excludeOtfId?: number
+): Promise<{ ok: boolean; error?: string }> {
+  const name = String(techName ?? "").trim();
+  if (!name) return { ok: true };
+
+  // ¿Está en una asistencia de carretera?
+  const tech = await db.query(
+    `SELECT "currentRoadsideAssistanceId" FROM techs WHERE name = $1`,
+    [name]
+  );
+  if (tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null) {
+    return {
+      ok: false,
+      error: `${name} está en una asistencia en carretera (nº ${tech.rows[0].currentRoadsideAssistanceId}). No se le puede asignar otra OTF hasta que termine.`,
+    };
+  }
+
+  // ¿Tiene ya una OTF abierta?
+  const abierta = await db.query(
+    `SELECT id, "baseName", "knownPlaceId" FROM otf
+     WHERE "assignedTechName" = $1 AND status IN ('planificada','en_curso')
+       AND ($2::int IS NULL OR id <> $2)
+     ORDER BY "createdAtMs" DESC LIMIT 1`,
+    [name, excludeOtfId ?? null]
+  );
+  if (!abierta.rows.length) return { ok: true };
+
+  const actual = abierta.rows[0];
+  const mismaBase =
+    knownPlaceId != null &&
+    actual.knownPlaceId != null &&
+    Number(actual.knownPlaceId) === Number(knownPlaceId);
+  if (mismaBase) return { ok: true }; // ampliación del trabajo en su base actual
+
+  return {
+    ok: false,
+    error: `${name} ya tiene la OTF #${actual.id}${actual.baseName ? ` en ${actual.baseName}` : ""}. Solo se le puede asignar otra OTF en esa misma base (ampliación) o cuando termine.`,
+  };
+}
+
 app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   try {
     const b = req.body ?? {};
     const now = Date.now();
+
+    const disp = await checkTechDisponibleParaOtf(
+      b.assignedTechName,
+      b.knownPlaceId != null ? Number(b.knownPlaceId) : null
+    );
+    if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
     const r = await db.query(
       `INSERT INTO otf ("workshopId","clientName","clientId","knownPlaceId","baseName",direccion,lat,lng,
         "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs")
@@ -13943,6 +13998,16 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body ?? {};
+
+    if (b.assignedTechName) {
+      const disp = await checkTechDisponibleParaOtf(
+        b.assignedTechName,
+        b.knownPlaceId != null ? Number(b.knownPlaceId) : null,
+        id
+      );
+      if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+    }
+
     await db.query(
       `UPDATE otf SET
          "clientName" = COALESCE($2,"clientName"),
