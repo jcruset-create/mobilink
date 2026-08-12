@@ -137,10 +137,12 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
   const [vehicleName, setVehicleName] = useState("");
   const [saving, setSaving] = useState(false);
   const [showPlaceMap, setShowPlaceMap] = useState(false);
+  const [error, setError] = useState("");
 
   async function save() {
     if (!clientName.trim()) return;
     setSaving(true);
+    setError("");
     try {
       const place = places.find((p) => String(p.id) === placeId);
       const veh = vehicles.find((v) => v.name === vehicleName);
@@ -156,6 +158,8 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
         webfleetVehicleId: veh?.webfleetVehicleId ?? null,
       });
       onCreated(o);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo crear la OTF");
     } finally {
       setSaving(false);
     }
@@ -198,6 +202,11 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
             </Field>
           </div>
         </div>
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">
+            {error}
+          </div>
+        )}
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">Cancelar</button>
           <button onClick={save} disabled={saving} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white disabled:opacity-50">{saving ? "…" : "Crear"}</button>

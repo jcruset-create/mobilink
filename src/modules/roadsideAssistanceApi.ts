@@ -81,7 +81,10 @@ export async function createOtf(body: Record<string, unknown>) {
     headers: getAdminHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("No se pudo crear la OTF");
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || "No se pudo crear la OTF");
+  }
   return res.json();
 }
 
@@ -91,7 +94,10 @@ export async function updateOtf(id: number, body: Record<string, unknown>) {
     headers: getAdminHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("No se pudo actualizar la OTF");
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || "No se pudo actualizar la OTF");
+  }
   return res.json();
 }
 
