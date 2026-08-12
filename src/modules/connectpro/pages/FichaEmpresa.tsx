@@ -12,6 +12,7 @@ import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, Emp
 import TablaUnidades from "../components/TablaUnidades";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import TarifasEditor from "../components/TarifasEditor";
+import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
   WORKSHOP_TIER, WORKSHOP_TIER_LABELS, WORKSHOP_TIER_STYLES, fmtDateTime,
   type Authorization, type WorkshopIntegrationType,
@@ -46,6 +47,12 @@ type Ficha = {
 };
 
 const TIERS: WorkshopIntegrationType[] = ["assist", "lite", "external"];
+
+const TALLER_VACIO = {
+  name: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist",
+  commercialNetwork: "", address: "", postalCode: "", city: "", province: "", email: "",
+  openingHours: "", services: "", notes: "",
+};
 const TABS = ["Resumen", "Talleres", "Operarios", "Unidades", "Tarifas"] as const;
 
 /** Campo editable de la ficha (edición en línea, cc_admin). */
@@ -86,7 +93,7 @@ export default function FichaEmpresa() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Resumen");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [nuevoTaller, setNuevoTaller] = useState({ name: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
+  const [nuevoTaller, setNuevoTaller] = useState(TALLER_VACIO);
   // Operarios de todos los talleres de la empresa, agrupados por taller
   const [operarios, setOperarios] = useState<Record<number, Operator[]> | null>(null);
 
@@ -132,11 +139,33 @@ export default function FichaEmpresa() {
           name: nuevoTaller.name.trim(), latitude: lat, longitude: lng,
           radiusKm: Number(nuevoTaller.radiusKm) || 60, phone: nuevoTaller.phone || null,
           providerCompanyId: Number(id), integrationType: nuevoTaller.integrationType,
+          services: nuevoTaller.services.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean),
+          commercialNetwork: nuevoTaller.commercialNetwork.trim() || null,
+          address: nuevoTaller.address.trim() || null,
+          postalCode: nuevoTaller.postalCode.trim() || null,
+          city: nuevoTaller.city.trim() || null,
+          province: nuevoTaller.province.trim() || null,
+          email: nuevoTaller.email.trim() || null,
+          openingHours: nuevoTaller.openingHours.trim() || null,
+          notes: nuevoTaller.notes.trim() || null,
         },
       });
-      setNuevoTaller({ name: "", latitude: "", longitude: "", radiusKm: "60", phone: "", integrationType: "assist" });
+      setNuevoTaller(TALLER_VACIO);
       load();
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  /** La empresa ya la sabemos: solo entran los campos del taller. */
+  const aplicarImportacion = (r: ImportacionConfirmada) => {
+    setNuevoTaller((t) => {
+      const siguiente = { ...t };
+      for (const { key } of CAMPOS_IMPORTABLES) {
+        const v = r.campos[key];
+        if (v != null) siguiente[key] = v;
+      }
+      if (r.observaciones) siguiente.notes = [siguiente.notes, r.observaciones].filter(Boolean).join("\n");
+      return siguiente;
+    });
   };
 
   if (!f) return <p className="text-sm text-slate-500">{error ?? "Cargando…"}</p>;
@@ -251,6 +280,13 @@ export default function FichaEmpresa() {
           {canEdit && (
             <Card className="p-4">
               <h3 className="mb-2 text-[13px] font-semibold text-slate-300">Añadir taller a {p.name}</h3>
+              <ImportarTallerWhatsApp
+                empresaFijada
+                valoresActuales={Object.fromEntries(
+                  CAMPOS_IMPORTABLES.map(({ key }) => [key, nuevoTaller[key] === TALLER_VACIO[key] ? "" : nuevoTaller[key]]),
+                )}
+                onImportar={aplicarImportacion}
+              />
               <div className="flex flex-wrap gap-2">
                 <Input placeholder="Nombre *" value={nuevoTaller.name} onChange={(e) => setNuevoTaller({ ...nuevoTaller, name: e.target.value })} className="w-48" />
                 <Input placeholder="Latitud *" value={nuevoTaller.latitude} onChange={(e) => setNuevoTaller({ ...nuevoTaller, latitude: e.target.value })} className="w-28" />
@@ -260,7 +296,31 @@ export default function FichaEmpresa() {
                 <Select value={nuevoTaller.integrationType} onChange={(e) => setNuevoTaller({ ...nuevoTaller, integrationType: e.target.value })}>
                   {TIERS.map((t) => <option key={t} value={t}>{WORKSHOP_TIER_LABELS[t]}</option>)}
                 </Select>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Input placeholder="Red comercial (Confortauto…)" value={nuevoTaller.commercialNetwork} onChange={(e) => setNuevoTaller({ ...nuevoTaller, commercialNetwork: e.target.value })} className="w-44" />
+                <Input placeholder="Dirección" value={nuevoTaller.address} onChange={(e) => setNuevoTaller({ ...nuevoTaller, address: e.target.value })} className="w-72" />
+                <Input placeholder="CP" value={nuevoTaller.postalCode} onChange={(e) => setNuevoTaller({ ...nuevoTaller, postalCode: e.target.value })} className="w-20" />
+                <Input placeholder="Municipio" value={nuevoTaller.city} onChange={(e) => setNuevoTaller({ ...nuevoTaller, city: e.target.value })} className="w-40" />
+                <Input placeholder="Provincia" value={nuevoTaller.province} onChange={(e) => setNuevoTaller({ ...nuevoTaller, province: e.target.value })} className="w-36" />
+                <Input placeholder="Email" value={nuevoTaller.email} onChange={(e) => setNuevoTaller({ ...nuevoTaller, email: e.target.value })} className="w-56" />
+                <Input placeholder="Horario" value={nuevoTaller.openingHours} onChange={(e) => setNuevoTaller({ ...nuevoTaller, openingHours: e.target.value })} className="w-72" />
+                <Input placeholder="Servicios (tyres, mechanical…)" value={nuevoTaller.services} onChange={(e) => setNuevoTaller({ ...nuevoTaller, services: e.target.value })} className="w-64" />
+              </div>
+              {nuevoTaller.notes && (
+                <div className="mt-2">
+                  <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Observaciones internas</div>
+                  <textarea
+                    value={nuevoTaller.notes}
+                    onChange={(e) => setNuevoTaller({ ...nuevoTaller, notes: e.target.value })}
+                    rows={Math.min(6, nuevoTaller.notes.split("\n").length + 1)}
+                    className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-[13px] text-slate-100"
+                  />
+                </div>
+              )}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <Button onClick={crearTaller} disabled={busy}>Añadir</Button>
+                <Button variant="ghost" onClick={() => setNuevoTaller(TALLER_VACIO)} disabled={busy}>Vaciar</Button>
               </div>
             </Card>
           )}

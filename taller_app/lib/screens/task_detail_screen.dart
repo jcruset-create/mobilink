@@ -3,17 +3,28 @@ import 'package:image_picker/image_picker.dart';
 import '../models/job.dart';
 import '../services/api_service.dart';
 import '../theme.dart';
+import '../widgets/checklist_trabajo.dart';
+import '../widgets/firma_cliente.dart';
 import '../workshops.dart';
 
 class TaskDetailScreen extends StatefulWidget {
   final ApiService api;
   final Job job;
   final bool esSupervisor;
+
+  /// En tablet el detalle vive en la columna derecha, dentro de la pantalla de
+  /// lista: no lleva Scaffold ni barra propia, y avisa de los cambios por
+  /// [onCambio] en vez de devolverlos al cerrarse.
+  final bool embebido;
+  final VoidCallback? onCambio;
+
   const TaskDetailScreen({
     super.key,
     required this.api,
     required this.job,
     required this.esSupervisor,
+    this.embebido = false,
+    this.onCambio,
   });
 
   @override
@@ -39,6 +50,35 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     if (!mounted) return;
     setState(() => _files = files);
   }
+
+  /// Firma del cliente: se pide en el lienzo y se sube como un adjunto más.
+  Future<void> _firmar() async {
+    final ruta = await FirmaCliente.pedir(context);
+    if (ruta == null) return;
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      await widget.api.subirFirma(_job.id, ruta);
+      await _loadFiles();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+      ));
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  Map<String, dynamic>? get _firma {
+    for (final f in _files) {
+      if (f['tipo'] == 'firma') return f;
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> get _fotos =>
+      _files.where((f) => f['tipo'] != 'firma').toList();
 
   Future<void> _addPhoto() async {
     final picker = ImagePicker();
@@ -73,6 +113,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         _busy = false;
         _changed = true;
       });
+      widget.onCambio?.call();
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -104,6 +145,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final contenido = _contenido();
+
+    if (widget.embebido) return contenido;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -112,7 +157,13 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       },
       child: Scaffold(
         appBar: AppBar(title: Text(_job.plate.isEmpty ? 'Tarea' : _job.plate)),
-        body: ListView(
+        body: contenido,
+      ),
+    );
+  }
+
+  Widget _contenido() {
+    return ListView(
           padding: const EdgeInsets.all(16),
           children: [
             Row(children: [
@@ -158,13 +209,13 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            if (_files.isEmpty)
+            if (_fotos.isEmpty)
               const Text('Sin fotos.', style: TextStyle(color: AppColors.textMuted))
             else
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: _files
+                children: _fotos
                     .map((f) => ClipRRect(
                           borderRadius: BorderRadius.circular(8),
                           child: Image.network(
@@ -183,9 +234,49 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ))
                     .toList(),
               ),
+
+            const SizedBox(height: 20),
+            const Divider(color: AppColors.border),
+            const SizedBox(height: 8),
+            ChecklistTrabajo(api: widget.api, jobId: _job.id),
+
+            const SizedBox(height: 20),
+            const Divider(color: AppColors.border),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('FIRMA DEL CLIENTE',
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.textMuted, letterSpacing: 0.4)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _uploadingPhoto ? null : _firmar,
+                  icon: const Icon(Icons.draw, size: 18),
+                  // Firmar otra vez sustituye la anterior, no acumula.
+                  label: Text(_firma == null ? 'Firmar' : 'Rehacer'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_firma == null)
+              const Text('Sin firma.', style: TextStyle(color: AppColors.textMuted))
+            else
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  color: Colors.white,
+                  height: 140,
+                  width: double.infinity,
+                  child: Image.network(
+                    (_firma!['url'] ?? '').toString(),
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const Center(
+                      child: Icon(Icons.broken_image, color: AppColors.textMuted),
+                    ),
+                  ),
+                ),
+              ),
           ],
-        ),
-      ),
     );
   }
 

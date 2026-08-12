@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
+import PlantillasChecklistPage from "./PlantillasChecklistPage";
 import { supabase } from "../administracion/services/supabase";
 import { APP_VERSION } from "../../version";
 
@@ -17,6 +18,7 @@ const SECCIONES = [
   { key: "agenda", label: "Agenda", icon: CalendarDays, proximamente: false },
   { key: "tecnicos", label: "Pantalla técnicos", icon: MonitorSmartphone, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
+  { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
@@ -183,8 +185,10 @@ export default function WorkPlannerApp() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100">
-      <header className="sticky top-0 z-40 border-b border-slate-700 bg-slate-900/95 px-3 py-1.5 backdrop-blur">
+    // Sin `text-slate-100` en la raíz: los diálogos del panel son blancos y
+    // heredaban el color claro, quedando texto blanco sobre fondo blanco.
+    <div className="min-h-screen bg-slate-900">
+      <header className="sticky top-0 z-40 border-b border-slate-700 bg-slate-900/95 px-3 py-1.5 text-slate-100 backdrop-blur">
         <div className="flex items-center gap-3 overflow-x-auto">
           <div className="flex shrink-0 items-center gap-1.5">
             <img
@@ -284,6 +288,7 @@ export default function WorkPlannerApp() {
               />
             }
           />
+          <Route path="plantillas" element={<PlantillasChecklistPage />} />
           <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
           <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
           <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />

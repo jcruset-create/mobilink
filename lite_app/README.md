@@ -42,6 +42,20 @@ Todo cuelga de `/api/connect/lite` (`server/connect/lite.ts`):
 Todas las operaciones que modifican datos aceptan `clientActionId`: reenviar
 la misma operación no la duplica.
 
+`POST /device` lleva, además del token push y los permisos, la versión de la
+app y el estado de las colas (`queuePending`, `queueFailed`, `queueOldestAtMs`).
+Con eso Central detecta en **Salud de Assist Lite** un móvil que lleva horas sin
+poder subir sus evidencias, cosa que desde el móvil no ve nadie.
+
+### Límites de uso
+
+La API responde `429` con `Retry-After` si un dispositivo se desboca: 120
+posiciones/min, 20 lotes/min, 60 fotografías/5 min, 20 firmas/5 min, 60
+mensajes/min, 30 sincronizaciones/min y un tope general de 900/min. Están unas
+diez veces por encima del uso normal, así que en la práctica solo los toca una
+cola reenviándose en bucle. Ante un `429`, esperar los segundos que indica
+`Retry-After` y reintentar; el `clientActionId` garantiza que nada se duplique.
+
 ## Modo sin conexión
 
 `lib/services/queue.dart` mantiene una cola en Hive con los cambios de estado,
@@ -49,76 +63,81 @@ las observaciones y las posiciones GPS. Al recuperar cobertura se envían con
 `POST /sync`. Si el estado oficial ya no admite el cambio, la operación queda
 marcada como **conflicto** y se avisa al operario (no se oculta ni se fuerza).
 
-Las fotografías y la firma necesitan conexión en el momento de subirlas; si
-falla, la app lo dice claramente en vez de fingir que se han guardado.
+`lib/services/file_queue.dart` hace lo propio con los binarios: la fotografía y
+la firma se copian al almacenamiento privado de la app en cuanto se capturan
+—la carpeta temporal la puede vaciar Android en cualquier momento, y la firma
+solo vivía en memoria— y se suben solas al recuperar señal, con el mismo
+`clientActionId`. El envío se corta al primer corte de red: insistir con el
+resto solo gasta batería.
 
-## Generar la plataforma Android (una sola vez)
+## Plataforma Android
 
-El repo solo versiona `lib/` + `pubspec.yaml`. Antes de compilar:
+`android/` **está en el repositorio** desde la versión 0.1.2. No hay que
+ejecutar `flutter create`: la regla `*/android/` del `.gitignore` lo descartaba
+en silencio y por eso durante un tiempo la APK no se podía compilar; ahora hay
+una excepción explícita para `lite_app/android/`.
 
-```bash
-cd lite_app
-flutter create . --org com.seatarragona --project-name lite_app --platforms android
-flutter pub get
-```
+Lo que ya viene configurado: identificador `com.mobilink.assist_lite`, nombre
+visible, icono y tema de arranque oscuro, permisos de INTERNET, ubicación fina
+y aproximada, cámara y notificaciones, los `<queries>` de `url_launcher`
+(`geo:`, `tel:`, `https:`; sin ellos los botones no hacen nada en Android 11+),
+`ndkVersion` y la memoria del demonio de Gradle bajada a 2 GB, porque el valor
+que genera Flutter (`-Xmx8G`) no cabe en equipos de 16 GB.
 
-Después hay que añadir a `android/app/src/main/AndroidManifest.xml`, dentro de
-`<manifest>`:
+### Seguimiento con la pantalla bloqueada
 
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-<uses-permission android:name="android.permission.CAMERA" />
-<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-```
+El flujo de posiciones se arranca como **servicio en primer plano** de Android
+(`AndroidSettings.foregroundNotificationConfig` en `tracker.dart`), con aviso
+persistente que no se puede ocultar. Lo levanta el propio `geolocator`
+—`GeolocatorLocationService` ya viene declarado con
+`foregroundServiceType="location"` en el manifiesto del plugin—, así que no hay
+ninguna dependencia extra ni de pago. De ahí los permisos `FOREGROUND_SERVICE`,
+`FOREGROUND_SERVICE_LOCATION` (obligatorio desde Android 14) y `WAKE_LOCK`.
 
-Y el nombre visible de la app en `<application android:label="Mobilink Assist Lite">`.
+**No** se declara `ACCESS_BACKGROUND_LOCATION`, y es deliberado: el servicio
+arranca con la app en primer plano —el operario pulsa "En camino"— y en ese caso
+basta el permiso de "mientras se usa la app". Pedir el de segundo plano
+obligaría a pasar la revisión aparte de Google Play sin ganar nada.
 
-Dentro de `<queries>` hay que declarar los esquemas que abre `url_launcher`
-(`geo:` para navegación, `tel:` para llamar y `https:` para la política de
-privacidad); si no, los botones no hacen nada en Android 11+.
+Limitación conocida: el servicio mantiene el seguimiento con la pantalla
+bloqueada y la app en segundo plano, pero **no sobrevive a que Android destruya
+la actividad** por falta de memoria. `Tracker._vigilar` reabre el flujo cuando
+detecta que se ha caído; el rastro del hueco no se recupera. La alternativa que
+sí lo cubriría es un servicio con motor Flutter propio
+(`flutter_background_geolocation`, de pago).
 
-Además, en `android/app/build.gradle.kts`:
-
-```kotlin
-android {
-    ndkVersion = "27.0.12077973"   // lo exigen url_launcher_android y geolocator
-    ...
-}
-```
-
-Y en `android/gradle.properties`, bajar la memoria del demonio de Gradle: el
-valor que genera Flutter (`-Xmx8G -XX:MaxMetaspaceSize=4G`) no cabe en equipos
-de 16 GB y el demonio muere a mitad de compilación.
-
-```properties
-org.gradle.jvmargs=-Xmx2G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError
-```
+`google-services.json` y `key.properties` no están en el repositorio, que es
+público: los inyecta la CI desde secretos.
 
 ## Compilar
 
+Lo normal es **no compilar a mano**: el workflow `build-lite-apk.yml` compila,
+firma con la clave de la casa, comprueba que no salga firmada en depuración y
+publica la release `assist-lite-vX.Y.Z+N`, que aparece en `/descargas.html`.
+
+En local:
+
 ```bash
+flutter pub get
 flutter build apk --release
 ```
+
+Sale sin firmar con la clave de producción y sin notificaciones (falta el
+`google-services.json`), así que sirve para probar, no para repartir.
 
 Si una compilación anterior se ha quedado a medias, Windows deja bloqueado
 `build/`: parar el demonio (`android\gradlew.bat --stop`), borrar la carpeta
 `build` y repetir.
 
-Copiar al Escritorio como `mobilink-assist-lite-<versión>.apk` (la versión sale
-de `pubspec.yaml`, p. ej. `mobilink-assist-lite-0.1.0.apk`). Verificar con
-`aapt` que la versión embebida es la esperada antes de copiar.
-
 ## Notificaciones push
 
-El backend ya sabe enviar avisos (`server/core/push.ts` + `litePush.ts`,
-FCM v1 con `FIREBASE_SERVICE_ACCOUNT`) y guarda el token de cada dispositivo en
-`connect_lite_devices.fcmToken`. La app **todavía no registra token**: mientras
-tanto refresca la bandeja cada 25 s y al volver a primer plano.
+La app integra `firebase_core` + `firebase_messaging` (`lib/services/push.dart`)
+y registra su token en `POST /device`, incluido el refresco. El backend envía
+con FCM v1 (`server/core/push.ts` + `litePush.ts`, con
+`FIREBASE_SERVICE_ACCOUNT`) y limpia los tokens que FCM rechaza.
 
-Para activarlas hay que añadir `firebase_core` + `firebase_messaging` al
-`pubspec.yaml`, el `google-services.json` del proyecto y llamar a
-`POST /device` con el `fcmToken`. Ninguna otra APK del ecosistema lo hace aún,
-así que conviene hacerlo a la vez para todas.
+Lo que falta es el **alta en Firebase**: dar de alta
+`com.mobilink.assist_lite` y guardar su `google-services.json` como secret
+`LITE_GOOGLE_SERVICES_BASE64`. Sin él la APK se compila igual, sin avisos: la
+bandeja sondea cada 25 s en vez de cada 2 minutos, y la pantalla de Perfil dice
+cuál de los dos casos es.

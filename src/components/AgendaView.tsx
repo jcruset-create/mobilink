@@ -36,6 +36,7 @@ import ScheduledJobV2MiniLine from "./ScheduledJobV2MiniLine";
 import {
   loadAgendaDateRemindersFromBackend,
   saveAgendaDateRemindersToBackend,
+  deleteAgendaDateReminderFromBackend,
   type AgendaDateReminderPayload,
 } from "../modules/agendaDateReminderApi";
 
@@ -641,8 +642,8 @@ export default function AgendaView({
       ? "rounded-2xl border border-slate-600 bg-slate-700 px-4 py-2 text-sm font-medium text-slate-100 hover:bg-slate-600"
       : "rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium",
     calBox: dark
-      ? "h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-sm"
-      : "h-[calc(100vh-130px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm",
+      ? "h-[calc(100dvh-140px)] w-full overflow-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-sm"
+      : "h-[calc(100dvh-140px)] w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm",
     gridHead: dark ? "bg-slate-800" : "bg-white",
     gridBorder: dark ? "border-slate-700" : "border-slate-200",
     gridBorderSoft: dark ? "border-slate-800" : "border-slate-100",
@@ -825,13 +826,21 @@ useEffect(() => {
     // Si localStorage no está disponible, la agenda seguirá funcionando.
   }
 
-  if (!dateRemindersLoaded) return;
-
-  void saveAgendaDateRemindersToBackend(dateReminders).catch((error) => {
-    console.error("Error guardando recordatorios de agenda:", error);
-    appendLog("Error guardando recordatorios de agenda.");
-  });
+  // Ojo: aquí NO se sube la lista al servidor. Hacerlo en cada cambio, con un
+  // PUT de la colección entera, provocaba que una pestaña con datos antiguos
+  // borrase los recordatorios creados desde otra. Cada alta o borrado persiste
+  // su propio elemento (guardarRecordatorioEnBackend / deleteDateReminder).
 }, [dateReminders, dateRemindersLoaded]);
+
+/** Persiste un único recordatorio (alta o edición). */
+function guardarRecordatorioEnBackend(reminder: DateReminder) {
+  void saveAgendaDateRemindersToBackend([
+    reminder as unknown as AgendaDateReminderPayload,
+  ]).catch((error) => {
+    console.error("Error guardando el recordatorio de agenda:", error);
+    appendLog("Error guardando el recordatorio de agenda.");
+  });
+}
 
   const [draft, setDraft] = useState({
   templateKey: quickTemplates[0]?.key ?? "",
@@ -1013,6 +1022,7 @@ function saveDateReminder() {
     }
 
     setDateReminders((prev) => [...prev, reminder]);
+    guardarRecordatorioEnBackend(reminder);
 
     appendLog(
       `Estado técnico programado: ${techName} · ${getTechStatusLabel(
@@ -1053,6 +1063,7 @@ function saveDateReminder() {
   };
 
   setDateReminders((prev) => [...prev, reminder]);
+  guardarRecordatorioEnBackend(reminder);
 
   appendLog(
     `Recordatorio creado: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
@@ -1080,6 +1091,11 @@ function deleteDateReminder(id: number) {
   if (!ok) return;
 
   setDateReminders((prev) => prev.filter((item) => item.id !== id));
+
+  void deleteAgendaDateReminderFromBackend(id).catch((error) => {
+    console.error("Error eliminando el recordatorio de agenda:", error);
+    appendLog("Error eliminando el recordatorio de agenda.");
+  });
 
   if (reminder.kind === "tech_status") {
     setScheduledTechStatuses((prev) =>
@@ -2077,7 +2093,9 @@ appendLog(
           </div>
 
           <div
-            className={`grid ${
+            // pb-16: aire por debajo de la última franja horaria, para que no
+            // quede pegada al borde del calendario (se notaba en móvil).
+            className={`grid pb-16 ${
               calendarMode === "day"
                 ? "min-w-[900px] grid-cols-[70px_1fr]"
                 : "min-w-[1180px] grid-cols-[70px_repeat(6,1fr)]"
@@ -2505,7 +2523,7 @@ appendLog(
 
 {reminderModalOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-    <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+    <div className="w-full max-w-lg rounded-3xl bg-white text-slate-900 p-6 shadow-2xl">
       <h3 className="text-xl font-semibold">Nuevo recordatorio por fechas</h3>
 
       <p className="mt-1 text-sm text-slate-500">
@@ -2748,7 +2766,7 @@ appendLog(
         </>)}
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-            <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
               <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
                 <h3 className="text-xl font-semibold">
                   {editingJobId != null ? "Editar cita" : "Nueva cita"}

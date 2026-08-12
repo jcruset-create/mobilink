@@ -39,6 +39,7 @@ export default function VehiculoDetalle() {
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
   const [modalOps, setModalOps] = useState(false);
+  const [filtroOps, setFiltroOps] = useState("");
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
   const [recargarItv, setRecargarItv] = useState(0); // fuerza recarga del bloque ITV al aplicar una ficha
@@ -94,6 +95,24 @@ export default function VehiculoDetalle() {
   );
   const medidaLabel = (mid?: string | null) => (mid ? medidasMap.get(mid) : null) ?? "—";
   const llantaLabel = (lid?: string | null) => { const l = lid ? llantasMap.get(lid) : null; return l ? tipoLlantaLabel(l) : "—"; };
+
+  // Una línea del histórico. Fuera del modal porque la usan los dos bloques:
+  // las operaciones de cada parte y las que aún no se han agrupado.
+  const filaOperacion = (o: OperacionNeumatico) => (
+    <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
+      {/* Número de LÍNEA, que ya existía (tyrecontrol_operaciones_fase1). El
+          del parte, OP-…, va en la cabecera del bloque. */}
+      <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
+      <td className={tdCls + " text-slate-400"}>
+        {o.created_at ? new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : o.fecha_operacion}
+      </td>
+      <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
+      <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
+      <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
+      <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+      <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
+    </tr>
+  );
 
   if (!v) return <div className="text-slate-400">Cargando ficha…</div>;
 
@@ -390,6 +409,12 @@ export default function VehiculoDetalle() {
 
       {modalOps && (
         <Modal title="Histórico de operaciones" onClose={() => setModalOps(false)}>
+          <input
+            value={filtroOps}
+            onChange={(e) => setFiltroOps(e.target.value)}
+            placeholder="Buscar por nº de parte (OP-2026-000143), de línea (#123) o de neumático"
+            className="mb-3 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500"
+          />
           {(() => {
             const lineas = resumenOperaciones(operaciones);
             return lineas.length > 0 ? (
@@ -401,24 +426,77 @@ export default function VehiculoDetalle() {
               </div>
             ) : null;
           })()}
-          <TableWrap>
-            <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Fecha</th><th className={thCls}>Tipo</th><th className={thCls}>Estado</th>
-              <th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
-            </tr></thead>
-            <tbody>
-              {operaciones.map((o) => (
-                <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
-                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
-                  <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </TableWrap>
+          {/* Agrupado por INTERVENCIÓN: las operaciones de una misma visita al
+              taller salen bajo un solo número de parte, en vez de como líneas
+              sueltas que parecían trabajos independientes. */}
+          {(() => {
+            const q = filtroOps.trim().toUpperCase();
+            const porIntervencion = new Map<string, OperacionNeumatico[]>();
+            const sueltas: OperacionNeumatico[] = [];
+            for (const o of operaciones) {
+              if (o.intervencion_id) {
+                const lista = porIntervencion.get(o.intervencion_id) ?? [];
+                lista.push(o);
+                porIntervencion.set(o.intervencion_id, lista);
+              } else {
+                sueltas.push(o);
+              }
+            }
+            const bloques = intervenciones
+              .map((i) => ({ i, ops: porIntervencion.get(i.id) ?? [] }))
+              .filter(({ i, ops }) =>
+                !q || (i.numero ?? "").toUpperCase().includes(q) ||
+                (i.resumen ?? "").toUpperCase().includes(q) ||
+                ops.some((o) => (o.neumatico?.numero_interno ?? "").toUpperCase().includes(q)
+                  || `#${o.numero_operacion ?? ""}` === q));
+
+            if (bloques.length === 0 && (sueltas.length === 0 || q)) {
+              return <div className="text-sm text-slate-500">
+                {q ? "Ningún parte coincide con la búsqueda." : "Este vehículo no tiene operaciones registradas."}
+              </div>;
+            }
+            const cabecera = (
+              <thead className="bg-slate-900"><tr>
+                <th className={thCls}>Nº</th><th className={thCls}>Hora</th><th className={thCls}>Tipo</th>
+                <th className={thCls}>Estado</th><th className={thCls}>Neumático</th>
+                <th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
+              </tr></thead>
+            );
+            return (
+              <div className="flex flex-col gap-3">
+                {bloques.map(({ i, ops }) => (
+                  <div key={i.id} className="rounded-lg border border-slate-700 bg-slate-900/60">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-slate-700 px-3 py-2">
+                      <span className="font-mono text-[13px] font-bold text-sky-300">{i.numero ?? "sin número"}</span>
+                      <span className="text-[12px] text-slate-300">
+                        {i.fecha}
+                        {i.created_at ? " · " + new Date(i.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
+                      </span>
+                      <span className="text-[12px] text-slate-500">
+                        {i.n_operaciones} {i.n_operaciones === 1 ? "operación" : "operaciones"}
+                      </span>
+                      {i.resumen && <span className="w-full text-[12px] text-slate-400">{i.resumen}</span>}
+                    </div>
+                    {ops.length > 0 ? (
+                      <TableWrap>{cabecera}<tbody>{ops.map(filaOperacion)}</tbody></TableWrap>
+                    ) : (
+                      // Puede pasar: listarOperaciones trae las 200 últimas, así
+                      // que un parte viejo puede quedarse sin sus líneas.
+                      <div className="px-3 py-2 text-[12px] text-slate-500">Sus operaciones no están entre las últimas cargadas.</div>
+                    )}
+                  </div>
+                ))}
+                {sueltas.length > 0 && !q && (
+                  <div className="rounded-lg border border-amber-600/40 bg-amber-500/5">
+                    <div className="border-b border-amber-600/30 px-3 py-2 text-[12px] text-amber-200">
+                      Recién hechas, aún sin número: se agrupan solas al cerrar la intervención.
+                    </div>
+                    <TableWrap>{cabecera}<tbody>{sueltas.map(filaOperacion)}</tbody></TableWrap>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </Modal>
       )}
     </div>

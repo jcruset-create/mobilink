@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { profundidadVigente } from "../utils/profundidad";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import { presionTxt } from "../types";
 import {
@@ -661,7 +662,7 @@ export default function VehicleLayoutImage({
                   // Sin medición propia se enseña la de fábrica del catálogo,
                   // igual que hace la tablet: una rueda recién montada no está
                   // "sin datos", está nueva.
-                  const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? profundidadesCatalogo[claveCatalogo] ?? null;
+                  const profundidad = profundidadVigente(medicion, neu) ?? profundidadesCatalogo[claveCatalogo] ?? null;
                   const presion = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
                   const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("");
                   const distintivos = [
@@ -758,7 +759,7 @@ export default function VehicleLayoutImage({
               const neu = montajeSeleccionado.neumatico;
               const medicion = medicionesActuales[neu.id];
               const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
-              const profundidad = medicion?.profundidad_mm ?? neu.profundidad_actual_mm ?? profundidadesCatalogo[claveCatalogo] ?? null;
+              const profundidad = profundidadVigente(medicion, neu) ?? profundidadesCatalogo[claveCatalogo] ?? null;
               const presionMedida = medicion?.presion_bar ?? null;
               const presionRecom = neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
               const indices = [neu.indice_carga, neu.indice_velocidad].filter(Boolean).join("/");

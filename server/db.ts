@@ -9,14 +9,45 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL no está configurada");
 }
 
+/**
+ * Supabase exige TLS; un PostgreSQL local (desarrollo o el contenedor de las
+ * pruebas de integración) no lo ofrece y rechaza la conexión con "The server
+ * does not support SSL connections". Se decide por la propia URL, así que en
+ * producción no cambia nada.
+ */
+const esLocal =
+  /@(localhost|127\.0\.0\.1|::1|postgres)[:/]/i.test(process.env.DATABASE_URL) ||
+  process.env.PGSSLMODE === "disable";
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: esLocal ? false : { rejectUnauthorized: false },
 });
 
 export async function initDb() {
+  // `payments` (cobros con Stripe) solo existía en la base de producción: nadie
+  // la creaba desde el código, así que en una base nueva todos los endpoints de
+  // /api/payments reventaban y el ALTER de abajo fallaba en silencio. En la base
+  // que ya existe esto es un no-op.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      reference TEXT NOT NULL,
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_phone TEXT NOT NULL DEFAULT '',
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      stripe_session_id TEXT,
+      stripe_payment_intent_id TEXT,
+      payment_url TEXT,
+      paid_at_ms BIGINT,
+      created_at_ms BIGINT NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS payments_reference_idx ON payments (reference);
+    CREATE INDEX IF NOT EXISTS payments_session_idx ON payments (stripe_session_id);
+  `);
+
   await pool.query(`
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
@@ -235,6 +266,14 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS job_files_job_idx ON job_files("jobId");
+  `);
+
+  // Distingue la firma del cliente de las fotos del trabajo. Van a la misma
+  // tabla porque son el mismo tipo de adjunto, pero la firma es única por
+  // trabajo y se enseña aparte.
+  await pool.query(`
+    ALTER TABLE job_files
+    ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'foto';
   `);
 
   await pool.query(`
@@ -518,6 +557,18 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS otf_trabajos_otf_idx ON otf_trabajos("otfId");
 
+    -- Catálogo de plantillas de trabajos OTF ("Revisar presiones", etc.).
+    -- Sustituye el texto libre de trabajoPlantilla por opciones consistentes
+    -- (también de cara al código de línea al presupuestar en el ERP).
+    CREATE TABLE IF NOT EXISTS otf_plantillas (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL UNIQUE,
+      descripcion TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS otf_trabajo_files (
       id SERIAL PRIMARY KEY,
       "trabajoId" INTEGER NOT NULL REFERENCES otf_trabajos(id) ON DELETE CASCADE,
@@ -708,9 +759,13 @@ export async function initDb() {
     -- (ambas a null; se vincula al crear la asistencia).
     ALTER TABLE whatsapp_capture_sessions ALTER COLUMN job_id DROP NOT NULL;
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS connect_assistance_id INTEGER;
-    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
     CREATE INDEX IF NOT EXISTS wcs_connect_idx
       ON whatsapp_capture_sessions(connect_assistance_id);
+
+    -- Para qué se abrió la captura: decide qué prompt usa el análisis con IA.
+    -- 'assistance' (por defecto) es lo de siempre; 'workshop' es el alta de un
+    -- taller de la red que llega por WhatsApp (ficha de Google, tarjeta…).
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'assistance';
 
     CREATE TABLE IF NOT EXISTS whatsapp_capture_messages (
       id SERIAL PRIMARY KEY,
@@ -740,6 +795,11 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS transcript TEXT;
     ALTER TABLE whatsapp_capture_messages
       ADD COLUMN IF NOT EXISTS transcript_status TEXT DEFAULT 'none';
+    -- Va DESPUES de crear la tabla, no antes: sobre una base ya existente daba
+    -- igual el orden, pero sobre una vacia rompia el arranque entero con
+    -- 'relation "whatsapp_capture_messages" does not exist'. Lo destapo el
+    -- contenedor de PostgreSQL de las pruebas de integracion.
+    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
   `);
 
   await pool.query(`
@@ -843,6 +903,59 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS whatsapp2_enviado_en_ms BIGINT,
       ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
   `).catch(() => {});
+
+  // Alta/baja de técnicos. Hasta ahora la única forma de quitar a alguien era
+  // borrar la fila, y el panel reconstruye su plantilla sobre INITIAL_TECHS
+  // (código), así que el borrado no servía: al recargar volvía a aparecer.
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS activo BOOLEAN NOT NULL DEFAULT true;
+  `);
+
+  // Checklists de trabajo. Las plantillas se editan desde WorkPlanner y el
+  // técnico las marca en la tablet.
+  //
+  // Los ítems van en JSONB y no en tabla aparte a propósito: una plantilla son
+  // media docena de líneas que se leen y se guardan siempre enteras, así que
+  // una tabla hija solo añadiría joins y un orden que mantener a mano.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS checklist_plantillas (
+      id            SERIAL PRIMARY KEY,
+      nombre        TEXT NOT NULL,
+      area          TEXT,
+      items         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      activo        BOOLEAN NOT NULL DEFAULT true,
+      "workshopId"  TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+  `);
+
+  // Estado del checklist EN un trabajo concreto. Se copia de la plantilla al
+  // instanciarlo: si mañana alguien edita la plantilla, el trabajo ya hecho no
+  // cambia, que es lo que se espera de un registro de lo que se comprobó.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_checklists (
+      "jobId"       INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      "plantillaId" INTEGER,
+      nombre        TEXT,
+      items         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+  `);
+
+  // Idempotencia de la APK de taller. La app reintenta lo que quedó en la cola
+  // offline, y un envío que llegó al servidor pero cuya respuesta se perdió por
+  // un timeout se repetiría: dos veces la misma foto, o dos veces el mismo
+  // trabajo. La clave la genera el cliente y es la que decide si algo ya se
+  // hizo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS taller_idempotencia (
+      clave        TEXT PRIMARY KEY,
+      respuesta    JSONB NOT NULL,
+      "createdAtMs" BIGINT NOT NULL
+    );
+  `);
 
   // ── SaaS: módulo "workplanner" licenciable ────────────────────────────
   // Equivale a supabase/migrations/saas_fase1c_modulo_workplanner.sql. Se

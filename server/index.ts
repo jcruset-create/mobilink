@@ -13,6 +13,8 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
+import { getMailTransport } from "./mail.ts";
+import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
 import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -30,6 +32,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
@@ -587,6 +590,9 @@ function normalizeTechRow(t: any) {
     phone: t.phone ?? null,
     statusChangedAtMs: t.statusChangedAtMs != null ? Number(t.statusChangedAtMs) : null,
     statusTotals: safeJsonParse(t.statusTotals, {}),
+    // Sin la columna (base antigua) se asume de alta: nadie está de baja por
+    // omisión.
+    activo: t.activo !== false,
   };
 }
 
@@ -1554,6 +1560,45 @@ async function getAssistPanelUser(req: express.Request): Promise<AssistPanelUser
   };
 }
 
+/**
+ * Credenciales válidas para la APK de taller (WorkPlanner Taller).
+ *
+ * Un técnico de taller puede identificarse de dos formas históricas:
+ *   · código de operario (techs.roadsideOperatorCode) — lo que usaba la APK
+ *   · PIN de taller      (techs.workshopPin)          — lo que usa /operario/taller
+ *
+ * Se aceptan las dos: exigir solo la primera dejaba fuera de la app a los
+ * técnicos que únicamente tienen PIN, que son la mayoría de los de taller.
+ * Los endpoints de asistencias en carretera siguen pidiendo el código, para no
+ * ampliar por la puerta de atrás quién puede tocar una asistencia.
+ */
+async function getTallerOperatorFromRequest(req: express.Request) {
+  return (
+    (await getRoadsideOperatorFromRequest(req)) ??
+    (await getWorkshopOperatorFromRequest(req))
+  );
+}
+
+function requireTallerOperator(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const operator = await getTallerOperatorFromRequest(req);
+
+    if (!operator) {
+      return res.status(401).json({ error: "Operario no autorizado" });
+    }
+
+    (req as any).roadsideOperator = operator;
+    next();
+  })().catch((error) => {
+    console.error("requireTallerOperator error:", error);
+    res.status(500).json({ error: "Error validando operario" });
+  });
+}
+
 function requireRoadsideOperator(
   req: express.Request,
   res: express.Response,
@@ -1801,11 +1846,14 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
         imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
       })
-      .select("id").single();
+      // El número lo pone la base de datos por DEFAULT; se lee de vuelta para
+      // poder enseñárselo al técnico nada más finalizar, que es cuando puede
+      // apuntarlo en el albarán.
+      .select("id, numero").single();
     if (e2) throw e2;
     await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
 
-    res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
+    res.json({ id: interv.id, numero: (interv as any).numero ?? null, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
@@ -1972,7 +2020,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals"
+             "statusChangedAtMs", "statusTotals", activo
       FROM techs
       ORDER BY id ASC
     `);
@@ -2117,6 +2165,45 @@ app.patch("/api/techs/:name/roadside-capable", requireAdminRole, async (req, res
   } catch (error) {
     console.error("PATCH /api/techs/:name/roadside-capable error:", error);
     res.status(500).json({ error: "Error actualizando apto para carretera" });
+  }
+});
+
+/**
+ * Alta o baja de un técnico.
+ *
+ * Sustituye al borrado: la ficha se conserva —con su histórico de trabajos,
+ * tiempos y pausas, que hacen falta para nóminas y reclamaciones— pero deja de
+ * ofrecerse para asignar y no puede entrar en las apps.
+ */
+app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const activo = req.body?.activo !== false;
+
+    const result = await db.query(
+      `UPDATE techs
+       SET activo = $1,
+           -- Al dar de baja se libera el trabajo en curso y se retiran las
+           -- credenciales: si no, seguiría pudiendo entrar en la tablet.
+           status = CASE WHEN $1 THEN status ELSE 'baja' END,
+           blocked = CASE WHEN $1 THEN blocked ELSE true END,
+           "currentJobId" = CASE WHEN $1 THEN "currentJobId" ELSE NULL END,
+           "roadsideOperatorCode" = CASE WHEN $1 THEN "roadsideOperatorCode" ELSE NULL END,
+           "workshopPin" = CASE WHEN $1 THEN "workshopPin" ELSE NULL END,
+           "statusChangedAtMs" = $2
+       WHERE name = $3
+       RETURNING *`,
+      [activo, Date.now(), name]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+
+    res.json(normalizeTechRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/techs/:name/activo error:", error);
+    res.status(500).json({ error: "Error cambiando el alta del técnico" });
   }
 });
 
@@ -2634,12 +2721,79 @@ app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res
    NO tocan los /api/jobs del panel web.
 ========================================================= */
 
-async function getTallerOperator(techName: string) {
+/**
+ * ¿Es el mismo técnico? Los nombres viajan por tres sitios (columna `techs`,
+ * lista `assignedNames` del trabajo y cabecera de la APK) y basta un acento,
+ * una mayúscula o un espacio de más para que la comparación exacta falle y el
+ * técnico vea "no tienes tareas" teniendo trabajo asignado.
+ */
+function mismoNombreTecnico(a: unknown, b: unknown) {
+  const normaliza = (v: unknown) =>
+    String(v ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+  const na = normaliza(a);
+  return na !== "" && na === normaliza(b);
+}
+
+/**
+ * Idempotencia para la APK de taller.
+ *
+ * La cola offline reintenta lo que no pudo enviar. Si una petición llegó al
+ * servidor pero la respuesta se perdió (timeout, cambio de red al salir del
+ * taller), el reintento la aplicaría otra vez: dos fotos idénticas en el mismo
+ * trabajo, o dos trabajos iguales. La clave viaja en la cabecera
+ * `x-idempotency-key` y la genera el cliente al encolar, así que sobrevive al
+ * reintento.
+ *
+ * Devuelve la respuesta ya guardada si esa clave se procesó antes.
+ */
+async function respuestaIdempotente(req: express.Request) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return null;
+
   const r = await db.query(
+    `SELECT respuesta FROM taller_idempotencia WHERE clave = $1 LIMIT 1`,
+    [clave]
+  );
+
+  return r.rows.length > 0 ? r.rows[0].respuesta : null;
+}
+
+async function guardarIdempotencia(req: express.Request, respuesta: unknown) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return;
+
+  try {
+    await db.query(
+      `INSERT INTO taller_idempotencia (clave, respuesta, "createdAtMs")
+       VALUES ($1, $2, $3)
+       ON CONFLICT (clave) DO NOTHING`,
+      [clave, JSON.stringify(respuesta), Date.now()]
+    );
+  } catch (error) {
+    // Que falle el registro no debe tumbar la operación, que sí se ha hecho.
+    console.error("guardarIdempotencia error:", error);
+  }
+}
+
+async function getTallerOperator(techName: string) {
+  let r = await db.query(
     `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
     [techName]
   );
-  if (r.rows.length === 0) return null;
+
+  // Repliegue tolerante: mismo nombre con otra caja o sin acentos.
+  if (r.rows.length === 0) {
+    const todos = await db.query(`SELECT name, "es_supervisor" FROM techs`);
+    const encontrado = todos.rows.find((t: any) => mismoNombreTecnico(t.name, techName));
+    if (!encontrado) return null;
+    r = { rows: [encontrado] } as any;
+  }
+
   return {
     name: String(r.rows[0].name),
     esSupervisor: r.rows[0].es_supervisor === true,
@@ -2647,7 +2801,71 @@ async function getTallerOperator(techName: string) {
 }
 
 // Ficha del operario logueado (para pintar el rol en la APK)
-app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => {
+/**
+ * Público: nombres que pueden entrar en la APK de taller.
+ *
+ * La APK usaba /api/roadside-operator/techs, que solo devuelve operarios con
+ * código de asistencia en carretera: los técnicos de taller no salían y el
+ * desplegable de la pantalla de login aparecía vacío.
+ */
+app.get("/api/taller-operator/techs-list", async (_req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT name
+      FROM techs
+      WHERE activo = true
+        AND (NULLIF(TRIM(COALESCE("workshopPin", '')), '') IS NOT NULL
+             OR NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL)
+      ORDER BY name ASC
+    `);
+
+    res.json(result.rows.map((r: any) => ({ name: r.name })));
+  } catch (error) {
+    console.error("GET /api/taller-operator/techs-list error:", error);
+    res.status(500).json({ error: "Error obteniendo operarios de taller" });
+  }
+});
+
+/**
+ * Público: login de la APK. Acepta el PIN de taller o el código de operario,
+ * sin que el técnico tenga que saber cuál de los dos tiene.
+ */
+app.post("/api/taller-operator/login", async (req, res) => {
+  try {
+    const techName = String(req.body?.techName || "").trim();
+    const code = String(req.body?.code || "").trim();
+
+    if (!techName || !code) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+
+    const porPin = await db.query(
+      `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+      [techName, code]
+    );
+
+    const esperado = await getExpectedRoadsideOperatorCode(techName);
+    const porCodigo = Boolean(esperado) && code === esperado;
+
+    if (porPin.rows.length === 0 && !porCodigo) {
+      return res.status(401).json({ error: "PIN incorrecto" });
+    }
+
+    // El código de operario da además sesión unificada (Bearer) porque es la
+    // que ya montaba /api/roadside-operator/login; con PIN de taller se entra
+    // igual, solo con las cabeceras de operario.
+    res.json({
+      ok: true,
+      techName,
+      metodo: porPin.rows.length > 0 ? "pin" : "codigo",
+    });
+  } catch (error) {
+    console.error("POST /api/taller-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2660,7 +2878,7 @@ app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => 
 });
 
 // Trabajos visibles (scope=live). Operario: solo los suyos. Supervisor: todos.
-app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2677,7 +2895,9 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
     let jobs = result.rows.map(normalizeJobRow);
     if (!op.esSupervisor) {
       jobs = jobs.filter(
-        (j: any) => Array.isArray(j.assignedNames) && j.assignedNames.includes(op.name)
+        (j: any) =>
+          Array.isArray(j.assignedNames) &&
+          j.assignedNames.some((n: unknown) => mismoNombreTecnico(n, op.name))
       );
     }
     res.json(jobs);
@@ -2688,7 +2908,7 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
 });
 
 // Lista de técnicos para asignar (solo supervisor)
-app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/techs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2712,8 +2932,14 @@ app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) 
 });
 
 // Crear/asignar trabajo (solo supervisor)
-app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
+    // Sin esto, un reintento de la cola crea un segundo trabajo idéntico: el id
+    // se genera con Date.now() en cada intento, así que no colisiona y pasan los
+    // dos.
+    const yaCreado = await respuestaIdempotente(req);
+    if (yaCreado) return res.json(yaCreado);
+
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2750,7 +2976,9 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
         workshopId,
       ]
     );
-    res.json(normalizeJobRow(result.rows[0]));
+    const creado = normalizeJobRow(result.rows[0]);
+    await guardarIdempotencia(req, creado);
+    res.json(creado);
   } catch (error) {
     console.error("POST /api/taller-operator/jobs error:", error);
     res.status(500).json({ error: "Error creando trabajo" });
@@ -2758,7 +2986,7 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
 });
 
 // Reasignar trabajo (solo supervisor)
-app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/assign", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2786,7 +3014,7 @@ app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (
 
 // Cambiar estado del trabajo (operario: solo los suyos; supervisor: cualquiera)
 // status admitido: activo (empezar/reanudar) | parado (pausar) | cerrado (finalizar) | espera
-app.put("/api/taller-operator/jobs/:id/status", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/status", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2872,7 +3100,7 @@ async function tallerCanAccessJob(op: { name: string; esSupervisor: boolean }, j
 }
 
 // Listar fotos de un trabajo
-app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2883,7 +3111,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
       return res.status(403).json({ error: "Sin acceso a este trabajo" });
     }
     const result = await db.query(
-      `SELECT id, url, "fileName", "techName", "createdAtMs"
+      `SELECT id, url, "fileName", "techName", "createdAtMs", tipo
        FROM job_files WHERE "jobId" = $1 ORDER BY "createdAtMs" ASC`,
       [id]
     );
@@ -2894,6 +3122,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
         fileName: r.fileName ?? null,
         techName: r.techName ?? null,
         createdAtMs: Number(r.createdAtMs),
+        tipo: r.tipo ?? "foto",
       }))
     );
   } catch (error) {
@@ -2905,10 +3134,15 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
 // Subir foto a un trabajo
 app.post(
   "/api/taller-operator/jobs/:id/files",
-  requireRoadsideOperator,
+  requireTallerOperator,
   upload.single("file"),
   async (req, res) => {
     try {
+      // Reintento de la cola offline: la foto ya se subió, se devuelve la
+      // misma respuesta en vez de dejar dos copias en el trabajo.
+      const yaHecho = await respuestaIdempotente(req);
+      if (yaHecho) return res.json(yaHecho);
+
       const { techName } = (req as any).roadsideOperator as { techName: string };
       const op = await getTallerOperator(techName);
       if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2925,7 +3159,12 @@ app.post(
         "image/webp": "webp",
       };
       const ext = mimeToExt[req.file.mimetype] ?? "jpg";
-      const storagePath = `taller/${id}/foto_${Date.now()}.${ext}`;
+      // 'firma' o 'foto'. La firma del cliente es única por trabajo: si se
+      // repite, la nueva sustituye a la anterior en vez de acumular garabatos.
+      const tipo = String((req.body as any)?.tipo ?? "foto").trim() === "firma"
+        ? "firma"
+        : "foto";
+      const storagePath = `taller/${id}/${tipo}_${Date.now()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from(SUPABASE_ROADSIDE_BUCKET)
@@ -2939,25 +3178,314 @@ app.post(
         .from(SUPABASE_ROADSIDE_BUCKET)
         .getPublicUrl(storagePath);
 
+      if (tipo === "firma") {
+        await db.query(`DELETE FROM job_files WHERE "jobId" = $1 AND tipo = 'firma'`, [id]);
+      }
+
       const result = await db.query(
-        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs")
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now()]
+        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs", tipo)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now(), tipo]
       );
       const row = result.rows[0];
-      res.json({
+      const respuesta = {
         id: Number(row.id),
         url: row.url,
         fileName: row.fileName ?? null,
         techName: row.techName ?? null,
         createdAtMs: Number(row.createdAtMs),
-      });
+        tipo: row.tipo ?? "foto",
+      };
+      await guardarIdempotencia(req, respuesta);
+      res.json(respuesta);
     } catch (error) {
       console.error("POST /api/taller-operator/jobs/:id/files error:", error);
       res.status(500).json({ error: "Error subiendo foto" });
     }
   }
 );
+
+/* =========================================================
+   CHECKLISTS — plantillas (WorkPlanner) y estado por trabajo (APK)
+========================================================= */
+
+/** Normaliza los ítems que llegan del editor: texto obligatorio, resto opcional. */
+function normalizaItemsPlantilla(valor: unknown) {
+  if (!Array.isArray(valor)) return [];
+  return valor
+    .map((item: any) => ({
+      texto: String(item?.texto ?? "").trim(),
+      obligatorio: item?.obligatorio === true,
+    }))
+    .filter((item) => item.texto !== "");
+}
+
+// Plantillas: listado para el panel (incluye las desactivadas si se pide)
+app.get("/api/checklist-plantillas", requirePanelRole, async (req, res) => {
+  try {
+    const incluirInactivas = String(req.query.incluirInactivas || "") === "true";
+    const result = await db.query(
+      `SELECT * FROM checklist_plantillas
+       ${incluirInactivas ? "" : "WHERE activo = true"}
+       ORDER BY nombre ASC`
+    );
+    res.json(result.rows.map(normalizaPlantillaRow));
+  } catch (error) {
+    console.error("GET /api/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error obteniendo las plantillas" });
+  }
+});
+
+function normalizaPlantillaRow(row: any) {
+  return {
+    id: Number(row.id),
+    nombre: row.nombre,
+    area: row.area ?? null,
+    items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+    activo: row.activo !== false,
+    workshopId: row.workshopId ?? null,
+    createdAtMs: Number(row.createdAtMs),
+    updatedAtMs: Number(row.updatedAtMs),
+  };
+}
+
+app.post("/api/checklist-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+
+    const items = normalizaItemsPlantilla(req.body?.items);
+    const ahora = Date.now();
+
+    const result = await db.query(
+      `INSERT INTO checklist_plantillas
+         (nombre, area, items, activo, "workshopId", "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, $3, true, $4, $5, $5)
+       RETURNING *`,
+      [
+        nombre,
+        String(req.body?.area ?? "").trim() || null,
+        JSON.stringify(items),
+        String(req.body?.workshopId ?? "").trim() || null,
+        ahora,
+      ]
+    );
+
+    res.json(normalizaPlantillaRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error creando la plantilla" });
+  }
+});
+
+app.put("/api/checklist-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+
+    const result = await db.query(
+      `UPDATE checklist_plantillas
+       SET nombre = $1, area = $2, items = $3, activo = $4, "updatedAtMs" = $5
+       WHERE id = $6
+       RETURNING *`,
+      [
+        nombre,
+        String(req.body?.area ?? "").trim() || null,
+        JSON.stringify(normalizaItemsPlantilla(req.body?.items)),
+        req.body?.activo !== false,
+        Date.now(),
+        id,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Plantilla no encontrada" });
+    }
+    res.json(normalizaPlantillaRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/checklist-plantillas/:id error:", error);
+    res.status(500).json({ error: "Error guardando la plantilla" });
+  }
+});
+
+// Baja lógica: los trabajos ya hechos conservan su copia, pero la plantilla
+// deja de ofrecerse. Borrarla de verdad rompería el histórico.
+app.delete("/api/checklist-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    await db.query(
+      `UPDATE checklist_plantillas SET activo = false, "updatedAtMs" = $1 WHERE id = $2`,
+      [Date.now(), id]
+    );
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/checklist-plantillas/:id error:", error);
+    res.status(500).json({ error: "Error desactivando la plantilla" });
+  }
+});
+
+// ── La APK ────────────────────────────────────────────────
+
+// Plantillas activas, para que el técnico elija cuál aplicar.
+app.get("/api/taller-operator/checklist-plantillas", requireTallerOperator, async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT * FROM checklist_plantillas WHERE activo = true ORDER BY nombre ASC`
+    );
+    res.json(result.rows.map(normalizaPlantillaRow));
+  } catch (error) {
+    console.error("GET /api/taller-operator/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error obteniendo las plantillas" });
+  }
+});
+
+function normalizaChecklistRow(row: any) {
+  return {
+    jobId: Number(row.jobId),
+    plantillaId: row.plantillaId != null ? Number(row.plantillaId) : null,
+    nombre: row.nombre ?? null,
+    items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+    updatedAtMs: Number(row.updatedAtMs),
+  };
+}
+
+app.get("/api/taller-operator/jobs/:id/checklist", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const result = await db.query(`SELECT * FROM job_checklists WHERE "jobId" = $1`, [id]);
+    res.json(result.rows.length > 0 ? normalizaChecklistRow(result.rows[0]) : null);
+  } catch (error) {
+    console.error("GET /api/taller-operator/jobs/:id/checklist error:", error);
+    res.status(500).json({ error: "Error obteniendo el checklist" });
+  }
+});
+
+// Aplica una plantilla al trabajo. Copia los ítems: si luego alguien edita la
+// plantilla, lo ya comprobado no cambia.
+app.post("/api/taller-operator/jobs/:id/checklist", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const plantillaId = Number(req.body?.plantillaId);
+    if (!Number.isFinite(plantillaId)) {
+      return res.status(400).json({ error: "Plantilla no válida" });
+    }
+
+    const plantilla = await db.query(
+      `SELECT * FROM checklist_plantillas WHERE id = $1 LIMIT 1`,
+      [plantillaId]
+    );
+    if (plantilla.rows.length === 0) {
+      return res.status(404).json({ error: "Plantilla no encontrada" });
+    }
+
+    const origen = normalizaPlantillaRow(plantilla.rows[0]);
+    const items = origen.items.map((item: any) => ({
+      texto: String(item?.texto ?? ""),
+      obligatorio: item?.obligatorio === true,
+      hecho: false,
+      hechoAtMs: null,
+      tecnico: null,
+    }));
+    const ahora = Date.now();
+
+    const result = await db.query(
+      `INSERT INTO job_checklists ("jobId", "plantillaId", nombre, items, "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT ("jobId") DO UPDATE SET
+         "plantillaId" = EXCLUDED."plantillaId",
+         nombre = EXCLUDED.nombre,
+         items = EXCLUDED.items,
+         "updatedAtMs" = EXCLUDED."updatedAtMs"
+       RETURNING *`,
+      [id, origen.id, origen.nombre, JSON.stringify(items), ahora]
+    );
+
+    res.json(normalizaChecklistRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/taller-operator/jobs/:id/checklist error:", error);
+    res.status(500).json({ error: "Error aplicando el checklist" });
+  }
+});
+
+/**
+ * Marca o desmarca UN ítem por su índice.
+ *
+ * Deliberadamente no se envía la lista entera: con dos técnicos en el mismo
+ * trabajo, o con la tablet reenviando la cola, el último en guardar borraría lo
+ * que marcó el otro. Es el mismo problema que tuvimos con los recordatorios de
+ * la agenda.
+ */
+app.put("/api/taller-operator/jobs/:id/checklist/:indice", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    const indice = Number(req.params.indice);
+    if (!Number.isFinite(id) || !Number.isFinite(indice)) {
+      return res.status(400).json({ error: "Petición no válida" });
+    }
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const actual = await db.query(`SELECT * FROM job_checklists WHERE "jobId" = $1`, [id]);
+    if (actual.rows.length === 0) {
+      return res.status(404).json({ error: "Este trabajo no tiene checklist" });
+    }
+
+    const checklist = normalizaChecklistRow(actual.rows[0]);
+    if (indice < 0 || indice >= checklist.items.length) {
+      return res.status(400).json({ error: "Ítem no válido" });
+    }
+
+    const hecho = req.body?.hecho !== false;
+    const items = checklist.items.map((item: any, i: number) =>
+      i === indice
+        ? {
+            ...item,
+            hecho,
+            hechoAtMs: hecho ? Date.now() : null,
+            tecnico: hecho ? op.name : null,
+          }
+        : item
+    );
+
+    const result = await db.query(
+      `UPDATE job_checklists SET items = $1, "updatedAtMs" = $2 WHERE "jobId" = $3 RETURNING *`,
+      [JSON.stringify(items), Date.now(), id]
+    );
+
+    res.json(normalizaChecklistRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/taller-operator/jobs/:id/checklist/:indice error:", error);
+    res.status(500).json({ error: "Error marcando el ítem" });
+  }
+});
 
 /* =========================================================
    PRESENCIA OPERATOR (APK Mobilink Presencia — fichaje)
@@ -4330,12 +4858,26 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
     } catch { /* sin config */ }
 
+    // Teléfono del técnico asignado, para que el cliente pueda llamarle
+    // directamente desde la página de seguimiento.
+    let techPhone: string | null = null;
+    if (assistance.assignedTechName) {
+      try {
+        const tp = await db.query(`SELECT phone FROM techs WHERE name = $1 LIMIT 1`, [
+          assistance.assignedTechName,
+        ]);
+        const raw = tp.rows[0]?.phone ? String(tp.rows[0].phone).trim() : "";
+        techPhone = raw || null;
+      } catch { /* sin teléfono */ }
+    }
+
     res.json({
       assistance,
       vanPlate,
       vanMarca,
       vanModelo,
       workshop,
+      techPhone,
       events: eventsResult.rows.map((e: any) => ({
         status: e.status,
         createdAtMs: Number(e.createdAtMs),
@@ -4937,6 +5479,14 @@ app.post("/api/tyrecontrol/webfleet/sync", authenticate, requireModule("tyrecont
   res.json(r);
 });
 
+// Mira el buzón del CheckPoint ahora mismo, sin esperar al temporizador. Para
+// probar la configuración del buzón sin quedarse quince minutos mirando.
+app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
+  const r = await revisarBuzonCheckpoint();
+  if ("error" in r) return res.status(502).json(r);
+  res.json(r);
+});
+
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
@@ -5239,7 +5789,8 @@ app.get("/api/roadside-operator/techs", async (_req, res) => {
     const result = await db.query(`
       SELECT *
       FROM techs
-      WHERE NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      WHERE activo = true
+        AND NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
       ORDER BY id ASC
     `);
 
@@ -8258,23 +8809,6 @@ app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRo
   }
 });
 
-let mailTransport: import("nodemailer").Transporter | null = null;
-function getMailTransport() {
-  if (mailTransport) return mailTransport;
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return null;
-  }
-  mailTransport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: Number(process.env.SMTP_PORT || 587) === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-  return mailTransport;
-}
 
 app.post(
   "/api/roadside-assistances/:id/send-report",
@@ -9824,9 +10358,11 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo. Antes esto hacía DELETE de toda la tabla y volvía a
+    // insertar la lista del cliente: la última pestaña que guardaba imponía su
+    // copia y borraba lo que hubieran creado las demás (se perdieron
+    // recordatorios reales así). Los borrados van por DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM agenda_date_reminders`);
 
     for (const item of items) {
       await db.query(
@@ -9903,6 +10439,25 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
     res.status(500).json({
       error: "Error guardando recordatorios de agenda",
     });
+
+  }
+});
+
+/** Borrado por elemento: sustituye al antiguo reemplazo completo de la tabla. */
+app.delete("/api/agenda-date-reminders/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de recordatorio no válido" });
+    }
+
+    await db.query(`DELETE FROM agenda_date_reminders WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/agenda-date-reminders/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el recordatorio" });
+
+
   }
 });
 
@@ -9910,9 +10465,10 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo: vaciar la tabla hacía que una pestaña con datos
+    // antiguos borrase los estados creados desde otra. Los borrados van por
+    // DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM scheduled_tech_statuses`);
 
     for (const item of items) {
       await db.query(
@@ -9981,6 +10537,20 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
     res.status(500).json({
       error: "Error guardando estados técnicos programados",
     });
+  }
+});
+
+/** Borrado por elemento del estado programado de un técnico. */
+app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "ID de estado no válido" });
+
+    await db.query(`DELETE FROM scheduled_tech_statuses WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/scheduled-tech-statuses/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el estado programado" });
   }
 });
 
@@ -12212,11 +12782,18 @@ Reglas obligatorias:
 ========================================================= */
 
 async function getWorkshopOperatorFromRequest(req: express.Request) {
-  const techName = String(req.headers["x-operator-name"] ?? "").trim();
+  const bruto = String(req.headers["x-operator-name"] ?? "").trim();
+  // La APK codifica el nombre: las cabeceras HTTP no admiten acentos y un
+  // "Jesús" sin codificar se pierde por el camino. El panel web lo manda tal
+  // cual, así que se acepta de las dos formas.
+  let techName = bruto;
+  try { techName = decodeURIComponent(bruto); } catch { /* nombre sin codificar */ }
   const pin = String(req.headers["x-operator-pin"] ?? "").trim();
   if (!techName || !pin) return null;
   const result = await db.query(
-    `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
+    `SELECT name FROM techs
+     WHERE name = $1 AND "workshopPin" = $2 AND activo = true
+     LIMIT 1`,
     [techName, pin]
   );
   if (result.rows.length === 0) return null;
@@ -12245,7 +12822,7 @@ function requireWorkshopOperatorAuth(
 app.get("/api/workshop-operator/techs-list", async (_req, res) => {
   try {
     const result = await db.query(
-      `SELECT name FROM techs ORDER BY name ASC`
+      `SELECT name FROM techs WHERE activo = true ORDER BY name ASC`
     );
     res.json(result.rows.map((r: any) => ({ name: r.name })));
   } catch (error) {
@@ -13455,12 +14032,25 @@ app.post("/api/roadside-known-places", requireAdminRole, async (req, res) => {
     const b = req.body ?? {};
     const lat = Number(b.lat), lng = Number(b.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
-    const result = await createKnownPlaceDedup({
-      nombre: String(b.nombre ?? "").trim(), tipo: b.tipo, direccion: b.direccion ?? null,
-      lat, lng, clientId: b.clientId ?? null, clientName: b.clientName ?? null,
-      notas: b.notas ?? null, createdBy: "oficina",
-    });
-    res.json(result);
+    // Alta manual de oficina: SIN deduplicado (eso es para los altas
+    // automáticos de los operarios). Si la oficina crea una base con su
+    // nombre, se crea tal cual y se devuelve el lugar directamente.
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO roadside_known_places
+        (nombre, tipo, direccion, lat, lng, "clientId", "clientName", notas, "createdBy", active, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'oficina',true,$9,$9) RETURNING *`,
+      [
+        String(b.nombre ?? "").trim() || "Lugar sin nombre",
+        b.tipo || "otro",
+        b.direccion ?? null,
+        lat, lng,
+        b.clientId ?? null, b.clientName ?? null,
+        b.notas ?? null,
+        now,
+      ]
+    );
+    res.json(normalizeKnownPlace(r.rows[0]));
   } catch (e) {
     console.error("POST known-places error:", e);
     res.status(500).json({ error: "Error creando lugar" });
@@ -13474,8 +14064,9 @@ app.put("/api/roadside-known-places/:id", requireAdminRole, async (req, res) => 
     const r = await db.query(
       `UPDATE roadside_known_places SET
          nombre = COALESCE($2, nombre), tipo = COALESCE($3, tipo),
-         direccion = $4, lat = COALESCE($5, lat), lng = COALESCE($6, lng),
-         "clientId" = $7, "clientName" = $8, notas = $9, "updatedAtMs" = $10
+         direccion = COALESCE($4, direccion), lat = COALESCE($5, lat), lng = COALESCE($6, lng),
+         "clientId" = COALESCE($7, "clientId"), "clientName" = COALESCE($8, "clientName"),
+         notas = COALESCE($9, notas), "updatedAtMs" = $10
        WHERE id = $1 RETURNING *`,
       [id, b.nombre ?? null, b.tipo ?? null, b.direccion ?? null,
        b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
@@ -13678,10 +14269,201 @@ app.get("/api/otf/:id", requireAdminRole, async (req, res) => {
   }
 });
 
+/**
+ * Regla de asignación de OTF: un operario que ya está trabajando no puede
+ * recibir otra OTF, salvo que sea para AMPLIAR el trabajo en la MISMA base
+ * donde está ahora (mismo lugar conocido). Ocupado = tiene una OTF
+ * planificada/en curso o una asistencia de carretera activa.
+ */
+async function checkTechDisponibleParaOtf(
+  techName: string | null | undefined,
+  knownPlaceId: number | null,
+  excludeOtfId?: number
+): Promise<{ ok: boolean; error?: string }> {
+  const name = String(techName ?? "").trim();
+  if (!name) return { ok: true };
+
+  // ¿Está en una asistencia de carretera?
+  const tech = await db.query(
+    `SELECT "currentRoadsideAssistanceId" FROM techs WHERE name = $1`,
+    [name]
+  );
+  if (tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null) {
+    return {
+      ok: false,
+      error: `${name} está en una asistencia en carretera (nº ${tech.rows[0].currentRoadsideAssistanceId}). No se le puede asignar otra OTF hasta que termine.`,
+    };
+  }
+
+  // ¿Tiene ya una OTF abierta?
+  const abierta = await db.query(
+    `SELECT id, "baseName", "knownPlaceId" FROM otf
+     WHERE "assignedTechName" = $1 AND status IN ('planificada','en_curso')
+       AND ($2::int IS NULL OR id <> $2)
+     ORDER BY "createdAtMs" DESC LIMIT 1`,
+    [name, excludeOtfId ?? null]
+  );
+  if (!abierta.rows.length) return { ok: true };
+
+  const actual = abierta.rows[0];
+  const mismaBase =
+    knownPlaceId != null &&
+    actual.knownPlaceId != null &&
+    Number(actual.knownPlaceId) === Number(knownPlaceId);
+  if (mismaBase) return { ok: true }; // ampliación del trabajo en su base actual
+
+  return {
+    ok: false,
+    error: `${name} ya tiene la OTF #${actual.id}${actual.baseName ? ` en ${actual.baseName}` : ""}. Solo se le puede asignar otra OTF en esa misma base (ampliación) o cuando termine.`,
+  };
+}
+
+// ── Plantillas de trabajos OTF (catálogo) ──
+app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const incluirInactivas = String(req.query.all || "") === "true";
+    const r = await db.query(
+      `SELECT id, nombre, descripcion, activo FROM otf_plantillas
+       ${incluirInactivas ? "" : "WHERE activo = true"}
+       ORDER BY nombre ASC`
+    );
+    res.json(r.rows.map((p: any) => ({
+      id: Number(p.id),
+      nombre: p.nombre,
+      descripcion: p.descripcion ?? null,
+      activo: p.activo === true,
+    })));
+  } catch (e) {
+    console.error("GET /api/otf-plantillas error:", e);
+    res.status(500).json({ error: "Error obteniendo plantillas" });
+  }
+});
+
+app.post("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO otf_plantillas (nombre, descripcion, activo, "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, true, $3, $3)
+       ON CONFLICT (nombre) DO UPDATE SET activo = true, "updatedAtMs" = $3
+       RETURNING id, nombre, descripcion, activo`,
+      [nombre, req.body?.descripcion ? String(req.body.descripcion).trim() : null, now]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error("POST /api/otf-plantillas error:", e);
+    res.status(500).json({ error: "Error creando plantilla" });
+  }
+});
+
+app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE otf_plantillas SET
+         nombre = COALESCE($2, nombre),
+         descripcion = COALESCE($3, descripcion),
+         activo = COALESCE($4, activo),
+         "updatedAtMs" = $5
+       WHERE id = $1 RETURNING id, nombre, descripcion, activo`,
+      [id, typeof b.nombre === "string" ? b.nombre.trim() : null,
+       typeof b.descripcion === "string" ? b.descripcion.trim() : null,
+       typeof b.activo === "boolean" ? b.activo : null, Date.now()]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Plantilla no encontrada" });
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error("PATCH /api/otf-plantillas/:id error:", e);
+    res.status(500).json({ error: "Error actualizando plantilla" });
+  }
+});
+
+// ── TyreControl por matrícula: resumen para la tarjeta de la OTF ──
+// Busca el vehículo en TyreControl (normalizando la matrícula) y devuelve la
+// última revisión completada con sus alertas. Solo lectura.
+app.get("/api/otf-tyrecontrol-info", requireSupervisorRole, async (req, res) => {
+  try {
+    const plateRaw = String(req.query.plate ?? "").trim();
+    const norm = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!norm) return res.status(400).json({ error: "plate requerida" });
+
+    // tc_vehiculos guarda la matrícula en mayúsculas pero puede llevar guiones
+    // o espacios: se normaliza en JS para comparar.
+    const { data: vehiculos, error: vErr } = await supabase
+      .from("tc_vehiculos")
+      .select("id, matricula, marca, modelo, km_actual, activo")
+      .limit(2000);
+    if (vErr) throw new Error(vErr.message);
+    const veh = (vehiculos ?? []).find(
+      (v: any) => String(v.matricula ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "") === norm
+    );
+    if (!veh) return res.json({ found: false });
+
+    const { data: revs } = await supabase
+      .from("revisiones_vehiculo")
+      .select("id, fecha_revision, km_vehiculo, estado_revision")
+      .eq("vehiculo_id", veh.id)
+      .in("estado_revision", ["completada", "enviada"])
+      .order("fecha_revision", { ascending: false })
+      .limit(1);
+    const rev = revs?.[0] ?? null;
+
+    let alertas = 0;
+    let minProfundidad: number | null = null;
+    let posiciones = 0;
+    if (rev) {
+      const { data: det } = await supabase
+        .from("revisiones_neumaticos_detalle")
+        .select("profundidad_mm, alerta_generada, neumatico_ausente")
+        .eq("revision_id", rev.id);
+      for (const d of det ?? []) {
+        posiciones++;
+        if ((d as any).alerta_generada === true) alertas++;
+        const p = (d as any).profundidad_mm != null ? Number((d as any).profundidad_mm) : null;
+        if (p != null && (minProfundidad == null || p < minProfundidad)) minProfundidad = p;
+      }
+    }
+
+    res.json({
+      found: true,
+      vehiculo: {
+        id: veh.id,
+        matricula: veh.matricula,
+        marca: veh.marca ?? null,
+        modelo: veh.modelo ?? null,
+        kmActual: veh.km_actual != null ? Number(veh.km_actual) : null,
+        activo: veh.activo !== false,
+      },
+      ultimaRevision: rev
+        ? {
+            fecha: rev.fecha_revision,
+            km: rev.km_vehiculo != null ? Number(rev.km_vehiculo) : null,
+            posiciones,
+            alertas,
+            minProfundidadMm: minProfundidad,
+          }
+        : null,
+    });
+  } catch (e) {
+    console.error("GET /api/otf/tyrecontrol-info error:", e);
+    res.status(500).json({ error: "Error consultando TyreControl" });
+  }
+});
+
 app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   try {
     const b = req.body ?? {};
     const now = Date.now();
+
+    const disp = await checkTechDisponibleParaOtf(
+      b.assignedTechName,
+      b.knownPlaceId != null ? Number(b.knownPlaceId) : null
+    );
+    if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
     const r = await db.query(
       `INSERT INTO otf ("workshopId","clientName","clientId","knownPlaceId","baseName",direccion,lat,lng,
         "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs")
@@ -13705,6 +14487,16 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body ?? {};
+
+    if (b.assignedTechName) {
+      const disp = await checkTechDisponibleParaOtf(
+        b.assignedTechName,
+        b.knownPlaceId != null ? Number(b.knownPlaceId) : null,
+        id
+      );
+      if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+    }
+
     await db.query(
       `UPDATE otf SET
          "clientName" = COALESCE($2,"clientName"),
@@ -13754,9 +14546,9 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
       ? combineTrabajo(b.trabajoPlantilla, b.detalleManual) : null;
     const r = await db.query(
       `UPDATE otf_trabajos SET
-         plate = COALESCE($2,plate), "plateRemolque" = $3, "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
+         plate = COALESCE($2,plate), "plateRemolque" = COALESCE($3,"plateRemolque"), "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
          "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = COALESCE($7,trabajo),
-         status = COALESCE($8,status), observaciones = $9, "updatedAtMs" = $10
+         status = COALESCE($8,status), observaciones = COALESCE($9,observaciones), "updatedAtMs" = $10
        WHERE id = $1 RETURNING *`,
       [tid, b.plate != null ? String(b.plate).toUpperCase().trim() : null, b.plateRemolque ?? null,
        b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
@@ -13999,21 +14791,47 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     const planificados = data.trabajos.filter((t: any) => t.origen !== "tecnico_campo");
     const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
 
-    const printT = (t: any) => {
+    const FOTO_LABELS: Record<string, string> = { matricula: "Matrícula", averia: "Avería" };
+    const printT = async (t: any) => {
+      if (doc.y > 700) doc.addPage();
       doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
       doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
+      if (t.observaciones) doc.fontSize(8).font("Helvetica").text(`   Observaciones: ${t.observaciones}`);
       if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
+      // Fotos del trabajo (matrícula, avería…): fila de miniaturas etiquetadas
+      const fotos = (t.fotos ?? []).slice(0, 4);
+      if (fotos.length > 0) {
+        if (doc.y > 640) doc.addPage();
+        const y0 = doc.y + 4;
+        let x = 50;
+        for (const f of fotos) {
+          try {
+            const buf = await fetchImageForPdf(f.url);
+            doc.image(buf, x, y0, { fit: [110, 80] });
+            const label = FOTO_LABELS[String(f.kind)] ?? "";
+            if (label) {
+              doc.fontSize(7).font("Helvetica").fillColor("#555555")
+                .text(label, x, y0 + 83, { width: 110, align: "center" });
+              doc.fillColor("#000000");
+            }
+            x += 120;
+          } catch { /* foto no accesible: se omite */ }
+        }
+        doc.x = 40;
+        doc.y = y0 + 96;
+      }
       doc.moveDown(0.2);
     };
 
     doc.fontSize(11).font("Helvetica-Bold").text("Planificados por oficina:");
     if (planificados.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
-    planificados.forEach(printT);
+    for (const t of planificados) await printT(t);
 
     doc.moveDown(0.4);
+    if (doc.y > 700) doc.addPage();
     doc.fontSize(11).font("Helvetica-Bold").text("Añadidos en campo por el técnico:");
     if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
-    enCampo.forEach(printT);
+    for (const t of enCampo) await printT(t);
 
     // Firma única
     if (data.firmaUrl || data.firmanteNombre) {
@@ -15299,29 +16117,36 @@ app.post(
       const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
 
       const systemPrompt = `Eres un extractor de datos de administración de un taller.
-Recibirás la imagen de un aviso de devolución de recibo bancario o de una factura pendiente
+Recibirás la imagen de un aviso de devolución de recibo bancario o de facturas pendientes
 (normalmente un email del banco o de contabilidad con campos como CLIENTE, FACTURA,
-VENCIMIENTO, NOMINAL, GASTOS, TOTAL).
+VENCIMIENTO, NOMINAL, GASTOS, TOTAL). El aviso puede contener UNA o VARIAS partidas
+(varias facturas/recibos en una tabla).
 
 Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
 {
   "clienteCodigo": string | null,      // código numérico del cliente si aparece (ej. "100506")
   "clienteNombre": string | null,      // razón social (ej. "DENIS EXPRESS CARGO, S.L.")
-  "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
-  "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
-  "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3", "1/2"); null si no aparece
   "fechaContabilizacion": string | null, // FECHA CONTABILIZACIÓN del aviso en ISO yyyy-mm-dd
-  "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
-  "nominal": number | null,            // importe nominal en euros
-  "gastos": number | null,             // gastos de devolución en euros
-  "total": number | null,              // importe total en euros (nominal + gastos)
-  "confianza": "alta" | "media" | "baja"
+  "confianza": "alta" | "media" | "baja",
+  "partidas": [                        // UNA entrada por cada factura/recibo del aviso
+    {
+      "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
+      "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
+      "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3"); null si no aparece
+      "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
+      "nominal": number | null,            // importe nominal en euros
+      "gastos": number | null,             // gastos de devolución en euros
+      "total": number | null               // importe total de ESTA partida (nominal + gastos)
+    }
+  ]
 }
 
 Reglas:
+- Si el aviso tiene una tabla con varias facturas, devuelve una partida por fila (no las sumes en una sola).
+- El "Total" general del aviso (suma de todas las partidas) NO es una partida: ignóralo.
 - Fechas tipo "30.06.26" o "2.07.26" son dd.mm.aa → conviértelas a ISO (2026-06-30, 2026-07-02).
 - Importes en formato español "1.997,32" → 1997.32 (número, punto decimal).
-- Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
+- Si el total de una partida no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
       const rIa = await pedirIA({
@@ -15343,6 +16168,21 @@ Reglas:
         console.error("analizar-impagado: respuesta no parseable:", raw);
         return res.status(422).json({ success: false, message: "No se pudieron extraer datos de la imagen." });
       }
+
+      // Normalizar: partidas siempre como array, y la primera aplanada en el
+      // nivel superior por compatibilidad con el formato antiguo de un solo recobro.
+      const partidas = Array.isArray(datos?.partidas) && datos.partidas.length
+        ? datos.partidas
+        : [{
+            numeroFactura: datos?.numeroFactura ?? null,
+            vencimiento: datos?.vencimiento ?? null,
+            numeroVencimiento: datos?.numeroVencimiento ?? null,
+            fechaFactura: datos?.fechaFactura ?? null,
+            nominal: datos?.nominal ?? null,
+            gastos: datos?.gastos ?? null,
+            total: datos?.total ?? null,
+          }];
+      datos = { ...datos, partidas, ...partidas[0] };
 
       return res.json({ success: true, datos });
     } catch (error) {
@@ -15925,6 +16765,16 @@ const APK_APPS: Record<
   { prefix: string; label: string; releaseTag?: string; pubspec?: string }
 > = {
   assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
+  // Sin "pubspec" a proposito: ese campo es el repliegue cuando la API de
+  // GitHub falla, y construye la URL de la release a partir de la version del
+  // repositorio. Mientras Lite no tenga su primera release publicada eso daria
+  // un enlace roto; mejor "No disponible" que un 404. Se anade en cuanto la CI
+  // publique la primera.
+  "assist-lite": {
+    prefix: "mobilink-assist-lite-",
+    label: "Mobilink Assist Lite",
+    releaseTag: "assist-lite-v",
+  },
   tyrecontrol: {
     prefix: "tyrecontrol-",
     label: "Mobilink TyreControl",
@@ -15932,26 +16782,13 @@ const APK_APPS: Record<
     pubspec: "tyrecontrol_app/pubspec.yaml",
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  taller: {
+    prefix: "mobilink-taller-",
+    label: "WorkPlanner Taller",
+    releaseTag: "taller-v",
+    pubspec: "taller_app/pubspec.yaml",
+  },
 };
-
-// Orden por versión descendente. El "+build" (0.31.6+80) cuenta como un tramo
-// más al final: sin esto, "6+80" se parseaba como 6 y dos builds del mismo
-// 0.31.6 empataban, así que ganaba el que devolviera primero el sistema de
-// ficheros — es decir, cualquiera.
-function versionPartes(v: string): number[] {
-  const [nombre, build] = v.split("+");
-  const out = nombre.split(".").map((n) => parseInt(n, 10) || 0);
-  out.push(parseInt(build ?? "0", 10) || 0);
-  return out;
-}
-function masNuevaPrimero(a: string, b: string): number {
-  const pa = versionPartes(a);
-  const pb = versionPartes(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
-  }
-  return 0;
-}
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
 function latestApkFor(prefix: string): { file: string; version: string } | null {
@@ -15959,7 +16796,11 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
     const dir = path.join(__dirname, "../public");
     const files = fs
       .readdirSync(dir)
-      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"));
+      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"))
+      // "mobilink-assist-" es prefijo de "mobilink-assist-lite-": sin esto, la
+      // APK de Lite se colaría en la fila de Assist. Detrás del prefijo va la
+      // versión, así que lo siguiente tiene que ser un dígito.
+      .filter((f) => /^\d/.test(f.slice(prefix.length)));
     if (!files.length) return null;
     const withVer = files.map((f) => ({
       file: f,
@@ -16137,6 +16978,7 @@ initDb()
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
+      startCheckpointMail(); // informe del arco CheckPoint por correo (apagado sin credenciales)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)

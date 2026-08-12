@@ -90,6 +90,25 @@ class _InicioTab extends StatelessWidget {
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IdentifyVehicleScreen())),
           ),
           const SizedBox(height: 14),
+          // Operaciones: entra a Cambios sin dar el rodeo por la ficha del
+          // vehículo. Identificar el camión no se puede saltar (Cambios
+          // necesita saber sobre cuál se trabaja), pero la ficha sí.
+          _BigTile(
+            // El mismo icono que el botón "Cambiar" de la ficha, que es a
+            // donde lleva. Icons.build ya lo usan Herramientas (pestaña y
+            // botón) y repetirlo aquí despistaría.
+            icon: Icons.swap_horiz,
+            label: 'Operaciones',
+            color: AppColors.tileVerdePastel,
+            onTap: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const IdentifyVehicleScreen(destino: DestinoVehiculo.operaciones)));
+              // Una operación puede haber cerrado incidencias: hay que
+              // refrescar el contador de la pestaña, como hace Incidencias.
+              await TyreControlApi.contarIncidenciasPendientes();
+            },
+          ),
+          const SizedBox(height: 14),
           // Planificación arriba (antes estaba abajo con Vehículos)
           Row(
             children: [
@@ -97,6 +116,7 @@ class _InicioTab extends StatelessWidget {
                 child: _BigTile(
                   icon: Icons.event_note,
                   label: 'Planificación',
+                  color: AppColors.tileGrisPastel,
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
                 ),
               ),
@@ -108,6 +128,7 @@ class _InicioTab extends StatelessWidget {
             builder: (_, n, __) => _BigTile(
               icon: Icons.warning_amber,
               label: n > 0 ? 'Incidencias ($n)' : 'Incidencias',
+              color: AppColors.tileRojoPastel,
               onTap: () async {
                 await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IncidenciasScreen()));
                 await TyreControlApi.contarIncidenciasPendientes();
@@ -184,14 +205,21 @@ class _BigTile extends StatelessWidget {
   final String label;
   final bool primary;
   final bool small;
+  /// Fondo propio para este boton. Sin el, se usa el de siempre.
+  final Color? color;
   final VoidCallback onTap;
 
-  const _BigTile({required this.icon, required this.label, required this.onTap, this.primary = false, this.small = false});
+  const _BigTile({required this.icon, required this.label, required this.onTap, this.primary = false, this.small = false, this.color});
 
   @override
   Widget build(BuildContext context) {
-    final bg = primary ? AppColors.primary : AppColors.surface;
-    final fg = primary ? AppColors.onPrimary : AppColors.textPrimary;
+    final bg = color ?? (primary ? AppColors.primary : AppColors.surface);
+    // Sobre un fondo claro (los pasteles) el texto claro no se lee. Se decide
+    // por la luminancia del propio fondo, asi que vale para cualquier color
+    // que se ponga despues sin tener que acordarse de nada.
+    final fg = bg.computeLuminance() > 0.5
+        ? AppColors.background
+        : (primary ? AppColors.onPrimary : AppColors.textPrimary);
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(16),
@@ -204,7 +232,9 @@ class _BigTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: primary ? null : Border.all(color: AppColors.cardBorder),
+            // Con fondo propio no se pinta borde: el de las tarjetas normales
+            // es mas oscuro que el gris y quedaria como un cerco.
+            border: (primary || color != null) ? null : Border.all(color: AppColors.cardBorder),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,

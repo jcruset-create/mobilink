@@ -22,6 +22,10 @@ import { transition, InvalidTransitionError, rejectAssignment, acceptAssignment 
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
 import { notifyLiteUser } from "./litePush.ts";
+import { liteMetrics } from "./liteMetrics.ts";
+import {
+  hitLimit, limitKey, newLimitStore, pruneLimitStore, LITE_LIMITS, type LimitName,
+} from "./liteLimits.ts";
 import {
   DEFAULT_FINISH_RULES, DEFAULT_GEOFENCE, EVIDENCE_CATEGORIES, EVIDENCE_CATEGORY_LABELS,
   LITE_STATUS_LABELS, SERVICE_RESULTS, SERVICE_RESULT_LABELS, canLiteTransition, computeLiteKpis,
@@ -40,6 +44,12 @@ function err(res: Response, status: number, code: string, message: string, extra
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+/** Número entero o null: lo que llega de la APK no siempre es un número. */
+function entero(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : null;
 }
 
 function safeParse(value: unknown): any {
@@ -191,6 +201,60 @@ function registerFailedLogin(key: string): void {
   }
 }
 
+// ── Límites de uso ─────────────────────────────────────────────────────────
+
+const limitStore = newLimitStore();
+let ultimaLimpiezaMs = 0;
+
+/**
+ * Freno por dispositivo (o por IP en el login, que aún no tiene sesión). El
+ * tope general por dispositivo se comprueba siempre, además del de la familia.
+ */
+function limitar(name: LimitName) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    if (now - ultimaLimpiezaMs > 300_000) {
+      pruneLimitStore(limitStore, now);
+      ultimaLimpiezaMs = now;
+    }
+
+    const sujeto = req.liteSession ? `d${req.liteSession.deviceId}` : `ip${req.ip ?? "?"}`;
+    const comprobaciones: LimitName[] = name === "login" ? ["login"] : [name, "device"];
+
+    for (const cual of comprobaciones) {
+      const v = hitLimit(limitStore, limitKey(cual, sujeto), LITE_LIMITS[cual], now);
+      if (!v.allowed) {
+        liteMetrics.recordRateLimited(etiquetaRuta(req), now);
+        res.setHeader("Retry-After", String(v.retryAfterSec));
+        return err(res, 429, "rate_limited",
+          "Demasiadas operaciones seguidas. Se reintentará en unos segundos.",
+          { retryAfterSec: v.retryAfterSec, limit: cual });
+      }
+    }
+    next();
+  };
+}
+
+// ── Medición ───────────────────────────────────────────────────────────────
+
+/**
+ * Etiqueta estable por ruta (`POST /assistances/:id/files`), no por URL: si se
+ * usara la URL real, cada asistencia crearía su propia serie y la métrica no
+ * agregaría nada. De paso evita que un identificador acabe en las métricas.
+ */
+function etiquetaRuta(req: Request): string {
+  const patron = (req as any).route?.path ?? req.path.replace(/\/\d+/g, "/:id");
+  return `${req.method} ${patron}`;
+}
+
+function medir(req: Request, res: Response, next: NextFunction) {
+  const inicio = Date.now();
+  res.on("finish", () => {
+    liteMetrics.recordApi(etiquetaRuta(req), res.statusCode, Date.now() - inicio);
+  });
+  next();
+}
+
 async function requireLite(req: Request, res: Response, next: NextFunction) {
   try {
     const header = String(req.headers.authorization || "");
@@ -317,6 +381,9 @@ async function storePoints(
       headingDeg: p.headingDeg != null ? Number(p.headingDeg) : null,
     }))
     .filter((p) => isValidPoint(p, now));
+  // Se miden las descartadas por inválidas, no las que quita `dedupePoints`:
+  // un punto repetido no aporta nada y tirarlo no es perder información.
+  liteMetrics.recordPoints(rawPoints.length, valid.length);
   const points = dedupePoints(valid as GpsPoint[]);
   if (points.length === 0) return { stored: 0, hint: null };
 
@@ -382,11 +449,12 @@ const ALLOWED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "im
 export function createConnectLiteRouter(): Router {
   const router = Router();
   router.use(json({ limit: "2mb" }));
+  router.use(medir);
 
   // ── Sesión ───────────────────────────────────────────────────────────────
 
   /** Login con código de taller + usuario + PIN. Devuelve token de dispositivo. */
-  router.post("/login", async (req, res) => {
+  router.post("/login", limitar("login"), async (req, res) => {
     const workshopCode = String(req.body?.workshopCode || "").trim();
     const username = String(req.body?.username || "").trim().toLowerCase();
     const pin = String(req.body?.pin || "");
@@ -524,11 +592,19 @@ export function createConnectLiteRouter(): Router {
          "gpsPermission" = COALESCE($5, "gpsPermission"),
          "cameraPermission" = COALESCE($6, "cameraPermission"),
          "notifPermission" = COALESCE($7, "notifPermission"),
-         "lastSeenAtMs" = $8
-       WHERE id = $9`,
+         "queuePending" = COALESCE($8, "queuePending"),
+         "queueFailed" = COALESCE($9, "queueFailed"),
+         "queueOldestAtMs" = CASE WHEN $8 IS NULL THEN "queueOldestAtMs" ELSE $10 END,
+         "queueReportedAtMs" = CASE WHEN $8 IS NULL THEN "queueReportedAtMs" ELSE $11 END,
+         "lastSeenAtMs" = $11
+       WHERE id = $12`,
       [
         b.fcmToken ?? null, b.platform ?? null, b.osVersion ?? null, b.appVersion ?? null,
         b.gpsPermission ?? null, b.cameraPermission ?? null, b.notifPermission ?? null,
+        // La cola sí se pisa con lo que diga la APK, incluido el cero: si se
+        // usara COALESCE con el más antiguo, una cola ya vaciada seguiría
+        // apareciendo como atascada para siempre.
+        entero(b.queuePending), entero(b.queueFailed), entero(b.queueOldestAtMs),
         Date.now(), s.deviceId,
       ],
     );
@@ -750,7 +826,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Máquina de estados ───────────────────────────────────────────────────
 
-  router.post("/assistances/:id/status", async (req, res) => {
+  router.post("/assistances/:id/status", limitar("status"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -812,7 +888,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Geolocalización ──────────────────────────────────────────────────────
 
-  router.post("/assistances/:id/location", async (req, res) => {
+  router.post("/assistances/:id/location", limitar("location"), async (req, res) => {
     const s = req.liteSession!;
     const a = await loadAssistance(s, Number(req.params.id));
     if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
@@ -827,7 +903,7 @@ export function createConnectLiteRouter(): Router {
   });
 
   /** Lote de posiciones acumuladas sin cobertura. */
-  router.post("/assistances/:id/locations-batch", async (req, res) => {
+  router.post("/assistances/:id/locations-batch", limitar("locationsBatch"), async (req, res) => {
     const s = req.liteSession!;
     const a = await loadAssistance(s, Number(req.params.id));
     if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
@@ -850,7 +926,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Observaciones y mensajes ─────────────────────────────────────────────
 
-  router.post("/assistances/:id/notes", async (req, res) => {
+  router.post("/assistances/:id/notes", limitar("messages"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -884,7 +960,7 @@ export function createConnectLiteRouter(): Router {
     res.json({ data: r.rows });
   });
 
-  router.post("/assistances/:id/messages", async (req, res) => {
+  router.post("/assistances/:id/messages", limitar("messages"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -917,7 +993,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Evidencias ───────────────────────────────────────────────────────────
 
-  router.post("/assistances/:id/files", upload.single("file"), async (req, res) => {
+  router.post("/assistances/:id/files", limitar("files"), upload.single("file"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -1003,7 +1079,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Firma ────────────────────────────────────────────────────────────────
 
-  router.post("/assistances/:id/signature", async (req, res) => {
+  router.post("/assistances/:id/signature", limitar("signature"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -1133,7 +1209,7 @@ export function createConnectLiteRouter(): Router {
    * Las fotos y firmas viajan por sus endpoints (multipart/base64) con el
    * mismo mecanismo de idempotencia.
    */
-  router.post("/sync", async (req, res) => {
+  router.post("/sync", limitar("sync"), async (req, res) => {
     const s = req.liteSession!;
     const ops = Array.isArray(req.body?.operations) ? req.body.operations.slice(0, 100) : [];
     const results: any[] = [];
@@ -1152,6 +1228,7 @@ export function createConnectLiteRouter(): Router {
         if (kind === "status") {
           if (!canLiteTransition(a.status, String(op.status))) {
             // Conflicto real: el estado oficial ya no admite ese cambio
+            liteMetrics.recordConflict(s.workshopId);
             results.push({
               clientActionId: opId, status: "conflict",
               officialStatus: a.status, requested: op.status,
@@ -1213,6 +1290,29 @@ export function createConnectLiteRouter(): Router {
   });
 
   return router;
+}
+
+// ---------------------------------------------------------------------------
+// Retención
+// ---------------------------------------------------------------------------
+
+/** Días que se guarda el resultado de una operación para poder reenviarla. */
+export const LITE_ACTIONS_RETENTION_DAYS = 30;
+
+/**
+ * `connect_lite_actions` guarda la respuesta completa de cada operación para
+ * que reenviarla sea idempotente, y esa respuesta incluye datos del cliente
+ * (nombre y teléfono del solicitante). Su única razón de ser es que una APK sin
+ * cobertura pueda reintentar, cosa que ocurre en horas, no en meses: dejarlo
+ * crecer para siempre era guardar datos personales sin motivo.
+ */
+export async function purgeLiteActions(now = Date.now()): Promise<number> {
+  const corte = now - LITE_ACTIONS_RETENTION_DAYS * 24 * 3600_000;
+  const r = await db.query(
+    `DELETE FROM connect_lite_actions WHERE "createdAtMs" < $1`,
+    [corte],
+  );
+  return r.rowCount ?? 0;
 }
 
 // ---------------------------------------------------------------------------

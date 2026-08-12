@@ -10,6 +10,7 @@ import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import '../widgets/vehicle_schema.dart';
 import '../widgets/vehicle_layout_image.dart';
@@ -27,7 +28,10 @@ class ReviewScreen extends StatefulWidget {
   /// Si es true, cada posición necesita profundidad Y presión para contar
   /// como completa (no avanza ni finaliza hasta tener ambas).
   final bool verificarPresiones;
-  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false});
+  /// Km informados a mano en la pantalla de confirmación, para el vehículo que
+  /// no está enlazado con ninguna plataforma.
+  final int? kmManual;
+  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual});
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -125,7 +129,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
       if (widget.revisionExistente != null) {
         _kmRevision = widget.revisionExistente!.kmVehiculo ?? 0;
       } else {
-        _kmRevision = 0;
+        // Sin plataforma, los km son los que haya informado el técnico en la
+        // pantalla anterior. Antes se creaba la revisión con 0 y ya no había
+        // forma de arreglarlo.
+        _kmRevision = widget.kmManual ?? 0;
         final wfId = widget.vehiculo.webfleetVehicleId;
         if (wfId != null && wfId.isNotEmpty) {
           final kmWf = await TyreControlApi.obtenerKmWebfleet(widget.vehiculo.empresaId, wfId);
@@ -603,6 +610,25 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
+  /// Informa o corrige los km de esta revisión. Se guardan en la revisión y en
+  /// la ficha del vehículo, para que la siguiente parta de ahí.
+  Future<void> _editarKm() async {
+    final rev = _revision;
+    final v = await pedirKmVehiculo(context,
+        matricula: widget.vehiculo.matricula, actual: _kmRevision.round());
+    if (v == null || !mounted) return;
+    setState(() => _kmRevision = v);
+    try {
+      if (rev != null) await TyreControlApi.actualizarKmRevision(rev.id, v);
+      await TyreControlApi.actualizarKmVehiculo(widget.vehiculo.id, v, origen: 'manual');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se han podido guardar los km: $e'), backgroundColor: AppColors.danger));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_cargando) {
@@ -624,7 +650,21 @@ class _ReviewScreenState extends State<ReviewScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(widget.vehiculo.matricula, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            Text('${widget.vehiculo.empresa?.nombre ?? ''} · ${_kmRevision.round()} km', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            Row(children: [
+              Flexible(
+                child: Text(widget.vehiculo.empresa?.nombre ?? '',
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+              ),
+              const Text(' · ', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+              // Sin plataforma se puede tocar para informarlos o corregirlos:
+              // vale también para una revisión arrastrada que se creó sin km.
+              ChipKmVehiculo(
+                km: _kmRevision,
+                automaticos: widget.vehiculo.kmAutomaticos,
+                onEditar: _editarKm,
+              ),
+            ]),
           ],
         ),
         actions: [if (_pausas != null) BotonPausa(controller: _pausas!)],
