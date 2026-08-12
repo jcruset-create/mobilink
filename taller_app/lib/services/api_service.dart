@@ -290,6 +290,67 @@ class ApiService {
     }
   }
 
+  // ── Checklist ────────────────────────────────────────────────
+
+  /// Plantillas activas, para elegir cuál aplicar al trabajo.
+  Future<List<Map<String, dynamic>>> plantillasChecklist() async {
+    try {
+      final res = await http
+          .get(Uri.parse('$kBackendUrl/api/taller-operator/checklist-plantillas'),
+              headers: await _authHeaders())
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return [];
+      return (jsonDecode(res.body) as List<dynamic>).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Checklist del trabajo, o null si todavía no se le ha aplicado ninguno.
+  Future<Map<String, dynamic>?> checklistDe(int jobId) async {
+    try {
+      final res = await http
+          .get(Uri.parse('$kBackendUrl/api/taller-operator/jobs/$jobId/checklist'),
+              headers: await _authHeaders())
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body);
+      return data is Map ? Map<String, dynamic>.from(data) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> aplicarChecklist(int jobId, int plantillaId) async {
+    final res = await http
+        .post(Uri.parse('$kBackendUrl/api/taller-operator/jobs/$jobId/checklist'),
+            headers: await _authHeaders(),
+            body: jsonEncode({'plantillaId': plantillaId}))
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode != 200) {
+      throw Exception(_errorDe(res.body, 'No se ha podido aplicar el checklist'));
+    }
+    return Map<String, dynamic>.from(jsonDecode(res.body) as Map);
+  }
+
+  /// Marca o desmarca UN punto. Se envía solo el índice, no la lista entera:
+  /// con dos técnicos en el mismo trabajo, mandar todo haría que el último
+  /// guardado borrase lo que marcó el otro.
+  Future<Map<String, dynamic>?> marcarChecklist(
+      int jobId, int indice, bool hecho) async {
+    final res = await http
+        .put(
+            Uri.parse(
+                '$kBackendUrl/api/taller-operator/jobs/$jobId/checklist/$indice'),
+            headers: await _authHeaders(),
+            body: jsonEncode({'hecho': hecho}))
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode != 200) {
+      throw Exception(_errorDe(res.body, 'No se ha podido guardar el punto'));
+    }
+    return Map<String, dynamic>.from(jsonDecode(res.body) as Map);
+  }
+
   // ── Pausas ───────────────────────────────────────────────────
   // Son las mismas que registra la pantalla /operario/taller: comparten
   // endpoint y tabla, así que el tiempo real del trabajo sale igual se marque

@@ -3163,6 +3163,288 @@ app.post(
 );
 
 /* =========================================================
+   CHECKLISTS — plantillas (WorkPlanner) y estado por trabajo (APK)
+========================================================= */
+
+/** Normaliza los ítems que llegan del editor: texto obligatorio, resto opcional. */
+function normalizaItemsPlantilla(valor: unknown) {
+  if (!Array.isArray(valor)) return [];
+  return valor
+    .map((item: any) => ({
+      texto: String(item?.texto ?? "").trim(),
+      obligatorio: item?.obligatorio === true,
+    }))
+    .filter((item) => item.texto !== "");
+}
+
+// Plantillas: listado para el panel (incluye las desactivadas si se pide)
+app.get("/api/checklist-plantillas", requirePanelRole, async (req, res) => {
+  try {
+    const incluirInactivas = String(req.query.incluirInactivas || "") === "true";
+    const result = await db.query(
+      `SELECT * FROM checklist_plantillas
+       ${incluirInactivas ? "" : "WHERE activo = true"}
+       ORDER BY nombre ASC`
+    );
+    res.json(result.rows.map(normalizaPlantillaRow));
+  } catch (error) {
+    console.error("GET /api/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error obteniendo las plantillas" });
+  }
+});
+
+function normalizaPlantillaRow(row: any) {
+  return {
+    id: Number(row.id),
+    nombre: row.nombre,
+    area: row.area ?? null,
+    items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+    activo: row.activo !== false,
+    workshopId: row.workshopId ?? null,
+    createdAtMs: Number(row.createdAtMs),
+    updatedAtMs: Number(row.updatedAtMs),
+  };
+}
+
+app.post("/api/checklist-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+
+    const items = normalizaItemsPlantilla(req.body?.items);
+    const ahora = Date.now();
+
+    const result = await db.query(
+      `INSERT INTO checklist_plantillas
+         (nombre, area, items, activo, "workshopId", "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, $3, true, $4, $5, $5)
+       RETURNING *`,
+      [
+        nombre,
+        String(req.body?.area ?? "").trim() || null,
+        JSON.stringify(items),
+        String(req.body?.workshopId ?? "").trim() || null,
+        ahora,
+      ]
+    );
+
+    res.json(normalizaPlantillaRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error creando la plantilla" });
+  }
+});
+
+app.put("/api/checklist-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+
+    const result = await db.query(
+      `UPDATE checklist_plantillas
+       SET nombre = $1, area = $2, items = $3, activo = $4, "updatedAtMs" = $5
+       WHERE id = $6
+       RETURNING *`,
+      [
+        nombre,
+        String(req.body?.area ?? "").trim() || null,
+        JSON.stringify(normalizaItemsPlantilla(req.body?.items)),
+        req.body?.activo !== false,
+        Date.now(),
+        id,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Plantilla no encontrada" });
+    }
+    res.json(normalizaPlantillaRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/checklist-plantillas/:id error:", error);
+    res.status(500).json({ error: "Error guardando la plantilla" });
+  }
+});
+
+// Baja lógica: los trabajos ya hechos conservan su copia, pero la plantilla
+// deja de ofrecerse. Borrarla de verdad rompería el histórico.
+app.delete("/api/checklist-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    await db.query(
+      `UPDATE checklist_plantillas SET activo = false, "updatedAtMs" = $1 WHERE id = $2`,
+      [Date.now(), id]
+    );
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/checklist-plantillas/:id error:", error);
+    res.status(500).json({ error: "Error desactivando la plantilla" });
+  }
+});
+
+// ── La APK ────────────────────────────────────────────────
+
+// Plantillas activas, para que el técnico elija cuál aplicar.
+app.get("/api/taller-operator/checklist-plantillas", requireTallerOperator, async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT * FROM checklist_plantillas WHERE activo = true ORDER BY nombre ASC`
+    );
+    res.json(result.rows.map(normalizaPlantillaRow));
+  } catch (error) {
+    console.error("GET /api/taller-operator/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error obteniendo las plantillas" });
+  }
+});
+
+function normalizaChecklistRow(row: any) {
+  return {
+    jobId: Number(row.jobId),
+    plantillaId: row.plantillaId != null ? Number(row.plantillaId) : null,
+    nombre: row.nombre ?? null,
+    items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+    updatedAtMs: Number(row.updatedAtMs),
+  };
+}
+
+app.get("/api/taller-operator/jobs/:id/checklist", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const result = await db.query(`SELECT * FROM job_checklists WHERE "jobId" = $1`, [id]);
+    res.json(result.rows.length > 0 ? normalizaChecklistRow(result.rows[0]) : null);
+  } catch (error) {
+    console.error("GET /api/taller-operator/jobs/:id/checklist error:", error);
+    res.status(500).json({ error: "Error obteniendo el checklist" });
+  }
+});
+
+// Aplica una plantilla al trabajo. Copia los ítems: si luego alguien edita la
+// plantilla, lo ya comprobado no cambia.
+app.post("/api/taller-operator/jobs/:id/checklist", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const plantillaId = Number(req.body?.plantillaId);
+    if (!Number.isFinite(plantillaId)) {
+      return res.status(400).json({ error: "Plantilla no válida" });
+    }
+
+    const plantilla = await db.query(
+      `SELECT * FROM checklist_plantillas WHERE id = $1 LIMIT 1`,
+      [plantillaId]
+    );
+    if (plantilla.rows.length === 0) {
+      return res.status(404).json({ error: "Plantilla no encontrada" });
+    }
+
+    const origen = normalizaPlantillaRow(plantilla.rows[0]);
+    const items = origen.items.map((item: any) => ({
+      texto: String(item?.texto ?? ""),
+      obligatorio: item?.obligatorio === true,
+      hecho: false,
+      hechoAtMs: null,
+      tecnico: null,
+    }));
+    const ahora = Date.now();
+
+    const result = await db.query(
+      `INSERT INTO job_checklists ("jobId", "plantillaId", nombre, items, "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT ("jobId") DO UPDATE SET
+         "plantillaId" = EXCLUDED."plantillaId",
+         nombre = EXCLUDED.nombre,
+         items = EXCLUDED.items,
+         "updatedAtMs" = EXCLUDED."updatedAtMs"
+       RETURNING *`,
+      [id, origen.id, origen.nombre, JSON.stringify(items), ahora]
+    );
+
+    res.json(normalizaChecklistRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/taller-operator/jobs/:id/checklist error:", error);
+    res.status(500).json({ error: "Error aplicando el checklist" });
+  }
+});
+
+/**
+ * Marca o desmarca UN ítem por su índice.
+ *
+ * Deliberadamente no se envía la lista entera: con dos técnicos en el mismo
+ * trabajo, o con la tablet reenviando la cola, el último en guardar borraría lo
+ * que marcó el otro. Es el mismo problema que tuvimos con los recordatorios de
+ * la agenda.
+ */
+app.put("/api/taller-operator/jobs/:id/checklist/:indice", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    const indice = Number(req.params.indice);
+    if (!Number.isFinite(id) || !Number.isFinite(indice)) {
+      return res.status(400).json({ error: "Petición no válida" });
+    }
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const actual = await db.query(`SELECT * FROM job_checklists WHERE "jobId" = $1`, [id]);
+    if (actual.rows.length === 0) {
+      return res.status(404).json({ error: "Este trabajo no tiene checklist" });
+    }
+
+    const checklist = normalizaChecklistRow(actual.rows[0]);
+    if (indice < 0 || indice >= checklist.items.length) {
+      return res.status(400).json({ error: "Ítem no válido" });
+    }
+
+    const hecho = req.body?.hecho !== false;
+    const items = checklist.items.map((item: any, i: number) =>
+      i === indice
+        ? {
+            ...item,
+            hecho,
+            hechoAtMs: hecho ? Date.now() : null,
+            tecnico: hecho ? op.name : null,
+          }
+        : item
+    );
+
+    const result = await db.query(
+      `UPDATE job_checklists SET items = $1, "updatedAtMs" = $2 WHERE "jobId" = $3 RETURNING *`,
+      [JSON.stringify(items), Date.now(), id]
+    );
+
+    res.json(normalizaChecklistRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/taller-operator/jobs/:id/checklist/:indice error:", error);
+    res.status(500).json({ error: "Error marcando el ítem" });
+  }
+});
+
+/* =========================================================
    PRESENCIA OPERATOR (APK Mobilink Presencia — fichaje)
    Auth por empleado (sea_employees) + PIN verificado con el
    RPC pres_login (pgcrypto). Cabeceras en cada petición:
