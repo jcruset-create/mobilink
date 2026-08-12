@@ -4522,12 +4522,26 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
     } catch { /* sin config */ }
 
+    // Teléfono del técnico asignado, para que el cliente pueda llamarle
+    // directamente desde la página de seguimiento.
+    let techPhone: string | null = null;
+    if (assistance.assignedTechName) {
+      try {
+        const tp = await db.query(`SELECT phone FROM techs WHERE name = $1 LIMIT 1`, [
+          assistance.assignedTechName,
+        ]);
+        const raw = tp.rows[0]?.phone ? String(tp.rows[0].phone).trim() : "";
+        techPhone = raw || null;
+      } catch { /* sin teléfono */ }
+    }
+
     res.json({
       assistance,
       vanPlate,
       vanMarca,
       vanModelo,
       workshop,
+      techPhone,
       events: eventsResult.rows.map((e: any) => ({
         status: e.status,
         createdAtMs: Number(e.createdAtMs),

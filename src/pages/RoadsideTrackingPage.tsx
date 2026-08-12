@@ -469,7 +469,18 @@ export default function RoadsideTrackingPage() {
               Asistencia
             </div>
             <div className="space-y-2 text-sm font-semibold text-slate-700">
-              <div>Operario: {assistance.assignedTechName || "Pendiente"}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Operario: {assistance.assignedTechName || "Pendiente"}</span>
+                {data?.techPhone && (
+                  <a
+                    href={`tel:${data.techPhone}`}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-black text-white hover:bg-emerald-500"
+                  >
+                    <Phone className="h-3.5 w-3.5" />
+                    Llamar al técnico
+                  </a>
+                )}
+              </div>
               <div>Furgoneta: {vanLabel}</div>
               <div>Salida: {formatTime(assistance.departedAtMs)}</div>
               <div>Llegada al punto: {formatTime(assistance.arrivedAtPointMs)}</div>
