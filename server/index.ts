@@ -1655,26 +1655,73 @@ app.get("/api/health", (_req, res) => {
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
+//
+// Dos modos (fase 3):
+//   · Con intervencionId (APK nueva): la sesión YA existe en BD desde
+//     tc_iniciar_intervencion y sus operaciones nacieron dentro. Se CIERRA
+//     esa fila (cerrada_at + número de parte al cerrar), adoptando además
+//     las huérfanas completadas del vehículo en la ventana — ahí siguen
+//     cayendo las reparaciones en sitio de resolver incidencias.
+//   · Sin él (APKs viejas): como siempre, se CREA la intervención agrupando
+//     las huérfanas del vehículo desde `desde`.
 app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
-    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis,
+    const { vehiculoId, desde, intervencionId, montajeAntes, incidencias, imagenChasis,
       inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
-    // Operaciones de la sesión aún sin intervención.
-    const { data: ops, error } = await supabase
+    // La sesión abierta, si la APK la manda. Si no existe o ya está cerrada,
+    // se degrada al modo clásico en vez de fallar: cerrar nunca debe dejar
+    // al técnico colgado.
+    let sesion: any = null;
+    if (typeof intervencionId === "string" && intervencionId) {
+      const { data: iv } = await supabase
+        .from("tc_intervenciones")
+        .select("id, numero, inicio_at, cerrada_at, vehiculo_id, empresa_id, tecnico_id")
+        .eq("id", intervencionId).maybeSingle();
+      if (iv && !iv.cerrada_at && iv.vehiculo_id === vehiculoId) sesion = iv;
+    }
+
+    const SELECT_OPS = "id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, " +
+      "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
+      "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
+      "neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)";
+
+    // Huérfanas completadas del vehículo en la ventana. En modo sesión son
+    // las "rezagadas" a adoptar; en modo clásico, la sesión entera. Solo
+    // trabajo HECHO: una prevista no puede colarse en el parte (fase 2).
+    const { data: sueltas, error } = await supabase
       .from("operaciones_neumaticos")
-      .select("id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
-        "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
-        "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
-        "neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)")
+      .select(SELECT_OPS)
       .eq("vehiculo_id", vehiculoId)
       .is("intervencion_id", null)
+      .eq("status", "completada")
       .gte("created_at", desde)
       .order("created_at", { ascending: true });
     if (error) throw error;
-    const activas = (ops ?? []).filter((o: any) => !o.is_anulada);
-    if (activas.length === 0) return res.json({ id: null, resumen: "", resumen_ia: "", n: 0 });
+
+    let ops: any[] = sueltas ?? [];
+    if (sesion) {
+      const { data: propias, error: e0 } = await supabase
+        .from("operaciones_neumaticos")
+        .select(SELECT_OPS)
+        .eq("intervencion_id", sesion.id)
+        .eq("status", "completada")
+        .order("created_at", { ascending: true });
+      if (e0) throw e0;
+      ops = [...(propias ?? []), ...ops].sort((a: any, b: any) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+    }
+    const activas = ops.filter((o: any) => !o.is_anulada);
+    if (activas.length === 0) {
+      // Sesión vacía o abandonada: se cierra sin quemar número de parte.
+      if (sesion) {
+        await supabase.from("tc_intervenciones")
+          .update({ cerrada_at: new Date().toISOString() })
+          .eq("id", sesion.id).is("cerrada_at", null);
+      }
+      return res.json({ id: sesion?.id ?? null, numero: sesion?.numero ?? null, resumen: "", resumen_ia: "", n: 0 });
+    }
 
     // Resumen determinista: el MISMO generador que usa el panel
     // (resumenOperaciones.ts). Aquí había una copia incrustada de los verbos
@@ -1809,7 +1856,9 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     // Cronometraje automático (Analítica de Productividad): la APK manda las
     // marcas de inicio/fin de la sesión de cambio y el total de pausas; aquí
     // se calculan duración y tiempo efectivo (duración = trabajo + pausa).
-    const tIni = inicioAt ? new Date(inicioAt) : null;
+    // Si la sesión existe en BD, su inicio_at (sellado por
+    // tc_iniciar_intervencion) manda sobre el reloj del móvil.
+    const tIni = sesion?.inicio_at ? new Date(sesion.inicio_at) : (inicioAt ? new Date(inicioAt) : null);
     const tFin = finAt ? new Date(finAt) : null;
     const durSeg = tIni && tFin && !isNaN(+tIni) && !isNaN(+tFin)
       ? Math.max(0, Math.round((+tFin - +tIni) / 1000)) : null;
@@ -1823,36 +1872,73 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     }
     const tipoPrincipal = [...cuenta.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
-    const { data: interv, error: e2 } = await supabase
-      .from("tc_intervenciones")
-      .insert({
-        empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId,
-        resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
-        inicio_at: tIni && !isNaN(+tIni) ? tIni.toISOString() : null,
-        fin_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : null,
-        duracion_seg: durSeg,
-        trabajo_seg: durSeg != null ? Math.max(0, durSeg - pSeg) : null,
-        pausa_seg: pSeg,
-        n_pausas: Number.isFinite(Number(nPausas)) ? Math.max(0, Math.round(Number(nPausas))) : 0,
-        tipo_principal: tipoPrincipal,
-        n_neumaticos: neus.size || null,
-        montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
-        montaje_despues: montajeDespues.length ? montajeDespues : null,
-        incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
-        imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
+    // Los campos del parte, comunes a los dos modos.
+    const datosParte = {
+      resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
+      inicio_at: tIni && !isNaN(+tIni) ? tIni.toISOString() : null,
+      fin_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : null,
+      duracion_seg: durSeg,
+      trabajo_seg: durSeg != null ? Math.max(0, durSeg - pSeg) : null,
+      pausa_seg: pSeg,
+      n_pausas: Number.isFinite(Number(nPausas)) ? Math.max(0, Math.round(Number(nPausas))) : 0,
+      tipo_principal: tipoPrincipal,
+      n_neumaticos: neus.size || null,
+      montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
+      montaje_despues: montajeDespues.length ? montajeDespues : null,
+      incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
+      imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
+    };
+
+    let intervId: string; let numero: string | null;
+    if (sesion) {
+      // Modo sesión: CERRAR la intervención que abrió tc_iniciar_intervencion.
+      const { error: e2 } = await supabase
+        .from("tc_intervenciones")
+        .update({
+          ...datosParte,
+          tecnico_id: sesion.tecnico_id ?? tecnicoId,
+          cerrada_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : new Date().toISOString(),
+        })
+        .eq("id", sesion.id);
+      if (e2) throw e2;
+      intervId = sesion.id;
+      // El número de parte se asigna AL CERRAR (una sesión abandonada no
+      // quema números). Atómico e idempotente en BD; si la función aún no
+      // existe (SQL de fase 3 sin aplicar), respaldo con el generador de
+      // siempre para no dejar el parte sin número.
+      numero = sesion.numero ?? null;
+      if (!numero) {
+        const r1 = await supabase.rpc("tc_asignar_numero_intervencion", { p_intervencion: sesion.id });
+        if (!r1.error && typeof r1.data === "string") {
+          numero = r1.data;
+        } else {
+          const r2 = await supabase.rpc("tc_generar_numero_operacion");
+          if (!r2.error && typeof r2.data === "string") {
+            numero = r2.data;
+            await supabase.from("tc_intervenciones").update({ numero }).eq("id", sesion.id).is("numero", null);
+          }
+        }
+      }
+    } else {
+      // Modo clásico (APKs sin sesión): crear la intervención ya cerrada.
+      const { data: interv, error: e2 } = await supabase
+        .from("tc_intervenciones")
+        .insert({ empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId, ...datosParte })
         // cerrada_at NO se manda a propósito: su default now() ya deja la
         // intervención cerrada, y así este insert funciona igual con la
         // migración de fase 1 aplicada o sin aplicar (se despliegan por
-        // separado). La fase 2/3 cablea el cierre por id.
-      })
-      // El número lo pone la base de datos por DEFAULT; se lee de vuelta para
-      // poder enseñárselo al técnico nada más finalizar, que es cuando puede
-      // apuntarlo en el albarán.
-      .select("id, numero").single();
-    if (e2) throw e2;
-    await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
+        // separado). El número lo pone la BD por DEFAULT.
+        .select("id, numero").single();
+      if (e2) throw e2;
+      intervId = interv.id;
+      numero = (interv as any).numero ?? null;
+    }
 
-    res.json({ id: interv.id, numero: (interv as any).numero ?? null, resumen, resumen_ia: resumenIa, n: activas.length });
+    // Estampar la intervención en las operaciones: en modo sesión adopta las
+    // rezagadas (las propias ya la llevan y el update es un no-op para ellas).
+    await supabase.from("operaciones_neumaticos").update({ intervencion_id: intervId }).in("id", (activas as any[]).map((o) => o.id));
+
+    res.json({ id: intervId, numero, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
