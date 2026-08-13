@@ -817,6 +817,35 @@ class TyreControlApi {
     });
   }
 
+  /// Inicia (o recupera, si ya hay una abierta de este técnico y vehículo) la
+  /// intervención de la sesión de trabajo en BD. Devuelve su id, o null si la
+  /// BD aún no tiene la fase 1/3 o no hay red: en ese caso la pantalla sigue
+  /// con el flujo antiguo (operaciones huérfanas + red de seguridad) y no se
+  /// pierde nada. El número de parte se asigna al CERRAR, no aquí.
+  static Future<String?> iniciarIntervencion(String vehiculoId) async {
+    try {
+      final r = await _db.rpc('tc_iniciar_intervencion', params: {'p_vehiculo': vehiculoId});
+      if (r is Map && r['id'] is String) return r['id'] as String;
+    } catch (_) {/* flujo antiguo */}
+    return null;
+  }
+
+  /// Ejecuta un RPC de operación DENTRO de la intervención activa: la fila
+  /// nace con su intervencion_id (fase 3). Con [intervencionId] null llama al
+  /// RPC directo, que es el comportamiento de siempre. Los nombres de [params]
+  /// son los del RPC real (p_vehiculo, p_montaje…); el envoltorio de BD
+  /// devuelve {resultado, intervencion, …} y aquí se extrae el resultado para
+  /// que el que llama no note la diferencia.
+  static Future<dynamic> _rpcOperacion(String rpc, Map<String, dynamic> params, String? intervencionId) async {
+    if (intervencionId == null) return _db.rpc(rpc, params: params);
+    final r = await _db.rpc('tc_ejecutar_en_intervencion', params: {
+      'p_intervencion': intervencionId,
+      'p_rpc': rpc,
+      'p_args': params,
+    });
+    return (r is Map) ? r['resultado'] : r;
+  }
+
   /// Monta un producto del almacén en una posición (descuenta stock).
   /// [condicion] = 'nuevo' | 'usado'. En usado, [profundidadUsado] se guarda
   /// como profundidad actual del neumático.
@@ -840,12 +869,13 @@ class TyreControlApi {
     String? rfidEpc,
     String? numeroSerie,
     String? dot,
+    String? intervencionId,
   }) async {
     final datos = _datosIdentidad(rfidEpc: rfidEpc, numeroSerie: numeroSerie, dot: dot);
     if (condicion == 'usado' && profundidadUsado != null) {
       datos['profundidad_actual_mm'] = profundidadUsado.toString();
     }
-    final r = await _db.rpc('tc_montar_desde_almacen', params: {
+    final r = await _rpcOperacion('tc_montar_desde_almacen', {
       'p_vehiculo': vehiculoId,
       'p_posicion': posicionId,
       'p_producto_almacen': productoAlmacenId,
@@ -856,7 +886,7 @@ class TyreControlApi {
       'p_obs': observaciones,
       'p_forzar_medida': forzarMedida,
       'p_condicion': condicion,
-    });
+    }, intervencionId);
     return r as String?;
   }
 
@@ -891,12 +921,13 @@ class TyreControlApi {
     String? rfidEpc,
     String? numeroSerie,
     String? dot,
+    String? intervencionId,
   }) async {
     final datos = _datosIdentidad(rfidEpc: rfidEpc, numeroSerie: numeroSerie, dot: dot);
     if (condicion == 'usado' && profundidadUsado != null) {
       datos['profundidad_actual_mm'] = profundidadUsado.toString();
     }
-    final r = await _db.rpc('tc_montar_desde_catalogo', params: {
+    final r = await _rpcOperacion('tc_montar_desde_catalogo', {
       'p_vehiculo': vehiculoId,
       'p_posicion': posicionId,
       'p_referencia': referenciaId,
@@ -907,7 +938,7 @@ class TyreControlApi {
       'p_obs': 'Montaje sin control de stock (APK)',
       'p_forzar_medida': forzarMedida,
       'p_condicion': condicion,
-    });
+    }, intervencionId);
     return r as String?;
   }
 
@@ -1006,13 +1037,14 @@ class TyreControlApi {
     required String montajeBId,
     num? km,
     String? observaciones,
+    String? intervencionId,
   }) async {
-    final res = await _db.rpc('tc_intercambiar_posiciones', params: {
+    final res = await _rpcOperacion('tc_intercambiar_posiciones', {
       'p_montaje_a': montajeAId,
       'p_montaje_b': montajeBId,
       'p_km': km,
       'p_obs': observaciones ?? 'Permuta en el mismo vehículo (APK)',
-    });
+    }, intervencionId);
     return '$res';
   }
 
@@ -1025,16 +1057,17 @@ class TyreControlApi {
     required Map<String, String> destinos,
     num? km,
     String? observaciones,
+    String? intervencionId,
   }) async {
     final lista = destinos.entries
         .map((e) => {'montaje': e.value, 'posicion': e.key})
         .toList();
-    final res = await _db.rpc('tc_permutar_plan', params: {
+    final res = await _rpcOperacion('tc_permutar_plan', {
       'p_vehiculo': vehiculoId,
       'p_destinos': lista,
       'p_km': km,
       'p_obs': observaciones,
-    });
+    }, intervencionId);
     return '$res';
   }
 
@@ -1068,13 +1101,14 @@ class TyreControlApi {
     required List<Map<String, dynamic>> acciones,
     num? km,
     String? observaciones,
+    String? intervencionId,
   }) async {
-    final res = await _db.rpc('tc_aplicar_plan_trabajo', params: {
+    final res = await _rpcOperacion('tc_aplicar_plan_trabajo', {
       'p_vehiculo': vehiculoId,
       'p_acciones': acciones,
       'p_km': km,
       'p_obs': observaciones,
-    });
+    }, intervencionId);
     return '$res';
   }
 
@@ -1086,13 +1120,14 @@ class TyreControlApi {
     required String posicionDestinoId,
     num? km,
     String? observaciones,
+    String? intervencionId,
   }) async {
-    final res = await _db.rpc('tc_cambiar_posicion', params: {
+    final res = await _rpcOperacion('tc_cambiar_posicion', {
       'p_montaje': montajeId,
       'p_posicion_destino': posicionDestinoId,
       'p_km': km,
       'p_obs': observaciones ?? 'Cambio de posición en el mismo vehículo (APK)',
-    });
+    }, intervencionId);
     return '$res';
   }
 
@@ -1127,6 +1162,7 @@ class TyreControlApi {
     String? imagenChasis,
     int? pausaSeg,
     int? nPausas,
+    String? intervencionId,
   }) async {
     try {
       final res = await http.post(
@@ -1140,6 +1176,9 @@ class TyreControlApi {
         body: jsonEncode({
           'vehiculoId': vehiculoId,
           'desde': desde.toUtc().toIso8601String(),
+          // Fase 3: si la sesión existe en BD (tc_iniciar_intervencion), el
+          // servidor CIERRA esa intervención en vez de crear otra.
+          if (intervencionId != null) 'intervencionId': intervencionId,
           // Cronometraje: la sesión de cambio va de abrir la pantalla a pulsar
           // Finalizar; el servidor calcula duración y tiempo efectivo.
           'inicioAt': desde.toUtc().toIso8601String(),
@@ -1177,14 +1216,15 @@ class TyreControlApi {
     num? km,
     String motivo = 'desgaste',
     String? observaciones,
+    String? intervencionId,
   }) async {
-    await _db.rpc('tc_desmontar_neumatico', params: {
+    await _rpcOperacion('tc_desmontar_neumatico', {
       'p_montaje': montajeId,
       'p_km': km,
       'p_motivo': motivo,
       'p_nuevo_estado': destino,
       'p_obs': observaciones,
-    });
+    }, intervencionId);
   }
 
   /// Catálogo configurable de tipos de incidencia (tabla tc_cat_tipos_incidencia).
