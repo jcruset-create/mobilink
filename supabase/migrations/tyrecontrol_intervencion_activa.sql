@@ -150,10 +150,22 @@ comment on function tc_despachar_ejecucion(text, jsonb) is
 
 -- Interna: los envoltorios son la puerta. Llamarla directa no saltaría
 -- ningún permiso (cada RPC valida los suyos), pero fuera de la puerta no
--- estampa ni cierra nada y solo generaría confusión. Basta con quitar
--- PUBLIC: nadie tiene grant explícito, así que anon/authenticated la
--- pierden con él.
-revoke all on function tc_despachar_ejecucion(text, jsonb) from public;
+-- estampa ni cierra nada y solo generaría confusión.
+--
+-- Con PUBLIC no basta: en Supabase hay ALTER DEFAULT PRIVILEGES que da a
+-- anon/authenticated un grant EXPLÍCITO sobre cada función nueva, así que
+-- hay que revocárselo también a ellos, si existen (en un Postgres pelado,
+-- como el de las pruebas locales, no existen).
+do $$
+declare r text;
+begin
+  revoke all on function tc_despachar_ejecucion(text, jsonb) from public;
+  foreach r in array array['anon', 'authenticated'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on function tc_despachar_ejecucion(text, jsonb) from %I', r);
+    end if;
+  end loop;
+end $$;
 
 -- ── 3. tc_ejecutar_prevista pasa a usar el despacho común ───────────────────
 -- Misma firma y mismo comportamiento que en la fase 2; solo cambia que el
