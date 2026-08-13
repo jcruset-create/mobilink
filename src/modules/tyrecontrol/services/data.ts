@@ -255,7 +255,11 @@ export async function listarRevisionesHistorico(filtros: {
     .select(
       "id, fecha_revision, created_at, medido_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
       "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
-      "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado)"
+      "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado), " +
+      // Para saber QUIÉN midió. Una revisión del arco no tiene técnico, pero
+      // tampoco lo tiene una importación de Excel: "sin técnico" no distingue
+      // una de otra. Lo que las separa es el método de cada medición.
+      "detalles:revisiones_neumaticos_detalle(metodo_profundidad, metodo_presion)"
     )
     .in("estado_revision", ["completada", "completada_con_incidencias", "completada_incidencia_pendiente"]);
   if (filtros.desde) q = q.gte("fecha_revision", filtros.desde);
