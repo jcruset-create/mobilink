@@ -63,6 +63,9 @@ export default function OtfPage() {
     fetchRoadsideTechsSimple().then(setTechs).catch(() => {});
     fetchRoadsideVehiclesSimple().then(setVehicles).catch(() => {});
     fetchOtfPlantillas().then(setPlantillas).catch(() => {});
+    // Deep-link desde el historial: /otf?id=123 abre esa OTF directamente
+    const id = Number(new URLSearchParams(window.location.search).get("id"));
+    if (Number.isFinite(id) && id > 0) void openOtf(id);
   }, []);
 
   async function openOtf(id: number) {
@@ -85,6 +88,7 @@ export default function OtfPage() {
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setShowNew(true)} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500">+ Nueva OTF</button>
           <button onClick={() => setShowPlantillas(true)} className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700">🧩 Plantillas</button>
+          <a href="/otf/historial" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700">🗂 Historial</a>
           <a href="/otf-tv" target="_blank" rel="noopener noreferrer" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700">📺 Panel TV</a>
           <button onClick={loadList} className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700">↻ Actualizar</button>
         </div>
