@@ -1,9 +1,12 @@
 # Cómo funciona hoy el módulo Operaciones (TyreControl)
 
-> Estado del código a 13-08-2026. Escrito para poder pegarlo como contexto en un
-> prompt de cambio: describe lo que **hay**, no lo que debería haber. Al final
-> hay una sección de cosas que no encajan, separada a propósito de la
-> descripción.
+> Estado del código a 13-08-2026, actualizado tras el análisis de la Fase 0
+> (`docs/ANALISIS_FASE0_intervenciones_operaciones.md`): incorpora las fases 7
+> y 8 ya entregadas (paginación, Excel, errores del detalle) y corrige dos
+> imprecisiones (sustitución = dos filas; quién llama a la agrupación de
+> sueltas). Escrito para poder pegarlo como contexto en un prompt de cambio:
+> describe lo que **hay**, no lo que debería haber. Al final hay una sección
+> de cosas que no encajan, separada a propósito de la descripción.
 
 ---
 
@@ -34,9 +37,16 @@ soltó a propósito para que los valores válidos vivan en catálogos editables
 
 ### Tablas satélite
 
-- **`tc_operacion_movimientos`** — una operación puede mover varios neumáticos
-  (una sustitución son un desmontaje y un montaje; un intercambio, dos de cada).
-  Cada pieza va aquí, con `orden`.
+- **`tc_operacion_movimientos`** — una operación puede mover varios neumáticos,
+  cada pieza aquí con su `orden`. Ojo: hoy solo la rellenan cuatro RPC
+  (`tc_cambiar_posicion`, `tc_intercambiar_posiciones` y las correcciones de la
+  Fase 3; `tc_registrar_reparacion`; `tc_permutar_plan`;
+  `tc_aplicar_plan_trabajo`). Una **sustitución** NO es una operación con dos
+  movimientos: son **dos filas** de `operaciones_neumaticos` — la del retirado
+  (`sustitucion`) y la del montado, que `tc_sustituir_neumatico` reetiqueta de
+  `montaje` a `sustitucion` con una ventana de 5 segundos
+  (`tyrecontrol_stock_usado.sql:239-241`). Montaje, desmontaje y descarte
+  tampoco escriben movimientos.
 - **`tc_operacion_estado_historial`** — lo escribe **solo el trigger**
   `trg_op_log_estado`, en cada `UPDATE` que cambie `status`. No se escribe a mano.
 - **`tc_operacion_auditoria`** — acciones sobre la operación (crear, anular,
@@ -135,7 +145,12 @@ nacen huérfanas, y no se pueden envolver al crearse porque panel y APK llaman a
 los mismos RPC: la base de datos no sabe si una operación va suelta o pertenece
 a una sesión que aún no ha terminado. Lo resuelve a posteriori
 `tc_agrupar_operaciones_sueltas(30)`, que agrupa lo que lleve más de 30 minutos
-huérfano. La llama el servidor al abrir un histórico, así que se cura sola.
+huérfano. La llaman **los clientes** (no el servidor Node) al abrir un
+histórico — la APK en `supabase_service.dart:983` y el panel en
+`data.ts:1017` —, así que se cura sola… si alguien abre un histórico. Ojo:
+filtra solo por huérfana y antigüedad, **no por `status`**, así que también
+envuelve operaciones planificadas sin ejecutar en una "intervención" de una
+línea.
 
 ### Dos numeraciones distintas
 
@@ -147,13 +162,14 @@ No son la misma serie ni están relacionadas.
 
 ---
 
-## 5. La pantalla del panel (`Operaciones.tsx`, 413 líneas)
+## 5. La pantalla del panel (`Operaciones.tsx`, 473 líneas)
 
-**Listado.** `listarOperaciones` sobre `operaciones_neumaticos`, orden
-`created_at desc`, **tope fijo de 200 filas sin paginación**. Filtros por
-empresa, vehículo, tipo, estado y rango de fechas — todos en servidor. El número
-que sale junto a los filtros es `items.length`, o sea *lo que ha llegado*, no el
-total que cumple el filtro.
+**Listado.** `listarOperacionesPagina` sobre `operaciones_neumaticos`, orden
+`created_at desc`, **paginación de servidor de 50 en 50** con total real
+(`count: "exact"`, respeta la RLS). Filtros por empresa, vehículo, tipo,
+estado y rango de fechas — todos en servidor, centralizados en
+`filtrarOperaciones` para que listado y exportación miren el mismo conjunto.
+El contador enseña `1–50 de N` con el total que cumple el filtro.
 
 **Columnas:** Nº, Fecha, Empresa, Vehículo, Tipo (chip de color por tipo,
 `COLOR_TIPO`), Estado (chip + prioridad si no es normal), Neumático, Posición
@@ -163,9 +179,9 @@ total que cumple el filtro.
 operación anulada no ofrece ninguno.
 
 **Detalle** (modal) — carga en paralelo movimientos, adjuntos, historial de
-estados y auditoría; cada uno con `.catch(() => [])`, así que **si una consulta
-falla la sección sale vacía sin decir por qué**. Desde ahí se anula, exigiendo
-motivo.
+estados y auditoría con `Promise.allSettled`; cada sección distingue "sin
+datos" de "no se ha podido cargar" (con el mensaje del error). Desde ahí se
+anula, exigiendo motivo.
 
 **Coste.** Se editan `coste_material` y `coste_mano_obra`; la columna muestra la
 suma. Los clientes lo ven pero no pueden editarlo. Existe además una columna
@@ -173,8 +189,9 @@ suma. Los clientes lo ven pero no pueden editarlo. Existe además una columna
 
 **Reservas activas** — modal aparte, listado y botón de liberar.
 
-**Exportar Excel** — genera el `.xlsx` en el navegador con las filas que hay
-cargadas en pantalla. Hereda el tope de 200.
+**Exportar Excel** — genera el `.xlsx` en el navegador con **todo lo que
+cumple el filtro** (`listarOperacionesTodas`, por bloques), con tope de
+seguridad de 10.000 filas y aviso explícito si se trunca.
 
 **Rol cliente** (`rol === 'cliente'` y no superadmin): empresa fijada a la suya,
 sin selector de empresa, sin editar costes y sin anular.
@@ -209,17 +226,18 @@ no encargos.
    duplicados.
 2. **El grafo de estados vive en el frontend.** Cualquier otro cliente del RPC
    puede saltárselo.
-3. **200 filas sin paginación**, y el contador de la pantalla dice cuántas han
-   llegado, no cuántas hay. Con el volumen actual ya se están ocultando
-   operaciones.
-4. **El Excel exporta lo cargado**, no lo filtrado. Mismo tope.
-5. **`.catch(() => [])` en las cuatro cargas del detalle**: un fallo de permisos
-   o de red se ve igual que "no hay nada".
-6. **Dos numeraciones** para lo mismo a ojos del usuario (§4).
-7. **`coste` convive con `coste_material` + `coste_mano_obra`** sin una regla
+3. ~~200 filas sin paginación~~ · ~~el Excel exporta lo cargado~~ ·
+   ~~`.catch(() => [])` en el detalle~~ — **resueltos** en las fases 7 y 8
+   (ver §5).
+4. **Dos numeraciones** para lo mismo a ojos del usuario (§4). La cabecera del
+   listado ya lo aclara ("Nº operación", con tooltip), pero siguen siendo dos
+   series.
+5. **`coste` convive con `coste_material` + `coste_mano_obra`** sin una regla
    escrita de cuál manda.
-8. **`tc_agrupar_operaciones_sueltas` depende de que alguien abra un histórico.**
-   Si nadie lo abre, las operaciones quedan huérfanas indefinidamente.
+6. **`tc_agrupar_operaciones_sueltas` depende de que alguien abra un histórico.**
+   Si nadie lo abre, las operaciones quedan huérfanas indefinidamente. Y como
+   no filtra por `status`, envuelve también operaciones previstas sin ejecutar
+   (§4).
 
 ---
 
