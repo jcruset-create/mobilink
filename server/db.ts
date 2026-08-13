@@ -334,6 +334,11 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
 
+    -- Hora de inicio del estado "en camino a taller" (el resto de estados ya
+    -- tienen su marca de tiempo propia)
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enCaminoBaseAtMs" BIGINT;
+
     -- Quién SOLICITA la asistencia (puede ser distinto del cliente al que se
     -- realiza el servicio: aseguradora, gestor de flota, otra empresa…)
     ALTER TABLE roadside_assistances
