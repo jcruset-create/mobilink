@@ -8481,10 +8481,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       {
         const steps: { label: string; ms: number | null }[] = [
           { label: "Aviso", ms: a.createdAtMs },
+          { label: "Asignada", ms: a.assignedAtMs },
           { label: "Salida", ms: a.departedAtMs },
           { label: "En punto", ms: a.arrivedAtPointMs },
+          { label: "Reparando", ms: a.inicioReparacionAtMs },
           { label: "Finalizada", ms: a.finishedAtMs },
-          { label: "Taller", ms: a.arrivedAtWorkshopMs },
+          { label: "A taller", ms: a.enCaminoBaseAtMs },
+          { label: "En taller", ms: a.arrivedAtWorkshopMs },
         ];
         if (doc.y + 46 > 790) doc.addPage();
         const y0 = doc.y + 4;
