@@ -42,25 +42,43 @@ Assets con la marca antigua que requieren diseño gráfico nuevo:
 
 ## Tier B — Recomendado, requiere decisión previa
 
-### B1. URL pública `sea-tarragona.onrender.com` → `app.mobilink.es` — `DECIDIDO` ✅ (2026-08-13)
-- **Dominio elegido**: `app.mobilink.es` (subdominio, **no** el raíz).
+### B1. URL pública `sea-tarragona.onrender.com` → dominio propio — `DECISIÓN` ⚠️ (rev. 2026-08-13)
+- **Estado**: analizado y sin ejecutar. El cambio de las 7 APKs se revirtió para no
+  bloquear despliegues; se rehace cuando se elija destino y el DNS esté listo.
+- **Lo que se descubrió el 2026-08-13 mirando Render** (invalida parte de lo de arriba):
+  - El servicio **ya se llama `mobilink`** (`srv-d7or6d8g4nts7384og40`), plan Starter.
+    Renombrarlo, por tanto, ya no está pendiente.
+  - Tiene **tres dominios propios verificados y con certificado emitido**:
+    `mobilink-solutions.com`, `www.` (redirige) y `api.mobilink-solutions.com`.
+    Se han gastado los **2/2 dominios** que incluye el plan del workspace: añadir
+    `app.mobilink.es` costaría subir de plan.
+  - **Render Subdomain sigue activo**: `sea-tarragona.onrender.com` es este mismo
+    servicio. No hay dos servidores, y el host viejo no se cae solo.
+  - Pendiente de aclarar: `mobilink-solutions.com` da `ERR_CERT_AUTHORITY_INVALID`
+    desde el PC de la oficina pese a constar el certificado como emitido. Probarlo
+    desde otra red antes de apuntar nada ahí.
+- **Candidato más barato**: apuntar las APKs a `mobilink-solutions.com`, que ya
+  funciona y no consume dominio nuevo ni requiere DNS. Sólo si se resuelve lo del
+  certificado.
+- **Dominio alternativo**: `app.mobilink.es` (subdominio, **no** el raíz).
 - **Por qué subdominio y no `mobilink.es`**: el dominio raíz no está en Render, apunta a
   otro hosting (`134.0.10.115`) y además tiene comodín (`*.mobilink.es` resuelve ahí).
   Repuntar el registro A del raíz tumbaría lo que hoy sirve `mobilink.es`. Con un CNAME
   concreto para `app` la web actual y el correo quedan intactos (el registro específico
   gana al comodín).
-- **No confundir con `mobilink-solutions.com`**: ese ya es custom domain del servicio
-  (`216.24.57.1`, IP apex de Render) y es el dominio **de cara al cliente final**
+- **`mobilink-solutions.com` es hoy el dominio de cara al cliente final**
   (`CANONICAL_PUBLIC_URL` en `server/index.ts`, enlaces de seguimiento por WhatsApp).
-  Se queda como está. `app.mobilink.es` es el host **técnico** al que hablan las APKs.
-- **Por qué no se renombra el servicio Render**: `render.yaml` es un Blueprint y Render
-  identifica los servicios **por el nombre**. Cambiar `name:` no renombra: crea un servicio
-  nuevo y abandona el viejo, arrancando sin ninguna de las ~30 variables `sync: false`.
-  Con dominio propio el nombre interno da igual, así que se deja `sea-tarragona`.
+  Si además pasa a ser el host técnico de las APKs, deja de haber esa separación —
+  decidir si importa antes de hacerlo.
+- **Por qué NO tocar `render.yaml`**: es un Blueprint y Render identifica los servicios
+  **por el nombre**. Cambiar `name:` no renombra: crea un servicio nuevo y abandona el
+  viejo, arrancando sin ninguna de las ~30 variables `sync: false`. El servicio ya se
+  llama `mobilink` en el dashboard; el `name: sea-tarragona` del fichero se deja en paz.
 - **URL incrustada en 7 APKs** (no 2): `flutter_app`, `lite_app`, `taller_app`,
   `safety_app`, `presencia_app`, `tyrecontrol_app` (`lib/config.dart`) y `almacen_app`
-  (`lib/main.dart`). Ya apuntan todas a `https://app.mobilink.es`.
-- **Orden obligatorio** — el código ya está, pero **no se puede desplegar antes del DNS**:
+  (`lib/main.dart`). Todas siguen en `sea-tarragona.onrender.com`.
+- **Orden obligatorio** — el DNS y el certificado van **antes** que el código, no después.
+  Compilar las APKs contra un host que aún no responde es fabricar tablets rotas:
   1. DNS: CNAME `app` → `sea-tarragona.onrender.com` (TTL bajo, 300, mientras se prueba).
   2. Render → Settings → Custom Domains → añadir `app.mobilink.es`, esperar a *Verified*
      y a que emita el certificado.
