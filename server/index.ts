@@ -14703,11 +14703,23 @@ app.post("/api/roadside-operator/otf/:id/trabajos", requireRoadsideOperator, asy
     if (!b.plate || !b.tipoVehiculo || (!b.trabajoPlantilla && !b.detalleManual) || !b.motivoAltaCampo) {
       return res.status(400).json({ error: "Matrícula, tipo, trabajo y motivo son obligatorios" });
     }
-    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
-      const dup = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id DESC LIMIT 1`, [otfId]);
-      return res.json(normalizeOtfTrabajo(dup.rows[0]));
-    }
     const trabajo = combineTrabajo(b.trabajoPlantilla, b.detalleManual);
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      // Reintento del mismo alta: se devuelve el trabajo que creó el intento
+      // anterior. Se busca por los datos del alta y no "el último de la OTF":
+      // otro técnico puede haber añadido uno en medio, y las fotos acabarían
+      // colgando del trabajo equivocado.
+      const dup = await db.query(
+        `SELECT * FROM otf_trabajos
+          WHERE "otfId" = $1 AND plate = $2 AND trabajo = $3
+            AND origen = 'tecnico_campo' AND "creadoPorTecnico" = $4
+          ORDER BY id DESC LIMIT 1`,
+        [otfId, String(b.plate).toUpperCase().trim(), trabajo, operator.techName]
+      );
+      // Si no aparece, el intento anterior se quedó sin crear nada pese a haber
+      // registrado la acción: se sigue adelante y se crea ahora.
+      if (dup.rows[0]) return res.json(normalizeOtfTrabajo(dup.rows[0]));
+    }
     const now = Date.now();
     const r = await db.query(
       `INSERT INTO otf_trabajos ("otfId",plate,"plateRemolque","tipoVehiculo","trabajoPlantilla","detalleManual",trabajo,
