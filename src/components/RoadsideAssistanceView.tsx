@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
+import LocationPickerModal from "./LocationPickerModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
@@ -58,6 +59,9 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 
 const INITIAL_DRAFT: RoadsideAssistanceDraft = {
+  solicitanteEmpresa: "",
+  solicitanteNombre: "",
+  solicitanteTelefono: "",
   customerName: "",
   customerPhone: "",
   conductorNombre: "",
@@ -112,8 +116,27 @@ const STEP_LABELS: Partial<Record<RoadsideAssistanceStatus, string>> = {
   llegada_taller: "En taller",
 };
 
+/** Hora de inicio de cada estado del flujo (si la asistencia la tiene registrada). */
+function stepTimestamp(
+  st: RoadsideAssistanceStatus,
+  a?: RoadsideAssistance
+): number | null | undefined {
+  if (!a) return null;
+  switch (st) {
+    case "pendiente": return a.createdAtMs;
+    case "asignada": return a.assignedAtMs;
+    case "en_camino": return a.departedAtMs;
+    case "en_punto": return a.arrivedAtPointMs;
+    case "inicio_reparacion": return a.inicioReparacionAtMs;
+    case "finalizada": return a.finishedAtMs;
+    case "en_camino_base": return a.enCaminoBaseAtMs;
+    case "llegada_taller": return a.arrivedAtWorkshopMs;
+    default: return null;
+  }
+}
+
 /** Línea de estados: verde = completado, naranja = en curso, gris = pendiente. */
-function StatusStepper({ status }: { status: RoadsideAssistanceStatus }) {
+function StatusStepper({ status, assistance }: { status: RoadsideAssistanceStatus; assistance?: RoadsideAssistance }) {
   const currentIndex = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
   // Estados fuera del flujo (cancelada / redirigida): badge simple
   if (currentIndex === -1) {
@@ -151,6 +174,14 @@ function StatusStepper({ status }: { status: RoadsideAssistanceStatus }) {
             <span className={`mt-1 text-center text-[9px] leading-tight ${label}`}>
               {STEP_LABELS[st] ?? ROADSIDE_ASSISTANCE_STATUS_LABELS[st]}
             </span>
+            {(() => {
+              const ts = stepTimestamp(st, assistance);
+              return ts ? (
+                <span className={`text-center text-[9px] font-mono leading-tight ${done || current ? "text-slate-400" : "text-slate-600"}`}>
+                  {formatTime(ts)}
+                </span>
+              ) : null;
+            })()}
           </div>
         );
       })}
@@ -246,6 +277,9 @@ function buildEditDraft(
   assistance: RoadsideAssistance
 ): RoadsideAssistanceEditDraft {
   return {
+    solicitanteEmpresa: assistance.solicitanteEmpresa || "",
+    solicitanteNombre: assistance.solicitanteNombre || "",
+    solicitanteTelefono: assistance.solicitanteTelefono || "",
     customerName: assistance.customerName || "",
     customerPhone: assistance.customerPhone || "",
     conductorNombre: assistance.conductorNombre || "",
@@ -415,6 +449,8 @@ export default function RoadsideAssistanceView({
   const [showPlacesManager, setShowPlacesManager] = useState(false);
   // Alta/edición de base con pin en el mapa: "new" = crear, KnownPlace = editar
   const [placeMapTarget, setPlaceMapTarget] = useState<"new" | KnownPlace | null>(null);
+  // Marcar la posición de la asistencia en el mapa (alta o edición)
+  const [mapPickerTarget, setMapPickerTarget] = useState<"create" | "edit" | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false); // cajón lateral en móvil
 
   useEffect(() => {
@@ -476,7 +512,7 @@ export default function RoadsideAssistanceView({
   };
 
   // ── Historial ───────────────────────────────────────────────────────────────
-  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null; origen: "central" | "taller" };
+  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null; origen: "central" | "taller"; solicitanteEmpresa?: string | null; solicitanteNombre?: string | null; solicitanteTelefono?: string | null };
   const [historialItems, setHistorialItems] = useState<HistorialItem[]>([]);
   const [historialTotal, setHistorialTotal] = useState(0);
   const [historialPage, setHistorialPage] = useState(1);
@@ -1022,13 +1058,12 @@ export default function RoadsideAssistanceView({
           >
             <Store className="h-4 w-4 shrink-0" /> Talleres
           </a>
-          <button
-            type="button"
-            onClick={() => setShowPlacesManager(true)}
-            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium text-slate-300 hover:bg-slate-800"
+          <a
+            href="/asistencias/lugares"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <MapPin className="h-4 w-4 shrink-0" /> Lugares
-          </button>
+          </a>
           <a
             href="/otf"
             target="_blank"
@@ -1195,10 +1230,79 @@ export default function RoadsideAssistanceView({
             )}
 
             <div className="space-y-3">
+              {/* ── Quién SOLICITA la asistencia ── */}
+              <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+                Solicitante de la asistencia
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Cliente
+                    Empresa que solicita
+                  </span>
+                  <input
+                    value={draft.solicitanteEmpresa}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, solicitanteEmpresa: event.target.value }))
+                    }
+                    placeholder="P. ej. aseguradora, gestor de flota…"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Persona que solicita
+                  </span>
+                  <input
+                    value={draft.solicitanteNombre}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, solicitanteNombre: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+              </div>
+              <label className="block md:w-1/2 md:pr-1.5">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
+                  Teléfono del solicitante
+                </span>
+                <input
+                  value={draft.solicitanteTelefono}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, solicitanteTelefono: event.target.value }))
+                  }
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                />
+              </label>
+
+              <label className="flex items-center gap-3 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2">
+                <input
+                  type="checkbox"
+                  onChange={(event) => {
+                    // Al marcar, copia los datos del solicitante al servicio
+                    if (event.target.checked) {
+                      setDraft((prev) => ({
+                        ...prev,
+                        customerName: prev.solicitanteEmpresa || prev.customerName,
+                        conductorNombre: prev.solicitanteNombre || prev.conductorNombre,
+                        customerPhone: prev.solicitanteTelefono || prev.customerPhone,
+                      }));
+                    }
+                  }}
+                  className="accent-sky-500"
+                />
+                <span className="text-sm font-bold text-sky-300">
+                  El servicio es para la misma empresa y persona (copiar datos)
+                </span>
+              </label>
+
+              {/* ── A quién se REALIZA el servicio ── */}
+              <div className="pt-1 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                Servicio a realizar
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Cliente (empresa del servicio)
                   </span>
                   <input
                     value={draft.customerName}
@@ -1214,7 +1318,7 @@ export default function RoadsideAssistanceView({
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Telefono WhatsApp
+                    Telefono WhatsApp (conductor)
                   </span>
                   <input
                     value={draft.customerPhone}
@@ -1318,15 +1422,25 @@ export default function RoadsideAssistanceView({
                 />
               </label>
 
-              <button
-                type="button"
-                onClick={handleGeocodeCreate}
-                disabled={geocodingCreate}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
-              >
-                <LocateFixed className="h-4 w-4" />
-                {geocodingCreate ? "Geocodificando..." : "Geocodificar dirección"}
-              </button>
+              <div className="grid gap-2 md:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={handleGeocodeCreate}
+                  disabled={geocodingCreate}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
+                >
+                  <LocateFixed className="h-4 w-4" />
+                  {geocodingCreate ? "Geocodificando..." : "Geocodificar dirección"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMapPickerTarget("create")}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300 hover:bg-red-500/25"
+                >
+                  <MapPin className="h-4 w-4" />
+                  Marcar en mapa
+                </button>
+              </div>
               {geocodeCreateError && (
                 <div className="text-xs font-bold text-red-400">{geocodeCreateError}</div>
               )}
@@ -1658,6 +1772,13 @@ export default function RoadsideAssistanceView({
                         <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
                         </div>
+                        {(assistance.solicitanteEmpresa || assistance.solicitanteNombre) && (
+                          <div className="mt-0.5 truncate text-xs text-slate-500">
+                            Solicita: {[assistance.solicitanteEmpresa, assistance.solicitanteNombre, assistance.solicitanteTelefono]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        )}
                       </div>
 
                       <div className="shrink-0 text-right text-xs font-bold text-slate-500">
@@ -1667,7 +1788,7 @@ export default function RoadsideAssistanceView({
                     </div>
 
                     <div className="mt-4">
-                      <StatusStepper status={assistance.status} />
+                      <StatusStepper status={assistance.status} assistance={assistance} />
                     </div>
 
                     <div className="mt-4 grid gap-2 text-sm">
@@ -2048,6 +2169,7 @@ export default function RoadsideAssistanceView({
                           <th className="px-3 py-2 text-left">Fecha</th>
                           <th className="px-3 py-2 text-left">Matrícula</th>
                           <th className="px-3 py-2 text-left">Cliente</th>
+                          <th className="px-3 py-2 text-left">Solicitante</th>
                           <th className="px-3 py-2 text-left">Operario</th>
                           <th className="px-3 py-2 text-left">Origen</th>
                           <th className="px-3 py-2 text-left">Estado</th>
@@ -2063,6 +2185,20 @@ export default function RoadsideAssistanceView({
                             </td>
                             <td className="px-3 py-2 font-bold text-slate-100">{item.plate || "—"}</td>
                             <td className="px-3 py-2 text-slate-300 max-w-[140px] truncate">{item.customerName || "—"}</td>
+                            <td
+                              className="px-3 py-2 text-slate-400 max-w-[150px] truncate"
+                              title={
+                                item.origen === "central"
+                                  ? "Central Assist"
+                                  : [item.solicitanteEmpresa, item.solicitanteNombre, item.solicitanteTelefono]
+                                      .filter(Boolean)
+                                      .join(" · ") || undefined
+                              }
+                            >
+                              {item.origen === "central"
+                                ? "Central Assist"
+                                : [item.solicitanteEmpresa, item.solicitanteNombre].filter(Boolean).join(" · ") || "—"}
+                            </td>
                             <td className="px-3 py-2 text-slate-400">{item.assignedTechName || "—"}</td>
                             <td className="px-3 py-2">
                               {item.origen === "central" ? (
@@ -2207,7 +2343,44 @@ export default function RoadsideAssistanceView({
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Cliente
+                    Empresa que solicita
+                  </span>
+                  <input
+                    value={editDraft.solicitanteEmpresa}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, solicitanteEmpresa: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Persona que solicita · teléfono
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      value={editDraft.solicitanteNombre}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({ ...prev, solicitanteNombre: event.target.value }))
+                      }
+                      placeholder="Nombre"
+                      className="w-1/2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    />
+                    <input
+                      value={editDraft.solicitanteTelefono}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({ ...prev, solicitanteTelefono: event.target.value }))
+                      }
+                      placeholder="Teléfono"
+                      className="w-1/2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    />
+                  </div>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Cliente (empresa del servicio)
                   </span>
                   <input
                     value={editDraft.customerName}
@@ -2286,15 +2459,25 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <div className="md:col-span-2">
-                  <button
-                    type="button"
-                    onClick={handleGeocodeEdit}
-                    disabled={geocodingEdit}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
-                  >
-                    <LocateFixed className="h-4 w-4" />
-                    {geocodingEdit ? "Geocodificando..." : "Geocodificar dirección"}
-                  </button>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={handleGeocodeEdit}
+                      disabled={geocodingEdit}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
+                    >
+                      <LocateFixed className="h-4 w-4" />
+                      {geocodingEdit ? "Geocodificando..." : "Geocodificar dirección"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapPickerTarget("edit")}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300 hover:bg-red-500/25"
+                    >
+                      <MapPin className="h-4 w-4" />
+                      Marcar en mapa
+                    </button>
+                  </div>
                   {geocodeEditError && (
                     <div className="mt-1 text-xs font-bold text-red-600">{geocodeEditError}</div>
                   )}
@@ -2945,6 +3128,46 @@ export default function RoadsideAssistanceView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Marcar la posición de la asistencia en el mapa */}
+      {mapPickerTarget && (
+        <LocationPickerModal
+          initialLat={
+            mapPickerTarget === "create"
+              ? (parseFloat(draft.latitude) || null)
+              : (parseFloat(editDraft.latitude) || null)
+          }
+          initialLng={
+            mapPickerTarget === "create"
+              ? (parseFloat(draft.longitude) || null)
+              : (parseFloat(editDraft.longitude) || null)
+          }
+          initialQuery={
+            mapPickerTarget === "create"
+              ? (draft.googleMapsUrl.trim() || draft.address.trim())
+              : (editDraft.googleMapsUrl.trim() || editDraft.address.trim())
+          }
+          onClose={() => setMapPickerTarget(null)}
+          onPick={(lat, lng, direccion) => {
+            if (mapPickerTarget === "create") {
+              setDraft((prev) => ({
+                ...prev,
+                latitude: String(lat),
+                longitude: String(lng),
+                // Solo se rellena la dirección si estaba vacía (no pisamos lo escrito)
+                address: prev.address.trim() ? prev.address : (direccion ?? prev.address),
+              }));
+            } else {
+              setEditDraft((prev) => ({
+                ...prev,
+                latitude: String(lat),
+                longitude: String(lng),
+                address: prev.address.trim() ? prev.address : (direccion ?? prev.address),
+              }));
+            }
+          }}
+        />
       )}
 
       {/* Alta/edición de base con pin en el mapa */}
