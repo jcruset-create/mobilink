@@ -239,6 +239,20 @@ const txt = (v: any): string | null => {
 export function fechaHora(fecha: any, hora: any): Date | null {
   const d = fecha instanceof Date ? new Date(fecha.getTime()) : null;
   if (!d || isNaN(d.getTime())) return null;
+  // El libro se lee con cellDates, así que una celda con formato de hora NO
+  // llega como texto sino como Date (1899-12-30 13:14:52). String() daba
+  // "Sat Dec 30 1899 13:14:52 GMT+0100", no casaba con HH:MM y toda medición
+  // acababa a medianoche: el histórico pintaba la misma hora en las 2000 filas.
+  if (hora instanceof Date && !isNaN(hora.getTime())) {
+    d.setHours(hora.getHours(), hora.getMinutes(), hora.getSeconds(), 0);
+    return d;
+  }
+  // Sin formato de hora, Excel la deja como fracción de día (0.5 = 12:00).
+  if (typeof hora === "number" && isFinite(hora)) {
+    const seg = Math.round((hora % 1) * 86400);
+    d.setHours(Math.floor(seg / 3600), Math.floor((seg % 3600) / 60), seg % 60, 0);
+    return d;
+  }
   const h = String(hora ?? "").trim();
   const m = h.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (m) d.setHours(Number(m[1]), Number(m[2]), Number(m[3] ?? 0), 0);
