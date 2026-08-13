@@ -53,6 +53,8 @@ type Fila = {
   cliente: string;
   base: string;
   tecnico: string;
+  /** true si la midió el arco: no hay operario a quien nombrar. */
+  esArco: boolean;
   km: number | null;
   estado: string;
   incidencias: number;
@@ -144,6 +146,12 @@ export default function HistoricoRevisiones() {
         const cuando = r.medido_at ?? r.created_at;
         const d = cuando ? new Date(cuando) : null;
         const incs = (r.incidencias ?? []) as { estado: string }[];
+        // Misma regla que tc_informe_control_revisiones: es del arco cuando
+        // TODAS sus mediciones vienen del arco. Si un técnico repasó una sola
+        // rueda, la revisión ya no es del CheckPoint y lleva su nombre.
+        const dets = (r.detalles ?? []) as { metodo_profundidad: string | null; metodo_presion: string | null }[];
+        const esArco = dets.length > 0
+          && dets.every((d) => d.metodo_profundidad === "checkpoint" || d.metodo_presion === "checkpoint");
         return {
           id: r.id,
           fecha: r.fecha_revision ?? "",
@@ -152,7 +160,8 @@ export default function HistoricoRevisiones() {
           unidad: r.vehiculo?.numero_unidad ?? null,
           cliente: r.vehiculo?.empresa?.nombre ?? "—",
           base: r.vehiculo?.delegacion?.nombre ?? "—",
-          tecnico: r.tecnico?.nombre ?? "—",
+          tecnico: r.tecnico?.nombre ?? (esArco ? "CheckPoint" : "—"),
+          esArco,
           km: r.km_vehiculo != null ? Number(r.km_vehiculo) : null,
           estado: r.estado_revision ?? "completada",
           incidencias: incs.length,
@@ -237,7 +246,13 @@ export default function HistoricoRevisiones() {
                 <td className={tdCls + " font-bold"}>{f.matricula}{f.unidad ? <span className="ml-1 text-[11px] font-normal text-slate-500">· {f.unidad}</span> : null}</td>
                 <td className={tdCls + " text-slate-400"}>{f.cliente}</td>
                 <td className={tdCls + " text-slate-400"}>{f.base}</td>
-                <td className={tdCls + " text-slate-300"}>{f.tecnico}</td>
+                <td className={tdCls + " text-slate-300"}>
+                  {/* En chip y no como texto: "CheckPoint" no es una persona,
+                      y puesto igual que un nombre se lee como si lo fuera. */}
+                  {f.esArco
+                    ? <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-bold text-sky-300">CheckPoint</span>
+                    : f.tecnico}
+                </td>
                 <td className={tdCls + " text-slate-400"}>{f.km != null ? f.km.toLocaleString("es-ES") : "—"}</td>
                 <td className={tdCls}>
                   {f.incidencias === 0 ? <span className="text-slate-500">—</span> : (
@@ -266,7 +281,7 @@ export default function HistoricoRevisiones() {
       {ficha && (
         <Modal title={`Revisión ${ficha.matricula} · ${fechaCorta(ficha.fecha)}${ficha.hora ? ` · ${ficha.hora}` : ""}`} onClose={() => setFicha(null)} size="xl">
           <div className="mb-2 text-[12px] text-slate-400">
-            {ficha.cliente} · Base {ficha.base} · Operario: {ficha.tecnico}
+            {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
           </div>

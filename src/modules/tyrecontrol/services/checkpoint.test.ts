@@ -74,6 +74,23 @@ describe("fechaHora", () => {
     expect(d.getMinutes()).toBe(14);
     expect(d.getSeconds()).toBe(52);
   });
+  // El libro se lee con cellDates: una celda con formato de hora NO llega
+  // como texto. Este test se escribió con la cadena "13:14:52" y por eso pasó
+  // mientras en producción todas las mediciones se guardaban a medianoche.
+  it("acepta la hora como Date, que es como la manda Excel", () => {
+    const d = fechaHora(new Date(2026, 7, 5), new Date(1899, 11, 30, 13, 14, 52))!;
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(7);
+    expect(d.getDate()).toBe(5);
+    expect(d.getHours()).toBe(13);
+    expect(d.getMinutes()).toBe(14);
+    expect(d.getSeconds()).toBe(52);
+  });
+  it("acepta la hora como fracción de día de Excel", () => {
+    const d = fechaHora(new Date(2026, 7, 5), 0.5)!;
+    expect(d.getHours()).toBe(12);
+    expect(d.getMinutes()).toBe(0);
+  });
   it("sin hora se queda a medianoche, no se inventa", () => {
     expect(fechaHora(new Date(2026, 7, 5), "N/A")!.getHours()).toBe(0);
   });
