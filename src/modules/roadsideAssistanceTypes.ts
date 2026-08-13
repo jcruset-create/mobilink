@@ -117,6 +117,7 @@ export type RoadsideAssistance = {
   arrivedAtPointMs?: number | null;
   inicioReparacionAtMs?: number | null;
   finishedAtMs?: number | null;
+  enCaminoBaseAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;
   cancelledAtMs?: number | null;
   updatedAtMs: number;
