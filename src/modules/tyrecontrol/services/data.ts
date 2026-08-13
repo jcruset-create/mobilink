@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
+import { recorrerPaginas } from "./paginacion";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
@@ -1022,21 +1023,86 @@ export async function listarIntervenciones(vehiculoId: string): Promise<Interven
   return (data ?? []) as Intervencion[];
 }
 
-export async function listarOperaciones(filtros?: {
+export interface FiltrosOperaciones {
   empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; estado?: string; intervencionId?: string; desde?: string; hasta?: string;
-}): Promise<OperacionNeumatico[]> {
-  let q = supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200);
-  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
-  if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
-  if (filtros?.neumaticoId) q = q.eq("neumatico_id", filtros.neumaticoId);
-  if (filtros?.tipo) q = q.eq("tipo_operacion", filtros.tipo);
-  if (filtros?.estado) q = q.eq("status", filtros.estado);
-  if (filtros?.intervencionId) q = q.eq("intervencion_id", filtros.intervencionId);
-  if (filtros?.desde) q = q.gte("fecha_operacion", filtros.desde);
-  if (filtros?.hasta) q = q.lte("fecha_operacion", filtros.hasta);
+}
+
+/**
+ * Los filtros, en un solo sitio. Listado, paginado y exportación tienen que
+ * mirar exactamente el mismo conjunto de filas: si cada uno los aplicase por su
+ * cuenta, el día que se añada un filtro nuevo el Excel exportaría algo distinto
+ * de lo que enseña la pantalla, y nadie se daría cuenta.
+ */
+function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
+  let r = q as any;
+  if (f?.empresaId) r = r.eq("empresa_id", f.empresaId);
+  if (f?.vehiculoId) r = r.eq("vehiculo_id", f.vehiculoId);
+  if (f?.neumaticoId) r = r.eq("neumatico_id", f.neumaticoId);
+  if (f?.tipo) r = r.eq("tipo_operacion", f.tipo);
+  if (f?.estado) r = r.eq("status", f.estado);
+  if (f?.intervencionId) r = r.eq("intervencion_id", f.intervencionId);
+  if (f?.desde) r = r.gte("fecha_operacion", f.desde);
+  if (f?.hasta) r = r.lte("fecha_operacion", f.hasta);
+  return r as T;
+}
+
+export async function listarOperaciones(filtros?: FiltrosOperaciones): Promise<OperacionNeumatico[]> {
+  const q = filtrarOperaciones(
+    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200),
+    filtros,
+  );
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as OperacionNeumatico[];
+}
+
+export interface PaginaOperaciones {
+  filas: OperacionNeumatico[];
+  /** Cuántas cumplen el filtro, no cuántas se han traído. */
+  total: number;
+}
+
+/**
+ * Una página del listado, con el total de verdad.
+ *
+ * `count: "exact"` lo cuenta la base de datos con los mismos filtros y respeta
+ * la RLS, así que el número que se enseña es el que el usuario puede ver.
+ */
+export async function listarOperacionesPagina(
+  filtros: FiltrosOperaciones | undefined,
+  pagina: number,
+  tamano: number,
+): Promise<PaginaOperaciones> {
+  const desde = Math.max(0, pagina) * tamano;
+  const q = filtrarOperaciones(
+    supabase.from("operaciones_neumaticos")
+      .select(OPERACION_SELECT, { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(desde, desde + tamano - 1),
+    filtros,
+  );
+  const { data, error, count } = await q;
+  if (error) throw new Error(error.message);
+  return { filas: (data ?? []) as unknown as OperacionNeumatico[], total: count ?? 0 };
+}
+
+/**
+ * TODAS las operaciones que cumplen el filtro, para exportar.
+ *
+ * Se trae por bloques porque PostgREST tiene su propio tope por respuesta y una
+ * petición única devolvería un recorte silencioso — que es justo el fallo que
+ * esto viene a corregir. El tope de seguridad evita que un filtro vacío intente
+ * descargar la tabla entera al navegador; cuando se alcanza se avisa, no se
+ * recorta a escondidas.
+ */
+export async function listarOperacionesTodas(
+  filtros: FiltrosOperaciones | undefined,
+  maximo = 10000,
+): Promise<{ filas: OperacionNeumatico[]; total: number; truncado: boolean }> {
+  return recorrerPaginas<OperacionNeumatico>(
+    (pagina, tamano) => listarOperacionesPagina(filtros, pagina, tamano),
+    maximo,
+  );
 }
 
 // ── Módulo Operaciones: catálogos configurables ────────────────
