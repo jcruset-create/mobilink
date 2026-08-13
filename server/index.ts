@@ -8419,6 +8419,19 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       if (a.customerName) clienteLines.push(["Nombre:", a.customerName]);
       if (a.customerPhone) clienteLines.push(["Teléfono:", a.customerPhone]);
       if (a.conductorNombre) clienteLines.push(["Conductor:", a.conductorNombre]);
+      // Quién solicitó la asistencia: si vino por la red de Central, se
+      // indica "Central Assist"; si no, los datos del solicitante.
+      if (a.origen === "central") {
+        clienteLines.push([
+          "Solicitado por:",
+          `Central Assist${a.expedienteCentral ? ` (Exp. ${a.expedienteCentral})` : ""}`,
+        ]);
+      } else {
+        const solicitante = [a.solicitanteEmpresa, a.solicitanteNombre, a.solicitanteTelefono]
+          .filter(Boolean)
+          .join(" · ");
+        if (solicitante) clienteLines.push(["Solicitado por:", solicitante]);
+      }
       if (!clienteLines.length) clienteLines.push(["Nombre:", "-"]);
 
       const intervencionLines: [string, string][] = [];
