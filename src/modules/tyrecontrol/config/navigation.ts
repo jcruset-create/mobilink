@@ -28,6 +28,7 @@ export const NAV: NavItem[] = [
   { key: "almacen-usados", path: "almacen-usados", label: "Almacén de usados", icon: Archive, roles: ["administrador"] },
   { key: "montajes", path: "montajes", label: "Montajes actuales", icon: Wrench, roles: ["administrador"] },
   { key: "operaciones", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["administrador"] },
+  { key: "intervenciones", path: "intervenciones", label: "Intervenciones", icon: CalendarCheck, roles: ["administrador"] },
   { key: "revision-vehiculo", path: "revision-vehiculo", label: "Revisión de vehículo", icon: ClipboardCheck, roles: ["administrador"] },
   { key: "autorizaciones", path: "autorizaciones", label: "Autorizaciones", icon: ShieldCheck, roles: ["administrador"] },
   { key: "enlace-almacen", path: "enlace-almacen", label: "Enlace con almacén", icon: Link2, superadminOnly: true },
@@ -47,6 +48,7 @@ export const NAV: NavItem[] = [
   // de flota que entra a ver cómo están sus autobuses.
   { key: "montajes-cliente", path: "montajes", label: "Neumáticos montados", icon: Wrench, roles: ["cliente"] },
   { key: "operaciones-cliente", path: "operaciones", label: "Trabajos realizados", icon: ClipboardList, roles: ["cliente"] },
+  { key: "intervenciones-cliente", path: "intervenciones", label: "Partes de trabajo", icon: CalendarCheck, roles: ["cliente"] },
   { key: "informes-cliente", path: "informes", label: "Informes", icon: BarChart3, roles: ["cliente"] },
   // Todos
   { key: "ayuda", path: "ayuda", label: "Ayuda / Manual", icon: HelpCircle },
