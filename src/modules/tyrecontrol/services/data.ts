@@ -980,6 +980,63 @@ export async function listarReservas(filtros?: { empresaId?: string; status?: st
   return (data ?? []) as unknown as ReservaNeumatico[];
 }
 
+// ── Vínculo prevista → ejecución (fase 2 del rediseño) ─────────
+/** Los catorce RPC de ejecución que el despachador de BD conoce. */
+export type RpcEjecucion =
+  | "tc_montar_desde_almacen" | "tc_montar_desde_catalogo" | "tc_montar_fuera_almacen"
+  | "tc_desmontar_neumatico" | "tc_sustituir_neumatico" | "tc_cambiar_posicion"
+  | "tc_intercambiar_posiciones" | "tc_corregir_posicion" | "tc_corregir_montado"
+  | "tc_registrar_reparacion" | "tc_descartar_neumatico" | "tc_regularizar_desmontaje"
+  | "tc_aplicar_plan_trabajo" | "tc_permutar_plan";
+
+export interface ResultadoEjecucionPrevista {
+  prevista: string;
+  /** Ids de las operaciones de ejecución vinculadas (una sustitución son dos). */
+  operaciones: string[];
+  resultado: unknown;
+}
+
+/**
+ * Ejecuta una operación PREVISTA con el RPC de ejecución de siempre, en una
+ * sola transacción: mueve el neumático, vincula las filas resultantes
+ * (operacion_prevista_id), cierra el plan como completada y consume o libera
+ * su reserva. `args` lleva los MISMOS nombres de parámetro que el RPC real
+ * (p_montaje, p_vehiculo…), sin p_operacion: el vínculo lo pone la BD.
+ */
+export async function ejecutarOperacionPrevista(
+  previstaId: string, rpc: RpcEjecucion, args: Record<string, unknown>,
+): Promise<ResultadoEjecucionPrevista> {
+  const { data, error } = await supabase.rpc("tc_ejecutar_prevista", {
+    p_prevista: previstaId, p_rpc: rpc, p_args: args,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as ResultadoEjecucionPrevista;
+}
+
+export interface OperacionVinculada {
+  id: string; numero_operacion?: number | null; tipo_operacion: string;
+  status?: string | null; fecha_operacion?: string | null;
+}
+
+/** Filas de ejecución que apuntan a esta prevista (vacío si no se ha ejecutado). */
+export async function listarEjecucionesDePrevista(previstaId: string): Promise<OperacionVinculada[]> {
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, numero_operacion, tipo_operacion, status, fecha_operacion")
+    .eq("operacion_prevista_id", previstaId).order("created_at");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as OperacionVinculada[];
+}
+
+/** La prevista que esta ejecución cierra (null si no ejecuta ningún plan). */
+export async function obtenerPrevistaDe(op: OperacionNeumatico): Promise<OperacionVinculada | null> {
+  if (!op.operacion_prevista_id) return null;
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, numero_operacion, tipo_operacion, status, fecha_operacion")
+    .eq("id", op.operacion_prevista_id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data ?? null) as unknown as OperacionVinculada | null;
+}
+
 // ── Fase 8: Operaciones (listado/filtros) ──────────────────────
 const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), neumatico:tc_neumaticos(*), posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(*), posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(*)";
 

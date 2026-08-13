@@ -270,12 +270,17 @@ transición legal definida en BD antes de automatizarla. El resto queda igual:
   `incidencia_id`, `motivo` si falta); cierra la prevista como `completada`
   (consumiendo reservas, mismo efecto que hoy en
   `operaciones_fase5.sql:90-92`); apunta auditoría en las dos.
-- **[fase 2]** Los catorce RPC ganan `p_operacion_prevista uuid default null`
-  al final de la firma; si viene, llaman al auxiliar tras crear su(s)
-  fila(s). En sustitución y planes, **todas** las filas resultantes se
-  vinculan a la misma prevista. ¡Ojo!: añadir parámetros crea una
-  **sobrecarga** en Postgres; cada migración debe hacer `drop function` de la
-  firma vieja para que PostgREST no falle por ambigüedad (§E.1).
+- **[fase 2]** ~~Los catorce RPC ganan `p_operacion_prevista`~~ **Como se
+  implementó de verdad** (`tyrecontrol_vincular_prevista_ejecucion.sql`): los
+  catorce RPC quedan **intactos**; un despachador
+  `tc_ejecutar_prevista(prevista, rpc, args)` valida el plan, deja su id en
+  un ajuste local de la transacción, llama al RPC de siempre y cierra el plan
+  al volver; un trigger BEFORE INSERT estampa `operacion_prevista_id` y copia
+  la herencia (incidencia, fecha prevista, prioridad, motivo) en cada fila
+  insertada con el ajuste puesto. Mismo contrato, cero reescritura de RPC en
+  producción y sin el problema de sobrecargas de §E.1 (que era el riesgo 1).
+  En sustitución y planes, **todas** las filas resultantes quedan vinculadas
+  a la misma prevista.
 - **[fase 2]** `tc_cambiar_estado_operacion`: para tipos con
   `es_fisica = true` en `tc_cat_tipos_operacion`, rechazar `→ completada` a
   mano con un mensaje que diga cómo se hace ("la ejecución se registra desde
