@@ -626,8 +626,8 @@ export default function AgendaView({
       ? "h-screen overflow-hidden bg-slate-900 p-3 text-slate-100"
       : "h-screen overflow-hidden bg-slate-50 p-3 text-slate-900",
     header: dark
-      ? "sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-800/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between"
-      : "sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between",
+      ? "md:sticky md:top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-800/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between"
+      : "md:sticky md:top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between",
     subtitle: dark ? "text-sm text-slate-400" : "text-sm text-slate-500",
     infoBar: dark
       ? "mt-2 rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-300"
@@ -2766,7 +2766,7 @@ appendLog(
         </>)}
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-            <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
+            <div className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
               <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
                 <h3 className="text-xl font-semibold">
                   {editingJobId != null ? "Editar cita" : "Nueva cita"}
@@ -3335,7 +3335,9 @@ setDraft((prev) => ({
                 </div>
               </div>
 
-              <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
+              {/* pb con safe-area: en iPhone la barra inferior de Safari se come
+                  el último centímetro y el botón Guardar quedaba pisado. */}
+              <div className="shrink-0 border-t border-slate-200 bg-white px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
                 <div className="flex gap-3">
                   <button
                     type="button"

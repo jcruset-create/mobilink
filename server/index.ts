@@ -17041,6 +17041,144 @@ app.use(
 /* =========================================================
    START SERVER
 ========================================================= */
+// ─────────────────────────────────────────────────────────────
+// Auto "En camino": si la furgoneta asignada se aleja >500 m del taller sin
+// que el operario haya pulsado "En camino", se activa solo (con ETA y
+// WhatsApp, como el botón). Salvaguarda: solo se dispara si antes vimos la
+// furgoneta DENTRO del radio tras la asignación ("armada"), para no marcar
+// en camino a furgonetas asignadas cuando ya estaban en ruta.
+// ─────────────────────────────────────────────────────────────
+const AUTO_EN_CAMINO_RADIO_M = 500;
+let autoEnCaminoRunning = false;
+
+async function activarEnCaminoAutomatico(
+  assistanceId: number,
+  origen: { lat: number; lng: number }
+) {
+  const current = await db.query(
+    `SELECT * FROM roadside_assistances WHERE id = $1 AND status = 'asignada' LIMIT 1`,
+    [assistanceId]
+  );
+  if (!current.rows.length) return; // alguien la cambió entre medias
+  const row = current.rows[0];
+  const now = Date.now();
+
+  // ETA solo si hay destino (sin coordenadas se activa igualmente, sin ruta)
+  let eta: { minutos: number; kilometros: string } | null = null;
+  const destLat = normalizeNullableNumber(row.latitude);
+  const destLng = normalizeNullableNumber(row.longitude);
+  if (destLat != null && destLng != null) {
+    try {
+      eta = await calcularETA(origen, { lat: destLat, lng: destLng });
+    } catch (e: any) {
+      console.error(`auto en-camino #${assistanceId}: ETA fallida:`, e?.message);
+    }
+  }
+
+  const result = await db.query(
+    `UPDATE roadside_assistances
+     SET status = 'en_camino',
+         "departedAtMs" = COALESCE("departedAtMs", $2),
+         "etaMinutos" = COALESCE($3, "etaMinutos"),
+         "etaKm" = COALESCE($4, "etaKm"),
+         "updatedAtMs" = $2
+     WHERE id = $1 RETURNING *`,
+    [assistanceId, now, eta?.minutos ?? null, eta?.kilometros ?? null]
+  );
+  const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+  await db.query(
+    `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+     VALUES ($1, 'en_camino', 'Automático: la furgoneta salió del taller (Webfleet)', 'auto-webfleet', $2)`,
+    [assistanceId, now]
+  );
+
+  // WhatsApp de "en camino" al cliente (igual que el botón), una sola vez
+  if (updated.customerPhone && !row.whatsappEnCaminoEnviado) {
+    try {
+      const trackingUrl = `${getPublicAppBaseUrl({} as express.Request)}/seguimiento/${updated.trackingToken}`;
+      const waResult = await sendRoadsideStatusWhatsApp(updated, "en_camino", {
+        etaMinutos: updated.etaMinutos,
+        etaKm: updated.etaKm,
+        trackingUrl,
+      });
+      if (waResult?.status === "sent") {
+        await db.query(
+          `UPDATE roadside_assistances
+           SET "whatsappEnCaminoEnviado" = true, "whatsappEnCaminoAt" = $2 WHERE id = $1`,
+          [assistanceId, now]
+        );
+      }
+    } catch (waErr: any) {
+      console.error(`auto en-camino #${assistanceId}: WhatsApp fallido:`, waErr?.message);
+    }
+  }
+
+  await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
+  console.log(`Auto en-camino: asistencia #${assistanceId} activada (furgoneta a >${AUTO_EN_CAMINO_RADIO_M} m del taller)`);
+}
+
+async function vigilarSalidaDelTaller() {
+  if (autoEnCaminoRunning) return; // sin solapes si Webfleet tarda
+  autoEnCaminoRunning = true;
+  try {
+    const asignadas = await db.query(
+      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada"
+       FROM roadside_assistances
+       WHERE status = 'asignada' AND "webfleetVehicleId" IS NOT NULL`
+    );
+    if (!asignadas.rows.length) return;
+
+    const wcfg = await getWorkshopConfig();
+    const wlat = parseFloat(wcfg.taller_lat);
+    const wlng = parseFloat(wcfg.taller_lng);
+    if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) return;
+
+    // Una sola llamada trae la posición de toda la flota
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
+    const response = await fetch(url, { headers });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data?.errorCode) return;
+    const vehicles = Array.isArray(data) ? data : data?.data ?? [];
+    const posByObj = new Map<string, { lat: number; lng: number }>();
+    for (const v of vehicles) {
+      const lat = Number(v.latitude_mdeg) / 1_000_000;
+      const lng = Number(v.longitude_mdeg) / 1_000_000;
+      if (Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)) {
+        posByObj.set(String(v.objectno), { lat, lng });
+      }
+    }
+
+    for (const a of asignadas.rows) {
+      const pos = posByObj.get(String(a.webfleetVehicleId));
+      if (!pos) continue;
+      const dist = haversineDistanceM(pos.lat, pos.lng, wlat, wlng);
+      if (dist <= AUTO_EN_CAMINO_RADIO_M) {
+        // Furgoneta vista en el taller: se arma el disparo automático
+        if (a.autoEnCaminoArmada !== true) {
+          await db.query(
+            `UPDATE roadside_assistances SET "autoEnCaminoArmada" = true WHERE id = $1`,
+            [a.id]
+          );
+        }
+      } else if (a.autoEnCaminoArmada === true) {
+        await activarEnCaminoAutomatico(Number(a.id), pos);
+      }
+    }
+  } catch (e: any) {
+    console.error("vigilarSalidaDelTaller error:", e?.message);
+  } finally {
+    autoEnCaminoRunning = false;
+  }
+}
+
+function startAutoEnCaminoWatcher() {
+  // Sin credenciales de Webfleet no hay posiciones: el chequeo saldrá vacío
+  setInterval(() => void vigilarSalidaDelTaller(), 60_000);
+  console.log(`Auto en-camino: vigilancia activa (radio ${AUTO_EN_CAMINO_RADIO_M} m, cada 60 s)`);
+}
+
 initDb()
   .then(() => initIntegrationHub())
   .then(() => initLicenses())
@@ -17059,6 +17197,7 @@ initDb()
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
+      startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
     });
   })
   .catch((error) => {

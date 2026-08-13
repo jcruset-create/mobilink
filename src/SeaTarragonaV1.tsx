@@ -4933,7 +4933,12 @@ return (
     <div className="mx-auto w-full max-w-[98vw] space-y-6">
 <div
   ref={stickyHeaderRef}
-  className={`z-30 bg-slate-50 pb-2 pt-2 ${embebido ? "" : "sticky top-0"}`}
+  // Sticky solo a partir de tablet. En un móvil esta cabecera —selector de
+  // taller y las veinte pestañas— ocupa la pantalla entera, así que al quedarse
+  // fija no dejaba sitio donde desplazarse: el contenido de abajo era
+  // inalcanzable. Suelta, se va hacia arriba al hacer scroll como cualquier
+  // cabecera.
+  className={`z-30 bg-slate-50 pb-2 pt-2 ${embebido ? "" : "md:sticky md:top-0"}`}
 >
   <div className="flex flex-col gap-2">
 <div className={`flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur md:flex-row md:items-center md:justify-between ${embebido ? "hidden" : "flex"}`}>
@@ -8106,7 +8111,7 @@ console.log("DEBUG tiempos trabajo activo", {
 
       {quickEntryOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
-    <div className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
+    <div className="flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
       <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
         <div className="flex items-start justify-between">
           <div>
@@ -8377,7 +8382,7 @@ console.log("DEBUG tiempos trabajo activo", {
     </div>
     {resetConfirmOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
-  <div className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
+  <div className="flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
       <div className="flex items-start justify-between">
         <div>
           <h3 className="text-xl font-semibold text-red-700">
