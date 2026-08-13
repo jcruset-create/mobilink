@@ -156,7 +156,7 @@ export default function KnownPlaceMapModal({ place, onClose, onSaved }: Props) {
 
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/60 p-4 pt-8">
-      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
+      <div className="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 text-slate-100 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
           <div className="flex items-center gap-2">
             <MapPin className="h-5 w-5 text-red-400" />
