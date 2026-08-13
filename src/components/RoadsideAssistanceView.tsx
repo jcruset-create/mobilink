@@ -485,7 +485,7 @@ export default function RoadsideAssistanceView({
   };
 
   // ── Historial ───────────────────────────────────────────────────────────────
-  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null; origen: "central" | "taller" };
+  type HistorialItem = { id: number; plate: string; customerName: string; customerPhone: string; assignedTechName: string | null; status: RoadsideAssistanceStatus; createdAtMs: number; finishedAtMs: number | null; cancelledAtMs: number | null; arrivedAtWorkshopMs: number | null; origen: "central" | "taller"; solicitanteEmpresa?: string | null; solicitanteNombre?: string | null; solicitanteTelefono?: string | null };
   const [historialItems, setHistorialItems] = useState<HistorialItem[]>([]);
   const [historialTotal, setHistorialTotal] = useState(0);
   const [historialPage, setHistorialPage] = useState(1);
