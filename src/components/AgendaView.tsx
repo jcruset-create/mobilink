@@ -626,8 +626,8 @@ export default function AgendaView({
       ? "h-screen overflow-hidden bg-slate-900 p-3 text-slate-100"
       : "h-screen overflow-hidden bg-slate-50 p-3 text-slate-900",
     header: dark
-      ? "sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-800/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between"
-      : "sticky top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between",
+      ? "md:sticky md:top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-800/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between"
+      : "md:sticky md:top-0 z-50 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between",
     subtitle: dark ? "text-sm text-slate-400" : "text-sm text-slate-500",
     infoBar: dark
       ? "mt-2 rounded-xl bg-slate-800 px-3 py-2 text-xs text-slate-300"
