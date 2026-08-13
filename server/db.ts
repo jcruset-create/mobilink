@@ -334,6 +334,17 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
 
+    -- Quién SOLICITA la asistencia (puede ser distinto del cliente al que se
+    -- realiza el servicio: aseguradora, gestor de flota, otra empresa…)
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteEmpresa" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteNombre" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteTelefono" TEXT;
+
     -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
     ALTER TABLE roadside_vehicles
     ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;

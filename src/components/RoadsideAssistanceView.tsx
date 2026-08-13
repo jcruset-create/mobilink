@@ -59,6 +59,9 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 
 const INITIAL_DRAFT: RoadsideAssistanceDraft = {
+  solicitanteEmpresa: "",
+  solicitanteNombre: "",
+  solicitanteTelefono: "",
   customerName: "",
   customerPhone: "",
   conductorNombre: "",
@@ -247,6 +250,9 @@ function buildEditDraft(
   assistance: RoadsideAssistance
 ): RoadsideAssistanceEditDraft {
   return {
+    solicitanteEmpresa: assistance.solicitanteEmpresa || "",
+    solicitanteNombre: assistance.solicitanteNombre || "",
+    solicitanteTelefono: assistance.solicitanteTelefono || "",
     customerName: assistance.customerName || "",
     customerPhone: assistance.customerPhone || "",
     conductorNombre: assistance.conductorNombre || "",
@@ -1197,10 +1203,79 @@ export default function RoadsideAssistanceView({
             )}
 
             <div className="space-y-3">
+              {/* ── Quién SOLICITA la asistencia ── */}
+              <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+                Solicitante de la asistencia
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Cliente
+                    Empresa que solicita
+                  </span>
+                  <input
+                    value={draft.solicitanteEmpresa}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, solicitanteEmpresa: event.target.value }))
+                    }
+                    placeholder="P. ej. aseguradora, gestor de flota…"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Persona que solicita
+                  </span>
+                  <input
+                    value={draft.solicitanteNombre}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, solicitanteNombre: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+              </div>
+              <label className="block md:w-1/2 md:pr-1.5">
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
+                  Teléfono del solicitante
+                </span>
+                <input
+                  value={draft.solicitanteTelefono}
+                  onChange={(event) =>
+                    setDraft((prev) => ({ ...prev, solicitanteTelefono: event.target.value }))
+                  }
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                />
+              </label>
+
+              <label className="flex items-center gap-3 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2">
+                <input
+                  type="checkbox"
+                  onChange={(event) => {
+                    // Al marcar, copia los datos del solicitante al servicio
+                    if (event.target.checked) {
+                      setDraft((prev) => ({
+                        ...prev,
+                        customerName: prev.solicitanteEmpresa || prev.customerName,
+                        conductorNombre: prev.solicitanteNombre || prev.conductorNombre,
+                        customerPhone: prev.solicitanteTelefono || prev.customerPhone,
+                      }));
+                    }
+                  }}
+                  className="accent-sky-500"
+                />
+                <span className="text-sm font-bold text-sky-300">
+                  El servicio es para la misma empresa y persona (copiar datos)
+                </span>
+              </label>
+
+              {/* ── A quién se REALIZA el servicio ── */}
+              <div className="pt-1 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                Servicio a realizar
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Cliente (empresa del servicio)
                   </span>
                   <input
                     value={draft.customerName}
@@ -1216,7 +1291,7 @@ export default function RoadsideAssistanceView({
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Telefono WhatsApp
+                    Telefono WhatsApp (conductor)
                   </span>
                   <input
                     value={draft.customerPhone}
@@ -1670,6 +1745,13 @@ export default function RoadsideAssistanceView({
                         <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
                         </div>
+                        {(assistance.solicitanteEmpresa || assistance.solicitanteNombre) && (
+                          <div className="mt-0.5 truncate text-xs text-slate-500">
+                            Solicita: {[assistance.solicitanteEmpresa, assistance.solicitanteNombre, assistance.solicitanteTelefono]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        )}
                       </div>
 
                       <div className="shrink-0 text-right text-xs font-bold text-slate-500">
@@ -2219,7 +2301,44 @@ export default function RoadsideAssistanceView({
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Cliente
+                    Empresa que solicita
+                  </span>
+                  <input
+                    value={editDraft.solicitanteEmpresa}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, solicitanteEmpresa: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Persona que solicita · teléfono
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      value={editDraft.solicitanteNombre}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({ ...prev, solicitanteNombre: event.target.value }))
+                      }
+                      placeholder="Nombre"
+                      className="w-1/2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    />
+                    <input
+                      value={editDraft.solicitanteTelefono}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({ ...prev, solicitanteTelefono: event.target.value }))
+                      }
+                      placeholder="Teléfono"
+                      className="w-1/2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    />
+                  </div>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Cliente (empresa del servicio)
                   </span>
                   <input
                     value={editDraft.customerName}

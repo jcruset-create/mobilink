@@ -708,6 +708,9 @@ function normalizeRoadsideAssistanceRow(row: any) {
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
     expedienteCentral: row.expedienteCentral ?? null,
+    solicitanteEmpresa: row.solicitanteEmpresa ?? null,
+    solicitanteNombre: row.solicitanteNombre ?? null,
+    solicitanteTelefono: row.solicitanteTelefono ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -7022,6 +7025,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "assignedVehicleName",
           "trackingToken",
           notes,
+          "solicitanteEmpresa",
+          "solicitanteNombre",
+          "solicitanteTelefono",
           "createdAtMs",
           "assignedAtMs",
           "departedAtMs",
@@ -7034,7 +7040,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
         )
         RETURNING *
       `,
@@ -7060,6 +7066,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         body.assignedVehicleName ? String(body.assignedVehicleName).trim() : null,
         crypto.randomUUID(),
         body.notes ? String(body.notes).trim() : null,
+        body.solicitanteEmpresa ? String(body.solicitanteEmpresa).trim() : null,
+        body.solicitanteNombre ? String(body.solicitanteNombre).trim() : null,
+        body.solicitanteTelefono ? String(body.solicitanteTelefono).trim() : null,
         now,
         timestampField === "assignedAtMs" ? now : null,
         timestampField === "departedAtMs" ? now : null,
@@ -7192,6 +7201,9 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "descripcionAveria" = $19,
           "trabajosARealizar" = $20,
           "esRemolque" = $21,
+          "solicitanteEmpresa" = COALESCE($22, "solicitanteEmpresa"),
+          "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
+          "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
           "updatedAtMs" = $17
           ${
             timestampField
@@ -7223,6 +7235,11 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
         body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
         body.esRemolque === true,
+        // Solicitante: COALESCE en el UPDATE — si el editor no envía el campo
+        // (APK antigua u otro flujo) se conserva; cadena vacía sí lo borra.
+        body.solicitanteEmpresa != null ? String(body.solicitanteEmpresa).trim() : null,
+        body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
+        body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
       ]
     );
 
