@@ -116,8 +116,26 @@ const STEP_LABELS: Partial<Record<RoadsideAssistanceStatus, string>> = {
   llegada_taller: "En taller",
 };
 
+/** Hora de inicio de cada estado del flujo (si la asistencia la tiene registrada). */
+function stepTimestamp(
+  st: RoadsideAssistanceStatus,
+  a?: RoadsideAssistance
+): number | null | undefined {
+  if (!a) return null;
+  switch (st) {
+    case "pendiente": return a.createdAtMs;
+    case "asignada": return a.assignedAtMs;
+    case "en_camino": return a.departedAtMs;
+    case "en_punto": return a.arrivedAtPointMs;
+    case "inicio_reparacion": return a.inicioReparacionAtMs;
+    case "finalizada": return a.finishedAtMs;
+    case "llegada_taller": return a.arrivedAtWorkshopMs;
+    default: return null; // en_camino_base no guarda hora propia
+  }
+}
+
 /** Línea de estados: verde = completado, naranja = en curso, gris = pendiente. */
-function StatusStepper({ status }: { status: RoadsideAssistanceStatus }) {
+function StatusStepper({ status, assistance }: { status: RoadsideAssistanceStatus; assistance?: RoadsideAssistance }) {
   const currentIndex = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(status);
   // Estados fuera del flujo (cancelada / redirigida): badge simple
   if (currentIndex === -1) {
@@ -155,6 +173,14 @@ function StatusStepper({ status }: { status: RoadsideAssistanceStatus }) {
             <span className={`mt-1 text-center text-[9px] leading-tight ${label}`}>
               {STEP_LABELS[st] ?? ROADSIDE_ASSISTANCE_STATUS_LABELS[st]}
             </span>
+            {(() => {
+              const ts = stepTimestamp(st, assistance);
+              return ts ? (
+                <span className={`text-center text-[9px] font-mono leading-tight ${done || current ? "text-slate-400" : "text-slate-600"}`}>
+                  {formatTime(ts)}
+                </span>
+              ) : null;
+            })()}
           </div>
         );
       })}
@@ -1761,7 +1787,7 @@ export default function RoadsideAssistanceView({
                     </div>
 
                     <div className="mt-4">
-                      <StatusStepper status={assistance.status} />
+                      <StatusStepper status={assistance.status} assistance={assistance} />
                     </div>
 
                     <div className="mt-4 grid gap-2 text-sm">
