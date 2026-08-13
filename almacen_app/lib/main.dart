@@ -4,7 +4,7 @@ import 'screens/login_screen.dart';
 
 const kSupabaseUrl = 'https://qhbtpebfkckzmtdcutvv.supabase.co';
 const kSupabaseAnonKey = 'sb_publishable_byCj39mPoGMOKWkjkYZxwA_HfX7PMek';
-const kBackendUrl = 'https://sea-tarragona.onrender.com';
+const kBackendUrl = 'https://app.mobilink.es';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

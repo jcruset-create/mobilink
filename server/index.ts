@@ -13086,10 +13086,23 @@ app.post(
       // Validate Twilio signature
       const authToken = process.env.TWILIO_AUTH_TOKEN ?? "";
       const twilioSig = req.headers["x-twilio-signature"] as string | undefined;
-      const fullUrl = `${process.env.PUBLIC_APP_URL ?? "https://sea-tarragona.onrender.com"}/api/whatsapp/inbound`;
+      // La firma se calcula sobre la URL EXACTA que Twilio llamó. El servicio
+      // responde por varios nombres a la vez (dominio propio y el .onrender.com
+      // heredado), así que se prueban todos en vez de fijar uno: cambiar de
+      // dominio no debe depender de acertar con esta constante.
+      const hostLlamado = req.get("x-forwarded-host") || req.get("host");
+      const candidatos = [
+        process.env.PUBLIC_APP_URL,
+        hostLlamado ? `https://${hostLlamado}` : "",
+        "https://app.mobilink.es",
+        "https://sea-tarragona.onrender.com",
+      ]
+        .map((u) => String(u || "").trim().replace(/\/+$/, ""))
+        .filter((u) => /^https?:\/\//i.test(u));
+      const urls = [...new Set(candidatos)].map((u) => `${u}/api/whatsapp/inbound`);
 
       if (authToken && twilioSig) {
-        const valid = twilio.validateRequest(authToken, twilioSig, fullUrl, req.body);
+        const valid = urls.some((u) => twilio.validateRequest(authToken, twilioSig, u, req.body));
         if (!valid) {
           console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente");
         }
@@ -16350,7 +16363,7 @@ async function enviarWhatsAppRecobro(
   const contentSid = String(process.env[contentSidEnv] || "").trim();
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) throw new Error("Twilio no configurado");
   if (!contentSid) throw new Error(`Falta la plantilla ${contentSidEnv}`);
-  const baseUrl = String(process.env.PUBLIC_APP_URL || "https://sea-tarragona.onrender.com").replace(/\/+$/, "");
+  const baseUrl = String(process.env.PUBLIC_APP_URL || "https://app.mobilink.es").replace(/\/+$/, "");
   const message = await twilioClient.messages.create({
     from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
     to: `whatsapp:+${telefono}`,

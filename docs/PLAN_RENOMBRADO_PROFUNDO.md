@@ -42,21 +42,35 @@ Assets con la marca antigua que requieren diseño gráfico nuevo:
 
 ## Tier B — Recomendado, requiere decisión previa
 
-### B1. URL pública `sea-tarragona.onrender.com` — `DECISIÓN` ⚠️ la más delicada
-- **Problema**: `flutter_app/lib/config.dart` y `tyrecontrol_app/lib/config.dart` llevan
-  la URL **incrustada**. Cambiar el nombre del servicio Render = URL nueva = **todas las
-  apps instaladas dejan de funcionar** hasta reinstalar.
-- **Opción recomendada — dominio propio** (p. ej. `api.mobilink.es`):
-  1. Comprar dominio y añadirlo como custom domain del servicio Render actual (la URL
-     onrender.com antigua SIGUE funcionando en paralelo → cero rotura).
-  2. Cambiar `kBackendUrl` en las apps al dominio nuevo, subir versión, recompilar APKs,
-     redistribuir con calma.
-  3. Cuando todas las instalaciones estén actualizadas, renombrar el servicio Render (o no:
-     con dominio propio el nombre interno da igual).
-- **Opción B — renombrar el servicio Render**: crea URL `mobilink-XXXX.onrender.com` y
-  **mata la antigua al instante**. Solo aceptable coordinando reinstalación inmediata de
-  todas las apps. No recomendada.
-- **Decisión pendiente**: ¿compramos dominio? ¿cuál?
+### B1. URL pública `sea-tarragona.onrender.com` → `app.mobilink.es` — `DECIDIDO` ✅ (2026-08-13)
+- **Dominio elegido**: `app.mobilink.es` (subdominio, **no** el raíz).
+- **Por qué subdominio y no `mobilink.es`**: el dominio raíz no está en Render, apunta a
+  otro hosting (`134.0.10.115`) y además tiene comodín (`*.mobilink.es` resuelve ahí).
+  Repuntar el registro A del raíz tumbaría lo que hoy sirve `mobilink.es`. Con un CNAME
+  concreto para `app` la web actual y el correo quedan intactos (el registro específico
+  gana al comodín).
+- **No confundir con `mobilink-solutions.com`**: ese ya es custom domain del servicio
+  (`216.24.57.1`, IP apex de Render) y es el dominio **de cara al cliente final**
+  (`CANONICAL_PUBLIC_URL` en `server/index.ts`, enlaces de seguimiento por WhatsApp).
+  Se queda como está. `app.mobilink.es` es el host **técnico** al que hablan las APKs.
+- **Por qué no se renombra el servicio Render**: `render.yaml` es un Blueprint y Render
+  identifica los servicios **por el nombre**. Cambiar `name:` no renombra: crea un servicio
+  nuevo y abandona el viejo, arrancando sin ninguna de las ~30 variables `sync: false`.
+  Con dominio propio el nombre interno da igual, así que se deja `sea-tarragona`.
+- **URL incrustada en 7 APKs** (no 2): `flutter_app`, `lite_app`, `taller_app`,
+  `safety_app`, `presencia_app`, `tyrecontrol_app` (`lib/config.dart`) y `almacen_app`
+  (`lib/main.dart`). Ya apuntan todas a `https://app.mobilink.es`.
+- **Orden obligatorio** — el código ya está, pero **no se puede desplegar antes del DNS**:
+  1. DNS: CNAME `app` → `sea-tarragona.onrender.com` (TTL bajo, 300, mientras se prueba).
+  2. Render → Settings → Custom Domains → añadir `app.mobilink.es`, esperar a *Verified*
+     y a que emita el certificado.
+  3. Render → Environment → `PUBLIC_APP_URL = https://app.mobilink.es`.
+  4. Twilio: actualizar la URL del webhook de WhatsApp entrante. La validación de firma
+     ya prueba varios hosts (`/api/whatsapp/inbound`), así que no rompe, pero conviene.
+  5. Mergear y recompilar las APKs. `sea-tarragona.onrender.com` sigue vivo, así que las
+     tablets sin actualizar siguen funcionando: la migración puede ir a su ritmo.
+- **Rollback**: volver `kBackendUrl` al `.onrender.com` y recompilar. El host viejo nunca
+  se apaga, así que no hay ventana de caída.
 
 ### B2. Rutas web `/sea-core/*` → `/core/*` — `HECHO` ✅ (2026-07-19)
 - Rutas renombradas a `/core/*` y enlaces internos actualizados (SeaHub, CoreLayout,

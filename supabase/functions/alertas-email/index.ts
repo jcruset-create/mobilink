@@ -135,7 +135,7 @@ serve(async (req) => {
         ${avisos > 0 ? ` y <strong style="color:#d97706">${avisos} aviso${avisos !== 1 ? "s" : ""}</strong>` : ""} que requieren atención:
       </p>
       <ul style="padding-left:16px;margin:0 0 20px">${listaHtml}</ul>
-      <a href="${Deno.env.get("APP_URL") ?? "https://sea-tarragona.onrender.com"}/sea"
+      <a href="${Deno.env.get("APP_URL") ?? "https://app.mobilink.es"}/sea"
         style="display:inline-block;background:#111827;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:bold">
         Ver en SEA Platform →
       </a>
