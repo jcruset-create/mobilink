@@ -1022,13 +1022,12 @@ export default function RoadsideAssistanceView({
           >
             <Store className="h-4 w-4 shrink-0" /> Talleres
           </a>
-          <button
-            type="button"
-            onClick={() => setShowPlacesManager(true)}
-            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-medium text-slate-300 hover:bg-slate-800"
+          <a
+            href="/asistencias/lugares"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <MapPin className="h-4 w-4 shrink-0" /> Lugares
-          </button>
+          </a>
           <a
             href="/otf"
             target="_blank"
