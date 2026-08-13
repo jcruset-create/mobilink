@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
+import LocationPickerModal from "./LocationPickerModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
@@ -415,6 +416,8 @@ export default function RoadsideAssistanceView({
   const [showPlacesManager, setShowPlacesManager] = useState(false);
   // Alta/edición de base con pin en el mapa: "new" = crear, KnownPlace = editar
   const [placeMapTarget, setPlaceMapTarget] = useState<"new" | KnownPlace | null>(null);
+  // Marcar la posición de la asistencia en el mapa (alta o edición)
+  const [mapPickerTarget, setMapPickerTarget] = useState<"create" | "edit" | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false); // cajón lateral en móvil
 
   useEffect(() => {
@@ -1317,15 +1320,25 @@ export default function RoadsideAssistanceView({
                 />
               </label>
 
-              <button
-                type="button"
-                onClick={handleGeocodeCreate}
-                disabled={geocodingCreate}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
-              >
-                <LocateFixed className="h-4 w-4" />
-                {geocodingCreate ? "Geocodificando..." : "Geocodificar dirección"}
-              </button>
+              <div className="grid gap-2 md:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={handleGeocodeCreate}
+                  disabled={geocodingCreate}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
+                >
+                  <LocateFixed className="h-4 w-4" />
+                  {geocodingCreate ? "Geocodificando..." : "Geocodificar dirección"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMapPickerTarget("create")}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300 hover:bg-red-500/25"
+                >
+                  <MapPin className="h-4 w-4" />
+                  Marcar en mapa
+                </button>
+              </div>
               {geocodeCreateError && (
                 <div className="text-xs font-bold text-red-400">{geocodeCreateError}</div>
               )}
@@ -2285,15 +2298,25 @@ export default function RoadsideAssistanceView({
                 </label>
 
                 <div className="md:col-span-2">
-                  <button
-                    type="button"
-                    onClick={handleGeocodeEdit}
-                    disabled={geocodingEdit}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
-                  >
-                    <LocateFixed className="h-4 w-4" />
-                    {geocodingEdit ? "Geocodificando..." : "Geocodificar dirección"}
-                  </button>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={handleGeocodeEdit}
+                      disabled={geocodingEdit}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300 hover:bg-blue-500/25 disabled:opacity-50"
+                    >
+                      <LocateFixed className="h-4 w-4" />
+                      {geocodingEdit ? "Geocodificando..." : "Geocodificar dirección"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapPickerTarget("edit")}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300 hover:bg-red-500/25"
+                    >
+                      <MapPin className="h-4 w-4" />
+                      Marcar en mapa
+                    </button>
+                  </div>
                   {geocodeEditError && (
                     <div className="mt-1 text-xs font-bold text-red-600">{geocodeEditError}</div>
                   )}
@@ -2944,6 +2967,46 @@ export default function RoadsideAssistanceView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Marcar la posición de la asistencia en el mapa */}
+      {mapPickerTarget && (
+        <LocationPickerModal
+          initialLat={
+            mapPickerTarget === "create"
+              ? (parseFloat(draft.latitude) || null)
+              : (parseFloat(editDraft.latitude) || null)
+          }
+          initialLng={
+            mapPickerTarget === "create"
+              ? (parseFloat(draft.longitude) || null)
+              : (parseFloat(editDraft.longitude) || null)
+          }
+          initialQuery={
+            mapPickerTarget === "create"
+              ? (draft.googleMapsUrl.trim() || draft.address.trim())
+              : (editDraft.googleMapsUrl.trim() || editDraft.address.trim())
+          }
+          onClose={() => setMapPickerTarget(null)}
+          onPick={(lat, lng, direccion) => {
+            if (mapPickerTarget === "create") {
+              setDraft((prev) => ({
+                ...prev,
+                latitude: String(lat),
+                longitude: String(lng),
+                // Solo se rellena la dirección si estaba vacía (no pisamos lo escrito)
+                address: prev.address.trim() ? prev.address : (direccion ?? prev.address),
+              }));
+            } else {
+              setEditDraft((prev) => ({
+                ...prev,
+                latitude: String(lat),
+                longitude: String(lng),
+                address: prev.address.trim() ? prev.address : (direccion ?? prev.address),
+              }));
+            }
+          }}
+        />
       )}
 
       {/* Alta/edición de base con pin en el mapa */}
