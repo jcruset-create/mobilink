@@ -129,8 +129,9 @@ function stepTimestamp(
     case "en_punto": return a.arrivedAtPointMs;
     case "inicio_reparacion": return a.inicioReparacionAtMs;
     case "finalizada": return a.finishedAtMs;
+    case "en_camino_base": return a.enCaminoBaseAtMs;
     case "llegada_taller": return a.arrivedAtWorkshopMs;
-    default: return null; // en_camino_base no guarda hora propia
+    default: return null;
   }
 }
 
