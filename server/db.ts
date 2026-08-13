@@ -334,6 +334,12 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
 
+    -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
+    -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
+    -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "autoEnCaminoArmada" BOOLEAN NOT NULL DEFAULT false;
+
     -- Hora de inicio del estado "en camino a taller" (el resto de estados ya
     -- tienen su marca de tiempo propia)
     ALTER TABLE roadside_assistances
