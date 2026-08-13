@@ -27,6 +27,7 @@ import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts
 // solo sitio: el mismo modulo que usa el panel, para que servidor y cliente
 // no puedan discrepar sobre si un guion es un valor.
 import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/services/itvValores.ts";
+import { resumenOperaciones } from "../src/modules/tyrecontrol/services/resumenOperaciones.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
@@ -1666,7 +1667,7 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
       .select("id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
         "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
         "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
-        "neumatico:tc_neumaticos(marca, modelo, medida)")
+        "neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)")
       .eq("vehiculo_id", vehiculoId)
       .is("intervencion_id", null)
       .gte("created_at", desde)
@@ -1675,20 +1676,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     const activas = (ops ?? []).filter((o: any) => !o.is_anulada);
     if (activas.length === 0) return res.json({ id: null, resumen: "", resumen_ia: "", n: 0 });
 
-    // Resumen determinista (mismas frases que en el front).
-    const MOTIVO: Record<string, string> = { desgaste: "desgaste", pinchazo: "pinchazo", rotura: "rotura", preventivo: "preventivo", desgaste_irregular: "desgaste irregular", cambio_estacional: "cambio estacional", reparacion: "reparación", fin_vida: "fin de vida", error_montaje: "error de montaje", otro: "otro" };
-    const VERBO: Record<string, [string, string]> = { montaje: ["Montado", "Montados"], desmontaje: ["Desmontado", "Desmontados"], sustitucion: ["Sustituido", "Sustituidos"], rotacion: ["Rotado", "Rotados"], cambio_posicion: ["Cambiado de posición", "Cambiados de posición"], intercambio: ["Intercambiado", "Intercambiados"], descarte: ["Descartado", "Descartados"] };
-    const posLabel = (o: any) => { const p = o.posicion_destino ?? o.posicion_origen; return p?.nombre ?? p?.codigo_posicion ?? o.neumatico?.medida ?? ""; };
-    const unirY = (xs: string[]) => { const a = xs.filter(Boolean); if (!a.length) return ""; if (a.length === 1) return a[0]; return `${a.slice(0, -1).join(", ")} y ${a[a.length - 1]}`; };
-    const porTipo = new Map<string, string[]>(); const reps = new Map<string, string[]>();
-    for (const o of activas as any[]) {
-      if (o.tipo_operacion === "reparacion") { const m = o.motivo ? (MOTIVO[o.motivo] ?? o.motivo) : "reparación"; const a = reps.get(m) ?? []; const pl = posLabel(o); if (pl) a.push(pl); reps.set(m, a); continue; }
-      const a = porTipo.get(o.tipo_operacion) ?? []; const pl = posLabel(o); if (pl) a.push(pl); porTipo.set(o.tipo_operacion, a);
-    }
-    const lineas: string[] = [];
-    for (const [tipo, poss] of porTipo) { const v = VERBO[tipo]; const n = poss.length || (activas as any[]).filter((o) => o.tipo_operacion === tipo).length; const s = n === 1 ? "neumático" : "neumáticos"; const verbo = v ? (n === 1 ? v[0] : v[1]) : tipo; lineas.push(`${verbo} ${n} ${s}${poss.length ? ": " + unirY(poss) : ""}`); }
-    for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
-    const resumen = lineas.join("\n");
+    // Resumen determinista: el MISMO generador que usa el panel
+    // (resumenOperaciones.ts). Aquí había una copia incrustada de los verbos
+    // que ya divergía; ver §3.4 del prompt de Intervenciones.
+    const resumen = resumenOperaciones(activas as any[]).join("\n");
 
     // Estado del vehículo DESPUÉS: montajes actuales por posición, más la
     // última presión medida por neumático (o la objetivo del eje como
@@ -1849,6 +1840,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         montaje_despues: montajeDespues.length ? montajeDespues : null,
         incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
         imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
+        // cerrada_at NO se manda a propósito: su default now() ya deja la
+        // intervención cerrada, y así este insert funciona igual con la
+        // migración de fase 1 aplicada o sin aplicar (se despliegan por
+        // separado). La fase 2/3 cablea el cierre por id.
       })
       // El número lo pone la base de datos por DEFAULT; se lee de vuelta para
       // poder enseñárselo al técnico nada más finalizar, que es cuando puede
