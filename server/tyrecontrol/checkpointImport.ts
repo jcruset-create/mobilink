@@ -179,12 +179,28 @@ async function cargar(
   // Las revisiones que ya existen para esos vehículos y fechas.
   const vehIds = [...new Set([...grupos.values()].map((g) => g.veh.id))];
   const mapRev = new Map<string, string>();
+  const aMedianoche: string[] = [];
   for (let i = 0; i < vehIds.length; i += 200) {
     const { data } = await supabase.from("revisiones_vehiculo")
-      .select("id, vehiculo_id, fecha_revision").in("vehiculo_id", vehIds.slice(i, i + 200));
+      .select("id, vehiculo_id, fecha_revision, medido_at").in("vehiculo_id", vehIds.slice(i, i + 200));
     for (const r of (data ?? []) as any[]) {
-      mapRev.set(`${r.vehiculo_id}|${String(r.fecha_revision).slice(0, 10)}`, r.id);
+      const k = `${r.vehiculo_id}|${String(r.fecha_revision).slice(0, 10)}`;
+      mapRev.set(k, r.id);
+      // Las importadas antes de arreglar la lectura de la hora quedaron a las
+      // 00:00:00Z: el histórico las pinta todas a la misma hora. Se corrigen
+      // al reimportar, pero SOLO esas — una hora real distinta, la de un
+      // técnico o la de otra pasada, no se toca.
+      if (r.medido_at && String(r.medido_at).match(/T00:00:00(\.0+)?(Z|\+00:00)$/)) aMedianoche.push(k);
     }
+  }
+
+  for (const k of aMedianoche) {
+    const g = grupos.get(k);
+    const id = mapRev.get(k);
+    if (!g || !id) continue;
+    const real = g.medido.toISOString();
+    if (real.match(/T00:00:00(\.0+)?(Z|\+00:00)$/)) continue; // el arco midió a esa hora
+    await supabase.from("revisiones_vehiculo").update({ medido_at: real }).eq("id", id);
   }
 
   const porCrear = [...grupos.values()].filter((g) => !mapRev.has(`${g.veh.id}|${g.fecha}`));
