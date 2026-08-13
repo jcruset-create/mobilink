@@ -107,6 +107,10 @@ export type RoadsideAssistance = {
   plateMismatch?: boolean;
   conductorNombre?: string | null;
   conductorDni?: string | null;
+  // Quién solicita la asistencia (puede ser distinto del cliente servido)
+  solicitanteEmpresa?: string | null;
+  solicitanteNombre?: string | null;
+  solicitanteTelefono?: string | null;
   reportToken?: string | null;
   whatsappAsignadaSentAtMs?: number | null;
   whatsappFinalizadaSentAtMs?: number | null;
@@ -119,6 +123,9 @@ export type RoadsideAssistance = {
 };
 
 export type RoadsideAssistanceDraft = {
+  solicitanteEmpresa: string;
+  solicitanteNombre: string;
+  solicitanteTelefono: string;
   customerName: string;
   customerPhone: string;
   conductorNombre: string;
