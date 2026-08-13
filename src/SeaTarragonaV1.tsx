@@ -4810,6 +4810,9 @@ if (view === "whatsapp_inbox" && canView("whatsapp_inbox")) {
       onBack={() => setView("operativo")}
       onCreateAssistance={(extracted, fromPhone) => {
         const draft: import("./modules/roadsideAssistanceTypes").RoadsideAssistanceDraft = {
+          solicitanteEmpresa: extracted.empresaSolicitante ?? "",
+          solicitanteNombre: "",
+          solicitanteTelefono: "",
           customerName: extracted.cliente ?? "",
           customerPhone: extracted.telefonoWhatsapp ?? fromPhone.replace("whatsapp:", "") ?? "",
           conductorNombre: "",
