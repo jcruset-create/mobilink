@@ -691,6 +691,10 @@ export interface OperacionNeumatico {
   is_correccion?: boolean;
   is_anulada?: boolean;
   operacion_anulada_id?: string | null;
+  /** Operación planificada que esta fila ejecuta (vínculo de la fase 2).
+   *  Varias filas de ejecución pueden apuntar al mismo plan: una sustitución
+   *  son dos. La columna solo existe con la migración de fase 2 aplicada. */
+  operacion_prevista_id?: string | null;
   delegacion_id?: string | null;
   incidencia_id?: string | null;
   proveedor?: string | null;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   listarEmpresas, listarUsadosAlmacen, resumenUsadosAlmacen, reesculturarEnAlmacen,
-  obtenerUmbralesEmpresa,
+  obtenerUmbralesEmpresa, migrarUsadosAFichas,
 } from "../services/data";
 import type { Empresa, UsadoEnAlmacen, ResumenAlmacenUsados } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
@@ -111,6 +111,31 @@ export default function AlmacenUsados() {
     setObs("");
   }
 
+  // Regularización de la Decisión 1: el RPC exige sesión de admin, así que el
+  // sitio para lanzarla es este (desde el SQL Editor no hay usuario y falla).
+  // Primero SIMULA y enseña el número; solo escribe tras confirmar.
+  const [regularizando, setRegularizando] = useState(false);
+  async function regularizar() {
+    if (!empresaId) return;
+    setRegularizando(true); setMsg("");
+    try {
+      const sim = await migrarUsadosAFichas(empresaId, true);
+      if (sim.error) { setMsg(sim.error); return; }
+      const n = Number(sim.se_regularizarian ?? 0);
+      if (n <= 0) { setMsg("No hay nada que regularizar en esta empresa."); await cargar(); return; }
+      const ok = window.confirm(
+        `Se pondrán a cero ${n} apuntes de "usado" del inventario de esta empresa: son gomas que ya están ` +
+        `representadas por su ficha (contadas dos veces). Se crea un asiento de salida por producto, sin ` +
+        `borrar ningún apunte histórico. ¿Regularizar?`,
+      );
+      if (!ok) return;
+      const res = await migrarUsadosAFichas(empresaId, false);
+      setMsg(`✔ Regularizado: ${res.asientos ?? 0} asiento(s), saldo anterior ${res.saldo_anterior ?? n}. El stock de usados sale ya solo de las fichas.`);
+      await cargar();
+    } catch (e: any) { setMsg(e?.message || "Error al regularizar"); }
+    finally { setRegularizando(false); }
+  }
+
   async function guardarReescultura() {
     if (!modal) return;
     const v = Number(mm.replace(",", "."));
@@ -154,12 +179,20 @@ export default function AlmacenUsados() {
       )}
 
       {pendienteRegularizar && (
-        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
-          <b>Quedan {Number(resumen?.unidades_stock)} usados apuntados en el inventario</b> de cuando se contaban
-          por cantidades. Ahora cada goma usada es su ficha, así que esos apuntes están de más: son las mismas
-          gomas contadas dos veces. Se ponen a cero ejecutando{" "}
-          <code>select tc_migrar_usados_a_fichas('empresa', false)</code>; sin el <code>false</code> solo simula
-          y te dice cuántos son.
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
+          <span>
+            <b>Quedan {Number(resumen?.unidades_stock)} usados apuntados en el inventario</b> de cuando se
+            contaban por cantidades. Ahora cada goma usada es su ficha, así que esos apuntes están de más:
+            son las mismas gomas contadas dos veces.
+          </span>
+          {puedeEditar ? (
+            <button onClick={regularizar} disabled={regularizando}
+              className="rounded border border-amber-400/60 px-2 py-1 font-bold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50">
+              {regularizando ? "Regularizando…" : "Regularizar ahora"}
+            </button>
+          ) : (
+            <span className="text-amber-300/80">Un administrador puede regularizarlo desde esta pantalla.</span>
+          )}
         </div>
       )}
 

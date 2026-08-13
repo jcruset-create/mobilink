@@ -300,8 +300,11 @@ begin
   end if;
 
   -- Ninguna intervención histórica (sin inicio_at, luego no creada por
-  -- tc_iniciar_intervencion) puede haber quedado abierta.
-  select count(*) into n from tc_intervenciones where cerrada_at is null and inicio_at is null;
+  -- tc_iniciar_intervencion) puede haber quedado abierta. Las PLANIFICADAS
+  -- de la fase 4 están abiertas sin inicio_at legítimamente, pero tampoco
+  -- tienen número: solo una fila numerada y sin inicio es una anomalía.
+  select count(*) into n from tc_intervenciones
+   where cerrada_at is null and inicio_at is null and numero is not null;
   if n > 0 then raise exception '% intervenciones históricas han quedado como abiertas', n; end if;
 
   if not exists (select 1 from pg_trigger where tgname = 'trg_op_valida_transicion') then
