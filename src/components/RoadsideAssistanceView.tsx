@@ -2142,6 +2142,7 @@ export default function RoadsideAssistanceView({
                           <th className="px-3 py-2 text-left">Fecha</th>
                           <th className="px-3 py-2 text-left">Matrícula</th>
                           <th className="px-3 py-2 text-left">Cliente</th>
+                          <th className="px-3 py-2 text-left">Solicitante</th>
                           <th className="px-3 py-2 text-left">Operario</th>
                           <th className="px-3 py-2 text-left">Origen</th>
                           <th className="px-3 py-2 text-left">Estado</th>
@@ -2157,6 +2158,20 @@ export default function RoadsideAssistanceView({
                             </td>
                             <td className="px-3 py-2 font-bold text-slate-100">{item.plate || "—"}</td>
                             <td className="px-3 py-2 text-slate-300 max-w-[140px] truncate">{item.customerName || "—"}</td>
+                            <td
+                              className="px-3 py-2 text-slate-400 max-w-[150px] truncate"
+                              title={
+                                item.origen === "central"
+                                  ? "Central Assist"
+                                  : [item.solicitanteEmpresa, item.solicitanteNombre, item.solicitanteTelefono]
+                                      .filter(Boolean)
+                                      .join(" · ") || undefined
+                              }
+                            >
+                              {item.origen === "central"
+                                ? "Central Assist"
+                                : [item.solicitanteEmpresa, item.solicitanteNombre].filter(Boolean).join(" · ") || "—"}
+                            </td>
                             <td className="px-3 py-2 text-slate-400">{item.assignedTechName || "—"}</td>
                             <td className="px-3 py-2">
                               {item.origen === "central" ? (
