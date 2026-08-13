@@ -14483,6 +14483,27 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   }
 });
 
+// Cancelar una OTF (endpoint dedicado: el PUT genérico reescribe todos los
+// campos y solo queremos tocar el estado).
+app.post("/api/otf/:id/cancelar", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const r = await db.query(
+      `UPDATE otf SET status = 'cancelada', "updatedAtMs" = $2
+       WHERE id = $1 AND status <> 'finalizada' RETURNING id`,
+      [id, Date.now()]
+    );
+    if (!r.rows.length) {
+      return res.status(409).json({ error: "La OTF no existe o ya está finalizada (no se puede cancelar)" });
+    }
+    res.json(await otfWithDetails(id));
+  } catch (e) {
+    console.error("POST /api/otf/:id/cancelar error:", e);
+    res.status(500).json({ error: "Error cancelando OTF" });
+  }
+});
+
 app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
