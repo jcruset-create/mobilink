@@ -695,6 +695,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     arrivedAtPointMs: row.arrivedAtPointMs != null ? Number(row.arrivedAtPointMs) : null,
     inicioReparacionAtMs: row.inicioReparacionAtMs != null ? Number(row.inicioReparacionAtMs) : null,
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    enCaminoBaseAtMs: row.enCaminoBaseAtMs != null ? Number(row.enCaminoBaseAtMs) : null,
     arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
     cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
     whatsappEnCaminoEnviado: row.whatsappEnCaminoEnviado === true || row.whatsappEnCaminoEnviado === "true",
@@ -798,7 +799,7 @@ function getRoadsideStatusTimestampField(status: string) {
   if (status === "en_punto") return "arrivedAtPointMs";
   if (status === "inicio_reparacion") return "inicioReparacionAtMs";
   if (status === "finalizada") return "finishedAtMs";
-  if (status === "en_camino_base") return null;
+  if (status === "en_camino_base") return "enCaminoBaseAtMs";
   if (status === "llegada_taller") return "arrivedAtWorkshopMs";
   if (status === "redirigida") return null;
   if (status === "cancelada") return "cancelledAtMs";
@@ -6725,7 +6726,7 @@ app.post(
           [id, operator.techName, now + 1]
         );
         const baseResult = await db.query(
-          `UPDATE roadside_assistances SET status = 'en_camino_base', "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
+          `UPDATE roadside_assistances SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
           [id, now + 1]
         );
         updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
@@ -8480,10 +8481,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       {
         const steps: { label: string; ms: number | null }[] = [
           { label: "Aviso", ms: a.createdAtMs },
+          { label: "Asignada", ms: a.assignedAtMs },
           { label: "Salida", ms: a.departedAtMs },
           { label: "En punto", ms: a.arrivedAtPointMs },
+          { label: "Reparando", ms: a.inicioReparacionAtMs },
           { label: "Finalizada", ms: a.finishedAtMs },
-          { label: "Taller", ms: a.arrivedAtWorkshopMs },
+          { label: "A taller", ms: a.enCaminoBaseAtMs },
+          { label: "En taller", ms: a.arrivedAtWorkshopMs },
         ];
         if (doc.y + 46 > 790) doc.addPage();
         const y0 = doc.y + 4;
