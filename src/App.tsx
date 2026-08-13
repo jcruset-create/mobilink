@@ -14,6 +14,8 @@ import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
 import CentralSharingPage from "./pages/CentralSharingPage";
 import TalleresPage from "./pages/TalleresPage";
+import LugaresPage from "./pages/LugaresPage";
+import OtfHistorialPage from "./pages/OtfHistorialPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
 /**
  * Los productos que viven bajo su propia ruta se cargan bajo demanda: son
@@ -151,6 +153,8 @@ export default function App() {
       <Route path="/licencias" element={<LicensesPage />} />
       <Route path="/asistencias/central" element={<CentralSharingPage />} />
       <Route path="/asistencias/talleres" element={<TalleresPage />} />
+      <Route path="/asistencias/lugares" element={<LugaresPage />} />
+      <Route path="/otf/historial" element={<OtfHistorialPage />} />
       <Route path="/admin/empresas" element={<AdminEmpresasPage />} />
       <Route path="/connect/*" element={<ConnectProApp />} />
       <Route path="/operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />

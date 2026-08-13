@@ -101,6 +101,18 @@ export async function updateOtf(id: number, body: Record<string, unknown>) {
   return res.json();
 }
 
+export async function cancelOtf(id: number) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/otf/${id}/cancelar`, {
+    method: "POST",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || "No se pudo cancelar la OTF");
+  }
+  return res.json();
+}
+
 // ── Plantillas de trabajos OTF ──
 export type OtfPlantilla = { id: number; nombre: string; descripcion: string | null; activo: boolean };
 

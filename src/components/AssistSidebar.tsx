@@ -97,7 +97,7 @@ export default function AssistSidebar({ active }: Props) {
           <a href="/asistencias/talleres" className={itemCls(active === "talleres")}>
             <Store className="h-4 w-4 shrink-0" /> Talleres
           </a>
-          <a href="/asistencias" className={itemCls(active === "lugares")}>
+          <a href="/asistencias/lugares" className={itemCls(active === "lugares")}>
             <MapPin className="h-4 w-4 shrink-0" /> Lugares
           </a>
           <a href="/otf" className={itemCls(active === "otf")}>

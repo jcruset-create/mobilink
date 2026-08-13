@@ -334,6 +334,28 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
 
+    -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
+    -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
+    -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "autoEnCaminoArmada" BOOLEAN NOT NULL DEFAULT false;
+
+    -- Hora de inicio del estado "en camino a taller" (el resto de estados ya
+    -- tienen su marca de tiempo propia)
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enCaminoBaseAtMs" BIGINT;
+
+    -- Quién SOLICITA la asistencia (puede ser distinto del cliente al que se
+    -- realiza el servicio: aseguradora, gestor de flota, otra empresa…)
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteEmpresa" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteNombre" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteTelefono" TEXT;
+
     -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
     ALTER TABLE roadside_vehicles
     ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;

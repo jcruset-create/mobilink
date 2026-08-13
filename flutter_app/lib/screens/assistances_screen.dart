@@ -154,7 +154,6 @@ class _AssistancesScreenState extends State<AssistancesScreen>
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final isExterior = exteriorMode.value;
 

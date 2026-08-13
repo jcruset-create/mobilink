@@ -83,44 +83,6 @@ class _FinishScreenState extends State<FinishScreen> {
     setState(() => _photoOr = file);
   }
 
-  Future<ImageSource?> _showSourceDialog(String title) {
-    return showModalBottomSheet<ImageSource>(
-      context: context,
-      backgroundColor: const Color(0xFF16213e),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(title,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt, color: Colors.white70),
-              title: const Text('Cámara',
-                  style: TextStyle(color: Colors.white70)),
-              onTap: () => Navigator.pop(context, ImageSource.camera),
-            ),
-            ListTile(
-              leading:
-                  const Icon(Icons.photo_library, color: Colors.white70),
-              title: const Text('Galería',
-                  style: TextStyle(color: Colors.white70)),
-              onTap: () => Navigator.pop(context, ImageSource.gallery),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _confirm() async {
     setState(() {
       _uploading = true;

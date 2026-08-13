@@ -695,6 +695,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     arrivedAtPointMs: row.arrivedAtPointMs != null ? Number(row.arrivedAtPointMs) : null,
     inicioReparacionAtMs: row.inicioReparacionAtMs != null ? Number(row.inicioReparacionAtMs) : null,
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    enCaminoBaseAtMs: row.enCaminoBaseAtMs != null ? Number(row.enCaminoBaseAtMs) : null,
     arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
     cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
     whatsappEnCaminoEnviado: row.whatsappEnCaminoEnviado === true || row.whatsappEnCaminoEnviado === "true",
@@ -708,6 +709,9 @@ function normalizeRoadsideAssistanceRow(row: any) {
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
     expedienteCentral: row.expedienteCentral ?? null,
+    solicitanteEmpresa: row.solicitanteEmpresa ?? null,
+    solicitanteNombre: row.solicitanteNombre ?? null,
+    solicitanteTelefono: row.solicitanteTelefono ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -795,7 +799,7 @@ function getRoadsideStatusTimestampField(status: string) {
   if (status === "en_punto") return "arrivedAtPointMs";
   if (status === "inicio_reparacion") return "inicioReparacionAtMs";
   if (status === "finalizada") return "finishedAtMs";
-  if (status === "en_camino_base") return null;
+  if (status === "en_camino_base") return "enCaminoBaseAtMs";
   if (status === "llegada_taller") return "arrivedAtWorkshopMs";
   if (status === "redirigida") return null;
   if (status === "cancelada") return "cancelledAtMs";
@@ -6722,7 +6726,7 @@ app.post(
           [id, operator.techName, now + 1]
         );
         const baseResult = await db.query(
-          `UPDATE roadside_assistances SET status = 'en_camino_base', "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
+          `UPDATE roadside_assistances SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
           [id, now + 1]
         );
         updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
@@ -7022,6 +7026,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "assignedVehicleName",
           "trackingToken",
           notes,
+          "solicitanteEmpresa",
+          "solicitanteNombre",
+          "solicitanteTelefono",
           "createdAtMs",
           "assignedAtMs",
           "departedAtMs",
@@ -7034,7 +7041,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
         )
         RETURNING *
       `,
@@ -7060,6 +7067,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         body.assignedVehicleName ? String(body.assignedVehicleName).trim() : null,
         crypto.randomUUID(),
         body.notes ? String(body.notes).trim() : null,
+        body.solicitanteEmpresa ? String(body.solicitanteEmpresa).trim() : null,
+        body.solicitanteNombre ? String(body.solicitanteNombre).trim() : null,
+        body.solicitanteTelefono ? String(body.solicitanteTelefono).trim() : null,
         now,
         timestampField === "assignedAtMs" ? now : null,
         timestampField === "departedAtMs" ? now : null,
@@ -7192,6 +7202,9 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "descripcionAveria" = $19,
           "trabajosARealizar" = $20,
           "esRemolque" = $21,
+          "solicitanteEmpresa" = COALESCE($22, "solicitanteEmpresa"),
+          "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
+          "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
           "updatedAtMs" = $17
           ${
             timestampField
@@ -7223,6 +7236,11 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
         body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
         body.esRemolque === true,
+        // Solicitante: COALESCE en el UPDATE — si el editor no envía el campo
+        // (APK antigua u otro flujo) se conserva; cadena vacía sí lo borra.
+        body.solicitanteEmpresa != null ? String(body.solicitanteEmpresa).trim() : null,
+        body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
+        body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
       ]
     );
 
@@ -8402,6 +8420,19 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       if (a.customerName) clienteLines.push(["Nombre:", a.customerName]);
       if (a.customerPhone) clienteLines.push(["Teléfono:", a.customerPhone]);
       if (a.conductorNombre) clienteLines.push(["Conductor:", a.conductorNombre]);
+      // Quién solicitó la asistencia: si vino por la red de Central, se
+      // indica "Central Assist"; si no, los datos del solicitante.
+      if (a.origen === "central") {
+        clienteLines.push([
+          "Solicitado por:",
+          `Central Assist${a.expedienteCentral ? ` (Exp. ${a.expedienteCentral})` : ""}`,
+        ]);
+      } else {
+        const solicitante = [a.solicitanteEmpresa, a.solicitanteNombre, a.solicitanteTelefono]
+          .filter(Boolean)
+          .join(" · ");
+        if (solicitante) clienteLines.push(["Solicitado por:", solicitante]);
+      }
       if (!clienteLines.length) clienteLines.push(["Nombre:", "-"]);
 
       const intervencionLines: [string, string][] = [];
@@ -8450,10 +8481,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       {
         const steps: { label: string; ms: number | null }[] = [
           { label: "Aviso", ms: a.createdAtMs },
+          { label: "Asignada", ms: a.assignedAtMs },
           { label: "Salida", ms: a.departedAtMs },
           { label: "En punto", ms: a.arrivedAtPointMs },
+          { label: "Reparando", ms: a.inicioReparacionAtMs },
           { label: "Finalizada", ms: a.finishedAtMs },
-          { label: "Taller", ms: a.arrivedAtWorkshopMs },
+          { label: "A taller", ms: a.enCaminoBaseAtMs },
+          { label: "En taller", ms: a.arrivedAtWorkshopMs },
         ];
         if (doc.y + 46 > 790) doc.addPage();
         const y0 = doc.y + 4;
@@ -14483,6 +14517,27 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   }
 });
 
+// Cancelar una OTF (endpoint dedicado: el PUT genérico reescribe todos los
+// campos y solo queremos tocar el estado).
+app.post("/api/otf/:id/cancelar", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const r = await db.query(
+      `UPDATE otf SET status = 'cancelada', "updatedAtMs" = $2
+       WHERE id = $1 AND status <> 'finalizada' RETURNING id`,
+      [id, Date.now()]
+    );
+    if (!r.rows.length) {
+      return res.status(409).json({ error: "La OTF no existe o ya está finalizada (no se puede cancelar)" });
+    }
+    res.json(await otfWithDetails(id));
+  } catch (e) {
+    console.error("POST /api/otf/:id/cancelar error:", e);
+    res.status(500).json({ error: "Error cancelando OTF" });
+  }
+});
+
 app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -16764,7 +16819,12 @@ const APK_APPS: Record<
   string,
   { prefix: string; label: string; releaseTag?: string; pubspec?: string }
 > = {
-  assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
+  assist: {
+    prefix: "mobilink-assist-",
+    label: "Mobilink Assist",
+    releaseTag: "assist-v",
+    pubspec: "flutter_app/pubspec.yaml",
+  },
   // Sin "pubspec" a proposito: ese campo es el repliegue cuando la API de
   // GitHub falla, y construye la URL de la release a partir de la version del
   // repositorio. Mientras Lite no tenga su primera release publicada eso daria
@@ -16813,18 +16873,26 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
   }
 }
 
-// ── Última APK publicada como GitHub Release ────────────────────────────────
+// ── APK publicada como GitHub Release ───────────────────────────────────────
 // El repositorio es público, así que el asset se descarga sin credenciales y
-// basta con redirigir al navegador. Se cachea porque la API sin token permite
-// 60 peticiones por hora y el centro de descargas lo consulta en cada visita.
+// basta con redirigir al navegador.
+//
+// Se pregunta por la ETIQUETA EXACTA (…/releases/tags/assist-v1.8.3+31), no
+// por la lista de releases: la lista pagina, y con varias apps publicando a
+// diario la de una app que publique poco se caía de la primera página. La
+// etiqueta se construye con la versión del pubspec del repositorio, que la CI
+// guarda solo DESPUÉS de publicar la release; si está en el repo, existe.
+//
+// Se cachea porque la API sin token permite 60 peticiones por hora y el centro
+// de descargas la consultaría en cada visita.
 const GH_REPO = process.env.GITHUB_REPO || "jcruset-create/mobilink";
 type ApkRelease = { version: string; url: string };
 const releaseCache = new Map<string, { hasta: number; valor: ApkRelease | null }>();
 const RELEASE_TTL_OK_MS = 10 * 60 * 1000;
 const RELEASE_TTL_FALLO_MS = 60 * 1000; // tras un fallo se reintenta antes
 
-async function latestReleaseApk(tagPrefix: string): Promise<ApkRelease | null> {
-  const cache = releaseCache.get(tagPrefix);
+async function releaseApkPorTag(tag: string, version: string): Promise<ApkRelease | null> {
+  const cache = releaseCache.get(tag);
   if (cache && Date.now() < cache.hasta) return cache.valor;
   try {
     const headers: Record<string, string> = {
@@ -16833,30 +16901,29 @@ async function latestReleaseApk(tagPrefix: string): Promise<ApkRelease | null> {
     };
     // Opcional: solo sirve para subir el límite de peticiones.
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    const r = await fetch(`https://api.github.com/repos/${GH_REPO}/releases?per_page=30`, {
-      headers,
-      signal: AbortSignal.timeout(8000),
-    });
+    const r = await fetch(
+      `https://api.github.com/repos/${GH_REPO}/releases/tags/${encodeURIComponent(tag)}`,
+      { headers, signal: AbortSignal.timeout(8000) }
+    );
+    // 404 = esa release no existe (app que todavía no ha publicado ninguna).
+    // Se cachea como "no hay" para no preguntar en cada visita.
+    if (r.status === 404) {
+      releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor: null });
+      return null;
+    }
     if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`);
-    const releases = (await r.json()) as any[];
-    const candidatas = (Array.isArray(releases) ? releases : [])
-      .filter((rel) => !rel.draft && !rel.prerelease && String(rel.tag_name ?? "").startsWith(tagPrefix))
-      .map((rel) => ({
-        version: String(rel.tag_name).slice(tagPrefix.length),
-        asset: (rel.assets ?? []).find((a: any) => String(a.name ?? "").endsWith(".apk")),
-      }))
-      .filter((c) => c.asset?.browser_download_url);
-    candidatas.sort((a, b) => masNuevaPrimero(a.version, b.version));
-    const mejor = candidatas[0]
-      ? { version: candidatas[0].version, url: candidatas[0].asset.browser_download_url as string }
+    const rel = (await r.json()) as any;
+    const asset = (rel?.assets ?? []).find((a: any) => String(a.name ?? "").endsWith(".apk"));
+    const valor = asset?.browser_download_url
+      ? { version, url: asset.browser_download_url as string }
       : null;
-    releaseCache.set(tagPrefix, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor: mejor });
-    return mejor;
+    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor });
+    return valor;
   } catch (e: any) {
-    console.warn("[descargas] no se pudo leer las releases de GitHub:", e?.message || e);
+    console.warn("[descargas] no se pudo consultar la release de GitHub:", e?.message || e);
     // Se conserva lo último bueno si lo había; si no, se reintenta en un minuto.
     const valor = cache?.valor ?? null;
-    releaseCache.set(tagPrefix, { hasta: Date.now() + RELEASE_TTL_FALLO_MS, valor });
+    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_FALLO_MS, valor });
     return valor;
   }
 }
@@ -16874,24 +16941,20 @@ function versionDelPubspec(rel: string): string | null {
 }
 
 // Resuelve la descarga de una app, por orden de preferencia:
-//   1. La release más reciente según la API de GitHub (nombre de asset exacto).
-//   2. Si la API falla o agota su límite de peticiones, la URL construida a
-//      partir de la versión del repositorio: no hace ninguna llamada y apunta
-//      a una release que sabemos publicada.
-//   3. Fichero suelto en public/ (apps que aún se compilan a mano).
+//   1. La release cuya etiqueta corresponde a la versión del repositorio.
+//   2. Fichero suelto en public/ (apps que todavía no publican release, o
+//      mientras GitHub no responde).
+// Devolver el fichero local como respaldo es lo que permite añadir el
+// releaseTag a una app ANTES de que su CI haya publicado nada: mientras no
+// exista la release se sigue sirviendo lo de siempre.
 async function resolverApk(
   app0: { prefix: string; releaseTag?: string; pubspec?: string }
 ): Promise<{ version: string; url?: string; file?: string } | null> {
-  if (app0.releaseTag) {
-    const rel = await latestReleaseApk(app0.releaseTag);
-    if (rel) return { version: rel.version, url: rel.url };
-
-    const v = app0.pubspec ? versionDelPubspec(app0.pubspec) : null;
+  if (app0.releaseTag && app0.pubspec) {
+    const v = versionDelPubspec(app0.pubspec);
     if (v) {
-      // El "+" del build number va codificado en la URL (…-v0.32.2%2B51).
-      const tag = encodeURIComponent(`${app0.releaseTag}${v}`);
-      const fichero = encodeURIComponent(`${app0.prefix}${v}.apk`);
-      return { version: v, url: `https://github.com/${GH_REPO}/releases/download/${tag}/${fichero}` };
+      const rel = await releaseApkPorTag(`${app0.releaseTag}${v}`, v);
+      if (rel) return { version: rel.version, url: rel.url };
     }
   }
   const local = latestApkFor(app0.prefix);
@@ -16965,6 +17028,144 @@ app.use(
 /* =========================================================
    START SERVER
 ========================================================= */
+// ─────────────────────────────────────────────────────────────
+// Auto "En camino": si la furgoneta asignada se aleja >500 m del taller sin
+// que el operario haya pulsado "En camino", se activa solo (con ETA y
+// WhatsApp, como el botón). Salvaguarda: solo se dispara si antes vimos la
+// furgoneta DENTRO del radio tras la asignación ("armada"), para no marcar
+// en camino a furgonetas asignadas cuando ya estaban en ruta.
+// ─────────────────────────────────────────────────────────────
+const AUTO_EN_CAMINO_RADIO_M = 500;
+let autoEnCaminoRunning = false;
+
+async function activarEnCaminoAutomatico(
+  assistanceId: number,
+  origen: { lat: number; lng: number }
+) {
+  const current = await db.query(
+    `SELECT * FROM roadside_assistances WHERE id = $1 AND status = 'asignada' LIMIT 1`,
+    [assistanceId]
+  );
+  if (!current.rows.length) return; // alguien la cambió entre medias
+  const row = current.rows[0];
+  const now = Date.now();
+
+  // ETA solo si hay destino (sin coordenadas se activa igualmente, sin ruta)
+  let eta: { minutos: number; kilometros: string } | null = null;
+  const destLat = normalizeNullableNumber(row.latitude);
+  const destLng = normalizeNullableNumber(row.longitude);
+  if (destLat != null && destLng != null) {
+    try {
+      eta = await calcularETA(origen, { lat: destLat, lng: destLng });
+    } catch (e: any) {
+      console.error(`auto en-camino #${assistanceId}: ETA fallida:`, e?.message);
+    }
+  }
+
+  const result = await db.query(
+    `UPDATE roadside_assistances
+     SET status = 'en_camino',
+         "departedAtMs" = COALESCE("departedAtMs", $2),
+         "etaMinutos" = COALESCE($3, "etaMinutos"),
+         "etaKm" = COALESCE($4, "etaKm"),
+         "updatedAtMs" = $2
+     WHERE id = $1 RETURNING *`,
+    [assistanceId, now, eta?.minutos ?? null, eta?.kilometros ?? null]
+  );
+  const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+  await db.query(
+    `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+     VALUES ($1, 'en_camino', 'Automático: la furgoneta salió del taller (Webfleet)', 'auto-webfleet', $2)`,
+    [assistanceId, now]
+  );
+
+  // WhatsApp de "en camino" al cliente (igual que el botón), una sola vez
+  if (updated.customerPhone && !row.whatsappEnCaminoEnviado) {
+    try {
+      const trackingUrl = `${getPublicAppBaseUrl({} as express.Request)}/seguimiento/${updated.trackingToken}`;
+      const waResult = await sendRoadsideStatusWhatsApp(updated, "en_camino", {
+        etaMinutos: updated.etaMinutos,
+        etaKm: updated.etaKm,
+        trackingUrl,
+      });
+      if (waResult?.status === "sent") {
+        await db.query(
+          `UPDATE roadside_assistances
+           SET "whatsappEnCaminoEnviado" = true, "whatsappEnCaminoAt" = $2 WHERE id = $1`,
+          [assistanceId, now]
+        );
+      }
+    } catch (waErr: any) {
+      console.error(`auto en-camino #${assistanceId}: WhatsApp fallido:`, waErr?.message);
+    }
+  }
+
+  await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
+  console.log(`Auto en-camino: asistencia #${assistanceId} activada (furgoneta a >${AUTO_EN_CAMINO_RADIO_M} m del taller)`);
+}
+
+async function vigilarSalidaDelTaller() {
+  if (autoEnCaminoRunning) return; // sin solapes si Webfleet tarda
+  autoEnCaminoRunning = true;
+  try {
+    const asignadas = await db.query(
+      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada"
+       FROM roadside_assistances
+       WHERE status = 'asignada' AND "webfleetVehicleId" IS NOT NULL`
+    );
+    if (!asignadas.rows.length) return;
+
+    const wcfg = await getWorkshopConfig();
+    const wlat = parseFloat(wcfg.taller_lat);
+    const wlng = parseFloat(wcfg.taller_lng);
+    if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) return;
+
+    // Una sola llamada trae la posición de toda la flota
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
+    const response = await fetch(url, { headers });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data?.errorCode) return;
+    const vehicles = Array.isArray(data) ? data : data?.data ?? [];
+    const posByObj = new Map<string, { lat: number; lng: number }>();
+    for (const v of vehicles) {
+      const lat = Number(v.latitude_mdeg) / 1_000_000;
+      const lng = Number(v.longitude_mdeg) / 1_000_000;
+      if (Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)) {
+        posByObj.set(String(v.objectno), { lat, lng });
+      }
+    }
+
+    for (const a of asignadas.rows) {
+      const pos = posByObj.get(String(a.webfleetVehicleId));
+      if (!pos) continue;
+      const dist = haversineDistanceM(pos.lat, pos.lng, wlat, wlng);
+      if (dist <= AUTO_EN_CAMINO_RADIO_M) {
+        // Furgoneta vista en el taller: se arma el disparo automático
+        if (a.autoEnCaminoArmada !== true) {
+          await db.query(
+            `UPDATE roadside_assistances SET "autoEnCaminoArmada" = true WHERE id = $1`,
+            [a.id]
+          );
+        }
+      } else if (a.autoEnCaminoArmada === true) {
+        await activarEnCaminoAutomatico(Number(a.id), pos);
+      }
+    }
+  } catch (e: any) {
+    console.error("vigilarSalidaDelTaller error:", e?.message);
+  } finally {
+    autoEnCaminoRunning = false;
+  }
+}
+
+function startAutoEnCaminoWatcher() {
+  // Sin credenciales de Webfleet no hay posiciones: el chequeo saldrá vacío
+  setInterval(() => void vigilarSalidaDelTaller(), 60_000);
+  console.log(`Auto en-camino: vigilancia activa (radio ${AUTO_EN_CAMINO_RADIO_M} m, cada 60 s)`);
+}
+
 initDb()
   .then(() => initIntegrationHub())
   .then(() => initLicenses())
@@ -16983,6 +17184,7 @@ initDb()
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
+      startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
     });
   })
   .catch((error) => {
