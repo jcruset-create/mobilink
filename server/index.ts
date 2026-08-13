@@ -1670,6 +1670,9 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         "neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)")
       .eq("vehiculo_id", vehiculoId)
       .is("intervencion_id", null)
+      // Solo trabajo HECHO: una operación prevista creada durante la sesión
+      // no puede colarse en el parte como si se hubiera ejecutado (fase 2).
+      .eq("status", "completada")
       .gte("created_at", desde)
       .order("created_at", { ascending: true });
     if (error) throw error;

@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { listarOperacionesPagina, listarOperacionesTodas, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion } from "../services/data";
-import type { EstadoHistorialEntry, AuditoriaEntry } from "../services/data";
+import { listarOperacionesPagina, listarOperacionesTodas, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion, listarEjecucionesDePrevista, obtenerPrevistaDe } from "../services/data";
+import type { EstadoHistorialEntry, AuditoriaEntry, OperacionVinculada } from "../services/data";
 import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion, OperacionMovimiento, OperacionAdjunto } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Acciones de estado disponibles según el estado actual (transiciones simples).
+// El grafo también vive en la base de datos (trg_op_valida_transicion): esto
+// solo decide qué botones se enseñan.
 const ACCIONES_ESTADO: Partial<Record<EstadoOperacion, { estado: EstadoOperacion; label: string; cls: string }[]>> = {
   pendiente: [{ estado: "asignada", label: "Asignar", cls: "text-sky-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
   planificada: [{ estado: "asignada", label: "Asignar", cls: "text-sky-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
@@ -15,6 +17,23 @@ const ACCIONES_ESTADO: Partial<Record<EstadoOperacion, { estado: EstadoOperacion
   en_proceso: [{ estado: "completada", label: "Completar", cls: "text-emerald-300" }, { estado: "pausada", label: "Pausar", cls: "text-amber-300" }],
   pausada: [{ estado: "en_proceso", label: "Reanudar", cls: "text-amber-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
 };
+
+// Tipos FÍSICOS (es_fisica en tc_cat_tipos_operacion): no se completan a mano
+// —la BD lo rechaza (EJECUCION_REQUERIDA)—, se cierran solos al registrar la
+// ejecución real, que queda vinculada. Las correcciones sí se completan a mano.
+const TIPOS_FISICOS = new Set<TipoOperacion>([
+  "sustitucion", "montaje", "desmontaje", "cambio_posicion", "intercambio",
+  "reparacion", "retirada_stock", "retirada_definitiva",
+]);
+
+const ESTADOS_ACTIVOS = new Set<EstadoOperacion>(["borrador", "pendiente", "planificada", "asignada", "en_proceso", "pausada"]);
+
+function accionesPara(o: OperacionNeumatico): { estado: EstadoOperacion; label: string; cls: string }[] {
+  if (!o.status || o.is_anulada) return [];
+  const base = ACCIONES_ESTADO[o.status] ?? [];
+  // "Completar" a mano solo para lo no físico; lo físico se completa ejecutando.
+  return base.filter((a) => a.estado !== "completada" || !TIPOS_FISICOS.has(o.tipo_operacion));
+}
 
 const COLOR_TIPO: Record<TipoOperacion, string> = {
   montaje: "bg-emerald-500/30 text-emerald-200",
@@ -58,24 +77,29 @@ export default function Operaciones() {
   const [detalle, setDetalle] = useState<null | {
     op: OperacionNeumatico; movimientos: OperacionMovimiento[]; adjuntos: OperacionAdjunto[];
     historial: EstadoHistorialEntry[]; auditoria: AuditoriaEntry[];
+    // Vínculo plan ↔ ejecución (fase 2): qué plan ejecuta esta fila y qué
+    // ejecuciones cierran este plan.
+    ejecuciones: OperacionVinculada[]; prevista: OperacionVinculada | null;
     // Por sección: un fallo de permisos o de red no puede parecer "no hay nada".
-    errores: Partial<Record<"movimientos" | "adjuntos" | "historial" | "auditoria", string>>;
+    errores: Partial<Record<"movimientos" | "adjuntos" | "historial" | "auditoria" | "vinculo", string>>;
   }>(null);
   const [cargandoDet, setCargandoDet] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState("");
   const [anulando, setAnulando] = useState(false);
 
   async function abrirDetalle(o: OperacionNeumatico) {
-    setDetalle({ op: o, movimientos: [], adjuntos: [], historial: [], auditoria: [], errores: {} });
+    setDetalle({ op: o, movimientos: [], adjuntos: [], historial: [], auditoria: [], ejecuciones: [], prevista: null, errores: {} });
     setMotivoAnular(""); setCargandoDet(true);
     try {
-      // allSettled y no all: que falle una sección no puede tumbar las otras
-      // tres, pero tampoco puede desaparecer. Cada una dice lo suyo.
-      const [mov, adj, hist, aud] = await Promise.allSettled([
+      // allSettled y no all: que falle una sección no puede tumbar las otras,
+      // pero tampoco puede desaparecer. Cada una dice lo suyo.
+      const [mov, adj, hist, aud, ejec, prev] = await Promise.allSettled([
         listarMovimientosOperacion(o.id),
         listarAdjuntosOperacion(o.id),
         listarHistorialEstados(o.id),
         listarAuditoriaOperacion(o.id),
+        listarEjecucionesDePrevista(o.id),
+        obtenerPrevistaDe(o),
       ]);
       const err = (r: PromiseSettledResult<unknown>) =>
         r.status === "rejected" ? ((r.reason as any)?.message || "No se ha podido cargar") : undefined;
@@ -83,8 +107,11 @@ export default function Operaciones() {
       setDetalle({
         op: o,
         movimientos: val(mov), adjuntos: val(adj), historial: val(hist), auditoria: val(aud),
+        ejecuciones: val(ejec),
+        prevista: prev.status === "fulfilled" ? prev.value : null,
         errores: {
           movimientos: err(mov), adjuntos: err(adj), historial: err(hist), auditoria: err(aud),
+          vinculo: err(ejec) ?? err(prev),
         },
       });
     } finally { setCargandoDet(false); }
@@ -288,7 +315,7 @@ export default function Operaciones() {
               <td className={tdCls}>
                 <div className="flex flex-wrap gap-1">
                   <button onClick={() => abrirDetalle(o)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>
-                  {(o.status && !o.is_anulada ? ACCIONES_ESTADO[o.status] ?? [] : []).map((a) => (
+                  {accionesPara(o).map((a) => (
                     <button key={a.estado} onClick={() => accionEstado(o, a.estado)} disabled={accionando === o.id}
                       className={`rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50 ${a.cls}`}>
                       {a.label}
@@ -334,7 +361,7 @@ export default function Operaciones() {
             <button onClick={() => setPlan(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
             <button onClick={guardarPlan} disabled={guardandoPlan || !plan.empresaId} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{guardandoPlan ? "Guardando…" : "Planificar"}</button>
           </div>}>
-          <p className="mb-3 text-xs text-slate-400">La operación queda pendiente/planificada. Su ejecución física se registra al marcarla como completada desde la app o el escritorio.</p>
+          <p className="mb-3 text-xs text-slate-400">La operación queda pendiente/planificada. Se cerrará sola cuando se registre su ejecución real (montaje, desmontaje, sustitución…) desde la ficha del vehículo o la APK, y quedará vinculada a ella. Las operaciones físicas no se completan a mano.</p>
           <div className="grid gap-2 sm:grid-cols-2">
             {!esCliente && (
               <Field label="Empresa">
@@ -410,6 +437,34 @@ export default function Operaciones() {
           </div>
           {cargandoDet ? <div className="text-sm text-slate-500">Cargando…</div> : (
             <div className="space-y-3 text-sm">
+              {/* Vínculo plan ↔ ejecución (fase 2). Solo sale cuando hay algo
+                  que decir: qué plan ejecuta esta fila, qué ejecuciones
+                  cerraron este plan, o cómo se completa una física activa. */}
+              {detalle.errores.vinculo ? (
+                <div className="rounded-lg bg-slate-800/60 p-2 text-[12px] text-amber-300">⚠ Vínculo plan↔ejecución: {detalle.errores.vinculo}</div>
+              ) : (
+                <>
+                  {detalle.prevista && (
+                    <div className="rounded-lg bg-sky-500/10 p-2 text-[12px] text-sky-200">
+                      Ejecuta la operación planificada <span className="font-mono font-bold">#{detalle.prevista.numero_operacion ?? "—"}</span>
+                      {detalle.prevista.fecha_operacion ? ` (${detalle.prevista.fecha_operacion})` : ""}
+                    </div>
+                  )}
+                  {detalle.ejecuciones.length > 0 && (
+                    <div className="rounded-lg bg-emerald-500/10 p-2 text-[12px] text-emerald-200">
+                      Ejecutada en: {detalle.ejecuciones.map((e) => `#${e.numero_operacion ?? "—"} (${TIPO_OPERACION_LABELS[e.tipo_operacion as TipoOperacion] ?? e.tipo_operacion})`).join(", ")}
+                    </div>
+                  )}
+                  {detalle.ejecuciones.length === 0 && !detalle.op.is_anulada
+                    && TIPOS_FISICOS.has(detalle.op.tipo_operacion)
+                    && !!detalle.op.status && ESTADOS_ACTIVOS.has(detalle.op.status) && (
+                    <div className="rounded-lg bg-slate-800/60 p-2 text-[12px] text-slate-400">
+                      Esta operación es física: no se completa a mano. Se cerrará sola al registrar la
+                      ejecución real desde la ficha del vehículo o la APK, y quedará vinculada aquí.
+                    </div>
+                  )}
+                </>
+              )}
               <Seccion titulo="Movimientos" n={detalle.movimientos.length} error={detalle.errores.movimientos}>
                 {detalle.movimientos.map((m) => (
                   <div key={m.id} className="text-[12px] text-slate-300">• {m.movimiento_tipo}{m.estado_anterior || m.estado_nuevo ? `: ${m.estado_anterior ?? "?"} → ${m.estado_nuevo ?? "?"}` : ""}{(m as any).neumatico ? ` · ${(m as any).neumatico.numero_interno ?? (m as any).neumatico.codigo_interno ?? ""}` : ""}</div>
