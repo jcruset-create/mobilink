@@ -8,6 +8,7 @@ import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
+import '../widgets/plate_badge.dart';
 import 'finish_screen.dart';
 import 'photos_screen.dart';
 import 'signature_screen.dart';
@@ -417,12 +418,23 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
                     ]),
 
                     _Bloque(titulo: 'Vehículo', hijos: [
+                      // La matrícula manda: si viene informada, en grande y
+                      // encabezando el bloque, no como una fila más.
+                      if (((a['vehicle'] as Map?)?['plate']?.toString() ?? '').isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: PlateBadge(
+                              plate: (a['vehicle'] as Map?)?['plate']?.toString() ?? '',
+                            ),
+                          ),
+                        ),
                       _Dato('Tipo', (a['vehicle'] as Map?)?['type']?.toString()),
                       _Dato('Marca y modelo', [
                         (a['vehicle'] as Map?)?['make'],
                         (a['vehicle'] as Map?)?['model'],
                       ].where((x) => x != null).join(' ')),
-                      _Dato('Matrícula', (a['vehicle'] as Map?)?['plate']?.toString()),
                     ]),
 
                     _Bloque(titulo: 'Contacto', hijos: [
