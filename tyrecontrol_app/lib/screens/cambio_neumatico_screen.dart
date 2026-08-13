@@ -67,6 +67,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Map<String, ({double? prof, double? pres})> _datosCat = {}; // catálogo por modelo (dibujo/presión máx)
   bool _trabajando = false;
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
+  /// La intervención de esta sesión en BD (fase 3): se abre (o recupera) al
+  /// cargar la pantalla y viaja en cada operación, que así nace dentro de su
+  /// parte. Null si la BD aún no la soporta o no hubo red al abrir: entonces
+  /// todo funciona como siempre (huérfanas + red de seguridad).
+  String? _intervencionId;
   final Set<String> _posicionesMontadas = {}; // posiciones donde se montó un neumático en esta sesión
   final Set<String> _posicionesResueltas = {}; // reparaciones en sitio hechas en esta sesión
   final Set<String> _incidenciasResueltas = {}; // ids de incidencias ya resueltas (para no re-resolver al finalizar)
@@ -167,6 +172,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         );
       }
       _matricula = (v['matricula'] as String?) ?? '';
+      // La sesión pasa a existir en BD nada más abrir (idempotente: si ya hay
+      // una abierta de este técnico y vehículo, se recupera). Best-effort.
+      _intervencionId ??= await TyreControlApi.iniciarIntervencion(widget.vehiculoId);
       final veh = Vehiculo.fromJson(v);
       _vehiculo = veh;
       // Km para las operaciones: de la plataforma si el vehículo está
@@ -325,7 +333,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _desmontar(MontajeActual m, String destino) async {
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino, km: _km);
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino, km: _km, intervencionId: _intervencionId);
       HapticFeedback.mediumImpact();
       await _cargar();
       final msg = destino == 'almacen'
@@ -355,6 +363,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       imagenChasis: _imagenChasis,
       pausaSeg: _pausas?.pausaSeg,
       nPausas: _pausas?.numPausas,
+      intervencionId: _intervencionId,
     );
     if (mounted) setState(() => _trabajando = false);
 
@@ -469,7 +478,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Future<void> _marcarIrreparable(PosicionVehiculo p, MontajeActual m) async {
     setState(() => _trabajando = true);
     try {
-      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje', km: _km);
+      await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: 'pendiente_reciclaje', km: _km, intervencionId: _intervencionId);
       HapticFeedback.mediumImpact();
       await _cargar();
       _aviso('Neumático a la papelera de reciclaje. Monta ahora la rueda de sustitución.', ok: true);
@@ -525,6 +534,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         vehiculoId: widget.vehiculoId, posicionId: p.id, productoAlmacenId: d.linea.productoId,
         condicion: d.condicion, profundidadUsado: datos.mm, km: _km,
         rfidEpc: datos.rfidEpc, numeroSerie: datos.numeroSerie,
+        intervencionId: _intervencionId,
       );
 
   /// Confirma al técnico que la goma se ha RECONOCIDO en vez de darla de alta
@@ -1166,7 +1176,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           for (final tipo in e.value)
             {'tipo': tipo, 'montaje': e.key, if (tipo == 'reescultura') 'valor': _mmReescultura[e.key]},
       ];
-      await TyreControlApi.aplicarPlanTrabajo(vehiculoId: widget.vehiculoId, acciones: acciones);
+      await TyreControlApi.aplicarPlanTrabajo(vehiculoId: widget.vehiculoId, acciones: acciones, intervencionId: _intervencionId);
       _posicionesMontadas.addAll(_plan.keys);
       HapticFeedback.mediumImpact();
       await _cargar();
@@ -1277,9 +1287,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     setState(() => _trabajando = true);
     try {
       if (esMover) {
-        await TyreControlApi.cambiarPosicion(montajeId: mA.id, posicionDestinoId: bId);
+        await TyreControlApi.cambiarPosicion(montajeId: mA.id, posicionDestinoId: bId, intervencionId: _intervencionId);
       } else {
-        await TyreControlApi.intercambiarPosiciones(montajeAId: mA.id, montajeBId: mB.id);
+        await TyreControlApi.intercambiarPosiciones(montajeAId: mA.id, montajeBId: mB.id, intervencionId: _intervencionId);
       }
       _posicionesMontadas.addAll([aId, bId]);
       HapticFeedback.mediumImpact();
@@ -1776,6 +1786,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             km: _km,
             rfidEpc: datos.rfidEpc,
             numeroSerie: datos.numeroSerie,
+            intervencionId: _intervencionId,
           );
       String? neuId;
       try {
