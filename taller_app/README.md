@@ -2,7 +2,7 @@
 
 App para las **tablets de los técnicos**: ver las tareas asignadas, empezarlas,
 pausarlas y cerrarlas, con fotos del trabajo y cola offline. Se conecta al backend
-Express (`https://app.mobilink.es`) por los endpoints
+Express (`https://sea-tarragona.onrender.com`) por los endpoints
 `/api/taller-operator/*`.
 
 - **applicationId**: `com.mobilink.taller` — **inmutable**: cambiarlo obliga a

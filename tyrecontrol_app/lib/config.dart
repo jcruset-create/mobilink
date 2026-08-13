@@ -7,4 +7,4 @@ const String kSupabaseAnonKey = 'sb_publishable_byCj39mPoGMOKWkjkYZxwA_HfX7PMek'
 // Backend Node (server/) — solo se usa para el reconocimiento de
 // matricula por foto (requiere la clave de OpenAI, que debe quedarse
 // en servidor). El resto de la app habla directo con Supabase.
-const String kBackendUrl = 'https://app.mobilink.es';
+const String kBackendUrl = 'https://sea-tarragona.onrender.com';

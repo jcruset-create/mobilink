@@ -16367,7 +16367,7 @@ async function enviarWhatsAppRecobro(
   const contentSid = String(process.env[contentSidEnv] || "").trim();
   if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) throw new Error("Twilio no configurado");
   if (!contentSid) throw new Error(`Falta la plantilla ${contentSidEnv}`);
-  const baseUrl = String(process.env.PUBLIC_APP_URL || "https://app.mobilink.es").replace(/\/+$/, "");
+  const baseUrl = String(process.env.PUBLIC_APP_URL || "https://sea-tarragona.onrender.com").replace(/\/+$/, "");
   const message = await twilioClient.messages.create({
     from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
     to: `whatsapp:+${telefono}`,

@@ -1,5 +1,5 @@
 /// URL del backend Express (el mismo que el resto de APKs de Mobilink).
-const String kBackendUrl = 'https://app.mobilink.es';
+const String kBackendUrl = 'https://sea-tarragona.onrender.com';
 
 /// Versión visible de la app y la que se informa a Central en cada arranque.
 /// La reescribe el workflow de compilación junto con pubspec.yaml: a mano se
