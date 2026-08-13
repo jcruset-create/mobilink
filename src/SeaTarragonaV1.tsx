@@ -8106,7 +8106,7 @@ console.log("DEBUG tiempos trabajo activo", {
 
       {quickEntryOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
-    <div className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
+    <div className="flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
       <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
         <div className="flex items-start justify-between">
           <div>
@@ -8377,7 +8377,7 @@ console.log("DEBUG tiempos trabajo activo", {
     </div>
     {resetConfirmOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
-  <div className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
+  <div className="flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
       <div className="flex items-start justify-between">
         <div>
           <h3 className="text-xl font-semibold text-red-700">
