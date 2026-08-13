@@ -13,6 +13,7 @@ import {
   createOtfPlantilla,
   updateOtfPlantilla,
   fetchTyreControlInfo,
+  cancelOtf,
   type OtfPlantilla,
   type TyreControlInfo,
 } from "../modules/roadsideAssistanceApi";
@@ -467,6 +468,22 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
           >
             💶 Presupuestar en BC
           </button>
+          {otf.status !== "finalizada" && otf.status !== "cancelada" && (
+            <button
+              onClick={async () => {
+                if (!confirm(`¿Cancelar la OTF de ${otf.clientName}? Los trabajos quedarán sin efecto.`)) return;
+                try {
+                  await cancelOtf(otf.id);
+                  onChange();
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : "No se pudo cancelar la OTF");
+                }
+              }}
+              className="mt-2 ml-2 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-1.5 text-xs font-black text-red-300 hover:bg-red-500/25"
+            >
+              ✕ Cancelar OTF
+            </button>
+          )}
         </div>
       </div>
 
