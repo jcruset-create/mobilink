@@ -16,9 +16,12 @@ pluginManagement {
     }
 }
 
+// Flutter 3.47 exige Gradle >= 8.14.0 y AGP >= 8.11.1: por debajo, el plugin
+// dev.flutter.flutter-gradle-plugin aborta el build. Las dos van juntas —
+// subir solo Gradle deja el build fallando en el siguiente control, el de AGP.
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.7.3" apply false
+    id("com.android.application") version "8.11.1" apply false
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false
 }
 
