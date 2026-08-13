@@ -2766,7 +2766,7 @@ appendLog(
         </>)}
         {modalOpen && selectedSlot && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-            <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
+            <div className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-2xl">
               <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
                 <h3 className="text-xl font-semibold">
                   {editingJobId != null ? "Editar cita" : "Nueva cita"}
@@ -3335,7 +3335,9 @@ setDraft((prev) => ({
                 </div>
               </div>
 
-              <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
+              {/* pb con safe-area: en iPhone la barra inferior de Safari se come
+                  el último centímetro y el botón Guardar quedaba pisado. */}
+              <div className="shrink-0 border-t border-slate-200 bg-white px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
                 <div className="flex gap-3">
                   <button
                     type="button"
