@@ -6,6 +6,7 @@ import 'package:signature/signature.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plate_badge.dart';
 
 const _tipos = ['Tractora', 'Remolque', 'Camión rígido', 'Furgoneta', 'Turismo', 'Maquinaria', 'Otros'];
 
@@ -302,9 +303,16 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // La matrícula manda: si viene informada, en grande y arriba del todo.
+        // En su propia línea para no comerse el estado del trabajo.
+        if ((t['plate']?.toString() ?? '').trim().isNotEmpty) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: PlateBadge(plate: t['plate'].toString()),
+          ),
+          const SizedBox(height: 6),
+        ],
         Row(children: [
-          Text(t['plate'] ?? '—', style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
-          const SizedBox(width: 8),
           Text(t['tipoVehiculo'] ?? '', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
           const Spacer(),
           Container(
