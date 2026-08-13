@@ -113,29 +113,32 @@ El apartado de tiempos es **integración**, no construcción. Revisa quién los
 rellena hoy y asegúrate de que INICIAR/FINALIZAR los alimentan. No añadas
 columnas paralelas.
 
-### 3.2 El stock tiene un doble conteo conocido y sin resolver — BLOQUEANTE
+### 3.2 El doble conteo del stock — RESUELTO en código, pendiente de regularizar
 
-**[verificado]** `supabase/migrations/tyrecontrol_almacen_usados.sql` lo
-documenta como **"Decisión 1, todavía sin responder"**:
+**[verificado, corregido el 13-08-2026]** Una versión anterior de este documento
+lo daba por abierto basándose en el comentario de
+`tyrecontrol_almacen_usados.sql` ("Decisión 1, todavía sin responder"). Una
+migración **posterior**, `tyrecontrol_usados_por_ficha.sql`, la cierra con la
+regla:
 
-> Al desmontar a almacén pasan DOS cosas: la ficha de `tc_neumaticos` queda con
-> `estado='almacen'` (con su identidad y sus mm) y, además,
-> `tc_devolver_usado_a_stock` suma +1 anónimo a `movimientos_stock`.
-> **La misma goma cuenta dos veces**, y ocurre HOY.
+> · NUEVO → sigue en `movimientos_stock`, por cantidades.
+> · USADO → es la ficha de `tc_neumaticos`. Ni entra ni sale de `movimientos_stock`.
 
-`tc_almacen_usados_resumen` devuelve los dos números por separado justamente
-para que la diferencia se vea en pantalla en vez de esconderse en una suma.
+Ya implementado y cableado: `tc_devolver_usado_a_stock` es NO-OP (con
+comprobación que revienta si alguien vuelve a meter el insert), montar un usado
+consume una ficha (`tc_elegir_usado_almacen`), y `tc_stock_almacen_empresa` —
+que ya llaman panel y APK — cuenta nuevos por movimientos y usados por fichas.
+**Esa función es la fuente canónica para la sección de stock del informe.**
 
-**Esto bloquea toda la sección de stock del informe.** No se puede prometer al
-cliente "después de esta intervención quedan 2 nuevos y 3 usados" mientras la
-misma goma se cuenta dos veces según por dónde se mire. Un snapshot construido
-sobre un número erróneo solo congela el error para siempre.
+Lo que queda es **operativo, no de código**: comprobar que la migración está
+aplicada en producción y ejecutar `tc_migrar_usados_a_fichas(empresa, false)`
+por empresa para poner a cero los apuntes viejos del doble conteo (a mano, por
+diseño: es un asiento en el inventario del cliente). La pantalla *Almacén de
+usados* enseña el desfase pendiente en la tarjeta "Apuntes pendientes".
 
-**Antes de implementar nada de stock o snapshot, cierra la Decisión 1**: elige
-cuál es la fuente de verdad (`tc_neumaticos` con identidad, o `movimientos_stock`
-anónimo), documéntalo y haz que el informe lea de ella. Si no se puede cerrar en
-esta tanda, **el informe debe decir explícitamente de qué fuente sale el número**
-en vez de dar una cifra que no se sostiene.
+Las fases 5 y 6 quedan desbloqueadas en cuanto la regularización esté hecha. El
+snapshot del informe debe leer de `tc_stock_almacen_empresa`, no inventar otra
+consulta.
 
 ### 3.3 En el panel NO existe pantalla de Intervenciones
 
@@ -346,8 +349,8 @@ Entrega un documento con:
 - **D.** Cambios mínimos, separados en: Base de datos · Backend · Panel · APK ·
   Informes.
 - **E.** Riesgos e incompatibilidades.
-- **F.** Tu decisión sobre **absorber vs vincular** (§2) y sobre la
-  **Decisión 1 del stock** (§3.2), razonadas.
+- **F.** Tu decisión sobre **absorber vs vincular** (§2), razonada. (La del
+  stock ya está tomada e implementada — §3.2.)
 
 **Para en seco después de la Fase 0 y espera aprobación.** No implementes nada
 hasta que se valide el análisis.
@@ -359,7 +362,7 @@ hasta que se valide el análisis.
 2. Eliminar la duplicidad planificada/ejecutada
 3. Intervención activa en la APK
 4. Planificación de intervenciones
-5. Stock y snapshot     ← bloqueada por la Decisión 1
+5. Stock y snapshot     ← requiere la regularización de §3.2 hecha en producción
 6. Informe de intervención
 7. Paginación y Excel
 8. Trazabilidad y manejo de errores
@@ -393,8 +396,9 @@ duplicados** · cierre de intervención · operaciones antiguas sin intervenció
 | **F** | Abrir la intervención 6 meses después | Muestra el stock **de entonces**, no el actual |
 | **G** | Revisión → incidencia → operación prevista → ejecución | La operación final sigue vinculada a la incidencia original |
 
-El escenario **D** solo es demostrable si antes se ha cerrado la Decisión 1
-(§3.2). Si no, dilo en lugar de dar por bueno un número que no se sostiene.
+El escenario **D** solo es demostrable con la regularización de §3.2 hecha en
+producción. Si no lo está, dilo en lugar de dar por bueno un número que no se
+sostiene.
 
 ---
 
@@ -414,7 +418,7 @@ El escenario **D** solo es demostrable si antes se ha cerrado la Decisión 1
 | Planificar / estados / reservas | `..._operaciones_fase5.sql` |
 | Anular y auditar | `..._operaciones_fase6.sql` |
 | Intervenciones y agrupación | `tyrecontrol_intervenciones.sql`, `tyrecontrol_numero_operacion.sql`, `tyrecontrol_trazabilidad_operaciones.sql` |
-| **Doble conteo de stock (Decisión 1)** | `tyrecontrol_almacen_usados.sql` — léelo entero |
+| **Stock: la regla nuevos/usados (Decisión 1)** | `tyrecontrol_usados_por_ficha.sql` — léelo entero; `tyrecontrol_almacen_usados.sql` da el contexto previo |
 | Montaje sin control de stock | `tyrecontrol_fase23_stock_manual_y_fuera_almacen.sql` |
 | APK | `tyrecontrol_app/lib/screens/cambio_neumatico_screen.dart`, `historial_operaciones_screen.dart`, `lib/services/supabase_service.dart` |
 | Plano del vehículo | `src/modules/tyrecontrol/components/VehicleLayout.tsx` |
