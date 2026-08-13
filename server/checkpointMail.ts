@@ -180,7 +180,29 @@ export function startCheckpointMail(): void {
   }
   if (timer) return;
   console.log(`CheckPoint por correo: ${cfg.user} cada ${cfg.minutos} min`);
+
   // Una primera pasada al arrancar, y luego el ritmo.
-  void revisarBuzonCheckpoint();
-  timer = setInterval(() => { void revisarBuzonCheckpoint(); }, cfg.minutos * 60 * 1000);
+  //
+  // La primera se registra pase lo que pase: la línea de arriba solo dice que
+  // hay credenciales, no que el buzón las acepte, y "no ha salido ningún error"
+  // es una forma pésima de enterarse de que algo funciona. Las siguientes solo
+  // hablan cuando hay algo que contar; una línea cada 15 minutos diciendo que
+  // no había correo es ruido que acaba tapando la que sí importa.
+  void revisarBuzonCheckpoint().then(traza("primera pasada", true));
+  timer = setInterval(
+    () => { void revisarBuzonCheckpoint().then(traza("pasada", false)); },
+    cfg.minutos * 60 * 1000,
+  );
+}
+
+function traza(qué: string, siempre: boolean) {
+  return (r: PasadaCheckpoint | { error: string }) => {
+    // El error ya lo ha escrito revisarBuzonCheckpoint con su causa.
+    if ("error" in r) return;
+    if (!siempre && !r.correos && !r.errores) return;
+    console.log(
+      `CheckPoint por correo: ${qué} — ${r.correos} correo(s), ` +
+      `${r.importados} importado(s), ${r.errores} error(es)`,
+    );
+  };
 }
