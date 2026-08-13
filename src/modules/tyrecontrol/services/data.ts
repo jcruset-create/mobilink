@@ -1959,6 +1959,27 @@ export async function resumenUsadosAlmacen(empresaId: string): Promise<ResumenAl
   return filas[0] ?? null;
 }
 
+/** Resultado de tc_migrar_usados_a_fichas (Decisión 1: poner a cero los
+ *  apuntes viejos del doble conteo de usados). Con simular=true no escribe. */
+export interface ResultadoRegularizacionUsados {
+  simulacion?: boolean;
+  fichas_en_almacen?: number;
+  saldo_usado_stock?: number;
+  se_regularizarian?: number;
+  saldo_anterior?: number;
+  asientos?: number;
+  error?: string;
+}
+
+/** Regulariza el inventario de usados de una empresa. El RPC exige sesión de
+ *  admin/superadmin (por eso NO se puede lanzar desde el SQL Editor, donde no
+ *  hay usuario): este es el camino, desde el panel. */
+export async function migrarUsadosAFichas(empresaId: string, simular = true): Promise<ResultadoRegularizacionUsados> {
+  const { data, error } = await supabase.rpc("tc_migrar_usados_a_fichas", { p_empresa: empresaId, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return (data ?? {}) as ResultadoRegularizacionUsados;
+}
+
 // Reescultura de una goma YA DESMONTADA. Para las montadas está el plan de
 // trabajo, que las reesculpe en el camión sin sacarlas del vehículo.
 export async function reesculturarEnAlmacen(neumaticoId: string, profundidadMm: number, obs?: string): Promise<void> {
