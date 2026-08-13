@@ -76,8 +76,14 @@ export async function revisarBuzonCheckpoint(): Promise<PasadaCheckpoint | { err
         const procesado = await procesarCorreo(cliente, uid);
         if (procesado === "error") out.errores++;
         else if (procesado === "importado") out.importados++;
-        // Leído: procesado o descartado, no hay que volver a mirarlo.
-        await cliente.messageFlagsAdd({ uid: String(uid) }, ["\\Seen"], { uid: true });
+        // Un correo que ha fallado se queda SIN leer. Si se marcase, el arreglo
+        // del fallo llegaría tarde: el informe ya estaría descartado y habría
+        // que pedirle a alguien que lo reenviara. Se reintenta en la siguiente
+        // pasada, que es lo que uno espera de algo que falla por un motivo
+        // pasajero. Los que se han importado o no traían informe, leídos.
+        if (procesado !== "error") {
+          await cliente.messageFlagsAdd({ uid: String(uid) }, ["\\Seen"], { uid: true });
+        }
       }
     } finally {
       lock.release();
@@ -100,11 +106,16 @@ async function procesarCorreo(cliente: ImapFlow, uid: number): Promise<"importad
   const adjunto = (correo.attachments || []).find((a) => esAdjuntoInforme(a.filename));
   if (!adjunto) return "sin_adjunto";
 
-  // ¿Ya procesado? El unique de message_id lo impediría de todas formas, pero
-  // mejor no bajarse el fichero ni tocar nada.
+  // ¿Ya procesado CON ÉXITO? Sólo entonces se salta. Una fila en 'error' es
+  // constancia de un intento fallido, no de un correo consumido: si se tratara
+  // igual, arreglar la causa no serviría de nada porque el informe ya estaría
+  // dado por visto.
   const { data: ya } = await supabase.from("tc_checkpoint_ejecuciones")
-    .select("id").eq("message_id", messageId).maybeSingle();
-  if (ya) return "sin_adjunto";
+    .select("id, estado").eq("message_id", messageId).maybeSingle();
+  if (ya && ya.estado !== "error") return "sin_adjunto";
+  // El unique de message_id impediría insertar el reintento, así que se retira
+  // la constancia del intento anterior justo antes de volver a probar.
+  if (ya) await supabase.from("tc_checkpoint_ejecuciones").delete().eq("id", ya.id);
 
   const base = {
     message_id: messageId,
@@ -180,7 +191,29 @@ export function startCheckpointMail(): void {
   }
   if (timer) return;
   console.log(`CheckPoint por correo: ${cfg.user} cada ${cfg.minutos} min`);
+
   // Una primera pasada al arrancar, y luego el ritmo.
-  void revisarBuzonCheckpoint();
-  timer = setInterval(() => { void revisarBuzonCheckpoint(); }, cfg.minutos * 60 * 1000);
+  //
+  // La primera se registra pase lo que pase: la línea de arriba solo dice que
+  // hay credenciales, no que el buzón las acepte, y "no ha salido ningún error"
+  // es una forma pésima de enterarse de que algo funciona. Las siguientes solo
+  // hablan cuando hay algo que contar; una línea cada 15 minutos diciendo que
+  // no había correo es ruido que acaba tapando la que sí importa.
+  void revisarBuzonCheckpoint().then(traza("primera pasada", true));
+  timer = setInterval(
+    () => { void revisarBuzonCheckpoint().then(traza("pasada", false)); },
+    cfg.minutos * 60 * 1000,
+  );
+}
+
+function traza(qué: string, siempre: boolean) {
+  return (r: PasadaCheckpoint | { error: string }) => {
+    // El error ya lo ha escrito revisarBuzonCheckpoint con su causa.
+    if ("error" in r) return;
+    if (!siempre && !r.correos && !r.errores) return;
+    console.log(
+      `CheckPoint por correo: ${qué} — ${r.correos} correo(s), ` +
+      `${r.importados} importado(s), ${r.errores} error(es)`,
+    );
+  };
 }

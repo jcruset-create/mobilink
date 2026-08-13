@@ -20,7 +20,6 @@ import {
   leerCheckpoint, filtrarNuevas, HOJA_DETALLE,
   type FilaCheckpoint, type VehiculoCheckpoint,
 } from "../../src/modules/tyrecontrol/services/checkpoint.ts";
-import { medidaCanonica } from "../../src/modules/tyrecontrol/services/medidas.ts";
 
 export interface ResultadoCheckpoint {
   mediciones: number;
@@ -158,8 +157,6 @@ async function cargar(
     for (const ps of posPorTipo.values()) ps.sort((a, b) => (a.orden_visual ?? 0) - (b.orden_visual ?? 0));
   }
 
-  const medidaPorVeh = new Map(vehiculos.map((v) => [v.matricula, v.medida]));
-
   // Una revisión por vehículo y fecha.
   interface Grupo { veh: { id: string; empresa_id: string; tipo_vehiculo_id: string | null }; fecha: string; medido: Date; filas: FilaCheckpoint[] }
   const grupos = new Map<string, Grupo>();
@@ -231,7 +228,10 @@ async function cargar(
         profundidad_mm: f.profundidadMm, presion_bar: f.presionBar,
         metodo_profundidad: f.profundidadMm != null ? "checkpoint" : null,
         metodo_presion: f.presionBar != null ? "checkpoint" : null,
-        medida: medidaCanonica(medidaPorVeh.get(f.matricula) ?? "") || null,
+        // Aquí NO va la medida. revisiones_neumaticos_detalle no tiene esa
+        // columna y PostgREST rechaza el lote entero, no la columna sobrante:
+        // una medición es lo que marca el arco, y la medida ya vive en el
+        // vehículo y en el neumático.
         no_accesible: false, neumatico_ausente: false,
       });
     }
