@@ -1054,15 +1054,91 @@ export interface IncidenciaOrigen {
 }
 export interface Intervencion {
   id: string; empresa_id: string; vehiculo_id: string | null; fecha: string;
-  /** Número de parte legible: OP-2026-000143. Lo pone la base de datos por
-   *  DEFAULT, así que falta en registros anteriores a esa migración. */
+  /** Número de parte legible: OP-2026-000143. Desde la fase 3 se asigna AL
+   *  CERRAR (una sesión abandonada o cancelada no quema números), así que
+   *  falta en abiertas/planificadas y en registros muy antiguos. */
   numero?: string | null;
   resumen: string | null; resumen_ia: string | null; n_operaciones: number; created_at?: string;
   montaje_antes?: MontajeSnapshot[] | null;
   montaje_despues?: MontajeSnapshot[] | null;
   incidencias?: IncidenciaOrigen[] | null;
   imagen_chasis?: string | null;
+  // Ciclo de vida (fases 1-4)
+  tecnico_id?: string | null;
+  inicio_at?: string | null;
+  fin_at?: string | null;
+  cerrada_at?: string | null;
+  observaciones?: string | null;
+  empresa?: { nombre?: string | null } | null;
+  vehiculo?: { matricula?: string | null } | null;
+  tecnico?: { nombre?: string | null } | null;
 }
+
+/** Estado visible de una intervención, derivado (no hay columna de estado):
+ *  planificada = abierta sin empezar · en_curso = abierta trabajándose ·
+ *  cerrada = con cerrada_at. Las anteriores a la fase 1 se backfillearon
+ *  como cerradas. */
+export type EstadoIntervencion = "planificada" | "en_curso" | "cerrada";
+export function estadoIntervencion(i: Pick<Intervencion, "inicio_at" | "cerrada_at">): EstadoIntervencion {
+  if (i.cerrada_at) return "cerrada";
+  return i.inicio_at ? "en_curso" : "planificada";
+}
+export interface FiltrosIntervenciones {
+  empresaId?: string; vehiculoId?: string; estado?: EstadoIntervencion; desde?: string; hasta?: string;
+}
+
+/** Una página del listado global de intervenciones, con total real (mismo
+ *  patrón que listarOperacionesPagina: count exact, respeta la RLS). */
+export async function listarIntervencionesPagina(
+  filtros: FiltrosIntervenciones | undefined,
+  pagina: number,
+  tamano: number,
+): Promise<{ filas: Intervencion[]; total: number }> {
+  const desde = Math.max(0, pagina) * tamano;
+  let q = supabase.from("tc_intervenciones")
+    .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(desde, desde + tamano - 1);
+  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
+  if (filtros?.desde) q = q.gte("fecha", filtros.desde);
+  if (filtros?.hasta) q = q.lte("fecha", filtros.hasta);
+  if (filtros?.estado === "cerrada") q = q.not("cerrada_at", "is", null);
+  if (filtros?.estado === "en_curso") q = q.is("cerrada_at", null).not("inicio_at", "is", null);
+  if (filtros?.estado === "planificada") q = q.is("cerrada_at", null).is("inicio_at", null);
+  const { data, error, count } = await q;
+  if (error) throw new Error(error.message);
+  return { filas: (data ?? []) as unknown as Intervencion[], total: count ?? 0 };
+}
+
+export interface OperacionPrevistaPlan {
+  tipo: string; neumatico?: string | null; posicion_destino?: string | null;
+  prioridad?: string | null; motivo?: string | null; obs?: string | null; reservar?: boolean;
+}
+
+/** Crea una intervención PLANIFICADA con sus operaciones previstas dentro
+ *  (atómico, en BD). Las previstas heredan fecha, técnico y prioridad. */
+export async function planificarIntervencion(params: {
+  empresaId: string; vehiculoId: string; fechaPrevista?: string | null; tecnicoId?: string | null;
+  prioridad?: string; observaciones?: string | null; operaciones: OperacionPrevistaPlan[];
+}): Promise<{ id: string; n_operaciones: number }> {
+  const { data, error } = await supabase.rpc("tc_planificar_intervencion", {
+    p_empresa: params.empresaId, p_vehiculo: params.vehiculoId,
+    p_fecha_prevista: params.fechaPrevista ?? null, p_tecnico: params.tecnicoId ?? null,
+    p_prioridad: params.prioridad ?? "normal", p_obs: params.observaciones ?? null,
+    p_operaciones: params.operaciones,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as { id: string; n_operaciones: number };
+}
+
+/** Cancela una intervención abierta: sus previstas vivas pasan a canceladas
+ *  (liberando reservas) y la intervención se cierra sin número de parte. */
+export async function cancelarIntervencion(id: string, motivo?: string | null): Promise<void> {
+  const { error } = await supabase.rpc("tc_cancelar_intervencion", { p_intervencion: id, p_motivo: motivo ?? null });
+  if (error) throw new Error(error.message);
+}
+
 export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
   // Antes de listar, se envuelven las operaciones que se quedaron sueltas (las
   // del panel y las de resolver incidencias, que no pasan por Finalizar): así
