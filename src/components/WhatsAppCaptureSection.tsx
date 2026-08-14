@@ -230,9 +230,15 @@ type Props = {
   jobId: number;
   jobPlate?: string;
   onAssistanceUpdated?: () => void;
+  /**
+   * Se llama cuando la captura termina (cerrada y con el análisis resuelto)
+   * habiéndola visto en marcha desde aquí. El padre la repliega y deja solo la
+   * tarjeta de la asistencia; se vuelve a ver con el botón «Captura WhatsApp».
+   */
+  onFinished?: () => void;
 };
 
-export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUpdated }: Props) {
+export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUpdated, onFinished }: Props) {
   const [session, setSession] = useState<WhatsAppCaptureSessionWithMessages | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -250,6 +256,12 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const [showAiModal, setShowAiModal] = useState(false);
   const [applyingAll, setApplyingAll] = useState(false);
   const autoOpenedSessionRef = useRef<number | null>(null);
+  // ¿Se ha visto la captura en marcha (activa o analizando) desde que se abrió
+  // esta sección? Solo entonces se repliega sola al terminar. Sin esta marca,
+  // abrirla con el botón para consultar una captura ya cerrada la cerraría de
+  // inmediato y el botón parecería roto.
+  const vistaEnMarchaRef = useRef(false);
+  const finalizadaAvisadaRef = useRef(false);
 
   const fetchSession = useCallback(async () => {
     try {
@@ -436,6 +448,21 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
       setShowAiModal(true);
     }
   }, [suggestions, session]);
+
+  // Al terminar la captura, replegarse y dejar solo la tarjeta de la asistencia.
+  // Se espera a que el modal de la IA esté cerrado: si no, el usuario perdería
+  // las sugerencias de vista al desmontarse esta sección con él abierto.
+  useEffect(() => {
+    if (!session) return;
+    if (session.status === "ACTIVE" || session.ai_status === "pending") {
+      vistaEnMarchaRef.current = true;
+      return;
+    }
+    if (!vistaEnMarchaRef.current || finalizadaAvisadaRef.current) return;
+    if (showAiModal) return;
+    finalizadaAvisadaRef.current = true;
+    onFinished?.();
+  }, [session, showAiModal, onFinished]);
 
   // Cerrar el modal con Escape
   useEffect(() => {

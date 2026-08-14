@@ -2064,6 +2064,11 @@ export default function RoadsideAssistanceView({
                         jobId={assistance.id}
                         jobPlate={assistance.plate}
                         onAssistanceUpdated={onRefresh}
+                        onFinished={() =>
+                          setWhatsappCaptureId((actual) =>
+                            actual === assistance.id ? null : actual
+                          )
+                        }
                       />
                     )}
                   </article>
