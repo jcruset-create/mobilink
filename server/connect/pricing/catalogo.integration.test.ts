@@ -78,12 +78,12 @@ describe.skipIf(!RUN)("Catálogo de neumáticos y consulta de precio", () => {
     /*
      * Dos tarifarios sobre el mismo motor: uno para lo que la central factura
      * al cliente y otro para lo que el taller le factura a ella. Se cargan
-     * como BORRADOR, se les monta el catálogo de neumáticos por la vía de
-     * administración —que es lo que se está probando— y solo entonces se
-     * publican. Ese es el orden real de trabajo.
+     * como BORRADOR y SIN catálogo de neumáticos —lo que se prueba aquí es la
+     * vía de administración, no los datos de SEAS— se les monta el catálogo a
+     * mano y solo entonces se publican. Ese es el orden real de trabajo.
      */
-    const venta = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATV_${sufijo}` });
-    const compra = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATC_${sufijo}` });
+    const venta = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATV_${sufijo}`, preciosNeumaticos: [] });
+    const compra = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATC_${sufijo}`, preciosNeumaticos: [] });
     versionVenta = venta.tariffVersionId;
     versionCompra = compra.tariffVersionId;
 
@@ -198,7 +198,7 @@ describe.skipIf(!RUN)("Catálogo de neumáticos y consulta de precio", () => {
   it("un grupo se reescribe entero: quitar una marca es mandar la lista sin ella", async () => {
     const { publicarVersion } = await import("./tarifario.ts");
     const { cargarTarifario } = await import("./tarifario.ts");
-    const borrador = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATG_${sufijo}` });
+    const borrador = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATG_${sufijo}`, preciosNeumaticos: [] });
 
     const antes = await cat.guardarGrupo(centroId, borrador.tariffVersionId,
       { code: "premium", name: "Premium", marcas: ["Bridgestone", "Michelin", "Continental"] });
@@ -224,7 +224,7 @@ describe.skipIf(!RUN)("Catálogo de neumáticos y consulta de precio", () => {
 
   it("un descuento de 610 se rechaza al darlo de alta, no en la factura", async () => {
     const { cargarTarifario } = await import("./tarifario.ts");
-    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATD_${sufijo}` });
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATD_${sufijo}`, preciosNeumaticos: [] });
     // 610 es el PRECIO resultante de un baremo de 1.000 al 39 %, no el descuento
     await expect(cat.crearPrecio(centroId, b.tariffVersionId, {
       medida: "315/80R22.5", modeloPrecio: "DISCOUNT_FROM_LIST", descuentoPorcentaje: "610",
@@ -306,7 +306,7 @@ describe.skipIf(!RUN)("Catálogo de neumáticos y consulta de precio", () => {
 
   it("dar de baja un precio lo desactiva, no lo borra, y solo puede hacerlo su centro", async () => {
     const { cargarTarifario, publicarVersion } = await import("./tarifario.ts");
-    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATX_${sufijo}` });
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `CATX_${sufijo}`, preciosNeumaticos: [] });
     const p = await cat.crearPrecio(centroId, b.tariffVersionId, {
       medida: "245/70R19.5", marca: "Bridgestone", posicion: "ANY",
       modeloPrecio: "NET_PRICE", importeNeto: "300",

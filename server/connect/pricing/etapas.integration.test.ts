@@ -163,7 +163,8 @@ describe.skipIf(!RUN)("Etapas de tarificación", () => {
     await bloquear(id, { distanceKm: 76 });
     // Se cierra el sábado por la mañana, con más kilómetros
     const f = await finalizar(id, { distanceKm: 125, durationMin: 200 });
-    expect(f!.venta?.regla?.code).toBe("NOCTURNO");
+    // Viernes 22:17 es fin de semana en la tarifa de SEAS, no nocturno
+    expect(f!.venta?.regla?.code).toBe("FESTIVO_ENTRADA");
     // Forfait 331 + 25 km de más a 1,25
     expect(formatear(f!.ventaTotal!)).toBe("362.25");
     expect(f!.lineas.map((l) => l.tipo)).toEqual(["FORFAIT", "EXTRA_KM"]);
@@ -199,7 +200,7 @@ describe.skipIf(!RUN)("Etapas de tarificación", () => {
     const antes = await db.query(
       `SELECT "estimatedCost", "costDetail" FROM connect_assistances WHERE id = $1`, [id]);
     expect(Number(antes.rows[0].estimatedCost)).toBe(331);
-    expect(antes.rows[0].costDetail).toContain("Nocturno");
+    expect(antes.rows[0].costDetail).toContain("Fin de semana");
 
     await finalizar(id, { distanceKm: 125 });
     const despues = await db.query(`SELECT "finalCost" FROM connect_assistances WHERE id = $1`, [id]);
@@ -217,7 +218,7 @@ describe.skipIf(!RUN)("Etapas de tarificación", () => {
 
     const { leerEtapa } = await import("./service.ts");
     const r = await leerEtapa(id, "locked");
-    expect(r!.explicacion.regla).toBe("Nocturno");
+    expect(r!.explicacion.regla).toBe("Fin de semana (viernes noche)");
     expect(r!.explicacion.horaLocal).toBe("22:17");
     expect(formatear(r!.ventaTotal!)).toBe("331.00");
 

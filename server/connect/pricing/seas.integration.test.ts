@@ -11,7 +11,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SEAS_2026 } from "./tarifarios/seas2026.ts";
+import { SEAS_2026_COMPRA, SEAS_2026_VENTA } from "./tarifarios/seas2026.ts";
 import { formatear } from "./money.ts";
 import type { ContextoTarifa } from "./types.ts";
 
@@ -30,6 +30,7 @@ let centroId = 0;
 let clienteId = 0;
 let empresaId = 0;
 let versionId = 0;
+let versionCompraId = 0;
 
 /** Tarifica un instante concreto con lo que hay cargado en la base. */
 async function tarifar(p: {
@@ -94,25 +95,28 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
     );
     empresaId = em.rows[0].id;
 
-    // Se carga el tarifario con un código propio de la prueba para no chocar
-    // con el que pueda existir ya en la base.
-    const r = await cargarTarifario(centroId, { ...SEAS_2026, code: `SEAS_${sufijo}` });
-    versionId = r.tariffVersionId;
-
     /*
-     * Los dos contratos apuntan a la MISMA versión: la central compra al
-     * taller y vende a su cliente con el mismo tarifario. Es el caso real.
+     * Los dos tarifarios del documento: la tabla de venta y la de compra. No
+     * coinciden, y por eso son dos planes. Se cargan con un código propio de
+     * la prueba para no chocar con lo que pueda existir ya en la base.
      */
-    for (const [role, columna, valor] of [
-      ["sale", '"clientId"', clienteId],
-      ["purchase", '"providerCompanyId"', empresaId],
+    const v = await cargarTarifario(centroId, { ...SEAS_2026_VENTA, code: `SEASV_${sufijo}` });
+    const c = await cargarTarifario(centroId, { ...SEAS_2026_COMPRA, code: `SEASC_${sufijo}` });
+    versionId = v.tariffVersionId;
+    versionCompraId = c.tariffVersionId;
+
+    // Cada contrato a su lado: el de venta al tarifario de venta y el de
+    // compra al de compra.
+    for (const [role, columna, valor, planId] of [
+      ["sale", '"clientId"', clienteId, v.tariffPlanId],
+      ["purchase", '"providerCompanyId"', empresaId, c.tariffPlanId],
     ] as const) {
       await db.query(
         `INSERT INTO connect_contracts
            ("controlCenterId", role, ${columna}, "tariffPlanId", name, status,
             "validFromMs", "createdAtMs", "updatedAtMs")
          VALUES ($1,$2,$3,$4,$5,'active',$6,$7,$7)`,
-        [centroId, role, valor, r.tariffPlanId, `Contrato ${role}`, Date.parse("2026-01-01T00:00:00Z"), now],
+        [centroId, role, valor, planId, `Contrato ${role}`, Date.parse("2026-01-01T00:00:00Z"), now],
       );
     }
   }, 60_000);
@@ -144,65 +148,102 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
 
   it("publicarlo es un acto aparte y deliberado", async () => {
     expect(await publicarVersion(versionId, null)).toBe(true);
+    expect(await publicarVersion(versionCompraId, null)).toBe(true);
     // Y solo se puede publicar una vez
     expect(await publicarVersion(versionId, null)).toBe(false);
   });
 
   it("volver a cargar el tarifario no toca una versión publicada", async () => {
     // Si la tocara, cambiaría el precio de asistencias ya facturadas con ella
-    const r = await cargarTarifario(centroId, { ...SEAS_2026, code: `SEAS_${sufijo}` });
+    const r = await cargarTarifario(centroId, { ...SEAS_2026_VENTA, code: `SEASV_${sufijo}` });
     expect(r.status).toBe("published");
     expect(r.tariffVersionId).toBe(versionId);
     const reglas = await db.query(
       `SELECT COUNT(*)::int AS n FROM connect_tariff_rules WHERE "tariffVersionId" = $1`, [versionId]);
-    expect(reglas.rows[0].n).toBe(SEAS_2026.reglas.length);
+    expect(reglas.rows[0].n).toBe(SEAS_2026_VENTA.reglas.length);
   });
 
-  it("viernes 22:17: nocturno a 331 €, leído de la base", async () => {
+  it("viernes 22:17 es fin de semana, no nocturno: la ventana empieza el viernes a las 19:00", async () => {
     const r = await tarifar({ atMs: Date.parse("2026-08-14T22:17:00+02:00") });
-    expect(r.venta?.regla?.code).toBe("NOCTURNO");
+    expect(r.venta?.regla?.code).toBe("FESTIVO_ENTRADA");
     expect(formatear(r.ventaTotal!)).toBe("331.00");
-    expect(r.explicacion.tarifario).toBe("SEAS Nacional");
+    expect(r.explicacion.tarifario).toBe("SEAS Nacional (venta)");
     expect(r.explicacion.version).toBe("2026");
     expect(r.explicacion.zona).toBe("España");
   });
 
-  it("la central compra y vende con el mismo tarifario: margen cero", async () => {
-    const r = await tarifar({ atMs: Date.parse("2026-08-14T22:17:00+02:00") });
-    expect(formatear(r.compraTotal!)).toBe("331.00");
-    expect(formatear(r.margen!)).toBe("0.00");
+  it("jueves 22:00 sí es nocturno", async () => {
+    const r = await tarifar({ atMs: Date.parse("2026-08-13T22:00:00+02:00") });
+    expect(r.venta?.regla?.code).toBe("NOCTURNO");
+    expect(formatear(r.ventaTotal!)).toBe("331.00");
   });
 
-  it("martes a 22 km: proximidad a 110 €", async () => {
+  it("lunes a las 03:00 sigue siendo fin de semana: la ventana acaba a las 08:00", async () => {
+    const r = await tarifar({ atMs: Date.parse("2026-08-17T03:00:00+02:00") });
+    expect(r.venta?.regla?.code).toBe("FESTIVO_SALIDA");
+    expect(formatear(r.ventaTotal!)).toBe("331.00");
+  });
+
+  it("viernes a las 10:00 es diurno: el fin de semana no se come el día", async () => {
+    const r = await tarifar({ atMs: Date.parse("2026-08-14T10:00:00+02:00") });
+    expect(r.venta?.regla?.code).toBe("DIURNO");
+    expect(formatear(r.ventaTotal!)).toBe("198.00");
+  });
+
+  it("compra y venta son tarifas distintas: el margen del nocturno es 56 €", async () => {
+    // Venta 331, compra 275. No coinciden, y por eso son dos planes.
+    const r = await tarifar({ atMs: Date.parse("2026-08-14T22:17:00+02:00") });
+    expect(formatear(r.ventaTotal!)).toBe("331.00");
+    expect(formatear(r.compraTotal!)).toBe("275.00");
+    expect(formatear(r.margen!)).toBe("56.00");
+    expect(formatear(r.margenPct!)).toBe("16.92");
+  });
+
+  it("el diurno proximidad da margen NEGATIVO, y eso es lo que dice el documento", async () => {
+    /*
+     * Venta 110, compra 125: SEAS paga al taller 15 € más de lo que le cobra
+     * a su cliente. Está así en la tarifa publicada. El motor no lo maquilla
+     * ni lo corta a cero: un margen negativo que se pinta es un margen que
+     * alguien puede corregir; uno que se esconde, no.
+     */
     const r = await tarifar({
       atMs: Date.parse("2026-08-11T10:30:00+02:00"), distanceKm: 22, durationMin: 60,
     });
     expect(r.venta?.regla?.code).toBe("DIURNO_PROX");
     expect(formatear(r.ventaTotal!)).toBe("110.00");
+    expect(formatear(r.compraTotal!)).toBe("125.00");
+    expect(formatear(r.margen!)).toBe("-15.00");
   });
 
-  it("martes a 76 km: diurno a 198 €", async () => {
+  it("martes a 76 km: diurno a 198 € de venta y 170 € de compra", async () => {
     const r = await tarifar({ atMs: Date.parse("2026-08-11T10:30:00+02:00"), distanceKm: 76 });
     expect(r.venta?.regla?.code).toBe("DIURNO");
     expect(formatear(r.ventaTotal!)).toBe("198.00");
+    expect(formatear(r.compraTotal!)).toBe("170.00");
+    expect(formatear(r.margen!)).toBe("28.00");
   });
 
   it("festivo nacional a las 10:00: festivo a 331 €, no diurno", async () => {
-    // 15 de agosto de 2026, Asunción
+    // 15 de agosto de 2026, Asunción (y además sábado)
     const r = await tarifar({ atMs: Date.parse("2026-08-15T10:00:00+02:00") });
     expect(r.venta?.regla?.code).toBe("FESTIVO");
     expect(formatear(r.ventaTotal!)).toBe("331.00");
   });
 
-  it("Navidad a las 22:00: festivos extra a 424 €, no nocturno", async () => {
+  it("Navidad a las 22:00: festivos extra a 424 €, no fin de semana", async () => {
+    // El 25 de diciembre de 2026 cae en viernes: la regla más excepcional gana
     const r = await tarifar({ atMs: Date.parse("2026-12-25T22:00:00+01:00") });
     expect(r.venta?.regla?.code).toBe("FESTIVO_EXTRA");
     expect(formatear(r.ventaTotal!)).toBe("424.00");
+    expect(formatear(r.compraTotal!)).toBe("400.00");
     expect(r.explicacion.tipoDia).toBe("Navidad (día especial)");
   });
 
-  it("el ejemplo completo del encargo cuadra con los datos cargados", async () => {
-    // Forfait 331 + 25 km de más a 1,25 + neumático 485,49 + adicional 60
+  it("el servicio completo cuadra con las dos tablas del documento", async () => {
+    /*
+     * Venta:  331 + 25 km × 1,25 + Bridgestone 315/70 dirección 485,49 + 60
+     * Compra: 275 + 25 km × 1,10 + el mismo neumático a 460 + 50
+     */
     const r = await tarifar({
       atMs: Date.parse("2026-08-14T22:17:00+02:00"),
       distanceKm: 125,
@@ -214,6 +255,57 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
     });
     expect(r.lineas.map((l) => l.tipo)).toEqual(["FORFAIT", "EXTRA_KM", "TIRE", "ADDITIONAL_TIRE"]);
     expect(formatear(r.ventaTotal!)).toBe("907.74");
+    expect(formatear(r.compraTotal!)).toBe("812.50");
+  });
+
+  it("un neumático de grupo se cobra por su columna, no por la de la marca", async () => {
+    // Falken es 1ª Europeas: 436,17 de venta y 410 de compra en 315/70
+    const r = await tarifar({
+      atMs: Date.parse("2026-08-14T22:17:00+02:00"), etapa: "final", distanceKm: 76,
+      conceptos: [
+        { tipo: "TIRE", neumatico: { medida: "315/70R22.5", marca: "Falken", posicion: "STEER" } },
+      ],
+    });
+    const linea = r.lineas.find((l) => l.tipo === "TIRE")!;
+    expect(formatear(linea.ventaTotal!)).toBe("436.17");
+    expect(formatear(linea.compraTotal!)).toBe("410.00");
+  });
+
+  it("una celda vacía del documento no se carga como un precio de cero", async () => {
+    /*
+     * En el PDF hay celdas en blanco y celdas con "0,00 €". Las dos significan
+     * que no hay precio, no que el neumático sea gratis. Si alguna se hubiera
+     * cargado tal cual, se facturaría un neumático de camión a cero euros.
+     */
+    const ceros = await db.query(
+      `SELECT COUNT(*)::int AS n FROM connect_tariff_tire_prices
+        WHERE "tariffVersionId" IN ($1, $2)
+          AND "priceModel" = 'NET_PRICE' AND "netAmount" <= 0`,
+      [versionId, versionCompraId]);
+    expect(ceros.rows[0].n).toBe(0);
+  });
+
+  it("sin precio neto se cae al descuento sobre baremo, que es lo que dice el documento", async () => {
+    /*
+     * 295/80R22.5 en tracción no tiene precio neto de Bridgestone en ninguna
+     * de las dos tablas, así que entra por la puerta de atrás: "condiciones
+     * aplicables a todos los neumáticos que no figuran con precio neto"
+     * (página 5), o sea el baremo del fabricante menos el descuento.
+     *
+     * Como aquí no hay ningún baremo cargado, el importe sale NULO con el
+     * motivo, no cero. Cargar el baremo de Bridgestone es lo que le pondría
+     * precio, y hasta entonces esto va a revisión manual.
+     */
+    const r = await tarifar({
+      atMs: Date.parse("2026-08-14T22:17:00+02:00"), etapa: "final", distanceKm: 76,
+      conceptos: [
+        { tipo: "TIRE", neumatico: { medida: "295/80R22.5", marca: "Bridgestone", posicion: "DRIVE" } },
+      ],
+    });
+    const linea = r.lineas.find((l) => l.tipo === "TIRE")!;
+    expect(linea.ventaTotal).toBeNull();
+    expect(r.avisos.map((a) => a.codigo)).toContain("MANUFACTURER_LIST_NOT_FOUND");
+    expect(r.estado).toBe("manual_review");
   });
 
   it("115 km con 100 incluidos no llegan al 20 %: no hay suplemento", async () => {
@@ -228,6 +320,7 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
       atMs: Date.parse("2026-08-14T22:17:00+02:00"), etapa: "final", cancelado: true,
     });
     expect(formatear(r.ventaTotal!)).toBe("165.50");
+    expect(formatear(r.compraTotal!)).toBe("137.50");
   });
 
   it("un servicio de 2025 no encuentra tarifa: el de 2026 no vale para atrás", async () => {

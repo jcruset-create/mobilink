@@ -16,6 +16,7 @@
  */
 
 import db from "../../db.ts";
+import { crearMarca, crearMedida } from "./catalog.ts";
 import { minutosDeHora } from "./time.ts";
 import type { AmbitoCalendario } from "./calendar.ts";
 import type { TipoCalculo, TipoDisparo } from "./extras.ts";
@@ -278,13 +279,7 @@ export async function cargarTarifario(
     );
     grupoId.set(g.code, id);
     for (const marca of g.marcas) {
-      const marcaId = await upsert(
-        `INSERT INTO connect_tire_brands ("controlCenterId", code, name, "normalizedName", "createdAtMs")
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT ("controlCenterId", "normalizedName") DO UPDATE SET name = EXCLUDED.name
-         RETURNING id`,
-        [controlCenterId, marca.toUpperCase().replace(/\s+/g, "_"), marca, marca.toUpperCase(), now],
-      );
+      const { id: marcaId } = await crearMarca(controlCenterId, marca);
       await db.query(
         `INSERT INTO connect_tire_brand_group_members ("groupId", "brandId")
          VALUES ($1,$2) ON CONFLICT DO NOTHING`,
@@ -295,21 +290,15 @@ export async function cargarTarifario(
 
   let preciosNeumaticos = 0;
   for (const p of def.preciosNeumaticos ?? []) {
-    const marcaId = p.marca ? await upsert(
-      `INSERT INTO connect_tire_brands ("controlCenterId", code, name, "normalizedName", "createdAtMs")
-       VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT ("controlCenterId", "normalizedName") DO UPDATE SET name = EXCLUDED.name
-       RETURNING id`,
-      [controlCenterId, p.marca.toUpperCase().replace(/\s+/g, "_"), p.marca, p.marca.toUpperCase(), now],
-    ) : null;
-
-    const medidaId = p.medida ? await upsert(
-      `INSERT INTO connect_tire_sizes ("controlCenterId", "normalizedCode", "rawInput", "createdAtMs")
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT ("controlCenterId", "normalizedCode") DO UPDATE SET "rawInput" = EXCLUDED."rawInput"
-       RETURNING id`,
-      [controlCenterId, p.medida, p.medida, now],
-    ) : null;
+    /*
+     * Las medidas y las marcas se dan de alta por la misma puerta que usa la
+     * administración del catálogo, para que normalicen igual. Si el cargador
+     * escribiera "315/80 R 22,5" tal cual y el panel escribiera
+     * "315/80R22.5", el catálogo acabaría con las dos y el precio saldría de
+     * una de ellas sin que nadie sepa cuál.
+     */
+    const marcaId = p.marca ? (await crearMarca(controlCenterId, p.marca)).id : null;
+    const medidaId = p.medida ? (await crearMedida(controlCenterId, p.medida)).id : null;
 
     await db.query(
       `INSERT INTO connect_tariff_tire_prices
