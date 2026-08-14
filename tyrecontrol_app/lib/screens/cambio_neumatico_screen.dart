@@ -1496,6 +1496,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.marca ?? '—', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
+        // El modelo, igual que en la ficha del vehículo (vehicle_layout_image):
+        // "Hankook" a secas no dice qué goma es cuando el cliente trabaja con
+        // dos modelos de la misma marca y medida.
+        if ((n?.modelo ?? '').isNotEmpty)
+          Text(n!.modelo!, style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text(n?.medida ?? '', style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
         if (n != null &&
             (esNuevoReciente ||
