@@ -1063,12 +1063,16 @@ export interface Intervencion {
   montaje_despues?: MontajeSnapshot[] | null;
   incidencias?: IncidenciaOrigen[] | null;
   imagen_chasis?: string | null;
-  // Ciclo de vida (fases 1-4)
+  // Ciclo de vida (fases 1-4) y cronometraje (Productividad)
   tecnico_id?: string | null;
   inicio_at?: string | null;
   fin_at?: string | null;
   cerrada_at?: string | null;
   observaciones?: string | null;
+  duracion_seg?: number | null;
+  trabajo_seg?: number | null;
+  pausa_seg?: number | null;
+  n_pausas?: number | null;
   /** Foto del stock al cierre (fase 5): lineas = estado completo de
    *  tc_stock_almacen_empresa; efecto = solo lo que esta intervención tocó,
    *  con antes/después. Falta en intervenciones cerradas antes de la fase 5. */
@@ -1149,6 +1153,15 @@ export async function planificarIntervencion(params: {
 export async function cancelarIntervencion(id: string, motivo?: string | null): Promise<void> {
   const { error } = await supabase.rpc("tc_cancelar_intervencion", { p_intervencion: id, p_motivo: motivo ?? null });
   if (error) throw new Error(error.message);
+}
+
+/** Una intervención completa, con empresa/vehículo/técnico, para el informe. */
+export async function obtenerIntervencion(id: string): Promise<Intervencion | null> {
+  const { data, error } = await supabase.from("tc_intervenciones")
+    .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)")
+    .eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data ?? null) as unknown as Intervencion | null;
 }
 
 export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
