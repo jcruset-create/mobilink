@@ -14,7 +14,7 @@ import ComunicacionesTab from "../components/ComunicacionesTab";
 import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
 import BackOfficeTab from "../components/BackOfficeTab";
 import VehiculoTab from "../components/VehiculoTab";
-import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
+import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime, fmtImporte } from "../types";
 
 type Detail = {
   id: number; uuid: string; status: string; priority: string; serviceType: string;
@@ -28,7 +28,7 @@ type Detail = {
   assignmentExplanation: string | null; createdAtMs: number;
   reportUrl: string | null; reportAtMs: number | null;
   assignedTechName: string | null; assignedVehicleName: string | null; assignedVehiclePlate: string | null;
-  estimatedCost: number | null; finalCost: number | null; costCurrency: string; costDetail: string | null;
+  estimatedCost: number | string | null; finalCost: number | string | null; costCurrency: string; costDetail: string | null;
 };
 
 type TimelineEntry = { fromStatus: string | null; toStatus: string; actorType: string; reason: string | null; occurredAtMs: number };
@@ -218,9 +218,9 @@ export default function FichaAsistencia() {
         )}
         {tab === "Costes" && (
           <div>
-            <Row label="Coste estimado" value={a.estimatedCost != null ? `${a.estimatedCost.toFixed(2)} ${a.costCurrency}` : "Sin tarifa aplicable"} />
+            <Row label="Coste estimado" value={fmtImporte(a.estimatedCost, a.costCurrency) ?? "Sin tarifa aplicable"} />
             <Row label="Detalle del cálculo" value={a.costDetail} />
-            <Row label="Coste final" value={a.finalCost != null ? `${a.finalCost.toFixed(2)} ${a.costCurrency}` : "Pendiente de cierre"} />
+            <Row label="Coste final" value={fmtImporte(a.finalCost, a.costCurrency) ?? "Pendiente de cierre"} />
             {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
               <div className="mt-3">
                 <Button
