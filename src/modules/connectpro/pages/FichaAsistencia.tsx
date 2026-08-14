@@ -14,6 +14,7 @@ import ComunicacionesTab from "../components/ComunicacionesTab";
 import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
 import BackOfficeTab from "../components/BackOfficeTab";
 import VehiculoTab from "../components/VehiculoTab";
+import TarificacionTab from "../components/TarificacionTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime, fmtImporte } from "../types";
 
 type Detail = {
@@ -45,7 +46,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Tarificación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -216,28 +217,44 @@ export default function FichaAsistencia() {
         {tab === "Comunicaciones" && (
           <ComunicacionesTab assistanceId={a.id} canOperate={canOperate} />
         )}
-        {tab === "Costes" && (
-          <div>
-            <Row label="Coste estimado" value={fmtImporte(a.estimatedCost, a.costCurrency) ?? "Sin tarifa aplicable"} />
-            <Row label="Detalle del cálculo" value={a.costDetail} />
-            <Row label="Coste final" value={fmtImporte(a.finalCost, a.costCurrency) ?? "Pendiente de cierre"} />
-            {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
-              <div className="mt-3">
-                <Button
-                  variant="ghost" disabled={busy}
-                  onClick={() => {
-                    const v = window.prompt("Coste final del servicio (€):", a.finalCost != null ? String(a.finalCost) : a.estimatedCost != null ? String(a.estimatedCost) : "");
-                    if (v != null && v.trim() !== "" && !Number.isNaN(Number(v))) {
-                      setBusy(true);
-                      boFetch(`/assistances/${a.id}/costs`, { method: "PATCH", body: { finalCost: Number(v) } })
-                        .then(load).catch((e: any) => setError(e.message)).finally(() => setBusy(false));
-                    }
-                  }}
-                >
-                  Registrar coste final
-                </Button>
-              </div>
-            )}
+        {tab === "Tarificación" && (
+          <div className="flex flex-col gap-4">
+            <TarificacionTab
+              assistanceId={a.id}
+              canOperate={canOperate}
+              status={a.status}
+              onChanged={load}
+            />
+
+            {/*
+              * El coste a mano se queda: hay servicios que se pactan por
+              * teléfono y no hay tarifa que los explique. Pero se pinta
+              * debajo del motor y con su etiqueta, para que se vea que es un
+              * importe puesto a dedo y no lo que dice el tarifario.
+              */}
+            <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+              <p className="mb-2 text-[13px] font-medium text-slate-200">Importe a mano</p>
+              <Row label="Coste estimado" value={fmtImporte(a.estimatedCost, a.costCurrency) ?? "Sin tarifa aplicable"} />
+              <Row label="Detalle del cálculo" value={a.costDetail} />
+              <Row label="Coste final" value={fmtImporte(a.finalCost, a.costCurrency) ?? "Pendiente de cierre"} />
+              {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
+                <div className="mt-3">
+                  <Button
+                    variant="ghost" disabled={busy}
+                    onClick={() => {
+                      const v = window.prompt("Coste final del servicio (€):", a.finalCost != null ? String(a.finalCost) : a.estimatedCost != null ? String(a.estimatedCost) : "");
+                      if (v != null && v.trim() !== "" && !Number.isNaN(Number(v))) {
+                        setBusy(true);
+                        boFetch(`/assistances/${a.id}/costs`, { method: "PATCH", body: { finalCost: Number(v) } })
+                          .then(load).catch((e: any) => setError(e.message)).finally(() => setBusy(false));
+                      }
+                    }}
+                  >
+                    Registrar coste final a mano
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
         )}
         {tab === "Solicitante" && (
