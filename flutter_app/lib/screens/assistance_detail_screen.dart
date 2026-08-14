@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plate_badge.dart';
 import 'arrival_photos_screen.dart';
 import 'cobros_screen.dart';
 import 'finish_screen.dart';
@@ -573,12 +574,17 @@ class _InfoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // La matrícula manda: si viene informada, en grande y arriba del
+          // todo. Si no, ni se pinta (antes dejaba una línea vacía).
+          if ((a['plate'] as String? ?? '').trim().isNotEmpty) ...[
+            PlateBadge(plate: a['plate'] as String),
+            const SizedBox(height: 12),
+          ],
           _row(Icons.business, a['customerName'] ?? ''),
           if ((a['conductorNombre'] as String? ?? '').isNotEmpty)
             _row(Icons.person, a['conductorNombre'] ?? ''),
           _row(Icons.phone, a['customerPhone'] ?? ''),
           _row(Icons.location_on, a['address'] ?? ''),
-          _row(Icons.directions_car, a['plate'] ?? ''),
           if ((a['vehicleDescription'] as String? ?? '').isNotEmpty)
             _row(Icons.info_outline, a['vehicleDescription'] ?? ''),
           if ((a['assignedVehicleName'] as String? ?? '').isNotEmpty)

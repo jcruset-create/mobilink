@@ -9,6 +9,7 @@ import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plate_badge.dart';
 import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
 import 'history_screen.dart';
@@ -495,18 +496,20 @@ class _ActiveAssistancesTab extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Text(plate, style: tt.titleMedium),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  customer,
-                                  style: tt.bodyMedium,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
+                          // La matrícula manda: si viene informada, en grande
+                          // y arriba del todo. Si no, ni se pinta.
+                          if (plate.isNotEmpty) ...[
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: PlateBadge(plate: plate),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                          Text(
+                            customer,
+                            style: tt.bodyMedium,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
                           Text(
