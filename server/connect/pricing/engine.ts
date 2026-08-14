@@ -250,7 +250,7 @@ export function calcularTarifa(
 
   return {
     etapa: opciones.etapa,
-    estado: estadoDe(ventaTotal, compraTotal, avisos),
+    estado: estadoDe(ventaTotal, compraTotal, avisos, lineas),
     currency: venta.lado?.currency ?? compra.lado?.currency ?? "EUR",
     compraTotal,
     ventaTotal,
@@ -285,10 +285,28 @@ function totalDe(lineas: LineaPrecio[], columna: "ventaTotal" | "compraTotal", r
   return alguna ? redondearCentimos(total) : CERO;
 }
 
-function estadoDe(venta: Dinero | null, compra: Dinero | null, avisos: Aviso[]): EstadoTarifa {
+/**
+ * `manual_review` significa que nadie debería facturar esto sin mirarlo.
+ * `partial` es que el precio está pero incompleto —venta sí y compra no, por
+ * ejemplo—, que es corriente y no bloquea nada.
+ *
+ * Una línea SIN precio de venta es motivo de revisión aunque el total salga:
+ * el total sale porque esa línea suma cero, y la factura iría corta por un
+ * importe que nadie ha decidido. Es el caso del neumático sin precio, que los
+ * tarifarios suelen mandar a revisión manual expresamente.
+ */
+function estadoDe(
+  venta: Dinero | null,
+  compra: Dinero | null,
+  avisos: Aviso[],
+  lineas: LineaPrecio[],
+): EstadoTarifa {
   const graves: CodigoAviso[] = ["NO_TARIFF_PLAN", "NO_MATCHING_RULE", "FORMULA_NOT_SUPPORTED"];
-  if (venta == null || avisos.some((a) => graves.includes(a.codigo))) return "manual_review";
-  if (compra == null || avisos.length > 0) return "partial";
+  const lineaSinPrecio = lineas.some((l) => l.ventaTotal == null);
+  if (venta == null || lineaSinPrecio || avisos.some((a) => graves.includes(a.codigo))) {
+    return "manual_review";
+  }
+  if (compra == null || lineas.some((l) => l.compraTotal == null) || avisos.length > 0) return "partial";
   return "ok";
 }
 
