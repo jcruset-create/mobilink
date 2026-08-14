@@ -132,6 +132,20 @@ export function etiquetaEstadoResumen(status: string): string {
   return ASSISTANCE_STATUS_LABELS[status] ?? status;
 }
 
+/**
+ * Importe con dos decimales.
+ *
+ * Acepta texto además de número a propósito: las columnas de dinero son
+ * NUMERIC en la base, y node-postgres las devuelve como texto para no perder
+ * precisión. Llamar a `.toFixed()` directamente sobre lo que llega de la API
+ * revienta.
+ */
+export function fmtImporte(v: number | string | null | undefined, moneda = "EUR"): string | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? `${n.toFixed(2)} ${moneda}` : null;
+}
+
 export function fmtDateTime(ms: number | null | undefined): string {
   if (!ms) return "-";
   return new Date(Number(ms)).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" });
