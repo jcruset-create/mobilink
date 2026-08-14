@@ -12,6 +12,7 @@
 import crypto from "node:crypto";
 import db from "../db.ts";
 import { seedNetworkWorkshops } from "./seedWorkshops.ts";
+import { initPricing } from "./pricing/schema.ts";
 
 export async function initConnect(): Promise<void> {
   await db.query(`
@@ -870,6 +871,11 @@ export async function initConnect(): Promise<void> {
        AND (SELECT COUNT(DISTINCT w."coreWorkshopId") FROM connect_workshops w
              WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL) = 1;
   `);
+
+  // Motor de tarifas: su esquema vive aparte para no seguir engordando este
+  // fichero. Depende de connect_control_centers, connect_clients y
+  // connect_assistances, así que va después.
+  await initPricing();
 
   await seedConnectDefaults();
   // El catálogo de talleres depende de red (geocodificación): si falla, se
