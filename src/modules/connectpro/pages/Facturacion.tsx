@@ -1,13 +1,22 @@
 /**
- * Connect Pro — Facturación: liquidación del periodo por cliente y por
- * proveedor a partir de los costes (final, o estimado si falta), con
- * export CSV y marca de facturado.
+ * Connect Pro — Facturación del periodo.
+ *
+ * Dos vistas que conviven a propósito:
+ *
+ *  - **Motor de tarifas**: liquida sobre las LÍNEAS del motor, concepto a
+ *    concepto y por los dos lados (lo que se cobra al cliente y lo que el
+ *    taller cobra a la central). Es la buena.
+ *  - **Costes (clásico)**: liquida sobre el importe suelto de cada asistencia.
+ *    Se queda porque hay servicios pactados a mano que no pasan por el motor,
+ *    y porque romper la facturación que ya funciona para estrenar la nueva no
+ *    le hace falta a nadie.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Th, Td, Badge, Input, Button, ErrorBanner, EmptyState, KpiCard } from "../components/ui";
+import LiquidacionMotor from "../components/LiquidacionMotor";
 import { fmtDateTime } from "../types";
 
 type Summary = {
@@ -42,6 +51,7 @@ export default function Facturacion() {
   const [lines, setLines] = useState<Line[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [vista, setVista] = useState<"motor" | "clasico">("motor");
 
   const range = useCallback(() => {
     const f = new Date(`${from}T00:00:00`).getTime();
@@ -87,22 +97,44 @@ export default function Facturacion() {
     <div>
       <PageTitle
         title="Facturación"
-        subtitle="Liquidación del periodo sobre asistencias finalizadas (coste final; estimado si aún no hay final)."
+        subtitle={vista === "motor"
+          ? "Liquidación sobre las líneas del motor de tarifas, con su desglose y sus dos lados."
+          : "Liquidación sobre el importe suelto de cada asistencia finalizada."}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
             <span className="text-slate-500">→</span>
             <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-            <Button variant="ghost" onClick={exportCsv} disabled={lines.length === 0}>Exportar CSV</Button>
-            <Button onClick={marcarFacturado} disabled={busy || lines.every((l) => l.invoicedAtMs != null)}>
-              Marcar periodo facturado
-            </Button>
+            {vista === "clasico" && (
+              <>
+                <Button variant="ghost" onClick={exportCsv} disabled={lines.length === 0}>Exportar CSV</Button>
+                <Button onClick={marcarFacturado} disabled={busy || lines.every((l) => l.invoicedAtMs != null)}>
+                  Marcar periodo facturado
+                </Button>
+              </>
+            )}
           </div>
         }
       />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
-      {summary && (
+      <div className="mb-4 flex gap-1">
+        {([["motor", "Motor de tarifas"], ["clasico", "Costes (clásico)"]] as const).map(([v, t]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setVista(v)}
+            className={`rounded-lg px-3 py-1.5 text-[13px] font-medium ${
+              vista === v ? "bg-cyan-600/20 text-cyan-300" : "text-slate-400 hover:bg-slate-800"}`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {vista === "motor" && <LiquidacionMotor from={from} to={to} />}
+
+      {vista === "clasico" && summary && (
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <KpiCard label="Servicios finalizados" value={summary.totals.services} />
           <KpiCard label="Importe del periodo" value={eur(summary.totals.amount)} tone="ok" />
@@ -111,7 +143,7 @@ export default function Facturacion() {
         </div>
       )}
 
-      {summary && (
+      {vista === "clasico" && summary && (
         <div className="mb-4 grid gap-4 lg:grid-cols-2">
           {([["Por cliente", summary.by_client], ["Por proveedor", summary.by_provider]] as const).map(([title, rows]) => (
             <Card key={title} className="overflow-x-auto">
@@ -135,7 +167,7 @@ export default function Facturacion() {
         </div>
       )}
 
-      {lines.length === 0 ? (
+      {vista === "clasico" && (lines.length === 0 ? (
         <EmptyState message="No hay asistencias finalizadas en el periodo." />
       ) : (
         <Card className="overflow-x-auto">
@@ -169,7 +201,7 @@ export default function Facturacion() {
             </tbody>
           </table>
         </Card>
-      )}
+      ))}
     </div>
   );
 }

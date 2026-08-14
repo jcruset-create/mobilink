@@ -2822,6 +2822,141 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ marked: r.rows.length });
   });
 
+  // ── Facturación desde el motor de tarifas ────────────────────────────────
+
+  /*
+   * Lo de arriba factura contra `finalCost`, un número suelto por asistencia
+   * sin desglose ni lado. Esto factura contra las LÍNEAS del motor, que traen
+   * concepto a concepto lo que se le cobra al cliente y lo que el taller le
+   * cobra a la central. Conviven a propósito: hay servicios pactados a mano
+   * que no pasan por el motor, y romper la facturación de siempre para
+   * estrenar la nueva no le hace falta a nadie.
+   */
+
+  /** Mes en curso si no se dice otra cosa. */
+  function periodoDe(req: Request) {
+    const ahora = new Date();
+    return {
+      controlCenterId: centroDe(req),
+      desdeMs: Number(req.query.from) || new Date(ahora.getFullYear(), ahora.getMonth(), 1).getTime(),
+      hastaMs: Number(req.query.to) || Date.now(),
+      incluirExportadas: req.query.incluirExportadas === "1",
+    };
+  }
+
+  function ladoDe(req: Request): "sale" | "purchase" {
+    return req.query.side === "purchase" || req.body?.side === "purchase" ? "purchase" : "sale";
+  }
+
+  /**
+   * Los documentos del periodo por un lado, con sus líneas y lo que impide
+   * emitir cada uno. Y aparte, los servicios terminados SIN tarifa de cierre:
+   * esa lista es la que impide facturar de menos sin enterarse.
+   */
+  router.get("/billing/documents", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { agruparEnDocumentos, resumen } = await import("./pricing/billing.ts");
+    const { lineasFacturables, pendientesDeCierre } = await import("./pricing/billingRepo.ts");
+
+    const periodo = periodoDe(req);
+    const lado = ladoDe(req);
+    const [filas, pendientes] = await Promise.all([
+      lineasFacturables(periodo, lado),
+      pendientesDeCierre(periodo),
+    ]);
+    const documentos = agruparEnDocumentos(filas, lado);
+
+    res.json({
+      from: periodo.desdeMs, to: periodo.hastaMs, side: lado,
+      resumen: resumen(documentos),
+      documentos,
+      pendientesDeCierre: pendientes,
+    });
+  });
+
+  /**
+   * CSV para el ERP.
+   *
+   * Solo salen los documentos emitibles: uno bloqueado por una línea sin
+   * precio no se exporta a medias, porque la factura iría corta por un importe
+   * que nadie ha decidido. Se ven en la pantalla con su motivo.
+   */
+  router.get("/billing/export.csv", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { agruparEnDocumentos, aCsv } = await import("./pricing/billing.ts");
+    const { lineasFacturables } = await import("./pricing/billingRepo.ts");
+
+    const periodo = periodoDe(req);
+    const lado = ladoDe(req);
+    const documentos = agruparEnDocumentos(await lineasFacturables(periodo, lado), lado)
+      .filter((d) => !d.bloqueado);
+
+    const nombre = `facturacion-${lado === "sale" ? "venta" : "compra"}-` +
+      `${new Date(periodo.desdeMs).toISOString().slice(0, 10)}.csv`;
+
+    await auditConnect({ req, action: "billing.exported", detail: {
+      side: lado, from: periodo.desdeMs, to: periodo.hastaMs, documentos: documentos.length } });
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
+    res.send(aCsv(documentos));
+  });
+
+  /**
+   * Deja constancia de lo que ya ha salido. A partir de aquí esas asistencias
+   * no vuelven a aparecer en el listado ni en la exportación, que es lo que
+   * impide mandar dos veces la misma factura.
+   */
+  router.post("/billing/mark-exported", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroDe(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+
+    const { agruparEnDocumentos } = await import("./pricing/billing.ts");
+    const { lineasFacturables, marcarExportadas } = await import("./pricing/billingRepo.ts");
+
+    const lado = ladoDe(req);
+    const periodo = {
+      controlCenterId: centro,
+      desdeMs: Number(req.body?.from) || 0,
+      hastaMs: Number(req.body?.to) || Date.now(),
+    };
+    const documentos = agruparEnDocumentos(await lineasFacturables(periodo, lado), lado)
+      .filter((d) => !d.bloqueado);
+
+    // Una marca por asistencia con su importe, para poder cuadrar después
+    const porAsistencia = new Map<number, { id: number; importe: number; currency: string }>();
+    for (const d of documentos) {
+      for (const l of d.lineas) {
+        const acc = porAsistencia.get(l.assistanceId)
+          ?? { id: l.assistanceId, importe: 0, currency: d.currency };
+        acc.importe += Number(l.total ?? 0);
+        porAsistencia.set(l.assistanceId, acc);
+      }
+    }
+
+    const marcadas = await marcarExportadas(centro, lado,
+      [...porAsistencia.values()].map((a) => ({
+        id: a.id, importe: a.importe.toFixed(4), currency: a.currency,
+      })),
+      { userId: req.connectUser?.id ?? null, referencia: req.body?.referencia ?? null });
+
+    await auditConnect({ req, action: "billing.marked_exported", detail: {
+      side: lado, marcadas, referencia: req.body?.referencia ?? null } });
+    res.json({ marcadas });
+  });
+
+  /** Deshacer: el ERP la rechazó o se emitió por error. */
+  router.delete("/billing/mark-exported/:assistanceId", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroDe(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { desmarcarExportada } = await import("./pricing/billingRepo.ts");
+    const lado = ladoDe(req);
+    const ok = await desmarcarExportada(centro, Number(req.params.assistanceId), lado);
+    if (ok) {
+      await auditConnect({ req, action: "billing.unmarked_exported", resourceType: "assistance",
+        resourceId: Number(req.params.assistanceId), detail: { side: lado } });
+    }
+    res.json({ ok });
+  });
+
   // ── Incidencias (Sprint 5) ────────────────────────────────
 
   const INCIDENT_TYPES = [
