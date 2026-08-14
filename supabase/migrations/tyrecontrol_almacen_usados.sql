@@ -178,7 +178,10 @@ begin
     (select count(*) from tc_neumaticos n
       where n.empresa_id = p_empresa and n.activo and n.estado in ('almacen','reservado')
         and n.reesculturado),
-    coalesce((select sum(case when ms.tipo = 'SALIDA' then -ms.cantidad else ms.cantidad end)
+    -- ::numeric obligatorio: cantidad es entera, sum() daría bigint y RETURN
+    -- QUERY exige el tipo declarado exacto (42804). Ver el fix
+    -- tyrecontrol_fix_resumen_usados_tipo.sql.
+    coalesce((select sum(case when ms.tipo = 'SALIDA' then -ms.cantidad else ms.cantidad end)::numeric
                 from movimientos_stock ms
                where ms.cliente_id = v_cliente and ms.condicion = 'usado'), 0);
 end $$;
