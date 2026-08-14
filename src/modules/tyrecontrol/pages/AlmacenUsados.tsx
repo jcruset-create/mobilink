@@ -33,6 +33,10 @@ export default function AlmacenUsados() {
   const [empresaId, setEmpresaId] = useState("");
   const [items, setItems] = useState<UsadoEnAlmacen[]>([]);
   const [resumen, setResumen] = useState<ResumenAlmacenUsados | null>(null);
+  // Si el resumen falla, se DICE. Escondido tras un catch vacío, un fallo de
+  // permisos o de red se veía igual que "no hay tarjetas" — y con él
+  // desaparecía también el aviso de regularización de la Decisión 1.
+  const [resumenError, setResumenError] = useState("");
   const [umbrales, setUmbrales] = useState<{ min: number; aviso: number }>({ min: 1.6, aviso: 3.0 });
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -60,7 +64,10 @@ export default function AlmacenUsados() {
     try {
       const [lista, res, umb] = await Promise.all([
         listarUsadosAlmacen(empresaId),
-        resumenUsadosAlmacen(empresaId).catch(() => null),
+        resumenUsadosAlmacen(empresaId).then(
+          (r) => { setResumenError(""); return r; },
+          (e: any) => { setResumenError(e?.message || "No se ha podido cargar"); return null; },
+        ),
         obtenerUmbralesEmpresa(empresaId).catch(() => null),
       ]);
       setItems(lista);
@@ -169,6 +176,11 @@ export default function AlmacenUsados() {
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
 
       {/* Resumen */}
+      {resumenError && (
+        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-300">
+          ⚠ No se ha podido cargar el resumen del almacén (tarjetas y aviso de regularización): {resumenError}
+        </div>
+      )}
       {resumen && (
         <div className="mb-3 grid gap-2 sm:grid-cols-4">
           <Tarjeta titulo="En almacén" valor={resumen.fichas} pie="gomas con ficha propia" />
