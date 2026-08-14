@@ -1069,6 +1069,18 @@ export interface Intervencion {
   fin_at?: string | null;
   cerrada_at?: string | null;
   observaciones?: string | null;
+  /** Foto del stock al cierre (fase 5): lineas = estado completo de
+   *  tc_stock_almacen_empresa; efecto = solo lo que esta intervención tocó,
+   *  con antes/después. Falta en intervenciones cerradas antes de la fase 5. */
+  stock_snapshot?: {
+    capturado_at?: string;
+    lineas?: { producto_id?: string; marca?: string | null; modelo?: string | null; medida?: string | null; nuevo?: number; usado?: number }[];
+    efecto?: {
+      producto_id?: string; marca?: string | null; modelo?: string | null; medida?: string | null;
+      montados_nuevo?: number; montados_usado?: number; devueltos_usado?: number;
+      antes_nuevo?: number; antes_usado?: number; despues_nuevo?: number; despues_usado?: number;
+    }[];
+  } | null;
   empresa?: { nombre?: string | null } | null;
   vehiculo?: { matricula?: string | null } | null;
   tecnico?: { nombre?: string | null } | null;

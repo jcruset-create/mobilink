@@ -236,6 +236,39 @@ export default function Intervenciones() {
           {detalle.interv.resumen_ia && detalle.interv.resumen_ia !== detalle.interv.resumen && (
             <div className="mb-2 rounded-lg bg-slate-800/60 p-2 text-[12px] italic text-slate-400">{detalle.interv.resumen_ia}</div>
           )}
+          {/* Fase 5: la foto del stock al cierre. Es el dato de ENTONCES,
+              guardado en la intervención — no se recalcula con el stock de hoy. */}
+          {detalle.interv.stock_snapshot?.efecto && detalle.interv.stock_snapshot.efecto.length > 0 && (
+            <div className="mb-2 rounded-lg bg-slate-800/60 p-2">
+              <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Efecto en el stock (al cierre)</div>
+              {detalle.interv.stock_snapshot.efecto.map((e, i) => (
+                <div key={i} className="text-[12px] text-slate-300">
+                  • {e.medida ?? "—"} {e.marca ?? ""} {e.modelo ?? ""} — nuevo {e.antes_nuevo ?? 0} → {e.despues_nuevo ?? 0} · usado {e.antes_usado ?? 0} → {e.despues_usado ?? 0}
+                  <span className="text-slate-500">
+                    {" "}({[
+                      (e.montados_nuevo ?? 0) > 0 ? `${e.montados_nuevo} nuevo(s) montado(s)` : "",
+                      (e.montados_usado ?? 0) > 0 ? `${e.montados_usado} usado(s) montado(s)` : "",
+                      (e.devueltos_usado ?? 0) > 0 ? `${e.devueltos_usado} devuelto(s) al almacén` : "",
+                    ].filter(Boolean).join(", ")})
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {detalle.interv.stock_snapshot?.lineas && detalle.interv.stock_snapshot.lineas.length > 0 && (
+            <details className="mb-2 rounded-lg bg-slate-800/60 p-2">
+              <summary className="cursor-pointer text-[11px] font-bold uppercase text-slate-400">
+                Stock del almacén al cierre ({detalle.interv.stock_snapshot.lineas.length} productos)
+              </summary>
+              <div className="mt-1 space-y-0.5">
+                {detalle.interv.stock_snapshot.lineas.map((l, i) => (
+                  <div key={i} className="text-[12px] text-slate-300">
+                    • {l.medida ?? "—"} {l.marca ?? ""} {l.modelo ?? ""} — nuevo {l.nuevo ?? 0} · usado {l.usado ?? 0}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Operaciones</div>
           {cargandoDet ? <div className="text-sm text-slate-500">Cargando…</div>
           : detalle.errorOps ? <div className="text-[12px] text-amber-300">⚠ No se han podido cargar: {detalle.errorOps}</div>

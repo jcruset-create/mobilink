@@ -1938,6 +1938,16 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     // rezagadas (las propias ya la llevan y el update es un no-op para ellas).
     await supabase.from("operaciones_neumaticos").update({ intervencion_id: intervId }).in("id", (activas as any[]).map((o) => o.id));
 
+    // Fase 5: foto del stock al cierre. El informe de dentro de seis meses
+    // enseña el stock de ENTONCES, no el de hoy, y el efecto exacto de esta
+    // intervención (Antes · Montados · Devueltos · Después) sale de sus
+    // operaciones reales — lo calcula y guarda la BD, nunca la IA.
+    // Best-effort: sin el SQL de fase 5 aplicado, el parte se cierra igual.
+    {
+      const snap = await supabase.rpc("tc_stock_snapshot_intervencion", { p_intervencion: intervId });
+      if (snap.error) console.error("snapshot de stock al cerrar:", snap.error.message);
+    }
+
     res.json({ id: intervId, numero, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
