@@ -1874,10 +1874,19 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json(paraApi(r));
   });
 
-  /** Las tres etapas con sus líneas: es la pestaña de tarificación. */
+  /**
+   * Las tres etapas con sus líneas: es la pestaña de tarificación.
+   *
+   * La normalización vive en `presenter.ts` y no aquí: las columnas NUMERIC
+   * llegan del driver como texto y las JSONB llegan parseadas o sin parsear
+   * según el caso, y eso tiene bastante criterio como para poder probarlo sin
+   * levantar la base.
+   */
   router.get("/pricing/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const { etapasDe } = await import("./pricing/service.ts");
-    res.json({ data: await etapasDe(Number(req.params.id)) });
+    const { etapaParaApi } = await import("./pricing/presenter.ts");
+    const filas = await etapasDe(Number(req.params.id));
+    res.json({ data: filas.map(etapaParaApi) });
   });
 
   /**
