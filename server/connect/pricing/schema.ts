@@ -30,8 +30,9 @@ export async function initPricing(): Promise<void> {
   await db.query(`
     /*
      * El contrato es quien dice si un tarifario se usa para comprar o para
-     * vender. El tarifario en sí es neutro: "SEAS Nacional 2026" es una lista
-     * de precios, igual que el PDF que la central tiene encima de la mesa.
+     * vender. El tarifario en sí es neutro: es una lista de precios, igual que
+     * el PDF que la central tiene encima de la mesa, y ese papel no dice si se
+     * usa para comprar o para vender.
      * Así el mismo tarifario se carga una vez y lo apuntan los dos contratos
      * —el del cliente al que se factura y el del taller que factura—, y un
      * cambio de precio mueve las dos facturas a la vez, que es lo que pasa en

@@ -11,8 +11,7 @@ import { describe, it, expect } from "vitest";
 import { formatear } from "./money.ts";
 import { minutosDeHora } from "./time.ts";
 import { calcularTarifa, type ConfiguracionLado, type ConfiguracionTarifa, type ReglaConImporte } from "./engine.ts";
-import { claveNeumatico } from "./engine.ts";
-import { aDinero } from "./money.ts";
+import type { CatalogoNeumaticos } from "./tires.ts";
 import type { ContextoTarifa } from "./types.ts";
 import type { FranjaHoraria } from "./timeBands.ts";
 import type { DiaCalendario } from "./calendar.ts";
@@ -61,14 +60,21 @@ const reglas: ReglaConImporte[] = [
     includedDistanceKm: "100", includedDurationMin: 180 },
 ];
 
+const catalogo: CatalogoNeumaticos = {
+  precios: [{
+    id: 1, tireSizeCode: "315/70R22.5", brandName: "BRIDGESTONE", position: "STEER",
+    priceModel: "NET_PRICE", netAmount: "485.49", priority: 10,
+  }],
+  gruposPorMarca: new Map(),
+  baremos: [],
+};
+
 /** El mismo tarifario sirve de venta y de compra: es el caso de una central. */
 function lado(contractId: number): ConfiguracionLado {
   return {
     contractId, tariffPlanId: 1, tariffPlanName: "SEAS Nacional", tariffVersionId: 7,
     version: "2026", currency: "EUR", reglas, extras,
-    preciosNeumaticos: new Map([
-      [claveNeumatico("315/70R22.5", "BRIDGESTONE", "STEER"), aDinero("485.49")!],
-    ]),
+    catalogoNeumaticos: catalogo,
   };
 }
 

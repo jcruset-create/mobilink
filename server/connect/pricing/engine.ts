@@ -29,6 +29,7 @@ import {
   CERO, aDinero, multiplicar, aCantidad, porcentajeDe, redondearCentimos, type Dinero,
 } from "./money.ts";
 import { resolverRegla, type ContextoRegla, type ReglaTarifa } from "./rules.ts";
+import { resolverPrecioNeumatico, type CatalogoNeumaticos, type PosicionNeumatico } from "./tires.ts";
 import { instanteLocal } from "./time.ts";
 import { describirFranja, franjasAplicables, type FranjaHoraria } from "./timeBands.ts";
 import {
@@ -59,8 +60,8 @@ export interface ConfiguracionLado {
   currency: string;
   reglas: ReglaConImporte[];
   extras: Extra[];
-  /** Precio ya resuelto por neumático, indexado por su clave de concepto. */
-  preciosNeumaticos?: Map<string, Dinero>;
+  /** Catálogo de precios de neumático de esta versión tarifaria. */
+  catalogoNeumaticos?: CatalogoNeumaticos;
 }
 
 export interface ConfiguracionTarifa {
@@ -143,11 +144,6 @@ function resolverLado(
     avisos: r.avisos.map((c) => ({ codigo: c as CodigoAviso, lado: papel })),
     descartes: [],
   };
-}
-
-/** Clave con la que se busca el precio de un neumático concreto. */
-export function claveNeumatico(medida: string, marca?: string | null, posicion?: string | null): string {
-  return [medida, marca ?? "*", posicion ?? "ANY"].join("|").toUpperCase();
 }
 
 // ---------------------------------------------------------------------------
@@ -374,12 +370,22 @@ function anadirConceptos(
     const cantidad = c.cantidad ?? 1;
 
     if (c.neumatico) {
-      const clave = claveNeumatico(c.neumatico.medida, c.neumatico.marca, c.neumatico.posicion);
-      const pv = cfg.venta?.preciosNeumaticos?.get(clave) ?? null;
-      const pc = cfg.compra?.preciosNeumaticos?.get(clave) ?? null;
-      if (pv == null && pc == null) {
+      const peticion = {
+        medida: c.neumatico.medida,
+        marca: c.neumatico.marca,
+        posicion: (c.neumatico.posicion ?? "ANY") as PosicionNeumatico,
+      };
+      const resolver = (l: ConfiguracionLado | null) =>
+        l?.catalogoNeumaticos ? resolverPrecioNeumatico(peticion, l.catalogoNeumaticos) : null;
+      const rv = resolver(cfg.venta);
+      const rc = resolver(cfg.compra);
+      const pv = rv?.importe ?? null;
+      const pc = rc?.importe ?? null;
+      for (const aviso of [...(rv?.avisos ?? []), ...(rc?.avisos ?? [])]) {
         // No se inventa un precio de neumático: va a revisión.
-        avisos.push({ codigo: "TIRE_PRICE_NOT_FOUND", detalle: clave });
+        if (!avisos.some((a) => a.codigo === aviso)) {
+          avisos.push({ codigo: aviso as CodigoAviso, detalle: peticion.medida });
+        }
       }
       anadir({
         tipo: c.tipo,
@@ -392,7 +398,7 @@ function anadirConceptos(
         compraTotal: pc != null ? redondearCentimos(multiplicar(pc, aCantidad(cantidad))) : null,
         ventaTotal: pv != null ? redondearCentimos(multiplicar(pv, aCantidad(cantidad))) : null,
         saleRuleId: null, purchaseRuleId: null, extraId: null,
-        metadata: { neumatico: c.neumatico },
+        metadata: { neumatico: c.neumatico, tarifa: rv?.explicacion ?? rc?.explicacion ?? null },
       });
       continue;
     }
