@@ -22,6 +22,7 @@ import NeumaticoDetalle from "./pages/NeumaticoDetalle";
 import MontajesActuales from "./pages/MontajesActuales";
 import Operaciones from "./pages/Operaciones";
 import Intervenciones from "./pages/Intervenciones";
+import InformeIntervencion from "./pages/InformeIntervencion";
 import Ayuda from "./pages/Ayuda";
 import RevisionVehiculo from "./pages/RevisionVehiculo";
 import Autorizaciones from "./pages/Autorizaciones";
@@ -76,6 +77,7 @@ export default function TyreControlApp() {
             <Route path="montajes" element={<MontajesActuales />} />
             <Route path="operaciones" element={<Operaciones />} />
             <Route path="intervenciones" element={<Intervenciones />} />
+            <Route path="intervenciones/:id" element={<InformeIntervencion />} />
             <Route path="revision-vehiculo" element={<RevisionVehiculo />} />
 
             {/* Informes: admin y cliente (RLS acota los datos por empresa) */}

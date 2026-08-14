@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { listarIntervencionesPagina, listarEmpresas, listarVehiculos, listarUsuarios, listarPosiciones, listarNeumaticosDisponibles, listarOperaciones, planificarIntervencion, cancelarIntervencion, estadoIntervencion } from "../services/data";
 import type { Intervencion, EstadoIntervencion, FiltrosIntervenciones, OperacionPrevistaPlan } from "../services/data";
 import type { Empresa, Vehiculo, Perfil, PosicionVehiculo, Neumatico, OperacionNeumatico, TipoOperacion, PrioridadOperacion } from "../types";
@@ -201,6 +202,7 @@ export default function Intervenciones() {
                 <td className={tdCls + " max-w-[280px] truncate text-slate-400"} title={i.resumen ?? undefined}>{i.resumen ?? "—"}</td>
                 <td className={tdCls}>
                   <div className="flex flex-wrap gap-1">
+                    <Link to={`/tyrecontrol/intervenciones/${i.id}`} className="rounded border border-sky-600 px-1.5 py-0.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-600/10">Informe</Link>
                     <button onClick={() => abrirDetalle(i)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>
                     {!esCliente && est !== "cerrada" && (
                       <button onClick={() => { setCancelar(i); setMotivoCancelar(""); }} className="rounded border border-rose-600 px-1.5 py-0.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-600/10">Cancelar</button>
