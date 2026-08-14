@@ -21,8 +21,9 @@ import db from "../../db.ts";
 import { calcularTarifa } from "./engine.ts";
 import { cargarConfiguracion } from "./repository.ts";
 import { construirSnapshot } from "./snapshot.ts";
-import { formatear, type Dinero } from "./money.ts";
-import type { ConceptoServicio, ContextoTarifa, EtapaTarifa, ResultadoTarifa } from "./types.ts";
+import { aDinero, formatear, multiplicar, porcentajeDe, restar, type Dinero } from "./money.ts";
+import { resolverPrecioNeumatico, type PosicionNeumatico } from "./tires.ts";
+import type { Aviso, ConceptoServicio, ContextoTarifa, EtapaTarifa, ResultadoTarifa } from "./types.ts";
 
 export interface DatosAsistencia {
   id: number;
@@ -224,6 +225,118 @@ export async function finalizar(
   });
   if (!r) return null;
   return guardar(a, r, atMs, opciones);
+}
+
+/**
+ * Precio de un neumático para una asistencia concreta.
+ *
+ * Se consulta desde la ficha cuando el taller comunica qué ha montado, antes
+ * de cerrar el servicio. Devuelve las cuatro cifras del §46: lo que el taller
+ * factura a la central (compra), lo que la central factura al cliente
+ * (venta), el margen y la tarifa de la que ha salido cada uno.
+ *
+ * Se tarifa al INSTANTE CONTRACTUAL, no a ahora. Si el servicio ya tiene orden
+ * de salida, el neumático que se añade tres días después se valora con la
+ * versión tarifaria que estaba vigente en la orden de salida, que es la que se
+ * comprometió. Consultarlo con la tarifa de hoy daría un precio que nadie
+ * pactó.
+ *
+ * No inventa precios. Si no hay tarifa para esa medida y esa marca, el importe
+ * es nulo y el resultado sale marcado para revisión manual: un cero aquí se
+ * facturaría, y un neumático de camión no cuesta cero.
+ */
+export interface ConsultaNeumatico {
+  medida: string;
+  marca?: string | null;
+  posicion?: string | null;
+  modelo?: string | null;
+  cantidad?: number | null;
+}
+
+export interface LadoNeumatico {
+  importeUnitario: Dinero | null;
+  importeTotal: Dinero | null;
+  explicacion: string | null;
+  tarifario: string | null;
+  version: string | null;
+}
+
+export interface ResultadoConsultaNeumatico {
+  peticion: { medida: string; marca: string | null; posicion: string; modelo: string | null; cantidad: number };
+  currency: string;
+  compra: LadoNeumatico;
+  venta: LadoNeumatico;
+  margen: Dinero | null;
+  margenPct: Dinero | null;
+  avisos: Aviso[];
+  /** true = nadie debería facturar esto sin mirarlo. */
+  revisionManual: boolean;
+}
+
+export async function precioNeumatico(
+  assistanceId: number,
+  consulta: ConsultaNeumatico,
+  opciones: { workshopId?: number | null; providerCompanyId?: number | null } = {},
+): Promise<ResultadoConsultaNeumatico | null> {
+  const a = await datosDeAsistencia(assistanceId);
+  if (!a || a.controlCenterId == null) return null;
+
+  const atMs = instanteContractual(a);
+  const { configuracion } = await cargarConfiguracion({
+    controlCenterId: a.controlCenterId,
+    clientId: a.clientId,
+    providerCompanyId: opciones.providerCompanyId ?? a.providerCompanyId,
+    workshopId: opciones.workshopId ?? a.workshopId,
+    atMs,
+    lugar: a.lugar,
+  });
+
+  const cantidad = Math.max(1, Math.trunc(Number(consulta.cantidad ?? 1)) || 1);
+  const peticion = {
+    medida: consulta.medida,
+    marca: consulta.marca ?? null,
+    posicion: (consulta.posicion ?? "ANY") as PosicionNeumatico,
+    modelo: consulta.modelo ?? null,
+  };
+
+  const avisos: Aviso[] = [];
+  const lado = (l: typeof configuracion.venta, cual: "sale" | "purchase"): LadoNeumatico => {
+    if (!l) {
+      avisos.push({ codigo: cual === "sale" ? "SALE_TARIFF_NOT_FOUND" : "PURCHASE_TARIFF_NOT_FOUND", lado: cual });
+      return { importeUnitario: null, importeTotal: null, explicacion: null, tarifario: null, version: null };
+    }
+    const r = l.catalogoNeumaticos
+      ? resolverPrecioNeumatico(peticion, l.catalogoNeumaticos)
+      : { importe: null, avisos: ["TIRE_PRICE_NOT_FOUND"], explicacion: null };
+
+    for (const codigo of r.avisos) {
+      avisos.push({ codigo: codigo as Aviso["codigo"], lado: cual });
+    }
+    return {
+      importeUnitario: r.importe,
+      importeTotal: r.importe == null ? null : multiplicar(r.importe, aDinero(cantidad)!),
+      explicacion: r.explicacion,
+      tarifario: l.tariffPlanName,
+      version: l.version,
+    };
+  };
+
+  const venta = lado(configuracion.venta, "sale");
+  const compra = lado(configuracion.compra, "purchase");
+
+  // Margen solo cuando se conocen las dos patas. Restar contra un nulo tratado
+  // como cero daría un margen del 100 % justo cuando falta el coste.
+  const margen = venta.importeTotal != null && compra.importeTotal != null
+    ? restar(venta.importeTotal, compra.importeTotal) : null;
+  const margenPct = margen != null && venta.importeTotal != null
+    ? porcentajeDe(margen, venta.importeTotal) : null;
+
+  return {
+    peticion: { ...peticion, cantidad },
+    currency: configuracion.venta?.currency ?? configuracion.compra?.currency ?? "EUR",
+    compra, venta, margen, margenPct, avisos,
+    revisionManual: venta.importeTotal == null || compra.importeTotal == null,
+  };
 }
 
 // ---------------------------------------------------------------------------
