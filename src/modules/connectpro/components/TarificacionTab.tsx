@@ -35,6 +35,24 @@ type Linea = {
 
 type Aviso = { codigo: string; lado?: string | null; detalle?: string };
 
+type Ajuste = {
+  id: number; field: string; originalValue: string | null; newValue: string; diferencia: string;
+  reason: string; authorizedByName: string | null; authorizedAtMs: number;
+  lineNumber: number | null; description: string | null;
+};
+
+type Permisos = {
+  verVenta: boolean; verCompra: boolean; verMargen: boolean;
+  ajustarImporte: boolean; limiteAjuste: string | null;
+};
+
+const CAMPOS_AJUSTABLES: [string, string][] = [
+  ["saleTotal", "Venta (total de la línea)"],
+  ["purchaseTotal", "Compra (total de la línea)"],
+  ["saleUnitPrice", "Venta (precio unitario)"],
+  ["purchaseUnitPrice", "Compra (precio unitario)"],
+];
+
 type Etapa = {
   stage: "estimate" | "locked" | "final";
   status: "ok" | "partial" | "manual_review";
@@ -111,15 +129,26 @@ export default function TarificacionTab({
   const [error, setError] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [estimacion, setEstimacion] = useState<Etapa | null>(null);
+  const [ajustes, setAjustes] = useState<Ajuste[]>([]);
+  const [permisos, setPermisos] = useState<Permisos | null>(null);
+  const [ajustando, setAjustando] = useState(false);
 
   const cargar = useCallback(() => {
     boFetch<{ data: Etapa[] }>(`/pricing/${assistanceId}`)
       .then((r) => setEtapas(r.data))
       .catch((e) => setError(e.message))
       .finally(() => setCargando(false));
+    boFetch<{ data: Ajuste[] }>(`/pricing/${assistanceId}/overrides`)
+      .then((r) => setAjustes(r.data)).catch(() => {});
   }, [assistanceId]);
 
   useEffect(cargar, [cargar]);
+
+  // Se pregunta qué puede este usuario para no ofrecerle lo que el backend va
+  // a rechazar. La comprobación de verdad la hace el servidor, no esto.
+  useEffect(() => {
+    boFetch<Permisos>("/pricing/permissions").then(setPermisos).catch(() => {});
+  }, []);
 
   const bloqueada = etapas.find((e) => e.stage === "locked");
   const cerrada = etapas.find((e) => e.stage === "final");
@@ -198,7 +227,137 @@ export default function TarificacionTab({
         visibles.map((e) => <FichaEtapa key={e.stage} e={e} provisional={e === estimacion} />)
       )}
 
+      {ajustes.length > 0 && <Ajustes ajustes={ajustes} />}
+
+      {permisos?.ajustarImporte && (cerrada || bloqueada) && (
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+          {ajustando ? (
+            <FormularioAjuste
+              assistanceId={assistanceId}
+              etapa={cerrada ? "final" : "locked"}
+              limite={permisos.limiteAjuste}
+              onHecho={() => { setAjustando(false); cargar(); onChanged(); }}
+              onCancelar={() => setAjustando(false)}
+            />
+          ) : (
+            <>
+              <Button variant="ghost" onClick={() => setAjustando(true)}>Ajustar un importe a mano</Button>
+              <p className="mt-2 text-xs text-slate-500">
+                Queda registrado con el motivo y con quién lo autoriza, y la tarifa
+                pasa a revisión manual.
+                {permisos.limiteAjuste && ` Tu límite por ajuste es de ${permisos.limiteAjuste} €.`}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
       <ConsultaNeumatico assistanceId={assistanceId} canOperate={canOperate} />
+    </div>
+  );
+}
+
+/**
+ * Lo que una persona ha decidido, junto a lo que calculó la tarifa.
+ *
+ * Se enseña aparte y no fundido en el importe porque la diferencia ES la
+ * información: seis meses después, la pregunta no es cuánto costó sino por qué
+ * costó eso y no lo que decía el tarifario.
+ */
+function Ajustes({ ajustes }: { ajustes: Ajuste[] }) {
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5">
+      <p className="border-b border-slate-700 px-3 py-2 text-[13px] font-medium text-amber-300">
+        Importes ajustados a mano ({ajustes.length})
+      </p>
+      <ul className="divide-y divide-slate-700/40">
+        {ajustes.map((a) => (
+          <li key={a.id} className="px-3 py-2 text-[13px]">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="text-slate-400">{a.description ?? "Servicio"}</span>
+              <span className="tabular-nums text-slate-500">{a.originalValue ?? "—"}</span>
+              <span className="text-slate-600">→</span>
+              <span className="tabular-nums font-semibold text-slate-100">{a.newValue}</span>
+              <span className={`tabular-nums ${Number(a.diferencia) < 0 ? "text-rose-300" : "text-emerald-300"}`}>
+                ({Number(a.diferencia) > 0 ? "+" : ""}{a.diferencia})
+              </span>
+              <span className="ml-auto text-[12px] text-slate-500">
+                {a.authorizedByName ?? "—"} · {fmtDateTime(a.authorizedAtMs)}
+              </span>
+            </div>
+            <p className="mt-0.5 text-[12px] text-slate-400">{a.reason}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FormularioAjuste({
+  assistanceId, etapa, limite, onHecho, onCancelar,
+}: {
+  assistanceId: number;
+  etapa: "locked" | "final";
+  limite: string | null;
+  onHecho: () => void;
+  onCancelar: () => void;
+}) {
+  const [campo, setCampo] = useState("saleTotal");
+  const [linea, setLinea] = useState("");
+  const [valor, setValor] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const guardar = async () => {
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/pricing/${assistanceId}/override`, {
+        method: "POST",
+        body: {
+          etapa, campo, valorNuevo: valor, motivo,
+          lineNumber: linea.trim() === "" ? null : Number(linea),
+        },
+      });
+      onHecho();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="mb-2 text-[13px] font-medium text-slate-200">
+        Ajustar un importe de la etapa {etapa === "final" ? "de cierre" : "comprometida"}
+      </p>
+      {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        <Select value={campo} onChange={(e) => setCampo(e.target.value)}>
+          {CAMPOS_AJUSTABLES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+        </Select>
+        <Input value={linea} onChange={(e) => setLinea(e.target.value)}
+               placeholder="Nº de línea (vacío = forfait)" />
+        <Input value={valor} onChange={(e) => setValor(e.target.value)} placeholder="Importe nuevo" />
+      </div>
+      <div className="mt-2">
+        <Input value={motivo} onChange={(e) => setMotivo(e.target.value)}
+               placeholder="Motivo del ajuste (obligatorio)" />
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <Button onClick={guardar} disabled={busy || !valor.trim() || motivo.trim().length < 5}>
+          Guardar el ajuste
+        </Button>
+        <Button variant="ghost" onClick={onCancelar} disabled={busy}>Cancelar</Button>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        El motivo es obligatorio y se guarda con tu nombre: es lo único que
+        responderá la pregunta dentro de seis meses.
+        {limite && ` No puedes mover más de ${limite} € por ajuste.`}
+      </p>
     </div>
   );
 }
