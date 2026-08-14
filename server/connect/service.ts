@@ -222,6 +222,19 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
     if (dup.rows[0]) return { row: dup.rows[0], duplicated: true };
   }
 
+  /*
+   * Sin centro de control la asistencia queda sin dueño, y con más de una
+   * central eso significa que no la ve nadie o la ven todas. La API de
+   * partners no lo manda, así que se deduce del partner.
+   */
+  let controlCenterId = input.controlCenterId ?? null;
+  if (controlCenterId == null && input.partnerId) {
+    const p = await db.query(
+      `SELECT "controlCenterId" FROM connect_partners WHERE id = $1`, [input.partnerId],
+    );
+    controlCenterId = p.rows[0]?.controlCenterId ?? null;
+  }
+
   const initialStatus = input.draft ? "draft" : "pending";
   const origin = input.origin ?? "api";
   // Si no llega expediente (creación manual sin rellenarlo, API, import…), se genera.
@@ -252,7 +265,7 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
       JSON.stringify(input.vehicle ?? {}),
       JSON.stringify(input.metadata ?? {}),
       origin,
-      input.controlCenterId ?? null,
+      controlCenterId,
       input.createdByUserId ?? null,
       expedientNumber,
       input.clientName ?? null,

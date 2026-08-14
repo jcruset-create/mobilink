@@ -42,6 +42,21 @@ function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
 }
 
+/**
+ * Centro de control por el que hay que filtrar, o null si se ven todos.
+ *
+ * El superadministrador del hub atraviesa los centros a propósito: es quien da
+ * de alta y da soporte a las centrales. Cualquier otro rol ve el suyo y solo el
+ * suyo. Es el mismo criterio que ya usaban clientes, usuarios y auditoría; lo
+ * que faltaba era aplicarlo también a las asistencias y a la facturación, que
+ * es donde están los importes.
+ */
+function centroDe(req: { connectUser?: { role: string; controlCenterId: number | null } }): number | null {
+  const u = req.connectUser;
+  if (!u || u.role === "superadmin") return null;
+  return u.controlCenterId;
+}
+
 /** Columnas JSON: según el driver llegan ya parseadas o como texto. */
 function leerJson(value: unknown): Record<string, any> {
   if (value == null) return {};
@@ -1641,8 +1656,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
         WHERE ($1::text IS NULL OR ca.status = $1)
           AND ($3::int IS NULL OR ca."workshopId" = $3)
+          AND ($4::int IS NULL OR ca."controlCenterId" = $4)
         ORDER BY ca.id DESC LIMIT $2`,
-      [status, limit, workshopId],
+      [status, limit, workshopId, centroDe(req)],
     );
     res.json({ data: r.rows });
   });
@@ -1662,8 +1678,8 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
          LEFT JOIN connect_users u ON u.id = ca."createdByUserId"
          LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-        WHERE ca.id = $1`,
-      [Number(req.params.id)],
+        WHERE ca.id = $1 AND ($2::int IS NULL OR ca."controlCenterId" = $2)`,
+      [Number(req.params.id), centroDe(req)],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
     res.json(r.rows[0]);
@@ -2420,6 +2436,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/billing/summary", ...requireConnectRole("cc_admin"), async (req, res) => {
     const from = Number(req.query.from) || new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const to = Number(req.query.to) || Date.now();
+    const centro = centroDe(req);
     const [byClient, byProvider, totals] = await Promise.all([
       db.query(
         `SELECT COALESCE(c.name, ca."clientName", p.name, 'Sin cliente') AS name,
@@ -2430,8 +2447,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
            LEFT JOIN connect_clients c ON c.id = ca."clientId"
            LEFT JOIN connect_partners p ON p.id = ca."partnerId"
           WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
+            AND ($3::int IS NULL OR ca."controlCenterId" = $3)
           GROUP BY 1 ORDER BY amount DESC`,
-        [from, to],
+        [from, to, centro],
       ),
       db.query(
         `SELECT COALESCE(pc.name, w.name, 'Sin proveedor') AS name,
@@ -2442,8 +2460,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
           WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
+            AND ($3::int IS NULL OR ca."controlCenterId" = $3)
           GROUP BY 1 ORDER BY amount DESC`,
-        [from, to],
+        [from, to, centro],
       ),
       db.query(
         `SELECT COUNT(*)::int AS services,
@@ -2451,8 +2470,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
                 COUNT(*) FILTER (WHERE "finalCost" IS NULL)::int AS without_final,
                 COUNT(*) FILTER (WHERE "invoicedAtMs" IS NULL)::int AS pending_invoice
            FROM connect_assistances
-          WHERE status IN ('finished','at_workshop') AND "createdAtMs" BETWEEN $1 AND $2`,
-        [from, to],
+          WHERE status IN ('finished','at_workshop') AND "createdAtMs" BETWEEN $1 AND $2
+            AND ($3::int IS NULL OR "controlCenterId" = $3)`,
+        [from, to, centro],
       ),
     ]);
     res.json({ from, to, totals: totals.rows[0], by_client: byClient.rows, by_provider: byProvider.rows });
@@ -2472,8 +2492,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
         WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
+          AND ($3::int IS NULL OR ca."controlCenterId" = $3)
         ORDER BY ca.id DESC LIMIT 1000`,
-      [from, to],
+      [from, to, centroDe(req)],
     );
     res.json({ data: r.rows, from, to });
   });
@@ -2484,8 +2505,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     const r = await db.query(
       `UPDATE connect_assistances SET "invoicedAtMs" = $1
         WHERE id = ANY($2::int[]) AND status = 'finished' AND "invoicedAtMs" IS NULL
+          AND ($3::int IS NULL OR "controlCenterId" = $3)
         RETURNING id`,
-      [Date.now(), ids],
+      [Date.now(), ids, centroDe(req)],
     );
     await auditConnect({ req, action: "billing.marked_invoiced", detail: { count: r.rows.length, ids: r.rows.map((x) => x.id) } });
     res.json({ marked: r.rows.length });
