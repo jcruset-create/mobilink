@@ -487,6 +487,34 @@ export async function initPricing(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_pricing_overrides_asistencia
       ON connect_pricing_overrides ("assistanceId", "authorizedAtMs" DESC);
+
+    /*
+     * Qué ha salido ya hacia el ERP y por qué lado.
+     *
+     * Dos lados y dos marcas, porque son dos documentos distintos a dos
+     * empresas distintas: la factura al cliente (venta) y la que el taller
+     * emite a la central (compra). Que la de venta esté hecha no dice nada de
+     * la de compra, y la columna invoicedAtMs de siempre no podía
+     * distinguirlas.
+     *
+     * El UNIQUE es lo que impide facturar dos veces el mismo servicio: una
+     * exportación repetida se encuentra la marca y se salta la línea, en vez
+     * de mandar un duplicado que alguien tendría que abonar después.
+     */
+    CREATE TABLE IF NOT EXISTS connect_billing_marks (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER NOT NULL REFERENCES connect_control_centers(id),
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      side TEXT NOT NULL,                     -- sale | purchase
+      "exportedAtMs" BIGINT NOT NULL,
+      "exportedByUserId" INTEGER,
+      "externalReference" TEXT,               -- número de factura o de lote del ERP
+      amount ${MONEY},
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      UNIQUE ("assistanceId", side)
+    );
+    CREATE INDEX IF NOT EXISTS idx_billing_marks_centro
+      ON connect_billing_marks ("controlCenterId", "exportedAtMs" DESC);
   `);
 
   // El plan apunta a su calendario; la clave se añade aparte porque
@@ -569,7 +597,7 @@ async function habilitarRls(): Promise<void> {
     "connect_tire_sizes", "connect_tire_brands", "connect_tire_brand_groups",
     "connect_manufacturer_price_lists", "connect_tariff_tire_prices",
     "connect_assistance_pricings", "connect_assistance_price_lines",
-    "connect_pricing_overrides",
+    "connect_pricing_overrides", "connect_billing_marks",
   ];
   for (const tabla of tablas) {
     await db.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`).catch(() => {});
