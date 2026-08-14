@@ -119,12 +119,22 @@ comment on function tc_stock_almacen_empresa(uuid) is
   'contando fichas de tc_neumaticos (Decisión 1, opción A). Fuente canónica '
   'del snapshot del informe. Llamable sin usuario (servicio); anon sin EXECUTE.';
 
+-- Quitar EXECUTE a anon exige quitar también el que le llega vía PUBLIC, y
+-- entonces hay que devolvérselo EXPLÍCITAMENTE a quien sí debe tenerlo:
+-- authenticated (panel y APK la llaman directa) y service_role (el cierre).
 do $$
 declare r text;
 begin
+  revoke all on function tc_stock_almacen_empresa(uuid) from public;
+  grant execute on function tc_stock_almacen_empresa(uuid) to authenticated;
   foreach r in array array['anon'] loop
     if exists (select 1 from pg_roles where rolname = r) then
       execute format('revoke all on function tc_stock_almacen_empresa(uuid) from %I', r);
+    end if;
+  end loop;
+  foreach r in array array['service_role'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('grant execute on function tc_stock_almacen_empresa(uuid) to %I', r);
     end if;
   end loop;
 end $$;
@@ -209,13 +219,19 @@ comment on function tc_stock_snapshot_intervencion(uuid) is
   'tc_stock_almacen_empresa) y el efecto de la intervención con '
   'antes/después. La llama el cierre; reejecutarla regenera la foto.';
 
-grant execute on function tc_stock_snapshot_intervencion(uuid) to authenticated;
 do $$
 declare r text;
 begin
+  revoke all on function tc_stock_snapshot_intervencion(uuid) from public;
+  grant execute on function tc_stock_snapshot_intervencion(uuid) to authenticated;
   foreach r in array array['anon'] loop
     if exists (select 1 from pg_roles where rolname = r) then
       execute format('revoke all on function tc_stock_snapshot_intervencion(uuid) from %I', r);
+    end if;
+  end loop;
+  foreach r in array array['service_role'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('grant execute on function tc_stock_snapshot_intervencion(uuid) to %I', r);
     end if;
   end loop;
 end $$;
@@ -279,11 +295,22 @@ begin
      and prosrc like '%auth.uid() is not null%';
   if n <> 1 then raise exception 'tc_stock_almacen_empresa ha perdido la Decisión 1 o el contexto de servicio'; end if;
 
-  -- anon no puede ni llamarlas (si el rol existe).
+  -- anon no puede ni llamarlas (si el rol existe); authenticated y el
+  -- servicio, sí.
   if exists (select 1 from pg_roles where rolname = 'anon') then
     if has_function_privilege('anon', 'tc_stock_almacen_empresa(uuid)', 'execute')
        or has_function_privilege('anon', 'tc_stock_snapshot_intervencion(uuid)', 'execute') then
       raise exception 'anon no debería poder ejecutar las funciones de stock';
+    end if;
+  end if;
+  if not has_function_privilege('authenticated', 'tc_stock_almacen_empresa(uuid)', 'execute')
+     or not has_function_privilege('authenticated', 'tc_stock_snapshot_intervencion(uuid)', 'execute') then
+    raise exception 'authenticated ha perdido el EXECUTE de las funciones de stock (panel y APK lo necesitan)';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    if not has_function_privilege('service_role', 'tc_stock_almacen_empresa(uuid)', 'execute')
+       or not has_function_privilege('service_role', 'tc_stock_snapshot_intervencion(uuid)', 'execute') then
+      raise exception 'service_role ha perdido el EXECUTE (el cierre del servidor lo necesita)';
     end if;
   end if;
 
