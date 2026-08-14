@@ -6,6 +6,7 @@ import 'package:signature/signature.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plate_badge.dart';
 
 const _tipos = ['Tractora', 'Remolque', 'Camión rígido', 'Furgoneta', 'Turismo', 'Maquinaria', 'Otros'];
 
@@ -302,9 +303,16 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // La matrícula manda: si viene informada, en grande y arriba del todo.
+        // En su propia línea para no comerse el estado del trabajo.
+        if ((t['plate']?.toString() ?? '').trim().isNotEmpty) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: PlateBadge(plate: t['plate'].toString()),
+          ),
+          const SizedBox(height: 6),
+        ],
         Row(children: [
-          Text(t['plate'] ?? '—', style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
-          const SizedBox(width: 8),
           Text(t['tipoVehiculo'] ?? '', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
           const Spacer(),
           Container(
@@ -377,6 +385,19 @@ class _OtfAddTrabajoScreenState extends State<OtfAddTrabajoScreen> {
   File? _fotoAveria;
   bool _saving = false;
 
+  // Identifica este alta en el servidor. Se genera una vez por formulario, NO
+  // por intento: así, si se reintenta tras un fallo de red, el servidor
+  // reconoce el alta y devuelve el trabajo que ya creó en vez de crear otro.
+  late final String _accionId =
+      '${DateTime.now().millisecondsSinceEpoch}-otf${widget.otfId}-campo';
+
+  // Lo ya conseguido en intentos anteriores. En campo la cobertura se cae a
+  // media subida: sin esto, el técnico veía el error rojo, volvía a darle a
+  // guardar y creaba un trabajo duplicado por cada reintento.
+  int? _trabajoId;
+  bool _matriculaSubida = false;
+  bool _averiaSubida = false;
+
   bool get _canSave =>
       _plate.text.trim().isNotEmpty &&
       _trabajo.text.trim().isNotEmpty &&
@@ -399,17 +420,26 @@ class _OtfAddTrabajoScreenState extends State<OtfAddTrabajoScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      final t = await widget.api.addOtfFieldTrabajo(
+      _trabajoId ??= (await widget.api.addOtfFieldTrabajo(
         widget.otfId,
         plate: _plate.text.trim().toUpperCase(),
         tipoVehiculo: _tipo,
         detalleManual: _trabajo.text.trim(),
         motivoAltaCampo: _motivo.text.trim(),
         status: 'en_proceso',
-      );
-      final tid = t['id'] as int;
-      await widget.api.uploadOtfTrabajoFile(tid, _fotoMatricula!, 'matricula');
-      await widget.api.uploadOtfTrabajoFile(tid, _fotoAveria!, 'averia');
+        actionId: _accionId,
+      ))['id'] as int;
+      final tid = _trabajoId!;
+      if (!_matriculaSubida) {
+        await widget.api.uploadOtfTrabajoFile(tid, _fotoMatricula!, 'matricula',
+            actionId: '$_accionId-matricula');
+        _matriculaSubida = true;
+      }
+      if (!_averiaSubida) {
+        await widget.api.uploadOtfTrabajoFile(tid, _fotoAveria!, 'averia',
+            actionId: '$_accionId-averia');
+        _averiaSubida = true;
+      }
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {

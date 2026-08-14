@@ -7,6 +7,7 @@ import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../theme.dart';
+import '../widgets/plate_badge.dart';
 import 'assistance_screen.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
@@ -292,11 +293,19 @@ class _AssistanceCard extends StatelessWidget {
               const SizedBox(height: 6),
               Text(st.label, style: TextStyle(color: st.color, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
+              // La matrícula manda: si viene informada, en grande y no
+              // enterrada en la línea de datos del vehículo.
+              if ((vehicle['plate']?.toString() ?? '').isNotEmpty) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: PlateBadge(plate: vehicle['plate'].toString(), fontSize: 22),
+                ),
+                const SizedBox(height: 6),
+              ],
               Text(
                 [
                   row['serviceType']?.toString(),
                   [vehicle['make'], vehicle['model']].where((x) => x != null).join(' '),
-                  vehicle['plate']?.toString(),
                 ].where((x) => x != null && x.toString().isNotEmpty).join(' · '),
                 style: const TextStyle(color: Colors.white70),
               ),
