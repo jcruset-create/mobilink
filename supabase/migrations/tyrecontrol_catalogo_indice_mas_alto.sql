@@ -79,19 +79,52 @@ update tc_referencias_neumatico r
   from _tc_catalogo_dedupe d
  where r.id = d.id;
 
+-- 3) Curar lo heredado: productos que ya apuntaban a una referencia inactiva
+--    ANTES de esta migración (retiradas a mano en su día). Si el mismo modelo
+--    tiene una referencia activa de la misma medida base, se repunta ahí. Si
+--    no la tiene, se deja y se avisa — apagar el aviso inventando una
+--    referencia no es curar nada.
+update productos_neumaticos p
+   set referencia_neumatico_id = destino.id
+  from tc_referencias_neumatico vieja
+  join tyre_sizes tv on tv.id = vieja.tyre_size_id,
+  lateral (
+    select r2.id
+      from tc_referencias_neumatico r2
+      join tyre_sizes t2 on t2.id = r2.tyre_size_id
+     where r2.activo
+       and r2.modelo_id = vieja.modelo_id
+       and t2.ancho = tv.ancho
+       and coalesce(t2.perfil, -1) = coalesce(tv.perfil, -1)
+       and t2.diametro_llanta = tv.diametro_llanta
+     limit 1
+  ) destino
+ where p.referencia_neumatico_id = vieja.id
+   and not vieja.activo;
+
 -- ── Comprobación ────────────────────────────────────────────────────────────
 do $$
-declare v_retiradas int; v_colgando int; v_grupos_dobles int;
+declare v_retiradas int; v_colgando int; v_heredados int; v_grupos_dobles int;
 begin
   select count(*) into v_retiradas from _tc_catalogo_dedupe;
 
-  -- Ningún producto puede quedar apuntando a una referencia inactiva.
+  -- DURO: ningún producto puede apuntar a una referencia retirada POR ESTA
+  -- migración — eso sería un fallo del repunte de arriba.
   select count(*) into v_colgando
+    from productos_neumaticos p
+    join _tc_catalogo_dedupe d on d.id = p.referencia_neumatico_id;
+  if v_colgando > 0 then
+    raise exception 'Quedan % productos apuntando a referencias retiradas por esta migración', v_colgando;
+  end if;
+
+  -- AVISO: inactivas heredadas sin sustituta activa. No es cosa de esta
+  -- migración, pero que se vea en vez de esconderse en un join.
+  select count(*) into v_heredados
     from productos_neumaticos p
     join tc_referencias_neumatico r on r.id = p.referencia_neumatico_id
    where not r.activo;
-  if v_colgando > 0 then
-    raise exception 'Quedan % productos apuntando a referencias retiradas', v_colgando;
+  if v_heredados > 0 then
+    raise warning 'Hay % producto(s) apuntando a referencias inactivas de antes, sin equivalente activo del mismo modelo y medida. Verlos: select p.id, p.nombre, r.referencia_completa from productos_neumaticos p join tc_referencias_neumatico r on r.id = p.referencia_neumatico_id where not r.activo;', v_heredados;
   end if;
 
   -- Y ningún grupo modelo × medida base puede seguir con más de una activa.
