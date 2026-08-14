@@ -7,7 +7,7 @@
  */
 
 import crypto from "node:crypto";
-import { Router, json, type Response } from "express";
+import { Router, json, type Request, type Response } from "express";
 import db from "../db.ts";
 import { requireConnectRole, auditConnect } from "./rbac.ts";
 import {
@@ -1892,6 +1892,205 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       if (r) return res.json({ etapa, explicacion: r.explicacion, avisos: r.avisos });
     }
     return err(res, 404, "not_found", "Esta asistencia todavía no tiene tarifa calculada");
+  });
+
+  /**
+   * Precio de un neumático para esta asistencia.
+   *
+   * Se consulta desde la ficha cuando el taller comunica qué ha montado. Sale
+   * la compra, la venta, el margen y de qué tarifa viene cada cifra. Si no hay
+   * precio para esa medida y esa marca, el importe viene nulo y el resultado
+   * marcado para revisión manual: aquí un cero se facturaría.
+   */
+  router.post("/pricing/:id/tire", ...requireConnectRole("operator"), async (req, res) => {
+    const { precioNeumatico } = await import("./pricing/service.ts");
+    const medida = String(req.body?.medida ?? "").trim();
+    if (!medida) return err(res, 400, "medida_requerida", "Hace falta la medida del neumático");
+
+    const r = await precioNeumatico(Number(req.params.id), {
+      medida,
+      marca: req.body?.marca ?? null,
+      posicion: req.body?.posicion ?? null,
+      modelo: req.body?.modelo ?? null,
+      cantidad: req.body?.cantidad != null ? Number(req.body.cantidad) : 1,
+    }, {
+      workshopId: req.body?.workshopId != null ? Number(req.body.workshopId) : undefined,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+
+    const t = (d: bigint | null) => (d == null ? null : formatear(d, 2));
+    res.json({
+      request: r.peticion,
+      currency: r.currency,
+      purchase: { unitPrice: t(r.compra.importeUnitario), total: t(r.compra.importeTotal),
+                  explanation: r.compra.explicacion, tariff: r.compra.tarifario, version: r.compra.version },
+      sale: { unitPrice: t(r.venta.importeUnitario), total: t(r.venta.importeTotal),
+              explanation: r.venta.explicacion, tariff: r.venta.tarifario, version: r.venta.version },
+      grossMargin: t(r.margen), grossMarginPct: t(r.margenPct),
+      warnings: r.avisos,
+      manualReview: r.revisionManual,
+    });
+  });
+
+  // ── Catálogo de neumáticos ───────────────────────────────────────────────
+
+  /*
+   * Mantenimiento del catálogo: medidas, marcas, grupos, precios de tarifa y
+   * baremos de fabricante. Es administración de la configuración de precios,
+   * así que va con rol de administrador de central y no de operador.
+   *
+   * Todo se normaliza al escribir (`medidaCanonica`, `normalizarMarca`) para
+   * que "315/80 R 22,5" y "315/80R22.5" no acaben siendo dos entradas del
+   * catálogo, y todo se filtra por centro de control, que es donde están los
+   * costes de compra.
+   */
+  const catalogo = () => import("./pricing/catalog.ts");
+
+  /** Traduce los errores del catálogo a respuestas, sin tragárselos. */
+  async function conCatalogo(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorCatalogo } = await catalogo();
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorCatalogo) {
+        return err(res, e.codigo === "version_publicada" ? 409 : 400, e.codigo, e.message);
+      }
+      throw e;
+    }
+  }
+
+  /** El centro sobre el que administrar. El superadministrador tiene que decir cuál. */
+  function centroCatalogo(req: Request): number | null {
+    const propio = centroDe(req);
+    if (propio != null) return propio;
+    const pedido = req.query?.controlCenterId ?? req.body?.controlCenterId;
+    return pedido != null ? Number(pedido) : null;
+  }
+
+  router.get("/pricing/catalog/sizes", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarMedidas } = await catalogo();
+    res.json({ data: await listarMedidas(centro, String(req.query?.q ?? "")) });
+  });
+
+  router.post("/pricing/catalog/sizes", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearMedida } = await catalogo();
+    await conCatalogo(res, () => crearMedida(centro, String(req.body?.medida ?? "")));
+  });
+
+  router.get("/pricing/catalog/brands", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarMarcas } = await catalogo();
+    res.json({ data: await listarMarcas(centro) });
+  });
+
+  router.post("/pricing/catalog/brands", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearMarca } = await catalogo();
+    await conCatalogo(res, () => crearMarca(centro, String(req.body?.marca ?? ""), req.body?.code ?? null));
+  });
+
+  router.get("/pricing/catalog/versions/:versionId/groups", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarGrupos } = await catalogo();
+    res.json({ data: await listarGrupos(centro, Number(req.params.versionId)) });
+  });
+
+  router.post("/pricing/catalog/versions/:versionId/groups", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarGrupo } = await catalogo();
+    await conCatalogo(res, async () => {
+      const g = await guardarGrupo(centro, Number(req.params.versionId), {
+        code: String(req.body?.code ?? ""), name: String(req.body?.name ?? req.body?.code ?? ""),
+        marcas: Array.isArray(req.body?.marcas) ? req.body.marcas.map(String) : [],
+      });
+      await auditConnect({ req, action: "pricing.catalog.group_saved", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: { code: g.code, marcas: g.marcas.length } });
+      return g;
+    });
+  });
+
+  router.get("/pricing/catalog/versions/:versionId/tire-prices", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarPrecios } = await catalogo();
+    res.json({ data: await listarPrecios(centro, Number(req.params.versionId)) });
+  });
+
+  router.post("/pricing/catalog/versions/:versionId/tire-prices", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearPrecio } = await catalogo();
+    await conCatalogo(res, async () => {
+      const p = await crearPrecio(centro, Number(req.params.versionId), {
+        medida: req.body?.medida ?? null,
+        marca: req.body?.marca ?? null,
+        grupoMarca: req.body?.grupoMarca ?? null,
+        posicion: req.body?.posicion ?? null,
+        modeloPrecio: String(req.body?.modeloPrecio ?? ""),
+        importeNeto: req.body?.importeNeto ?? null,
+        descuentoPorcentaje: req.body?.descuentoPorcentaje ?? null,
+        baremoId: req.body?.baremoId != null ? Number(req.body.baremoId) : null,
+        prioridad: req.body?.prioridad != null ? Number(req.body.prioridad) : 0,
+      });
+      await auditConnect({ req, action: "pricing.catalog.tire_price_created", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: { id: p.id, medida: p.tireSizeCode, marca: p.brandName } });
+      return p;
+    });
+  });
+
+  router.delete("/pricing/catalog/tire-prices/:priceId", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { desactivarPrecio } = await catalogo();
+    await conCatalogo(res, async () => {
+      const ok = await desactivarPrecio(centro, Number(req.params.priceId));
+      if (ok) {
+        await auditConnect({ req, action: "pricing.catalog.tire_price_disabled", resourceType: "tariff_tire_price",
+          resourceId: Number(req.params.priceId), detail: {} });
+      }
+      return { ok };
+    });
+  });
+
+  router.get("/pricing/catalog/price-lists", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarBaremos } = await catalogo();
+    res.json({ data: await listarBaremos(centro) });
+  });
+
+  router.post("/pricing/catalog/price-lists", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearBaremo } = await catalogo();
+    await conCatalogo(res, () => crearBaremo(centro, {
+      marca: String(req.body?.marca ?? ""),
+      nombre: String(req.body?.nombre ?? ""),
+      vigenteDesdeMs: Number(req.body?.vigenteDesdeMs ?? Date.now()),
+      vigenteHastaMs: req.body?.vigenteHastaMs != null ? Number(req.body.vigenteHastaMs) : null,
+      fuente: req.body?.fuente ?? null,
+    }));
+  });
+
+  router.post("/pricing/catalog/price-lists/:listId/lines", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { cargarLineasBaremo } = await catalogo();
+    const lineas = Array.isArray(req.body?.lineas) ? req.body.lineas : [];
+    await conCatalogo(res, async () => {
+      const r = await cargarLineasBaremo(centro, Number(req.params.listId), lineas);
+      await auditConnect({ req, action: "pricing.catalog.price_list_loaded", resourceType: "manufacturer_price_list",
+        resourceId: Number(req.params.listId), detail: r });
+      return r;
+    });
   });
 
   /**
