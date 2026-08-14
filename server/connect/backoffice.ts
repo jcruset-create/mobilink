@@ -9,7 +9,7 @@
 import crypto from "node:crypto";
 import { Router, json, type Request, type Response } from "express";
 import db from "../db.ts";
-import { requireConnectRole, auditConnect } from "./rbac.ts";
+import { requireConnectRole, auditConnect, type ConnectRole } from "./rbac.ts";
 import {
   createAssistance, submitDraft, assignAssistance, transition, InvalidTransitionError,
   findCandidates, offerToWorkshop, acceptAssignment, rejectAssignment, withdrawAndReassign,
@@ -33,6 +33,7 @@ import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
 import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
 import { normalizarVehiculo, descripcionVehiculo } from "./vehicle.ts";
 import { formatear } from "./pricing/money.ts";
+import { puede as puedeEconomico } from "./pricing/permissions.ts";
 import type { ResultadoTarifa } from "./pricing/types.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
 import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
@@ -65,21 +66,30 @@ function centroDe(req: { connectUser?: { role: string; controlCenterId: number |
  * Los importes salen como TEXTO con dos decimales. Convertirlos a `number`
  * aquí devolvería la coma flotante que se ha quitado a conciencia en todo el
  * motor, y el panel solo tiene que pintarlos.
+ *
+ * Y se recorta según el rol de quien pregunta: el margen no lo ve todo el
+ * mundo. Se recorta al SALIR y no al calcular, porque el motor necesita las
+ * dos patas para el margen aunque quien pregunte no vaya a verlo.
  */
-function paraApi(r: ResultadoTarifa) {
+function paraApi(r: ResultadoTarifa, role?: ConnectRole) {
   const t = (d: bigint | null) => (d == null ? null : formatear(d, 2));
+  const verVenta = role == null || puedeEconomico(role, "ver_venta");
+  const verCompra = role == null || puedeEconomico(role, "ver_compra");
+  const verMargen = role == null || puedeEconomico(role, "ver_margen");
+  const si = (ok: boolean, v: string | null) => (ok ? v : null);
+
   return {
     etapa: r.etapa, estado: r.estado, currency: r.currency,
-    saleTotal: t(r.ventaTotal), purchaseTotal: t(r.compraTotal),
-    grossMargin: t(r.margen), grossMarginPct: t(r.margenPct),
+    saleTotal: si(verVenta, t(r.ventaTotal)), purchaseTotal: si(verCompra, t(r.compraTotal)),
+    grossMargin: si(verMargen, t(r.margen)), grossMarginPct: si(verMargen, t(r.margenPct)),
     tariff: r.venta?.tariffPlanName ?? r.compra?.tariffPlanName ?? null,
     version: r.venta?.version ?? r.compra?.version ?? null,
     rule: r.venta?.regla?.name ?? r.compra?.regla?.name ?? null,
     lines: r.lineas.map((l) => ({
       lineNumber: l.numero, kind: l.tipo, description: l.descripcion,
       quantity: l.cantidad, unit: l.unidad,
-      saleUnitPrice: t(l.ventaUnitaria), saleTotal: t(l.ventaTotal),
-      purchaseUnitPrice: t(l.compraUnitaria), purchaseTotal: t(l.compraTotal),
+      saleUnitPrice: si(verVenta, t(l.ventaUnitaria)), saleTotal: si(verVenta, t(l.ventaTotal)),
+      purchaseUnitPrice: si(verCompra, t(l.compraUnitaria)), purchaseTotal: si(verCompra, t(l.compraTotal)),
     })),
     warnings: r.avisos,
     explanation: r.explicacion,
@@ -1493,7 +1503,12 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/assistances/:id/report.pdf", ...requireConnectRole("analyst"), async (req, res) => {
     const id = Number(req.params.id);
     try {
-      const { buffer, assistance } = await buildConnectReportPdf(id);
+      /*
+       * Aquí sí van los importes: la ruta va con rol de la central. El informe
+       * que se archiva con URL pública se genera sin ellos, porque ese enlace
+       * lo acaba viendo el taller y el precio de venta es el de la central.
+       */
+      const { buffer, assistance } = await buildConnectReportPdf(id, { incluirImportes: true });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -1840,7 +1855,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       durationMin: req.body?.durationMin != null ? Number(req.body.durationMin) : null,
     });
     if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
-    res.json(paraApi(r));
+    res.json(paraApi(r, req.connectUser?.role));
   });
 
   /** Bloqueo del forfait. Idempotente: repetirlo devuelve el mismo. */
@@ -1854,7 +1869,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
     await auditConnect({ req, action: "pricing.locked", resourceType: "assistance",
       resourceId: Number(req.params.id), detail: { regla: r.venta?.regla?.code, estado: r.estado } });
-    res.json(paraApi(r));
+    res.json(paraApi(r, req.connectUser?.role));
   });
 
   /** Cierre: regulariza con lo real manteniendo la regla bloqueada. */
@@ -1871,7 +1886,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
     await auditConnect({ req, action: "pricing.finalized", resourceType: "assistance",
       resourceId: Number(req.params.id), detail: { estado: r.estado, lineas: r.lineas.length } });
-    res.json(paraApi(r));
+    res.json(paraApi(r, req.connectUser?.role));
   });
 
   /**
@@ -1885,8 +1900,22 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/pricing/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const { etapasDe } = await import("./pricing/service.ts");
     const { etapaParaApi } = await import("./pricing/presenter.ts");
+    const { recortarSegunRol } = await import("./pricing/permissions.ts");
+    const role = req.connectUser?.role;
     const filas = await etapasDe(Number(req.params.id));
-    res.json({ data: filas.map(etapaParaApi) });
+
+    res.json({
+      data: filas.map(etapaParaApi).map((e) => ({
+        ...recortarSegunRol(e, role, {
+          venta: ["saleTotal"], compra: ["purchaseTotal"],
+          margen: ["grossMargin", "grossMarginPct"],
+        }),
+        lines: e.lines.map((l) => recortarSegunRol(l as Record<string, any>, role, {
+          venta: ["saleUnitPrice", "saleTotal"],
+          compra: ["purchaseUnitPrice", "purchaseTotal"],
+        })),
+      })),
+    });
   });
 
   /**
@@ -1938,6 +1967,85 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       grossMargin: t(r.margen), grossMarginPct: t(r.margenPct),
       warnings: r.avisos,
       manualReview: r.revisionManual,
+    });
+  });
+
+  /**
+   * Ajuste manual de un importe.
+   *
+   * Va con rol de supervisor y no de operador, y aun así el servicio comprueba
+   * el límite del rol: un supervisor mueve lo razonable de un turno y por
+   * encima de ahí hace falta el administrador de la central. El motivo es
+   * obligatorio, y no por burocracia: es lo único que responderá la pregunta
+   * dentro de seis meses.
+   */
+  router.post("/pricing/:id/override", ...requireConnectRole("supervisor"), async (req, res) => {
+    const { ajustarImporte, ErrorAjuste } = await import("./pricing/overrides.ts");
+    const u = req.connectUser!;
+    try {
+      const r = await ajustarImporte({
+        assistanceId: Number(req.params.id),
+        etapa: req.body?.etapa === "locked" ? "locked" : "final",
+        lineNumber: req.body?.lineNumber != null ? Number(req.body.lineNumber) : null,
+        campo: req.body?.campo,
+        valorNuevo: req.body?.valorNuevo,
+        motivo: String(req.body?.motivo ?? ""),
+      }, {
+        id: u.id, nombre: u.name || u.email, role: u.role,
+        controlCenterId: centroDe(req),
+      });
+
+      await auditConnect({ req, action: "pricing.override", resourceType: "assistance",
+        resourceId: Number(req.params.id), detail: {
+          campo: req.body?.campo, anterior: r.anterior, nuevo: r.nuevo, motivo: req.body?.motivo } });
+      res.json(r);
+    } catch (e) {
+      if (e instanceof ErrorAjuste) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  });
+
+  /** Los ajustes de una asistencia, para enseñarlos junto a las etapas. */
+  router.get("/pricing/:id/overrides", ...requireConnectRole("analyst"), async (req, res) => {
+    const { ajustesDe } = await import("./pricing/overrides.ts");
+    res.json({ data: await ajustesDe(Number(req.params.id)) });
+  });
+
+  /**
+   * Auditoría económica: qué se ha movido a mano en el periodo, quién y
+   * cuánto. Es de administrador de central: es la pantalla que vigila a los
+   * que pueden ajustar.
+   */
+  router.get("/pricing/audit", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { auditoriaEconomica } = await import("./pricing/overrides.ts");
+    const ahora = new Date();
+    res.json(await auditoriaEconomica({
+      controlCenterId: centroDe(req),
+      desdeMs: Number(req.query.from) || new Date(ahora.getFullYear(), ahora.getMonth(), 1).getTime(),
+      hastaMs: Number(req.query.to) || Date.now(),
+    }));
+  });
+
+  /** Lo que este usuario puede ver y tocar del dinero, para que el panel no ofrezca lo que va a rechazar. */
+  router.get("/pricing/permissions", ...requireConnectUser(), async (req, res) => {
+    const { puede, limiteAjuste, leerAjustes } = await import("./pricing/permissions.ts");
+    const { formatear } = await import("./pricing/money.ts");
+    const u = req.connectUser!;
+
+    const cc = u.controlCenterId
+      ? await db.query(`SELECT settings FROM connect_control_centers WHERE id = $1`, [u.controlCenterId])
+      : null;
+    const limite = limiteAjuste(u.role, leerAjustes(cc?.rows[0]?.settings ?? null));
+
+    res.json({
+      role: u.role,
+      verVenta: puede(u.role, "ver_venta"),
+      verCompra: puede(u.role, "ver_compra"),
+      verMargen: puede(u.role, "ver_margen"),
+      ajustarImporte: puede(u.role, "ajustar_importe"),
+      publicarTarifa: puede(u.role, "publicar_tarifa"),
+      exportarFacturacion: puede(u.role, "exportar_facturacion"),
+      limiteAjuste: limite === undefined || limite == null ? null : formatear(limite, 2),
     });
   });
 
