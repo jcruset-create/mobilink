@@ -14,7 +14,39 @@ import db from "../db.ts";
 import { seedNetworkWorkshops } from "./seedWorkshops.ts";
 import { initPricing } from "./pricing/schema.ts";
 
+/**
+ * Identificador del cerrojo de arranque. Cualquier número sirve mientras sea
+ * el mismo en todos los procesos; este viene de "connect-schema".
+ */
+const CERROJO_ESQUEMA = 815_243_119;
+
+/**
+ * Crea y actualiza el esquema, con un cerrojo para que solo lo haga uno a la
+ * vez.
+ *
+ * Sin él, dos procesos arrancando a la vez ejecutan los mismos CREATE TABLE y
+ * ALTER sobre las mismas tablas y se pisan: PostgreSQL responde con errores de
+ * tupla concurrente o con un interbloqueo, y el que pierde no arranca. Pasa en
+ * Render en cuanto hay más de una instancia, y pasaba en las pruebas de
+ * integración, que es donde se detectó: dos ficheros de pruebas contra una
+ * base recién creada fallaban una de cada dos veces.
+ *
+ * El cerrojo es de sesión, así que hace falta una conexión propia del pool: si
+ * se pidiera y se soltara desde el pool general, podrían tocar conexiones
+ * distintas y no serviría de nada.
+ */
 export async function initConnect(): Promise<void> {
+  const cliente = await db.connect();
+  try {
+    await cliente.query(`SELECT pg_advisory_lock($1)`, [CERROJO_ESQUEMA]);
+    await crearEsquemaConnect();
+  } finally {
+    await cliente.query(`SELECT pg_advisory_unlock($1)`, [CERROJO_ESQUEMA]).catch(() => {});
+    cliente.release();
+  }
+}
+
+async function crearEsquemaConnect(): Promise<void> {
   await db.query(`
     -- Empresas cliente (partners externos: aseguradoras, renting, grúas...)
     CREATE TABLE IF NOT EXISTS connect_partners (
@@ -870,6 +902,30 @@ export async function initConnect(): Promise<void> {
      WHERE "workshopId" IS NULL
        AND (SELECT COUNT(DISTINCT w."coreWorkshopId") FROM connect_workshops w
              WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL) = 1;
+  `);
+
+  /*
+   * Los partners no tenían centro de control, así que una asistencia creada
+   * por la API quedaba sin dueño. Mientras nadie filtraba por centro no se
+   * notaba; en cuanto haya dos centrales, una asistencia huérfana o no la ve
+   * nadie o la ven todas. Se rellena solo cuando hay un único centro, que es
+   * el caso de hoy: con dos o más hay que decidirlo a mano.
+   */
+  await db.query(`
+    ALTER TABLE connect_partners ADD COLUMN IF NOT EXISTS "controlCenterId" INTEGER;
+
+    UPDATE connect_partners
+       SET "controlCenterId" = (SELECT id FROM connect_control_centers
+                                 WHERE "deletedAtMs" IS NULL ORDER BY id LIMIT 1)
+     WHERE "controlCenterId" IS NULL
+       AND (SELECT COUNT(*) FROM connect_control_centers WHERE "deletedAtMs" IS NULL) = 1;
+
+    UPDATE connect_assistances ca
+       SET "controlCenterId" = p."controlCenterId"
+      FROM connect_partners p
+     WHERE p.id = ca."partnerId"
+       AND ca."controlCenterId" IS NULL
+       AND p."controlCenterId" IS NOT NULL;
   `);
 
   // Motor de tarifas: su esquema vive aparte para no seguir engordando este
