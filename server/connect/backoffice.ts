@@ -32,6 +32,8 @@ import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
 import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
 import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
 import { normalizarVehiculo, descripcionVehiculo } from "./vehicle.ts";
+import { formatear } from "./pricing/money.ts";
+import type { ResultadoTarifa } from "./pricing/types.ts";
 import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
 import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
 import {
@@ -55,6 +57,34 @@ function centroDe(req: { connectUser?: { role: string; controlCenterId: number |
   const u = req.connectUser;
   if (!u || u.role === "superadmin") return null;
   return u.controlCenterId;
+}
+
+/**
+ * Resultado del motor listo para JSON.
+ *
+ * Los importes salen como TEXTO con dos decimales. Convertirlos a `number`
+ * aquí devolvería la coma flotante que se ha quitado a conciencia en todo el
+ * motor, y el panel solo tiene que pintarlos.
+ */
+function paraApi(r: ResultadoTarifa) {
+  const t = (d: bigint | null) => (d == null ? null : formatear(d, 2));
+  return {
+    etapa: r.etapa, estado: r.estado, currency: r.currency,
+    saleTotal: t(r.ventaTotal), purchaseTotal: t(r.compraTotal),
+    grossMargin: t(r.margen), grossMarginPct: t(r.margenPct),
+    tariff: r.venta?.tariffPlanName ?? r.compra?.tariffPlanName ?? null,
+    version: r.venta?.version ?? r.compra?.version ?? null,
+    rule: r.venta?.regla?.name ?? r.compra?.regla?.name ?? null,
+    lines: r.lineas.map((l) => ({
+      lineNumber: l.numero, kind: l.tipo, description: l.descripcion,
+      quantity: l.cantidad, unit: l.unidad,
+      saleUnitPrice: t(l.ventaUnitaria), saleTotal: t(l.ventaTotal),
+      purchaseUnitPrice: t(l.compraUnitaria), purchaseTotal: t(l.compraTotal),
+    })),
+    warnings: r.avisos,
+    explanation: r.explicacion,
+    engineVersion: r.engineVersion,
+  };
 }
 
 /** Columnas JSON: según el driver llegan ya parseadas o como texto. */
@@ -1791,6 +1821,77 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     );
     await auditConnect({ req, action: "assistance.updated", resourceType: "assistance", resourceId: id, detail: Object.keys(b) });
     res.json(r.rows[0]);
+  });
+
+  // ── Tarificación ─────────────────────────────────────────────────────────
+
+  /**
+   * Estimación para comparar talleres candidatos. No guarda nada: se llama
+   * una vez por candidato y guardar diez estimaciones que nadie va a mirar
+   * solo ensucia la ficha.
+   */
+  router.post("/pricing/:id/estimate", ...requireConnectRole("operator"), async (req, res) => {
+    const { estimar } = await import("./pricing/service.ts");
+    const r = await estimar(Number(req.params.id), {
+      workshopId: req.body?.workshopId != null ? Number(req.body.workshopId) : undefined,
+      providerCompanyId: req.body?.providerCompanyId != null ? Number(req.body.providerCompanyId) : undefined,
+      distanceKm: req.body?.distanceKm != null ? Number(req.body.distanceKm) : null,
+      distanceSource: req.body?.distanceSource ?? "estimated",
+      durationMin: req.body?.durationMin != null ? Number(req.body.durationMin) : null,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+    res.json(paraApi(r));
+  });
+
+  /** Bloqueo del forfait. Idempotente: repetirlo devuelve el mismo. */
+  router.post("/pricing/:id/lock", ...requireConnectRole("operator"), async (req, res) => {
+    const { bloquear } = await import("./pricing/service.ts");
+    const r = await bloquear(Number(req.params.id), {
+      distanceKm: req.body?.distanceKm != null ? Number(req.body.distanceKm) : null,
+      distanceSource: req.body?.distanceSource ?? "routed",
+      userId: req.connectUser?.id ?? null,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+    await auditConnect({ req, action: "pricing.locked", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { regla: r.venta?.regla?.code, estado: r.estado } });
+    res.json(paraApi(r));
+  });
+
+  /** Cierre: regulariza con lo real manteniendo la regla bloqueada. */
+  router.post("/pricing/:id/finalize", ...requireConnectRole("operator"), async (req, res) => {
+    const { finalizar } = await import("./pricing/service.ts");
+    const r = await finalizar(Number(req.params.id), {
+      distanceKm: req.body?.distanceKm != null ? Number(req.body.distanceKm) : null,
+      distanceSource: req.body?.distanceSource ?? "routed",
+      durationMin: req.body?.durationMin != null ? Number(req.body.durationMin) : null,
+      conceptos: Array.isArray(req.body?.conceptos) ? req.body.conceptos : undefined,
+      cancelado: !!req.body?.cancelado,
+      userId: req.connectUser?.id ?? null,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+    await auditConnect({ req, action: "pricing.finalized", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { estado: r.estado, lineas: r.lineas.length } });
+    res.json(paraApi(r));
+  });
+
+  /** Las tres etapas con sus líneas: es la pestaña de tarificación. */
+  router.get("/pricing/:id", ...requireConnectRole("analyst"), async (req, res) => {
+    const { etapasDe } = await import("./pricing/service.ts");
+    res.json({ data: await etapasDe(Number(req.params.id)) });
+  });
+
+  /**
+   * Por qué costó eso. Se lee del snapshot y no del tarifario actual: si
+   * mañana se sube el nocturno, esta asistencia se sigue explicando con lo
+   * que se le aplicó entonces.
+   */
+  router.get("/pricing/:id/explain", ...requireConnectRole("analyst"), async (req, res) => {
+    const { leerEtapa } = await import("./pricing/service.ts");
+    for (const etapa of ["final", "locked", "estimate"] as const) {
+      const r = await leerEtapa(Number(req.params.id), etapa);
+      if (r) return res.json({ etapa, explicacion: r.explicacion, avisos: r.avisos });
+    }
+    return err(res, 404, "not_found", "Esta asistencia todavía no tiene tarifa calculada");
   });
 
   /**
