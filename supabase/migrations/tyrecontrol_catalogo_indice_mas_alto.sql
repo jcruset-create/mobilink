@@ -30,86 +30,95 @@
 -- hay nada que hacer.
 -- ============================================================
 
--- Sin "on commit drop": el editor de Supabase no ejecuta todo en la misma
--- transacción y la tabla se evaporaría antes de usarla (lección aprendida en
--- tyrecontrol_tipos_mal_puestos.sql).
-drop table if exists _tc_catalogo_dedupe;
-create temp table _tc_catalogo_dedupe as
-with refs as (
-  select r.id, r.modelo_id, r.referencia_completa,
-         ts.ancho, coalesce(ts.perfil, -1) as perfil, ts.diametro_llanta,
-         -- La carga viene como texto ('154'); si no es numérica, pierde.
-         nullif(regexp_replace(ts.indice_carga_simple, '\D', '', 'g'), '')::int as carga,
-         -- Orden real de códigos de velocidad (la H va entre U y V, herencia
-         -- histórica de la norma; ordenar alfabéticamente la colocaría mal).
-         coalesce(array_position(
-           array['B','C','D','E','F','G','J','K','L','M','N','P','Q','R','S','T','U','H','V','W','Y'],
-           upper(trim(ts.codigo_velocidad))), 0) as vel,
-         nullif(regexp_replace(coalesce(ts.indice_carga_doble, ''), '\D', '', 'g'), '')::int as carga_doble,
-         r.created_at
-    from tc_referencias_neumatico r
-    join tyre_sizes ts on ts.id = r.tyre_size_id
-   where r.activo
-),
-ordenados as (
-  select id, modelo_id, referencia_completa,
-         first_value(id) over w as superviviente,
-         first_value(referencia_completa) over w as ref_superviviente,
-         count(*) over (partition by modelo_id, ancho, perfil, diametro_llanta) as n
-    from refs
-  window w as (
-    partition by modelo_id, ancho, perfil, diametro_llanta
-    order by carga desc nulls last, vel desc, carga_doble desc nulls last, created_at asc
-    rows between unbounded preceding and unbounded following
-  )
-)
-select id, referencia_completa, superviviente, ref_superviviente
-  from ordenados
- where n > 1 and id <> superviviente;
-
--- 1) El stock del almacén, a la superviviente. Antes de apagar nada.
-update productos_neumaticos p
-   set referencia_neumatico_id = d.superviviente
-  from _tc_catalogo_dedupe d
- where p.referencia_neumatico_id = d.id;
-
--- 2) Retirar las repetidas (desactivar, no borrar).
-update tc_referencias_neumatico r
-   set activo = false, updated_at = now()
-  from _tc_catalogo_dedupe d
- where r.id = d.id;
-
--- 3) Curar lo heredado: productos que ya apuntaban a una referencia inactiva
---    ANTES de esta migración (retiradas a mano en su día). Si el mismo modelo
---    tiene una referencia activa de la misma medida base, se repunta ahí. Si
---    no la tiene, se deja y se avisa — apagar el aviso inventando una
---    referencia no es curar nada.
-update productos_neumaticos p
-   set referencia_neumatico_id = destino.id
-  from tc_referencias_neumatico vieja
-  join tyre_sizes tv on tv.id = vieja.tyre_size_id,
-  lateral (
-    select r2.id
-      from tc_referencias_neumatico r2
-      join tyre_sizes t2 on t2.id = r2.tyre_size_id
-     where r2.activo
-       and r2.modelo_id = vieja.modelo_id
-       and t2.ancho = tv.ancho
-       and coalesce(t2.perfil, -1) = coalesce(tv.perfil, -1)
-       and t2.diametro_llanta = tv.diametro_llanta
-     limit 1
-  ) destino
- where p.referencia_neumatico_id = vieja.id
-   and not vieja.activo;
-
--- ── Comprobación ────────────────────────────────────────────────────────────
+-- TODO EN UN SOLO BLOQUE, a propósito.
+--
+-- La tabla de trabajo es temporal, y una temporal vive únicamente en su
+-- sesión. El editor de Supabase no garantiza que dos sentencias del mismo
+-- script vayan por la misma conexión, así que repartir esto en varias
+-- sentencias funciona unas veces y otras da "relation _tc_catalogo_dedupe
+-- does not exist". Un DO es UNA sentencia: dentro está todo en la misma
+-- sesión y en la misma transacción — o se aplica entero, o no se aplica nada.
 do $$
-declare v_retiradas int; v_colgando int; v_heredados int; v_grupos_dobles int;
+declare
+  v_retiradas int; v_repuntados int; v_heredados int; v_curados int;
+  v_colgando int; v_grupos_dobles int;
 begin
+  create temp table _tc_catalogo_dedupe on commit drop as
+  with refs as (
+    select r.id, r.modelo_id, r.referencia_completa,
+           ts.ancho, coalesce(ts.perfil, -1) as perfil, ts.diametro_llanta,
+           -- La carga viene como texto ('154'); si no es numérica, pierde.
+           nullif(regexp_replace(ts.indice_carga_simple, '\D', '', 'g'), '')::int as carga,
+           -- Orden real de códigos de velocidad (la H va entre U y V, herencia
+           -- histórica de la norma; ordenar alfabéticamente la colocaría mal).
+           coalesce(array_position(
+             array['B','C','D','E','F','G','J','K','L','M','N','P','Q','R','S','T','U','H','V','W','Y'],
+             upper(trim(ts.codigo_velocidad))), 0) as vel,
+           nullif(regexp_replace(coalesce(ts.indice_carga_doble, ''), '\D', '', 'g'), '')::int as carga_doble,
+           r.created_at
+      from tc_referencias_neumatico r
+      join tyre_sizes ts on ts.id = r.tyre_size_id
+     where r.activo
+  ),
+  ordenados as (
+    select id, modelo_id, referencia_completa,
+           first_value(id) over w as superviviente,
+           first_value(referencia_completa) over w as ref_superviviente,
+           count(*) over (partition by modelo_id, ancho, perfil, diametro_llanta) as n
+      from refs
+    window w as (
+      partition by modelo_id, ancho, perfil, diametro_llanta
+      order by carga desc nulls last, vel desc, carga_doble desc nulls last, created_at asc
+      rows between unbounded preceding and unbounded following
+    )
+  )
+  select id, referencia_completa, superviviente, ref_superviviente
+    from ordenados
+   where n > 1 and id <> superviviente;
+
   select count(*) into v_retiradas from _tc_catalogo_dedupe;
 
+  -- 1) El stock del almacén, a la superviviente. ANTES de apagar nada.
+  update productos_neumaticos p
+     set referencia_neumatico_id = d.superviviente
+    from _tc_catalogo_dedupe d
+   where p.referencia_neumatico_id = d.id;
+  get diagnostics v_repuntados = row_count;
+
+  -- 2) Retirar las repetidas (desactivar, no borrar).
+  update tc_referencias_neumatico r
+     set activo = false, updated_at = now()
+    from _tc_catalogo_dedupe d
+   where r.id = d.id;
+
+  -- 3) Curar lo heredado: productos que ya apuntaban a una referencia inactiva
+  --    ANTES de esta migración (retiradas a mano en su día). Si el mismo modelo
+  --    tiene una activa de la misma medida base, se repunta ahí. Si no la hay,
+  --    se deja y se avisa — apagar el aviso inventando una referencia no es
+  --    curar nada.
+  update productos_neumaticos p
+     set referencia_neumatico_id = destino.id
+    from tc_referencias_neumatico vieja
+    join tyre_sizes tv on tv.id = vieja.tyre_size_id,
+    lateral (
+      select r2.id
+        from tc_referencias_neumatico r2
+        join tyre_sizes t2 on t2.id = r2.tyre_size_id
+       where r2.activo
+         and r2.modelo_id = vieja.modelo_id
+         and t2.ancho = tv.ancho
+         and coalesce(t2.perfil, -1) = coalesce(tv.perfil, -1)
+         and t2.diametro_llanta = tv.diametro_llanta
+       limit 1
+    ) destino
+   where p.referencia_neumatico_id = vieja.id
+     and not vieja.activo;
+  get diagnostics v_curados = row_count;
+
+  -- ── Comprobación ──────────────────────────────────────────────────────────
+
   -- DURO: ningún producto puede apuntar a una referencia retirada POR ESTA
-  -- migración — eso sería un fallo del repunte de arriba.
+  -- migración — eso sería un fallo del repunte del paso 1.
   select count(*) into v_colgando
     from productos_neumaticos p
     join _tc_catalogo_dedupe d on d.id = p.referencia_neumatico_id;
@@ -117,17 +126,7 @@ begin
     raise exception 'Quedan % productos apuntando a referencias retiradas por esta migración', v_colgando;
   end if;
 
-  -- AVISO: inactivas heredadas sin sustituta activa. No es cosa de esta
-  -- migración, pero que se vea en vez de esconderse en un join.
-  select count(*) into v_heredados
-    from productos_neumaticos p
-    join tc_referencias_neumatico r on r.id = p.referencia_neumatico_id
-   where not r.activo;
-  if v_heredados > 0 then
-    raise warning 'Hay % producto(s) apuntando a referencias inactivas de antes, sin equivalente activo del mismo modelo y medida. Verlos: select p.id, p.nombre, r.referencia_completa from productos_neumaticos p join tc_referencias_neumatico r on r.id = p.referencia_neumatico_id where not r.activo;', v_heredados;
-  end if;
-
-  -- Y ningún grupo modelo × medida base puede seguir con más de una activa.
+  -- DURO: ningún grupo modelo × medida base puede seguir con más de una activa.
   select count(*) into v_grupos_dobles from (
     select 1
       from tc_referencias_neumatico r
@@ -140,7 +139,15 @@ begin
     raise exception 'Quedan % grupos con más de una referencia activa', v_grupos_dobles;
   end if;
 
-  raise notice 'OK: % referencias repetidas retiradas; el catálogo queda con el índice más alto de cada modelo y medida', v_retiradas;
-end $$;
+  -- AVISO: inactivas heredadas sin sustituta activa. No es cosa de esta
+  -- migración, pero que se vea en vez de esconderse en un join.
+  select count(*) into v_heredados
+    from productos_neumaticos p
+    join tc_referencias_neumatico r on r.id = p.referencia_neumatico_id
+   where not r.activo;
+  if v_heredados > 0 then
+    raise warning 'Hay % producto(s) apuntando a referencias inactivas de antes, sin equivalente activo del mismo modelo y medida. Verlos: select p.id, p.nombre, r.referencia_completa from productos_neumaticos p join tc_referencias_neumatico r on r.id = p.referencia_neumatico_id where not r.activo;', v_heredados;
+  end if;
 
-drop table if exists _tc_catalogo_dedupe;
+  raise notice 'OK: % referencias repetidas retiradas, % productos repuntados a la superviviente, % heredados curados', v_retiradas, v_repuntados, v_curados;
+end $$;
