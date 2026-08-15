@@ -184,3 +184,28 @@ export function Cabecera({
     </div>
   );
 }
+
+/**
+ * Aviso de que hay que romper el precinto de un cartucho.
+ *
+ * Sin esto la pantalla pide "1 € × 4" y el operador ve una sola moneda suelta
+ * en el cajón, sin saber que las otras tres están dentro de un tubo. Y romper
+ * un tubo no tiene vuelta atrás, así que conviene decirlo antes.
+ */
+export function AvisoCartuchos({
+  aperturas,
+}: {
+  aperturas: { valor: number; cartuchos: number; piezas: number }[];
+}) {
+  if (aperturas.length === 0) return null;
+
+  return (
+    <Aviso tono="aviso">
+      <strong>Hay que abrir {aperturas.length === 1 ? "un cartucho" : "cartuchos"}:</strong>{" "}
+      {aperturas
+        .map((a) => `${a.cartuchos} de ${euros(a.valor)} (${a.piezas} monedas)`)
+        .join(", ")}
+      . Un tubo abierto no se vuelve a cerrar.
+    </Aviso>
+  );
+}

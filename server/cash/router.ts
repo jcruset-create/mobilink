@@ -231,6 +231,7 @@ export function createCashRouter(): Router {
       const salida = await servicio.abrirJornada(contexto(req), {
         registerId: enteroPositivo(b.registerId, "registerId"),
         fondoManual: lineas(b.fondoManual, "fondoManual"),
+        fondoCartuchos: lineas(b.fondoCartuchos, "fondoCartuchos"),
         motivoFondoManual: typeof b.motivoFondoManual === "string" ? b.motivoFondoManual : undefined,
         fecha: typeof b.fecha === "string" ? b.fecha : undefined,
         notas: typeof b.notas === "string" ? b.notas : undefined,
@@ -440,6 +441,7 @@ export function createCashRouter(): Router {
         await servicio.cerrarJornada(contexto(req), {
           sessionId: enteroPositivo(req.params.id, "id"),
           cambioFinal: lineas(b.cambioFinal, "cambioFinal"),
+          cambioFinalCartuchos: lineas(b.cambioFinalCartuchos, "cambioFinalCartuchos"),
           arqueoId: b.arqueoId ? enteroPositivo(b.arqueoId, "arqueoId") : undefined,
           notas: typeof b.notas === "string" ? b.notas : undefined,
         })

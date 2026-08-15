@@ -792,14 +792,7 @@ describe.runIf(RUN)("cartuchos", () => {
     expect(p.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
   });
 
-  /*
-   * PENDIENTE: hoy el arqueo y el cierre trabajan en piezas, así que un tubo
-   * que se cuenta precintado al cerrar amanece como monedas sueltas. El importe
-   * se conserva —el dinero no se pierde— pero el formato sí. Esta prueba fija
-   * el comportamiento ACTUAL para que el día que se complete el cierre con
-   * formato se vea aquí que cambia.
-   */
-  it("al cerrar, el importe se conserva aunque el tubo pase a monedas sueltas", async () => {
+  it("un tubo precintado al cierre sigue precintado a la mañana siguiente", async () => {
     const caja = await crearCaja("cartucho-herencia");
     const { sesion } = await servicio.abrirJornada(ctx, {
       registerId: caja,
@@ -808,19 +801,58 @@ describe.runIf(RUN)("cartuchos", () => {
     });
     expect(await stock(sesion.id, 100)).toEqual({ sueltas: 2, tubos: 2 });
 
-    // No se toca nada: se arquea y se cierra dejándolo todo como cambio.
-    const teorico = await servicio.stockDeJornada(sesion.id);
-    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
-    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: teorico.lineas });
+    // No se toca nada: se cuenta lo que hay -2 sueltas y 2 tubos- y se cierra
+    // dejándolo todo en caja como cambio.
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [{ valor: 100, cantidad: 2 }],
+      cartuchos: [{ valor: 100, cantidad: 2 }],
+    });
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 100, cantidad: 2 }],
+      cambioFinalCartuchos: [{ valor: 100, cantidad: 2 }],
+    });
+    expect(cierre.totalCambioCentimos).toBe(5200);
+    expect(cierre.totalIngresoCentimos).toBe(0);
 
     const manana = await servicio.abrirJornada(ctx, { registerId: caja });
     expect(manana.sesion.fondoInicialHeredado).toBe(true);
-    // El importe se conserva entero: 2 sueltas + 2 tubos de 25 = 52 monedas.
-    expect(manana.sesion.fondoInicialCentimos).toBe(sesion.fondoInicialCentimos);
     expect(manana.sesion.fondoInicialCentimos).toBe(5200);
 
-    // Pero el formato no: las 52 monedas amanecen sueltas y sin tubos. Esto es
-    // lo que queda por completar.
-    expect(await stock(manana.sesion.id, 100)).toEqual({ sueltas: 52, tubos: 0 });
+    // Y el formato se conserva: los dos tubos siguen precintados.
+    expect(await stock(manana.sesion.id, 100)).toEqual({ sueltas: 2, tubos: 2 });
+  });
+
+  it("la propuesta de cierre deja los tubos en caja y manda el resto al banco", async () => {
+    const caja = await crearCaja("cartucho-propuesta-cierre");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 }, // 100 € en billetes
+        { valor: 100, cantidad: 10 }, //  10 € sueltos
+      ],
+      fondoCartuchos: [{ valor: 100, cantidad: 2 }], // 50 € en dos tubos
+    });
+    expect(sesion.fondoInicialCentimos).toBe(16000);
+
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 100, cantidad: 10 },
+      ],
+      cartuchos: [{ valor: 100, cantidad: 2 }],
+    });
+
+    // Objetivo 60 €: caben los dos tubos (50 €) y 10 € de sueltas.
+    const p = await servicio.proponerCierre(sesion.id, 6000);
+    expect(p.cambioFinalCartuchos).toEqual([{ valor: 100, cantidad: 2 }]);
+    expect(p.cambioFinal).toEqual([{ valor: 100, cantidad: 10 }]);
+    // Los billetes se van al banco.
+    expect(p.ingresoBancario).toEqual([{ valor: 5000, cantidad: 2 }]);
+    expect(p.ingresoBancarioCartuchos).toEqual([]);
+    expect(teorico.totalCentimos).toBe(16000);
   });
 });

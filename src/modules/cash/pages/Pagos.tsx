@@ -15,11 +15,24 @@ import DenominationGrid, {
   cantidadesDesde,
   lineasDesde,
 } from "../components/DenominationGrid";
-import { Aviso, BotonAccion, Cabecera, ErrorBox, OrigenBadge, inputCls } from "../components/ui";
+import {
+  Aviso,
+  AvisoCartuchos,
+  BotonAccion,
+  Cabecera,
+  ErrorBox,
+  OrigenBadge,
+  inputCls,
+} from "../components/ui";
 import { BuscadorDocumentos } from "./Cobros";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
-import { ETIQUETA_FORMA_PAGO, type DocumentoExterno, type FormaPago } from "../types";
+import {
+  ETIQUETA_FORMA_PAGO,
+  type AperturaCartucho,
+  type DocumentoExterno,
+  type FormaPago,
+} from "../types";
 import * as api from "../services/api";
 
 const FORMAS: FormaPago[] = ["CASH", "BANK_TRANSFER", "BBVA_CARD", "CAIXABANK_CARD", "OTHER"];
@@ -40,6 +53,7 @@ export default function Pagos() {
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [ultimo, setUltimo] = useState<string | null>(null);
+  const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
 
   const importe = aCentimos(importeTexto) ?? 0;
   const esEfectivo = forma === "CASH";
@@ -55,9 +69,11 @@ export default function Pagos() {
       const r = await api.proponerCambio(jornada.sesion.id, importe);
       if (esFallo(r)) {
         setEntregado({});
+        setAperturas([]);
         setAvisoComposicion(r.mensaje);
       } else {
         setEntregado(cantidadesDesde(r.lineas));
+        setAperturas(r.aperturas ?? []);
         setAvisoComposicion("");
       }
     } catch (e) {
@@ -197,6 +213,7 @@ export default function Pagos() {
           {esEfectivo ? (
             <>
               {avisoComposicion && <Aviso tono="mal">{avisoComposicion}</Aviso>}
+              <AvisoCartuchos aperturas={aperturas} />
               <DenominationGrid
                 titulo="Efectivo que sale de la caja"
                 denominaciones={denominaciones}
