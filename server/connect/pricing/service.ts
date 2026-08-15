@@ -35,6 +35,9 @@ export interface DatosAsistencia {
   vehicleTypeCode: string;
   serviceOrderedAtMs: number | null;
   createdAtMs: number;
+  /** Lo que dejó el taller al cerrar: kilómetros y minutos del servicio. */
+  odometerKm: number | null;
+  workedMinutes: number | null;
   lugar: { country?: string | null; regionCode?: string | null; provinceCode?: string | null; postalCode?: string | null; municipality?: string | null };
 }
 
@@ -55,6 +58,7 @@ export async function datosDeAsistencia(assistanceId: number): Promise<DatosAsis
   const r = await db.query(
     `SELECT ca.id, ca."controlCenterId", ca."clientId", ca."workshopId", ca."serviceType",
             ca.vehicle, ca."serviceOrderedAtMs", ca."createdAtMs",
+            ca."odometerKm", ca."workedMinutes",
             w."providerCompanyId", w.province AS "workshopProvince",
             b."tipoVehiculo", b."ubicacionIncidencia"
        FROM connect_assistances ca
@@ -78,6 +82,8 @@ export async function datosDeAsistencia(assistanceId: number): Promise<DatosAsis
     vehicleTypeCode: String(vehiculo.type ?? a.tipoVehiculo ?? "car"),
     serviceOrderedAtMs: a.serviceOrderedAtMs == null ? null : Number(a.serviceOrderedAtMs),
     createdAtMs: Number(a.createdAtMs),
+    odometerKm: a.odometerKm == null ? null : Number(a.odometerKm),
+    workedMinutes: a.workedMinutes == null ? null : Number(a.workedMinutes),
     /*
      * La asistencia no guarda provincia ni país: solo coordenadas y dirección.
      * Hasta que se resuelva la zona por geocodificación inversa se asume
@@ -251,6 +257,8 @@ export async function finalizar(
   const a = await datosDeAsistencia(assistanceId);
   if (!a) return null;
 
+  const real = distanciaYTiempoReales(a, opciones);
+
   const bloqueada = await db.query(
     `SELECT "saleRuleId", "purchaseRuleId" FROM connect_assistance_pricings
       WHERE "assistanceId" = $1 AND stage = 'locked'`,
@@ -258,12 +266,53 @@ export async function finalizar(
   );
 
   const atMs = instanteContractual(a);
-  const r = await tarificar(a, "final", opciones, atMs, {
+  const r = await tarificar(a, "final", real, atMs, {
     saleRuleId: bloqueada.rows[0]?.saleRuleId ?? null,
     purchaseRuleId: bloqueada.rows[0]?.purchaseRuleId ?? null,
   });
   if (!r) return null;
-  return guardar(a, r, atMs, opciones);
+  return guardar(a, r, atMs, real);
+}
+
+/**
+ * Los kilómetros y los minutos con los que se regulariza el cierre.
+ *
+ * Si quien cierra no los manda, se cogen los que dejó el taller al cerrar el
+ * servicio. Sin esto el cierre solo produce el forfait: los kilómetros de más
+ * no se cobran, y en un tarifario que incluye 100 km eso es dinero en cada
+ * servicio que se pase.
+ *
+ * ⚠ LA GUARDA DEL CUENTAKILÓMETROS
+ *
+ * El campo se llama `odometerKm` y en la app del taller solo pone
+ * "Kilómetros", junto a "Minutos trabajados". Si alguien anota ahí la lectura
+ * del cuentakilómetros en vez de los del servicio, un 234.567 a 1,25 €/km
+ * serían casi trescientos mil euros en una factura.
+ *
+ * Así que no se usa a ciegas: por encima del límite se descarta y se deja el
+ * cierre sin distancia, que es lo que pasaba antes. Cobrar de menos se
+ * arregla; emitir esa factura, no.
+ */
+const MAX_KM_SERVICIO = 2000;
+
+function distanciaYTiempoReales(
+  a: DatosAsistencia,
+  opciones: OpcionesTarificacion,
+): OpcionesTarificacion {
+  if (opciones.distanceKm != null && opciones.durationMin != null) return opciones;
+
+  const kmTaller = a.odometerKm != null && a.odometerKm > 0 && a.odometerKm <= MAX_KM_SERVICIO
+    ? a.odometerKm : null;
+
+  return {
+    ...opciones,
+    distanceKm: opciones.distanceKm ?? kmTaller,
+    distanceSource: opciones.distanceKm != null
+      ? opciones.distanceSource
+      : kmTaller != null ? "routed" : opciones.distanceSource,
+    durationMin: opciones.durationMin ?? (a.workedMinutes != null && a.workedMinutes > 0
+      ? a.workedMinutes : null),
+  };
 }
 
 /**
