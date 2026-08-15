@@ -126,6 +126,15 @@ async function tarificar(
     lugar: a.lugar,
   });
 
+  /*
+   * Los festivos DEL TALLER, que no son los del servicio. Si en su pueblo es
+   * fiesta local, ese día trabaja en festivo y lo factura como tal aunque para
+   * el cliente de la central sea un martes cualquiera. Solo afecta a la compra.
+   */
+  const clasesDiaTaller = workshopId != null && a.controlCenterId != null
+    ? await clasesFestivasDelTaller(a.controlCenterId, workshopId, atMs)
+    : [];
+
   const ctx: ContextoTarifa = {
     assistanceId: a.id,
     controlCenterId: a.controlCenterId,
@@ -143,6 +152,7 @@ async function tarificar(
     durationMin: opciones.durationMin ?? null,
     conceptos: opciones.conceptos,
     cancelado: opciones.cancelado,
+    clasesDiaTaller,
   };
 
   return calcularTarifa(ctx, configuracion, {
@@ -151,6 +161,35 @@ async function tarificar(
     reglaVentaBloqueadaId: bloqueada?.saleRuleId ?? null,
     reglaCompraBloqueadaId: bloqueada?.purchaseRuleId ?? null,
   });
+}
+
+/**
+ * Las clases de día que aporta el calendario del taller.
+ *
+ * Se traducen a las mismas etiquetas que usa el calendario del tarifario
+ * —`holiday_local`, `holiday_regional`, `holiday`— para que una regla de
+ * festivo escrita sin saber nada de talleres encaje igual. El motor no tiene
+ * que enterarse de que esto viene de otro sitio.
+ */
+async function clasesFestivasDelTaller(
+  controlCenterId: number,
+  workshopId: number,
+  atMs: number,
+): Promise<string[]> {
+  const { calendarioDeTalleres } = await import("../workshopCalendar.ts");
+  const cal = await calendarioDeTalleres(controlCenterId, [workshopId], new Date(atMs));
+  const c = cal.get(workshopId);
+  if (!c || !c.esFestivo) return [];
+
+  const clases: string[] = [];
+  for (const f of c.festivos) {
+    // El nacional ya lo trae el calendario del tarifario: no se duplica
+    if (f.ambito === "national") continue;
+    const etiqueta = `holiday_${f.ambito}`;
+    if (!clases.includes(etiqueta)) clases.push(etiqueta);
+  }
+  if (clases.length > 0) clases.push("holiday");
+  return clases;
 }
 
 /**
