@@ -2049,6 +2049,175 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     });
   });
 
+  // ── Administración del tarifario ─────────────────────────────────────────
+
+  /*
+   * Hasta ahora un tarifario solo se cambiaba editando un fichero de datos y
+   * ejecutando un script. Eso valía para cargar el primero; no vale para que
+   * una central suba el nocturno en enero sin llamar a nadie.
+   *
+   * Todo va con rol de administrador de central, y el módulo de debajo se
+   * encarga de que una versión publicada no se pueda tocar.
+   */
+  const admin = () => import("./pricing/tariffAdmin.ts");
+
+  async function conTarifario(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorTarifario } = await admin();
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorTarifario) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
+
+  /** El centro sobre el que administrar. El superadministrador tiene que decir cuál. */
+  function centroAdmin(req: Request): number | null {
+    const propio = centroDe(req);
+    if (propio != null) return propio;
+    const pedido = req.query?.controlCenterId ?? req.body?.controlCenterId;
+    return pedido != null ? Number(pedido) : null;
+  }
+
+  /** Envuelve una ruta de administración resolviendo el centro una sola vez. */
+  function rutaAdmin(fn: (centro: number, req: Request) => Promise<unknown>) {
+    return async (req: Request, res: Response) => {
+      const centro = centroAdmin(req);
+      if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+      await conTarifario(res, () => fn(centro, req));
+    };
+  }
+
+  router.get("/tariffs", ...requireConnectRole("analyst"), rutaAdmin(async (centro) => {
+    const { listarPlanes } = await admin();
+    return { data: await listarPlanes(centro) };
+  }));
+
+  router.post("/tariffs", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { crearPlan } = await admin();
+    const p = await crearPlan(centro, req.body ?? {});
+    await auditConnect({ req, action: "tariff.plan_saved", resourceType: "tariff_plan",
+      resourceId: p.id, detail: { code: p.code } });
+    return p;
+  }));
+
+  router.get("/tariffs/:planId/versions", ...requireConnectRole("analyst"), rutaAdmin(async (centro, req) => {
+    const { listarVersiones } = await admin();
+    return { data: await listarVersiones(centro, Number(req.params.planId)) };
+  }));
+
+  /** El contenido completo de una versión: reglas, suplementos, franjas, zonas y calendario. */
+  router.get("/tariffs/versions/:versionId", ...requireConnectRole("analyst"), rutaAdmin(async (centro, req) => {
+    const { detalleVersion } = await admin();
+    return detalleVersion(centro, Number(req.params.versionId));
+  }));
+
+  /**
+   * Duplicar es la vía normal para cambiar un precio: se copia lo publicado,
+   * se edita la copia y se publica con su fecha de entrada en vigor.
+   */
+  router.post("/tariffs/versions/:versionId/duplicate", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { duplicarVersion } = await admin();
+    const r = await duplicarVersion(centro, Number(req.params.versionId), {
+      version: String(req.body?.version ?? ""),
+      validFromMs: Number(req.body?.validFromMs) || Date.now(),
+      validToMs: req.body?.validToMs != null ? Number(req.body.validToMs) : null,
+      notes: req.body?.notes ?? null,
+    });
+    await auditConnect({ req, action: "tariff.version_duplicated", resourceType: "tariff_version",
+      resourceId: r.id, detail: { origen: Number(req.params.versionId), ...r.copiado } });
+    return r;
+  }));
+
+  router.patch("/tariffs/versions/:versionId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { editarVersion } = await admin();
+    return editarVersion(centro, Number(req.params.versionId), {
+      validFromMs: req.body?.validFromMs != null ? Number(req.body.validFromMs) : null,
+      validToMs: req.body?.validToMs != null ? Number(req.body.validToMs) : null,
+      notes: req.body?.notes ?? null,
+      priority: req.body?.priority != null ? Number(req.body.priority) : null,
+    });
+  }));
+
+  /** Revisión previa: lo que se puede saber de una versión sin ejecutarla. */
+  router.get("/tariffs/versions/:versionId/check", ...requireConnectRole("analyst"), rutaAdmin(async (centro, req) => {
+    const { revisarVersion } = await admin();
+    return { problemas: await revisarVersion(centro, Number(req.params.versionId)) };
+  }));
+
+  router.post("/tariffs/versions/:versionId/publish", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { publicar } = await admin();
+    const r = await publicar(centro, Number(req.params.versionId), req.connectUser?.id ?? null);
+    await auditConnect({ req, action: "tariff.version_published", resourceType: "tariff_version",
+      resourceId: Number(req.params.versionId), detail: { avisos: r.avisos.length } });
+    return r;
+  }));
+
+  router.post("/tariffs/versions/:versionId/archive", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { archivar } = await admin();
+    const ok = await archivar(centro, Number(req.params.versionId));
+    if (ok) {
+      await auditConnect({ req, action: "tariff.version_archived", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: {} });
+    }
+    return { ok };
+  }));
+
+  router.put("/tariffs/versions/:versionId/rules", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarRegla } = await admin();
+    const r = await guardarRegla(centro, Number(req.params.versionId), req.body ?? {});
+    await auditConnect({ req, action: "tariff.rule_saved", resourceType: "tariff_version",
+      resourceId: Number(req.params.versionId), detail: { code: r.code, importe: req.body?.amount } });
+    return r;
+  }));
+
+  router.delete("/tariffs/versions/:versionId/rules/:ruleId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { borrarRegla } = await admin();
+    const ok = await borrarRegla(centro, Number(req.params.versionId), Number(req.params.ruleId));
+    if (ok) {
+      await auditConnect({ req, action: "tariff.rule_deleted", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: { ruleId: Number(req.params.ruleId) } });
+    }
+    return { ok };
+  }));
+
+  router.put("/tariffs/versions/:versionId/extras", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarExtra } = await admin();
+    const r = await guardarExtra(centro, Number(req.params.versionId), req.body ?? {});
+    await auditConnect({ req, action: "tariff.extra_saved", resourceType: "tariff_version",
+      resourceId: Number(req.params.versionId), detail: { code: r.code } });
+    return r;
+  }));
+
+  router.delete("/tariffs/versions/:versionId/extras/:extraId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { borrarExtra } = await admin();
+    return { ok: await borrarExtra(centro, Number(req.params.versionId), Number(req.params.extraId)) };
+  }));
+
+  router.put("/tariffs/time-bands", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarFranja } = await admin();
+    const r = await guardarFranja(centro, req.body ?? {});
+    await auditConnect({ req, action: "tariff.time_band_saved", detail: r });
+    return r;
+  }));
+
+  router.put("/tariffs/zones", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarZona } = await admin();
+    const r = await guardarZona(centro, req.body ?? {});
+    await auditConnect({ req, action: "tariff.zone_saved", detail: r });
+    return r;
+  }));
+
+  router.put("/tariffs/calendars/:calendarId/days", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarDiaCalendario } = await admin();
+    return guardarDiaCalendario(centro, Number(req.params.calendarId), req.body ?? {});
+  }));
+
+  router.delete("/tariffs/calendars/:calendarId/days/:dayId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { borrarDiaCalendario } = await admin();
+    return { ok: await borrarDiaCalendario(centro, Number(req.params.calendarId), Number(req.params.dayId)) };
+  }));
+
   // ── Catálogo de neumáticos ───────────────────────────────────────────────
 
   /*
