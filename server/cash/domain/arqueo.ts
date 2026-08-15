@@ -11,6 +11,7 @@
  */
 
 import { type Centimos } from "./money.ts";
+import { calcularCambio } from "./change.ts";
 import {
   type Inventario,
   type LineaDenominacion,
@@ -142,18 +143,40 @@ export function repartirCierre(
 /**
  * Propone qué dejar como cambio para el día siguiente a partir de lo contado.
  *
- * Criterio: llegar al objetivo dejando la caja preparada para dar cambio, es
- * decir quedándose primero con el menudo y subiendo hacia los billetes solo
- * cuando hace falta. Es lo contrario que el algoritmo de cambio (que minimiza
- * piezas) y es a propósito: una caja que empieza el día con un billete de 200 €
- * y nada más no puede devolver 3,40 €.
+ * Criterio: llegar EXACTAMENTE al objetivo dejando la caja preparada para dar
+ * cambio, es decir quedándose con todo el menudo que se pueda y completando con
+ * billetes. Es lo contrario que el cambio al cliente (que minimiza piezas) y es
+ * a propósito: una caja que abre con un billete de 200 € y nada más no puede
+ * devolver 3,40 €.
  *
- * Es una propuesta: el operador puede cambiarla, y `repartirCierre` valida lo
- * que finalmente decida.
+ * Se resuelve con la misma búsqueda exacta que el cambio, pidiéndole que
+ * MAXIMICE las piezas. Un reparto de menor a mayor a ojo no vale: cogiendo
+ * primero todo el menudo se llega a 260 € y el resto solo se puede completar
+ * con un billete de 100 €, que se pasa. La búsqueda exacta sí encuentra la
+ * combinación que cierra en 300 € justos.
+ *
+ * Si no existe ninguna combinación exacta con lo contado (pasa cuando el
+ * objetivo no es alcanzable pieza a pieza), se devuelve el mejor reparto
+ * aproximado por debajo del objetivo. Nunca miente sobre su total, y el
+ * operador ajusta.
+ *
+ * Es una propuesta: `repartirCierre` valida lo que finalmente decida.
  */
 export function proponerCambioFinal(contado: Inventario, objetivo: Centimos): LineaDenominacion[] {
   if (objetivo <= 0) return [];
+  if (objetivo >= totalInventario(contado)) {
+    // Se quiere dejar todo (o más de lo que hay): se deja todo.
+    return [...contado.entries()]
+      .filter(([, cantidad]) => cantidad > 0)
+      .map(([valor, cantidad]) => ({ valor, cantidad }))
+      .sort((a, b) => b.valor - a.valor);
+  }
 
+  const exacto = calcularCambio(objetivo, contado, "mas_piezas");
+  if (exacto.ok) return exacto.lineas;
+
+  // Sin combinación exacta: se compone lo más cerca posible por debajo,
+  // empezando por el menudo, que es lo que interesa conservar.
   const valores = [...contado.keys()].filter((v) => (contado.get(v) ?? 0) > 0).sort((a, b) => a - b);
   const propuesta: LineaDenominacion[] = [];
   let restante = objetivo;
@@ -168,8 +191,5 @@ export function proponerCambioFinal(contado: Inventario, objetivo: Centimos): Li
     }
   }
 
-  // Si de menor a mayor no se llega justo al objetivo (quedan céntimos sueltos
-  // que ninguna pieza disponible cubre), se deja lo que se ha podido componer:
-  // la propuesta nunca miente sobre su total, y el operador ajusta.
   return propuesta.sort((a, b) => b.valor - a.valor);
 }

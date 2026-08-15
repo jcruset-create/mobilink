@@ -75,14 +75,30 @@ export type ResultadoCambio =
   | { ok: false; motivo: MotivoCambioImposible; mensaje: string };
 
 /**
+ * Qué combinación exacta preferir cuando hay varias.
+ *
+ * · `menos_piezas` — la del cambio al cliente: cuantas menos piezas, mejor.
+ * · `mas_piezas`   — la del cambio que se deja en caja al cerrar: interesa
+ *                    quedarse con el menudo, porque una caja que abre con un
+ *                    billete de 200 € y nada más no puede devolver 3,40 €.
+ *
+ * Las dos son la MISMA búsqueda exacta; solo cambia el sentido del óptimo.
+ */
+export type PreferenciaCambio = "menos_piezas" | "mas_piezas";
+
+/**
  * Propone cómo devolver `importe` usando SOLO piezas de `stock`.
  *
- * Objetivo: el menor número de piezas posible. Eso ya cumple de paso lo de "no
- * vaciar denominaciones útiles para el cambio", porque devolver 20 € en un
- * billete gasta una pieza y hacerlo en monedas de 50 c gasta cuarenta: el
- * óptimo nunca se lleva el menudo si puede evitarlo.
+ * Por defecto minimiza las piezas, que es lo que se quiere al dar cambio a un
+ * cliente. Eso ya cumple de paso lo de "no vaciar denominaciones útiles",
+ * porque devolver 20 € en un billete gasta una pieza y hacerlo en monedas de
+ * 50 c gasta cuarenta: el óptimo nunca se lleva el menudo si puede evitarlo.
  */
-export function calcularCambio(importe: Centimos, stock: Inventario): ResultadoCambio {
+export function calcularCambio(
+  importe: Centimos,
+  stock: Inventario,
+  preferencia: PreferenciaCambio = "menos_piezas"
+): ResultadoCambio {
   if (!Number.isSafeInteger(importe) || importe < 0) {
     return {
       ok: false,
@@ -123,6 +139,13 @@ export function calcularCambio(importe: Centimos, stock: Inventario): ResultadoC
   // `a` en esa capa. Es lo que permite reconstruir la combinación al final.
   const usadas: Int32Array[] = [];
 
+  /*
+   * Truco para no escribir la búsqueda dos veces: se minimiza siempre
+   * `signo × piezas`. Con signo = +1 sale la combinación de menos piezas; con
+   * signo = −1, la de más. Es la misma tabla y la misma ventana móvil.
+   */
+  const signo = preferencia === "mas_piezas" ? -1 : 1;
+
   let previo = new Int32Array(importe + 1).fill(INF);
   previo[0] = 0;
 
@@ -142,12 +165,17 @@ export function calcularCambio(importe: Centimos, stock: Inventario): ResultadoC
       for (let j = 0, a = resto; a <= importe; j++, a += valor) {
         const p = previo[a];
         if (p < INF) {
-          const clave = p - j;
+          const clave = p - signo * j;
           // Empates: se sale el que ya estaba (`>` estricto), que tiene el
           // índice `m` más pequeño y por tanto gasta MÁS piezas de esta
           // denominación. Como se recorre de mayor a menor, eso equivale a
           // preferir el billete gordo y conservar el menudo.
-          while (cola > cabeza && previo[resto + deque[cola - 1] * valor] - deque[cola - 1] > clave) cola--;
+          while (
+            cola > cabeza &&
+            previo[resto + deque[cola - 1] * valor] - signo * deque[cola - 1] > clave
+          ) {
+            cola--;
+          }
           deque[cola++] = j;
         }
 
@@ -156,7 +184,7 @@ export function calcularCambio(importe: Centimos, stock: Inventario): ResultadoC
 
         if (cola > cabeza) {
           const m = deque[cabeza];
-          actual[a] = previo[resto + m * valor] - m + j;
+          actual[a] = previo[resto + m * valor] - signo * m + signo * j;
           usoActual[a] = j - m;
         }
       }
@@ -199,15 +227,16 @@ export function calcularCambio(importe: Centimos, stock: Inventario): ResultadoC
   }
 
   lineas.sort((a, b) => b.valor - a.valor);
-  return { ok: true, lineas, piezas: previo[importe] };
+  return { ok: true, lineas, piezas: signo * previo[importe] };
 }
 
 /** Atajo cómodo para las pruebas y para la API, que hablan en líneas. */
 export function calcularCambioDesdeLineas(
   importe: Centimos,
-  stock: readonly LineaDenominacion[]
+  stock: readonly LineaDenominacion[],
+  preferencia: PreferenciaCambio = "menos_piezas"
 ): ResultadoCambio {
-  return calcularCambio(importe, inventarioDesdeLineas(stock));
+  return calcularCambio(importe, inventarioDesdeLineas(stock), preferencia);
 }
 
 /**

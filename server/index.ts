@@ -20,6 +20,7 @@ import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
+import { initCash, mountCash, startCashErpWorker } from "./cash/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
@@ -16902,6 +16903,13 @@ function startRecobrosNotifierChecker() {
 mountIntegrationHub(app);
 
 /* =========================================================
+   MOBILINK CASH (API bajo /api/cash)
+   Igual que el hub: antes del catch-all del SPA.
+========================================================= */
+
+mountCash(app);
+
+/* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
 ========================================================= */
 
@@ -17291,6 +17299,7 @@ initDb()
   .then(() => initIntegrationHub())
   .then(() => initLicenses())
   .then(() => initConnect())
+  .then(() => initCash())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -17306,6 +17315,7 @@ initDb()
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
+      startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
     });
   })
   .catch((error) => {

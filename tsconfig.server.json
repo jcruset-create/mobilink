@@ -21,5 +21,5 @@
     "strict": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["server/connect/**/*.ts"]
+  "include": ["server/connect/**/*.ts", "server/cash/**/*.ts"]
 }
