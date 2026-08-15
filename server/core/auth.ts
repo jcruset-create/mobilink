@@ -185,34 +185,15 @@ export const requireSuperadmin: RequestHandler = (req, res, next) => {
   next();
 };
 
-/** Registra una acción en app_auditoria (best-effort: nunca rompe la request). */
-export async function registrarAuditoria(opts: {
-  empresaId: string;
-  userId?: string | null;
-  accion: string;
-  entidad?: string;
-  entidadId?: string;
-  detalle?: unknown;
-  ip?: string;
-}): Promise<void> {
-  try {
-    await db.query(
-      `INSERT INTO app_auditoria (empresa_id, user_id, accion, entidad, entidad_id, detalle, ip)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        opts.empresaId,
-        opts.userId ?? null,
-        opts.accion,
-        opts.entidad ?? null,
-        opts.entidadId ?? null,
-        opts.detalle ? JSON.stringify(opts.detalle) : null,
-        opts.ip ?? null,
-      ]
-    );
-  } catch (e) {
-    console.error("registrarAuditoria error:", e);
-  }
-}
+/**
+ * Reexportado desde `core/auditoria.ts`.
+ *
+ * Se movió allí porque este fichero exige `SUPABASE_URL` en cuanto se importa
+ * (lo necesita para resolver tokens), y un módulo que solo quiera auditar no
+ * tiene por qué arrastrar eso. Se mantiene el reexport para no tocar los sitios
+ * que ya lo importaban de aquí.
+ */
+export { registrarAuditoria } from "./auditoria.ts";
 
 /** Datos para GET /api/me: usuario + empresa + módulos con licencia vigente. */
 export async function buildMePayload(ctx: AuthContext) {

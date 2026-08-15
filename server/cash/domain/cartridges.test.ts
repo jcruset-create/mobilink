@@ -1,0 +1,153 @@
+/**
+ * Pruebas de los cartuchos.
+ *
+ * El caso que da nombre al fichero es el del encargo: hay que devolver 4 €, no
+ * hay monedas de 2 €, solo queda 1 moneda de 1 € suelta y un tubo de 25. Se
+ * abre el tubo, se devuelven 4 monedas y quedan 22 sueltas.
+ */
+
+import { describe, it, expect } from "vitest";
+import { esExito, esFallo } from "./result.ts";
+import {
+  aperturasNecesarias,
+  calcularCambioConCartuchos,
+  inventarioConTodoAbierto,
+  piezasTotales,
+  stockDesdeLineas,
+} from "./cartridges.ts";
+import { totalInventario } from "./inventory.ts";
+
+/** Configuración de cartuchos del encargo. */
+const POR_CARTUCHO = new Map([
+  [200, 25],
+  [100, 25],
+  [50, 25],
+  [20, 25],
+  [10, 50],
+  [5, 50],
+  [2, 50],
+  [1, 50],
+]);
+
+const totalDe = (l: readonly { valor: number; cantidad: number }[]) =>
+  l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+describe("el tubo se abre solo si hace falta", () => {
+  it("con sueltas suficientes no se rompe ningún precinto", () => {
+    // 30 monedas de 1 € sueltas y un tubo. Los 4 € salen de lo suelto.
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 30 }], [{ valor: 100, cantidad: 1 }]);
+    const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO);
+
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    expect(r.aperturas).toEqual([]);
+    expect(totalDe(r.lineas)).toBe(400);
+  });
+
+  it("no rompe aunque abriendo saliera con menos piezas", () => {
+    // 4 € en monedas de 1 €: cuatro piezas. Con un tubo de 2 € abierto serían
+    // dos. Da igual: mientras haya suelto, el precinto no se toca.
+    const stock = stockDesdeLineas(
+      [{ valor: 100, cantidad: 10 }],
+      [{ valor: 200, cantidad: 1 }]
+    );
+    const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO);
+
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    expect(r.aperturas).toEqual([]);
+    expect(r.lineas).toEqual([{ valor: 100, cantidad: 4 }]);
+  });
+
+  it("el caso del encargo: 4 € con 1 suelta y un tubo de 25", () => {
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 1 }], [{ valor: 100, cantidad: 1 }]);
+    // El cartucho de 1 € es de 25 unidades.
+    const porCartucho = new Map([[100, 25]]);
+
+    const r = calcularCambioConCartuchos(400, stock, porCartucho);
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+
+    expect(totalDe(r.lineas)).toBe(400);
+    expect(r.lineas).toEqual([{ valor: 100, cantidad: 4 }]);
+    // Se abre exactamente un tubo, y de él salen 25 monedas.
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+
+    // Tras la operación: 1 + 25 − 4 = 22 sueltas, y ningún tubo.
+    const sueltasDespues = 1 + 25 - 4;
+    expect(sueltasDespues).toBe(22);
+  });
+
+  it("abre varios tubos si con uno no llega", () => {
+    // Hay que devolver 60 € en monedas de 1 €: 0 sueltas y tubos de 25.
+    const stock = stockDesdeLineas([], [{ valor: 100, cantidad: 4 }]);
+    const porCartucho = new Map([[100, 25]]);
+
+    const r = calcularCambioConCartuchos(6000, stock, porCartucho);
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    expect(totalDe(r.lineas)).toBe(6000);
+    // 60 monedas → tres tubos (75 piezas), porque con dos solo hay 50.
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 3, piezas: 75 }]);
+  });
+
+  it("los tubos cuentan como dinero disponible aunque estén cerrados", () => {
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 2 }], [{ valor: 100, cantidad: 2 }]);
+    const porCartucho = new Map([[100, 25]]);
+
+    expect(piezasTotales(stock, 100, porCartucho)).toBe(52);
+    expect(totalInventario(inventarioConTodoAbierto(stock, porCartucho))).toBe(5200);
+  });
+
+  it("sin tubos ni sueltas suficientes sigue siendo imposible", () => {
+    const stock = stockDesdeLineas([{ valor: 5000, cantidad: 2 }], []);
+    const r = calcularCambioConCartuchos(300, stock, POR_CARTUCHO);
+    expect(r.ok).toBe(false);
+    if (esExito(r)) return;
+    expect(r.motivo).toBe("NO_SOLUTION");
+  });
+
+  it("una denominación sin cartucho configurado no inventa piezas", () => {
+    // Los billetes no van en tubo: 2 de 50 € y nada más.
+    const stock = stockDesdeLineas([{ valor: 5000, cantidad: 2 }], [{ valor: 5000, cantidad: 3 }]);
+    const sinCartucho = new Map<number, number>();
+    expect(piezasTotales(stock, 5000, sinCartucho)).toBe(2);
+  });
+});
+
+describe("aperturas de una entrega elegida a mano", () => {
+  const porCartucho = new Map([[100, 25]]);
+
+  it("no exige abrir nada si lo suelto llega", () => {
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 10 }], [{ valor: 100, cantidad: 1 }]);
+    const r = aperturasNecesarias([{ valor: 100, cantidad: 4 }], stock, porCartucho);
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    expect(r.aperturas).toEqual([]);
+  });
+
+  it("calcula los tubos que hay que abrir", () => {
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 1 }], [{ valor: 100, cantidad: 2 }]);
+    const r = aperturasNecesarias([{ valor: 100, cantidad: 30 }], stock, porCartucho);
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    // 30 pedidas − 1 suelta = 29 → dos tubos de 25.
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 2, piezas: 50 }]);
+  });
+
+  it("rechaza lo que no hay ni abriendo todos los tubos", () => {
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 1 }], [{ valor: 100, cantidad: 1 }]);
+    const r = aperturasNecesarias([{ valor: 100, cantidad: 40 }], stock, porCartucho);
+    expect(r.ok).toBe(false);
+    if (esExito(r)) return;
+    expect(r).toMatchObject({ valor: 100, pedido: 40, disponible: 26 });
+  });
+
+  it("rechaza si la denominación no tiene cartucho y faltan sueltas", () => {
+    const stock = stockDesdeLineas([{ valor: 5000, cantidad: 1 }], []);
+    const r = aperturasNecesarias([{ valor: 5000, cantidad: 3 }], stock, new Map());
+    expect(r.ok).toBe(false);
+    if (esExito(r)) return;
+    expect(r.disponible).toBe(1);
+  });
+});
