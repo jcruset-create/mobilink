@@ -246,7 +246,14 @@ export async function initCash(): Promise<void> {
       importe_centimos BIGINT NOT NULL,
       motivo TEXT NOT NULL CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
-        'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT','CLOSING_FLOAT')),
+        'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
+        'CLOSING_FLOAT','CARTRIDGE_OPENED')),
+      -- Tubos precintados que representa este asiento. 0 = monedas sueltas.
+      -- La columna cantidad son SIEMPRE piezas: en una fila de cartuchos vale
+      -- tubos x piezas_por_cartucho. Asi el total de piezas sigue siendo la
+      -- suma de cantidad sin ningun caso especial, y las sueltas salen de
+      -- filtrar por cartuchos = 0.
+      cartuchos INTEGER NOT NULL DEFAULT 0,
       created_by UUID,
       created_at_ms BIGINT NOT NULL
     );
@@ -254,6 +261,23 @@ export async function initCash(): Promise<void> {
     CREATE INDEX IF NOT EXISTS cash_denmov_op_idx ON cash_denomination_movements(operation_id);
     CREATE INDEX IF NOT EXISTS cash_denmov_stock_idx
       ON cash_denomination_movements(session_id, denomination_id, direccion);
+  `);
+
+  /*
+   * Cartuchos: se añade después del CREATE para las bases que ya existían.
+   * Abrir un tubo es irreversible y deja su propio par de asientos
+   * (CARTRIDGE_OPENED), así que el rastro del efectivo sigue cuadrando.
+   */
+  await pool.query(`
+    ALTER TABLE cash_denomination_movements
+      ADD COLUMN IF NOT EXISTS cartuchos INTEGER NOT NULL DEFAULT 0;
+
+    ALTER TABLE cash_denomination_movements DROP CONSTRAINT IF EXISTS cash_denomination_movements_motivo_check;
+    ALTER TABLE cash_denomination_movements ADD CONSTRAINT cash_denomination_movements_motivo_check
+      CHECK (motivo IN (
+        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
+        'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
+        'CLOSING_FLOAT','CARTRIDGE_OPENED'));
   `);
 
   // ── Arqueos ───────────────────────────────────────────────────────────────

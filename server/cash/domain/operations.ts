@@ -76,15 +76,23 @@ export type MotivoMovimiento =
   | "CASH_DELIVERY"
   | "BANK_DEPOSIT"
   | "ADJUSTMENT"
-  | "CLOSING_FLOAT";
+  | "CLOSING_FLOAT"
+  /** Apertura de un cartucho: sale el tubo y entran sus monedas sueltas. */
+  | "CARTRIDGE_OPENED";
 
 export type Direccion = "IN" | "OUT";
+
+/**
+ * Línea de un asiento. `cantidad` son SIEMPRE piezas; `cartuchos` dice cuántos
+ * tubos precintados representan esas piezas (0 = monedas sueltas).
+ */
+export type LineaMovimiento = LineaDenominacion & { cartuchos?: number };
 
 /** Movimiento de piezas ya resuelto, listo para escribir en el libro mayor. */
 export type MovimientoDenominacion = {
   direccion: Direccion;
   motivo: MotivoMovimiento;
-  lineas: LineaDenominacion[];
+  lineas: LineaMovimiento[];
 };
 
 // ── Entrada normalizada ────────────────────────────────────────────────────
