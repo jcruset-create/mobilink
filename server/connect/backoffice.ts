@@ -588,8 +588,7 @@ export function createConnectBackofficeRouter(): Router {
     const since30 = Date.now() - 30 * 24 * 3600_000;
     const [auth, workshops, units, stats, billing, incidents] = await Promise.all([
       db.query(
-        `SELECT a.*, (SELECT COUNT(*)::int FROM connect_tariff_lines tl
-                       WHERE tl."authorizationId" = a.id AND tl.active) AS "tariffLines"
+        `SELECT a.*
            FROM connect_provider_authorizations a
           WHERE a."providerCompanyId" = $1 AND a."branchId" IS NULL
           ORDER BY a.id DESC LIMIT 1`,
@@ -2161,6 +2160,48 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ ok });
   });
 
+  // ── Cierre automático de tarifas ─────────────────────────────────────────
+
+  /*
+   * Apagado de fábrica. Mientras lo esté, el cierre lo dispara una persona
+   * desde la ficha, que es como funciona hoy.
+   */
+  router.get("/pricing/auto-close", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { leerAjustesCierre, simularCierre } = await import("./pricing/cierreAutomatico.ts");
+
+    const cc = await db.query(`SELECT settings FROM connect_control_centers WHERE id = $1`, [centro]);
+    const ajustes = leerAjustesCierre(cc.rows[0]?.settings ?? null);
+    res.json({ ...ajustes, ...(await simularCierre(centro, ajustes.esperaMin)) });
+  });
+
+  /**
+   * Simula sin cerrar nada: «con esta espera se cerrarían N servicios».
+   * Encender el interruptor a ciegas en una central con seiscientos servicios
+   * sin cerrar es una sorpresa que conviene ahorrarse.
+   */
+  router.get("/pricing/auto-close/preview", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { simularCierre, ESPERA_POR_DEFECTO_MIN } = await import("./pricing/cierreAutomatico.ts");
+    const espera = Number(req.query.esperaMin);
+    res.json(await simularCierre(centro, Number.isFinite(espera) && espera >= 0 ? espera : ESPERA_POR_DEFECTO_MIN));
+  });
+
+  router.put("/pricing/auto-close", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarAjustesCierre, simularCierre } = await import("./pricing/cierreAutomatico.ts");
+
+    const ajustes = await guardarAjustesCierre(centro, {
+      activo: req.body?.activo === true,
+      esperaMin: Number(req.body?.esperaMin),
+    });
+    await auditConnect({ req, action: "pricing.auto_close_changed", detail: ajustes });
+    res.json({ ...ajustes, ...(await simularCierre(centro, ajustes.esperaMin)) });
+  });
+
   // ── Calendario de los talleres ───────────────────────────────────────────
 
   /*
@@ -3045,29 +3086,19 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json(r.rows[0]);
   });
 
-  router.get("/authorizations/:id/tariffs", ...requireConnectRole("analyst"), async (req, res) => {
-    const r = await db.query(
-      `SELECT * FROM connect_tariff_lines WHERE "authorizationId" = $1 ORDER BY "serviceTypeCode"`,
-      [Number(req.params.id)],
-    );
-    res.json({ data: r.rows });
-  });
+  /*
+   * El editor de tarifas por autorización (importe base + €/km) se ha
+   * retirado: lo sustituye el motor de tarifas, que vive en Tarifas y sabe
+   * franjas, festivos, zonas y los dos lados.
+   *
+   * La TABLA connect_tariff_lines se queda, y `finalizeAcceptedAssignment`
+   * la sigue leyendo como respaldo cuando el motor no devuelve importe —una
+   * empresa sin contrato de compra todavía—. Borrarla dejaría hoy mismo sin
+   * coste a las asistencias de esas empresas, que es peor que arrastrar una
+   * tabla. Lo que ya no se puede es escribir en ella: no tiene sentido dar de
+   * alta datos nuevos en un sistema que se está retirando.
+   */
 
-  router.put("/authorizations/:id/tariffs/:code", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const { baseAmount, perKmAmount, active } = req.body ?? {};
-    const r = await db.query(
-      `INSERT INTO connect_tariff_lines ("authorizationId", "serviceTypeCode", "baseAmount", "perKmAmount", active, "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT ("authorizationId", "serviceTypeCode")
-       DO UPDATE SET "baseAmount" = EXCLUDED."baseAmount", "perKmAmount" = EXCLUDED."perKmAmount",
-                     active = EXCLUDED.active, "updatedAtMs" = EXCLUDED."updatedAtMs"
-       RETURNING *`,
-      [Number(req.params.id), String(req.params.code), Number(baseAmount) || 0, Number(perKmAmount) || 0,
-       active !== false, Date.now()],
-    );
-    await auditConnect({ req, action: "tariff.upserted", resourceType: "authorization", resourceId: Number(req.params.id), detail: req.body });
-    res.json(r.rows[0]);
-  });
 
   // Coste final de la asistencia (cierre administrativo)
   router.patch("/assistances/:id/costs", ...requireConnectRole("operator"), async (req, res) => {
