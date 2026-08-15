@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
+import Contratos from "../components/Contratos";
 
 
 type Plan = {
@@ -71,7 +72,7 @@ const ESTADOS: Record<string, { texto: string; clase: string }> = {
 };
 
 const DIAS = ["L", "M", "X", "J", "V", "S", "D"];
-const SECCIONES = ["Reglas", "Suplementos", "Franjas", "Zonas", "Calendario"] as const;
+const SECCIONES = ["Reglas", "Suplementos", "Franjas", "Zonas", "Calendario", "Contratos"] as const;
 
 const fecha = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleDateString("es-ES"));
 const aMs = (iso: string) => new Date(`${iso}T00:00:00`).getTime();
@@ -252,6 +253,7 @@ export default function Tarifas() {
           {seccion === "Franjas" && (
             <Franjas detalle={detalle} onCambio={refrescar} onError={setError} />
           )}
+          {seccion === "Contratos" && <Contratos planes={planes} />}
           {seccion === "Zonas" && <Zonas detalle={detalle} />}
           {seccion === "Calendario" && <Calendario detalle={detalle} />}
         </>
