@@ -123,17 +123,30 @@ describe("SEAS 2026 como datos", () => {
     expect(importe(SEAS_2026_COMPRA, "DIURNO")).toBe("170");
   });
 
-  it("el diurno proximidad tiene margen negativo, y está a propósito", () => {
+  it("el diurno proximidad va invertido respecto al PDF, y es deliberado", () => {
     /*
-     * Venta 110 y compra 125: SEAS paga al taller más de lo que cobra. Está
-     * así en el documento. Esta prueba no lo aprueba: lo fija, para que si
-     * alguien lo cambia sea a sabiendas y no de refilón.
+     * El documento publica 110 de venta y 125 de compra, o sea que SEAS
+     * pagaría al taller más de lo que cobra. La dirección lo ha resuelto como
+     * lo que es —las columnas cambiadas en esa fila— y aquí van al revés.
+     *
+     * Esta prueba no aprueba la decisión: la FIJA. Es el único importe del
+     * fichero que no coincide con el documento, y si alguien lo "corrige" de
+     * vuelta contrastando contra el PDF, esto se pone rojo y le obliga a leer
+     * el porqué antes de tocarlo.
      */
     const venta = Number(SEAS_2026_VENTA.reglas.find((r) => r.code === "DIURNO_PROX")!.importe);
     const compra = Number(SEAS_2026_COMPRA.reglas.find((r) => r.code === "DIURNO_PROX")!.importe);
-    expect(venta).toBe(110);
-    expect(compra).toBe(125);
-    expect(venta - compra).toBe(-15);
+    expect(venta).toBe(125);
+    expect(compra).toBe(110);
+    expect(venta - compra).toBe(15);
+  });
+
+  it("ningún forfait vende por debajo del coste", () => {
+    // Resuelto el diurno proximidad, los cinco forfaits dan margen positivo
+    for (const r of SEAS_2026_VENTA.reglas) {
+      const compra = SEAS_2026_COMPRA.reglas.find((x) => x.code === r.code)!;
+      expect(Number(r.importe) - Number(compra.importe), r.code).toBeGreaterThan(0);
+    }
   });
 
   it("tres marcas dan más descuento en venta que en compra", () => {

@@ -20,16 +20,23 @@
  * precio de venta, así que son dos planes tarifarios: el contrato de venta
  * apunta a `SEAS_2026_VENTA` y el de compra a `SEAS_2026_COMPRA`.
  *
- * ⚠ EL DIURNO PROXIMIDAD DA MARGEN NEGATIVO
+ * ⚠ EL DIURNO PROXIMIDAD VA INVERTIDO RESPECTO AL DOCUMENTO
  *
- * Venta 110 €, compra 125 €: SEAS paga al taller 15 € más de lo que cobra a
- * su cliente. Está así en el documento y no es un error de transcripción. Se
- * carga tal cual —el motor calcula márgenes negativos sin problema— pero
- * conviene que alguien lo confirme antes de publicar la versión.
+ * El PDF publica, para el diurno proximidad, 110 € en la tabla de venta y
+ * 125 € en la de compra: SEAS pagaría al taller 15 € más de lo que le cobra a
+ * su cliente. Se transcribió así, se señaló, y la dirección lo ha resuelto
+ * como lo que es —las dos columnas cambiadas en esa fila del documento—, así
+ * que aquí van al revés: **125 € de venta y 110 € de compra**.
+ *
+ * Es el ÚNICO importe de este fichero que no coincide con el documento, y está
+ * cambiado a propósito. Si alguien contrasta la carga contra el PDF y ve la
+ * diferencia: no es una errata de transcripción, no la "corrijas" de vuelta.
+ * El resto de filas de las dos tablas sí son literales.
  *
  * LO QUE FALTA CONTRASTAR O DECIDIR
  *
- *  1. El margen negativo del diurno proximidad (arriba).
+ *  1. Que la dirección confirme por escrito la inversión del diurno
+ *     proximidad, para que quede en el expediente y no solo aquí.
  *  2. La ventana de festivos acaba el lunes a las 08:00 en la tabla de venta y
  *     a las 07:30 en la de compra. Aquí van las dos a las 08:00: en esa media
  *     hora el importe es el mismo (nocturno y festivo valen igual en las dos
@@ -41,7 +48,9 @@
  *     como "3,1") no se ha podido cruzar con los grupos de precio neto
  *     (1ª EUROPEAS / import 1 / import 2). No se carga: no se inventa.
  *  5. Tres marcas tienen MÁS descuento en venta que en compra —BARUM, DAYTON y
- *     FORMULA—, o sea margen negativo también ahí. Está en el documento.
+ *     FORMULA—, o sea margen negativo también ahí. Eso NO se ha tocado: está
+ *     en el documento y nadie ha dicho lo contrario. Es el mismo caso que el
+ *     diurno proximidad y probablemente merezca la misma revisión.
  *
  * LO QUE EL DOCUMENTO TRAE Y AQUÍ NO SE CARGA, Y POR QUÉ
  *
@@ -77,7 +86,7 @@ const FUENTE = "Asociados_2026_Mayo.pdf (SEAS 24 Horas, S.L.), vigente desde 202
 
 /** Importe del forfait en cada lado, con lo que incluye. */
 const FORFAITS = {
-  DIURNO_PROX:   { venta: "110", compra: "125", km: 30,  min: 90 },
+  DIURNO_PROX:   { venta: "125", compra: "110", km: 30,  min: 90 },   // ⚠ invertido respecto al PDF, ver cabecera
   DIURNO:        { venta: "198", compra: "170", km: 100, min: 180 },
   NOCTURNO:      { venta: "331", compra: "275", km: 100, min: 180 },
   FESTIVO:       { venta: "331", compra: "275", km: 100, min: 180 },

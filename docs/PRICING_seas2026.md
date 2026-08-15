@@ -14,11 +14,13 @@ ASISTENCIA` y `TARIFA DE COMPRA DE SEAS ASISTENCIA`. No coinciden.
 
 | Forfait | Incluye | Venta | Compra | Margen |
 |---|---|---:|---:|---:|
-| Diurno proximidad | < 30 km / 1,5 h | 110 € | 125 € | **−15 €** |
+| Diurno proximidad | < 30 km / 1,5 h | 125 €* | 110 €* | 15 € |
 | Diurno | 100 km / 3 h | 198 € | 170 € | 28 € |
 | Nocturno | 100 km / 3 h | 331 € | 275 € | 56 € |
 | Festivos | 100 km / 3 h | 331 € | 275 € | 56 € |
 | Festivos extra (25 dic, 1 ene) | 100 km / 3 h | 424 € | 400 € | 24 € |
+
+\* **Invertido respecto al PDF a propósito.** Ver §2.
 
 | Suplemento | Venta | Compra |
 |---|---:|---:|
@@ -34,22 +36,30 @@ mismos que los de venta. Se cargan como dos planes tarifarios distintos
 uno y el de compra al otro. El motor no cambió: ya estaba diseñado para que la
 regla produzca un importe y el `role` del contrato decida de qué lado es.
 
-## 2. El diurno proximidad da margen negativo
+## 2. El diurno proximidad va invertido respecto al PDF
 
-Venta 110 €, compra 125 €. SEAS paga al taller **15 € más** de lo que le cobra
-a su cliente. Está así en el documento publicado y no es un error de
-transcripción: las dos tablas son legibles y coherentes en el resto de líneas.
+El documento publica, para el diurno proximidad, **110 € de venta y 125 € de
+compra**: SEAS pagaría al taller 15 € más de lo que le cobra a su cliente. Es
+el único número de las dos tablas que no se sostiene, y las dos son legibles y
+coherentes en todas las demás líneas.
 
-Se ha cargado tal cual. El motor calcula y enseña márgenes negativos sin
-maquillarlos, y hay una prueba que lo fija (`seas2026.test.ts`) para que si
-alguien cambia esos números sea a sabiendas.
+Se transcribió tal cual, se señaló, y la dirección lo ha resuelto como lo que
+es —las dos columnas cambiadas en esa fila del documento—. Lo cargado es por
+tanto **125 € de venta y 110 € de compra**, con margen de 15 €.
 
-**Pendiente de confirmar con SEAS.** Es el único número del documento que
-parece un error de la fuente y no una decisión.
+> **Es el único importe cargado que no coincide con el documento fuente**, y
+> está cambiado a propósito. Quien contraste la carga contra el PDF va a ver la
+> diferencia: no es una errata de transcripción y no hay que "corregirla" de
+> vuelta. Hay una prueba en `seas2026.test.ts` que se pone roja si alguien lo
+> intenta, para obligarle a leer el porqué antes de tocarlo.
 
-Lo mismo pasa en los neumáticos: **Barum, Dayton y Formula** tienen más
-descuento en venta que en compra (Dayton, 45 % frente a 30 %), o sea que
-también venden por debajo del coste.
+Conviene que la inversión quede confirmada por escrito con SEAS, para que esté
+en el expediente y no solo en un comentario del código.
+
+**Lo que NO se ha tocado**: en los neumáticos, **Barum, Dayton y Formula**
+tienen más descuento en venta que en compra (Dayton, 45 % frente a 30 %), o sea
+que también venden por debajo del coste. Es el mismo caso y sigue como está en
+el documento, a la espera de la misma revisión.
 
 ## 3. La ventana de festivos, y la pregunta del nocturno resuelta
 
@@ -130,8 +140,9 @@ tarifa.
 Las versiones se han cargado como **BORRADOR**. No facturan nada hasta que
 alguien las publique a conciencia. Antes de hacerlo:
 
-1. El margen negativo del diurno proximidad (110 venta / 125 compra).
-2. Los descuentos invertidos de Barum, Dayton y Formula.
+1. Que la inversión del diurno proximidad quede confirmada por escrito.
+2. Los descuentos invertidos de Barum, Dayton y Formula, que siguen como en el
+   documento.
 3. Si el 07:30 del lunes en la tabla de compra es intencionado.
 4. La posición de las medidas 435/50R19.5 y 445/45R19.5: la tabla de compra no
    la trae y se les ha puesto **remolque**, que es la que llevan en la de
