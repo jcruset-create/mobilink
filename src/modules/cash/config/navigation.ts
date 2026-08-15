@@ -16,6 +16,7 @@ import {
   Lock,
   History,
   Plug,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +39,7 @@ export const NAV: NavItem[] = [
   { key: "cierre", path: "cierre", label: "Cierre", icon: Lock, permiso: "cash.close_session" },
   { key: "historico", path: "historico", label: "Histórico", icon: History, permiso: "cash.view" },
   { key: "erp", path: "erp", label: "Integración ERP", icon: Plug, permiso: "cash.erp.view" },
+  { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, permiso: "cash.configure" },
 ];
 
 export function navVisible(item: NavItem, permisos: readonly string[]): boolean {

@@ -25,6 +25,7 @@ let servicio: typeof import("./service.ts");
 let repo: typeof import("./repository.ts");
 let outbox: typeof import("./erp/worker.ts");
 let registry: typeof import("./erp/registry.ts");
+let config: typeof import("./config.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
 let facturaDemo: typeof import("./erp/mock.ts").facturaDemo;
 
@@ -74,6 +75,7 @@ beforeAll(async () => {
   repo = await import("./repository.ts");
   outbox = await import("./erp/worker.ts");
   registry = await import("./erp/registry.ts");
+  config = await import("./config.ts");
   const mock = await import("./erp/mock.ts");
   MockCashErpConnector = mock.MockCashErpConnector;
   facturaDemo = mock.facturaDemo;
@@ -583,5 +585,114 @@ describe.runIf(RUN)("integración con ERP", () => {
 
     const estado = await registry.estadoIntegracion(EMPRESA);
     expect(estado.estado).toBe("DESACTIVADA");
+  });
+});
+
+describe.runIf(RUN)("configuración", () => {
+  it("crear una caja la deja lista para abrir jornada", async () => {
+    const nombre = `config-${String(process.hrtime.bigint()).slice(-9)}`;
+    const caja = await config.crearCaja(ctx, { nombre, centro: "reus" });
+
+    expect(caja.activa).toBe(true);
+    expect(caja.nombre).toBe(nombre);
+
+    const lista = await config.listarCajas(EMPRESA);
+    const fila = lista.find((c) => c.id === caja.id);
+    expect(fila).toMatchObject({ activa: true, jornadas: 0, jornadaAbierta: null });
+
+    // Y efectivamente se puede abrir jornada con ella.
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja.id,
+      fondoManual: [{ valor: 5000, cantidad: 1 }],
+    });
+    expect(sesion.estado).toBe("OPEN");
+  });
+
+  it("volver a crear una caja dada de baja la reactiva en vez de fallar", async () => {
+    const nombre = `rebaja-${String(process.hrtime.bigint()).slice(-9)}`;
+    const caja = await config.crearCaja(ctx, { nombre, centro: "reus" });
+    await config.actualizarCaja(ctx, caja.id, { activa: false });
+
+    const otraVez = await config.crearCaja(ctx, { nombre, centro: "reus" });
+    expect(otraVez.id).toBe(caja.id);
+    expect(otraVez.activa).toBe(true);
+  });
+
+  it("no se puede dar de baja ni renombrar una caja con la jornada abierta", async () => {
+    const nombre = `abierta-${String(process.hrtime.bigint()).slice(-9)}`;
+    const caja = await config.crearCaja(ctx, { nombre });
+    await servicio.abrirJornada(ctx, {
+      registerId: caja.id,
+      fondoManual: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    // Quedaría dinero contado en una caja que ya no aparece, y nadie podría
+    // cerrarla.
+    await expect(config.actualizarCaja(ctx, caja.id, { activa: false })).rejects.toMatchObject({
+      codigo: "JORNADA_ABIERTA",
+    });
+    await expect(config.actualizarCaja(ctx, caja.id, { nombre: "otro" })).rejects.toMatchObject({
+      codigo: "JORNADA_ABIERTA",
+    });
+
+    const lista = await config.listarCajas(EMPRESA);
+    expect(lista.find((c) => c.id === caja.id)?.activa).toBe(true);
+  });
+
+  it("una caja de otra empresa no se puede tocar", async () => {
+    const caja = await config.crearCaja(ctx, {
+      nombre: `ajena-${String(process.hrtime.bigint()).slice(-9)}`,
+    });
+    const otraEmpresa = { ...ctx, empresaId: "00000000-0000-4000-a000-0000000000ff" };
+    await expect(config.actualizarCaja(otraEmpresa, caja.id, { activa: false })).rejects.toMatchObject({
+      codigo: "CAJA_NO_ENCONTRADA",
+    });
+  });
+
+  it("no se desactiva una denominación con piezas en una caja abierta", async () => {
+    const caja = await config.crearCaja(ctx, {
+      nombre: `den-${String(process.hrtime.bigint()).slice(-9)}`,
+    });
+    await servicio.abrirJornada(ctx, {
+      registerId: caja.id,
+      fondoManual: [{ valor: 20000, cantidad: 1 }], // billete de 200 €
+    });
+
+    const { rows } = await db.query(
+      `SELECT id FROM cash_denominations WHERE valor_centimos = 20000`
+    );
+    const id = rows[0].id;
+
+    expect(await config.tienePiezasEnCajaAbierta(id)).toBe(true);
+    await expect(config.actualizarDenominacion(ctx, id, { activa: false })).rejects.toMatchObject({
+      codigo: "DENOMINACION_EN_USO",
+    });
+  });
+
+  it("sí se puede cambiar el tamaño del cartucho, y el valor nunca", async () => {
+    const { rows } = await db.query(`SELECT * FROM cash_denominations WHERE valor_centimos = 200`);
+    const antes = rows[0];
+
+    const d = await config.actualizarDenominacion(ctx, antes.id, { piezasPorCartucho: 40 });
+    expect(d.piezasPorCartucho).toBe(40);
+    expect(d.valor).toBe(200); // el valor no es ni un parámetro
+
+    // Se puede dejar sin cartucho.
+    const sin = await config.actualizarDenominacion(ctx, antes.id, { piezasPorCartucho: null });
+    expect(sin.piezasPorCartucho).toBeNull();
+
+    // Y se restaura para no dejar el catálogo tocado a las demás pruebas.
+    await config.actualizarDenominacion(ctx, antes.id, {
+      piezasPorCartucho: antes.piezas_por_cartucho,
+    });
+  });
+
+  it("rechaza un tamaño de cartucho que no es un entero positivo", async () => {
+    const { rows } = await db.query(`SELECT id FROM cash_denominations WHERE valor_centimos = 100`);
+    for (const malo of [0, -5, 2.5]) {
+      await expect(
+        config.actualizarDenominacion(ctx, rows[0].id, { piezasPorCartucho: malo })
+      ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+    }
   });
 });

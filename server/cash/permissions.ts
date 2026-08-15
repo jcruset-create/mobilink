@@ -28,6 +28,24 @@ export const PERMISOS = [
   "cash.adjustment.create",
   "cash.operation.reverse",
   "cash.count.create",
+  /**
+   * Alta y baja de las cajas físicas de la empresa.
+   *
+   * Va separado de `cash.erp.configure` a propósito: dar de alta una caja en
+   * Reus y conectar la ERP de la empresa son decisiones de calado distinto, y
+   * quien puede hacer la primera no tiene por qué poder hacer la segunda.
+   */
+  "cash.configure",
+  /**
+   * Catálogo de denominaciones y cartuchos.
+   *
+   * Permiso propio y solo de admin porque `cash_denominations` NO tiene
+   * empresa: es el catálogo de toda la instalación. Si un responsable de una
+   * empresa pudiera desactivar la moneda de 1 c, se la estaría desactivando
+   * también a las demás. Con el euro esto rara vez se toca, pero el permiso
+   * tiene que reflejar el alcance real de la tabla.
+   */
+  "cash.denominations.configure",
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
@@ -71,6 +89,9 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.adjustment.create",
     "cash.operation.reverse",
     "cash.count.create",
+    // Puede dar de alta una caja de su empresa, pero no tocar el catálogo de
+    // denominaciones, que es de toda la instalación.
+    "cash.configure",
   ],
   admin: PERMISOS,
 };

@@ -37,6 +37,8 @@ type Valor = {
 
   jornada: ResumenJornada | null;
   refrescar: () => Promise<void>;
+  /** Vuelve a leer el arranque: cajas, denominaciones y permisos. */
+  recargarConfiguracion: () => Promise<void>;
   /** Existencias por valor, para limitar lo que se puede sacar. */
   disponible: Record<number, number>;
   puede: (permiso: string) => boolean;
@@ -102,6 +104,29 @@ export function CashProvider({ children }: { children: ReactNode }) {
     if (cajaId) await cargarJornada(cajaId);
   }, [cajaId, cargarJornada]);
 
+  /**
+   * Recarga el arranque tras tocar la configuración. Hace falta porque las
+   * denominaciones y las cajas se leen una sola vez al entrar: sin esto, dar de
+   * alta una caja no la haría aparecer en el selector hasta recargar la página.
+   */
+  const recargarConfiguracion = useCallback(async () => {
+    const b = await api.bootstrap();
+    setBoot(b);
+    // Si la caja elegida ha desaparecido (se ha dado de baja), se pasa a la
+    // primera disponible en vez de dejar el selector apuntando a la nada.
+    if (cajaId && !b.cajas.some((c) => c.id === cajaId)) {
+      const siguiente = b.cajas[0]?.id ?? null;
+      setCajaId(siguiente);
+      setJornada(null);
+      if (siguiente) {
+        localStorage.setItem(CLAVE_CAJA, String(siguiente));
+        await cargarJornada(siguiente);
+      } else {
+        localStorage.removeItem(CLAVE_CAJA);
+      }
+    }
+  }, [cajaId, cargarJornada]);
+
   const disponible = useMemo(() => {
     const m: Record<number, number> = {};
     for (const l of jornada?.stock ?? []) m[l.valor] = l.cantidad;
@@ -124,6 +149,7 @@ export function CashProvider({ children }: { children: ReactNode }) {
     seleccionarCaja,
     jornada,
     refrescar,
+    recargarConfiguracion,
     disponible,
     puede,
   };

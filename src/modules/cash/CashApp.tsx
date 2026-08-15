@@ -19,6 +19,7 @@ import Arqueo from "./pages/Arqueo";
 import Cierre from "./pages/Cierre";
 import Historico from "./pages/Historico";
 import IntegracionErp from "./pages/IntegracionErp";
+import Configuracion from "./pages/Configuracion";
 
 function Contenido() {
   const { cargando, error, permisos } = useCash();
@@ -60,6 +61,7 @@ function Contenido() {
         <Route path="cierre" element={<Cierre />} />
         <Route path="historico" element={<Historico />} />
         <Route path="erp" element={<IntegracionErp />} />
+        <Route path="configuracion" element={<Configuracion />} />
       </Route>
       <Route path="*" element={<Navigate to="/cash/jornada" replace />} />
     </Routes>

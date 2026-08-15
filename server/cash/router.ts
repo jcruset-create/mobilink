@@ -21,6 +21,7 @@ import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimien
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
 import * as servicio from "./service.ts";
+import * as config from "./config.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -138,23 +139,76 @@ export function createCashRouter(): Router {
   );
 
   // ── Cajas ────────────────────────────────────────────────────────────────
+
+  r.get(
+    "/registers",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      res.json({ cajas: await config.listarCajas(req.authCtx!.empresaId) });
+    })
+  );
+
   r.post(
     "/registers",
-    exigirPermiso("cash.erp.configure"),
+    exigirPermiso("cash.configure"),
     ruta(async (req, res) => {
-      const { nombre, centro } = req.body ?? {};
-      if (typeof nombre !== "string" || !nombre.trim()) {
-        throw new ErrorCaja("ENTRADA_NO_VALIDA", "La caja necesita un nombre.", 400);
-      }
-      const ahora = Date.now();
-      const { rows } = await pool.query(
-        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
-         VALUES ($1,$2,$3,$4,$4)
-         ON CONFLICT (empresa_id, centro, nombre) DO UPDATE SET activa = true, updated_at_ms = $4
-         RETURNING id, centro, nombre`,
-        [req.authCtx!.empresaId, typeof centro === "string" ? centro : "", nombre.trim(), ahora]
+      const b = req.body ?? {};
+      const caja = await config.crearCaja(contexto(req), {
+        nombre: typeof b.nombre === "string" ? b.nombre : "",
+        centro: typeof b.centro === "string" ? b.centro : "",
+      });
+      res.status(201).json({ caja });
+    })
+  );
+
+  r.patch(
+    "/registers/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const caja = await config.actualizarCaja(contexto(req), enteroPositivo(req.params.id, "id"), {
+        nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+        centro: typeof b.centro === "string" ? b.centro : undefined,
+        activa: typeof b.activa === "boolean" ? b.activa : undefined,
+      });
+      res.json({ caja });
+    })
+  );
+
+  // ── Catálogo de denominaciones ───────────────────────────────────────────
+
+  /** Todas, activas o no: la pantalla de configuración necesita las desactivadas. */
+  r.get(
+    "/denominations",
+    exigirPermiso("cash.view"),
+    ruta(async (_req, res) => {
+      res.json({ denominaciones: await cargarDenominaciones(pool, false) });
+    })
+  );
+
+  r.patch(
+    "/denominations/:id",
+    exigirPermiso("cash.denominations.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      // `null` es un valor con significado (sin cartucho), así que se distingue
+      // de "no se ha mandado el campo".
+      const piezas =
+        b.piezasPorCartucho === undefined
+          ? undefined
+          : b.piezasPorCartucho === null || b.piezasPorCartucho === ""
+            ? null
+            : entero(b.piezasPorCartucho, "piezasPorCartucho");
+
+      const denominacion = await config.actualizarDenominacion(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+          piezasPorCartucho: piezas,
+        }
       );
-      res.json({ caja: rows[0] });
+      res.json({ denominacion });
     })
   );
 
