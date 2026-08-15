@@ -316,7 +316,7 @@ export async function buildConnectReportPdf(
     titulo("Cierre del servicio");
     datos([
       ["Resultado", SERVICE_RESULT_LABELS[String(a.resultCode)] ?? a.resultCode ?? "-"],
-      ["Kilómetros", a.odometerKm != null ? String(a.odometerKm) : "-"],
+      ["Kilómetros recorridos", a.odometerKm != null ? String(a.odometerKm) : "-"],
       ["Tiempo trabajado", a.workedMinutes != null ? `${a.workedMinutes} min` : "-"],
       ...(opciones.incluirImportes
         ? [["Coste", a.finalCost != null ? `${Number(a.finalCost).toFixed(2)} ${a.costCurrency ?? "EUR"}`
