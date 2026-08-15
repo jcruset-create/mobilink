@@ -713,6 +713,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     solicitanteEmpresa: row.solicitanteEmpresa ?? null,
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
+    solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -7120,6 +7121,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "solicitanteEmpresa",
           "solicitanteNombre",
           "solicitanteTelefono",
+          "solicitanteAutorizacion",
           "createdAtMs",
           "assignedAtMs",
           "departedAtMs",
@@ -7132,7 +7134,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
         )
         RETURNING *
       `,
@@ -7161,6 +7163,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         body.solicitanteEmpresa ? String(body.solicitanteEmpresa).trim() : null,
         body.solicitanteNombre ? String(body.solicitanteNombre).trim() : null,
         body.solicitanteTelefono ? String(body.solicitanteTelefono).trim() : null,
+        body.solicitanteAutorizacion ? String(body.solicitanteAutorizacion).trim() : null,
         now,
         timestampField === "assignedAtMs" ? now : null,
         timestampField === "departedAtMs" ? now : null,
@@ -7296,6 +7299,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "solicitanteEmpresa" = COALESCE($22, "solicitanteEmpresa"),
           "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
           "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
+          "solicitanteAutorizacion" = COALESCE($25, "solicitanteAutorizacion"),
           "updatedAtMs" = $17
           ${
             timestampField
@@ -7332,6 +7336,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.solicitanteEmpresa != null ? String(body.solicitanteEmpresa).trim() : null,
         body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
         body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
+        body.solicitanteAutorizacion != null ? String(body.solicitanteAutorizacion).trim() : null,
       ]
     );
 

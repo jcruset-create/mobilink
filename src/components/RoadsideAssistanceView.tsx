@@ -62,6 +62,7 @@ const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   solicitanteEmpresa: "",
   solicitanteNombre: "",
   solicitanteTelefono: "",
+  solicitanteAutorizacion: "",
   customerName: "",
   customerPhone: "",
   conductorNombre: "",
@@ -280,6 +281,7 @@ function buildEditDraft(
     solicitanteEmpresa: assistance.solicitanteEmpresa || "",
     solicitanteNombre: assistance.solicitanteNombre || "",
     solicitanteTelefono: assistance.solicitanteTelefono || "",
+    solicitanteAutorizacion: assistance.solicitanteAutorizacion || "",
     customerName: assistance.customerName || "",
     customerPhone: assistance.customerPhone || "",
     conductorNombre: assistance.conductorNombre || "",
@@ -1261,18 +1263,33 @@ export default function RoadsideAssistanceView({
                   />
                 </label>
               </div>
-              <label className="block md:w-1/2 md:pr-1.5">
-                <span className="mb-1 block text-xs font-semibold text-slate-400">
-                  Teléfono del solicitante
-                </span>
-                <input
-                  value={draft.solicitanteTelefono}
-                  onChange={(event) =>
-                    setDraft((prev) => ({ ...prev, solicitanteTelefono: event.target.value }))
-                  }
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
-                />
-              </label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Teléfono del solicitante
+                  </span>
+                  <input
+                    value={draft.solicitanteTelefono}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, solicitanteTelefono: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Autorización o cita
+                  </span>
+                  <input
+                    value={draft.solicitanteAutorizacion}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, solicitanteAutorizacion: event.target.value }))
+                    }
+                    placeholder="Nº de autorización o de cita"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+              </div>
 
               <label className="flex items-center gap-3 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2">
                 <input
@@ -1777,6 +1794,11 @@ export default function RoadsideAssistanceView({
                             Solicita: {[assistance.solicitanteEmpresa, assistance.solicitanteNombre, assistance.solicitanteTelefono]
                               .filter(Boolean)
                               .join(" · ")}
+                          </div>
+                        )}
+                        {assistance.solicitanteAutorizacion && (
+                          <div className="mt-0.5 truncate text-xs font-bold text-amber-400/90">
+                            Autorización / cita: {assistance.solicitanteAutorizacion}
                           </div>
                         )}
                       </div>
@@ -2355,6 +2377,20 @@ export default function RoadsideAssistanceView({
                     onChange={(event) =>
                       setEditDraft((prev) => ({ ...prev, solicitanteEmpresa: event.target.value }))
                     }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    Autorización o cita
+                  </span>
+                  <input
+                    value={editDraft.solicitanteAutorizacion}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, solicitanteAutorizacion: event.target.value }))
+                    }
+                    placeholder="Nº de autorización o de cita"
                     className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
