@@ -94,3 +94,54 @@ Arqueo · Cierre · Histórico · Integración ERP.
 Componente central reutilizable: `DenominationGrid`, la rejilla de −/+ por
 denominación pensada para tablet, que se usa igual en cobro, pago, movimiento,
 arqueo y cierre.
+
+Lo común (`Card`, `Modal`, `TableWrap`, `Pill`, `inputCls`…) se **reexporta**
+de `administracion/components/ui.tsx` en vez de copiarse; en
+`cash/components/ui.tsx` solo vive lo que no existía (botones de 56 px para el
+mostrador, distintivos de origen ERP/manual y de estado de sincronización).
+
+## 7. Permisos
+
+`server/cash/permissions.ts` traduce el rol de `app_usuario_modulos` (módulo
+`cash`) a permisos finos. No hay tabla de permisos nueva: sería un mecanismo
+paralelo que mantener.
+
+| Rol | Puede |
+|---|---|
+| `consulta` | ver |
+| `cajero` | cobrar, pagar, mover efectivo, arquear |
+| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP |
+| `admin` | además configurar la integración |
+
+Los cobros y pagos distinguen permiso ERP de permiso manual
+(`cash.collection.create` vs `cash.collection.create_manual`), que era lo que
+pedía el encargo: se puede dejar cobrar facturas de la ERP a quien no debe
+poder inventarse un cobro.
+
+## 8. Estado de la entrega
+
+Implementado y probado:
+
+- Motor de dominio completo, con contraste contra búsqueda exhaustiva.
+- Esquema, migración y alta del módulo `cash` en `app_licencias`.
+- Servicio transaccional, API `/api/cash/*` y montaje en `server/index.ts`.
+- Conector ERP + mock + outbox con reintentos e idempotencia.
+- Las nueve pantallas del módulo, dadas de alta en `/inicio` y en `modulosApp`.
+
+**893 pruebas en verde** (`npm test`), de las cuales 83 son de Mobilink Cash y
+16 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
+idempotente.
+
+Queda fuera de esta fase, y conviene decirlo:
+
+- **Conector de una ERP real.** Solo está el mock. Escribir el de Business
+  Central (o Sage, o A3) es implementar `ICashErpConnector` y registrarlo; el
+  motor de caja no cambia.
+- **Webhooks de entrada** (`invoice.created`, `invoice.updated`…). El modelo los
+  admite —`cash_external_documents` ya hace upsert por
+  `(empresa, sistema, id)`— pero no hay endpoint de recepción.
+- **PDF del ingreso bancario.** Ahora se imprime la pantalla. El repo ya usa
+  `pdfkit` en `server/index.ts`, así que generarlo es un añadido pequeño.
+- **Exportación de una operación manual a la ERP.** El modelo lo permite
+  (`source = MANUAL` + `erp_sync_status`), pero no hay acción de interfaz.

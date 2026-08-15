@@ -90,6 +90,7 @@ import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
 
 const TyreControlApp = lazy(() => import("./modules/tyrecontrol/TyreControlApp"));
 const AdministracionApp = lazy(() => import("./modules/administracion/AdministracionApp"));
+const CashApp = lazy(() => import("./modules/cash/CashApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
 
@@ -369,6 +370,9 @@ export default function App() {
 
       {/* SEA Administración (cobros, seguimiento de pagos y recobros) */}
       <Route path="/administracion/*" element={<AdministracionApp />} />
+
+      {/* Mobilink Cash — caja física: cobros, pagos, denominaciones y arqueo */}
+      <Route path="/cash/*" element={<CashApp />} />
 
       {/* Mobilink Integration Hub — panel de integraciones */}
       <Route path="/integraciones" element={<Protegida><PanelIntegraciones /></Protegida>} />

@@ -1,0 +1,244 @@
+/**
+ * Cliente de la API de Mobilink Cash.
+ *
+ * Un único sitio donde se hace `fetch`, con las cabeceras de la sesión
+ * unificada (`sessionHeaders`, el mismo mecanismo que usa el resto del panel) y
+ * con los errores del backend traducidos a una excepción que lleva el código.
+ * Las pantallas nunca leen `response.ok` ni parsean mensajes a mano.
+ */
+
+import { sessionHeaders } from "../../sessionHeaders";
+import type {
+  Bootstrap,
+  Caja,
+  DocumentoExterno,
+  EstadoIntegracion,
+  LineaDenominacion,
+  Movimiento,
+  Operacion,
+  ResultadoArqueo,
+  ResultadoCambio,
+  ResumenJornada,
+  Sesion,
+} from "../types";
+
+const BASE = "/api/cash";
+
+/**
+ * Error de la API con el código estable que devuelve el backend.
+ *
+ * Los campos se declaran y asignan a mano en vez de con propiedades de
+ * parámetro porque el proyecto compila con `erasableSyntaxOnly`: solo se admite
+ * sintaxis de TypeScript que se pueda borrar sin generar código.
+ */
+export class ErrorApiCaja extends Error {
+  readonly codigo: string;
+  readonly estado: number;
+  readonly detalle?: unknown;
+
+  constructor(codigo: string, message: string, estado: number, detalle?: unknown) {
+    super(message);
+    this.name = "ErrorApiCaja";
+    this.codigo = codigo;
+    this.estado = estado;
+    this.detalle = detalle;
+  }
+}
+
+async function pedir<T>(ruta: string, init?: RequestInit): Promise<T> {
+  const cabeceras = await sessionHeaders(
+    init?.body ? { "Content-Type": "application/json" } : undefined
+  );
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${ruta}`, { ...init, headers: cabeceras });
+  } catch {
+    // Sin red no se puede operar la caja: es mejor decirlo tal cual que dejar
+    // al usuario delante de una pantalla que no reacciona.
+    throw new ErrorApiCaja("SIN_CONEXION", "No hay conexión con el servidor.", 0);
+  }
+
+  const texto = await res.text();
+  const datos = texto ? JSON.parse(texto) : null;
+
+  if (!res.ok) {
+    throw new ErrorApiCaja(
+      datos?.code ?? "ERROR",
+      datos?.error ?? `Error ${res.status}`,
+      res.status,
+      datos?.detalle
+    );
+  }
+  return datos as T;
+}
+
+const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+// ── Arranque ───────────────────────────────────────────────────────────────
+
+export const bootstrap = () => pedir<Bootstrap>("/bootstrap");
+
+export const crearCaja = (nombre: string, centro: string) =>
+  pedir<{ caja: Caja }>("/registers", json({ nombre, centro }));
+
+// ── Jornada ────────────────────────────────────────────────────────────────
+
+export const jornadaAbierta = (registerId: number) =>
+  pedir<ResumenJornada | { sesion: null }>(`/registers/${registerId}/session`);
+
+export const abrirJornada = (datos: {
+  registerId: number;
+  fondoManual?: LineaDenominacion[];
+  motivoFondoManual?: string;
+  notas?: string;
+}) => pedir<{ sesion: Sesion; stock: LineaDenominacion[] }>("/sessions", json(datos));
+
+export const detalleJornada = (sessionId: number) =>
+  pedir<ResumenJornada & { operaciones: Operacion[]; arqueos: unknown[] }>(`/sessions/${sessionId}`);
+
+export const stockJornada = (sessionId: number) =>
+  pedir<{ lineas: LineaDenominacion[]; totalCentimos: number; piezas: number }>(
+    `/sessions/${sessionId}/stock`
+  );
+
+export const movimientosJornada = (sessionId: number) =>
+  pedir<{ movimientos: Movimiento[] }>(`/sessions/${sessionId}/movements`);
+
+export const reabrirJornada = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/reopen`, json({ motivo }));
+
+/**
+ * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
+ * confirmación vuelve a validar en el servidor con la jornada bloqueada.
+ */
+export const proponerCambio = (sessionId: number, importeCentimos: number) =>
+  pedir<ResultadoCambio>(`/sessions/${sessionId}/change?importe=${importeCentimos}`);
+
+// ── Operaciones ────────────────────────────────────────────────────────────
+
+export type RespuestaOperacion = {
+  operacionId: number;
+  numero: string;
+  efectivoNetoCentimos: number;
+  stock: LineaDenominacion[];
+  totalStockCentimos: number;
+  erpSyncStatus: string;
+};
+
+export const registrarCobro = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  formasPago: { forma: string; importe: number; referencia?: string | null }[];
+  efectivoRecibido?: LineaDenominacion[];
+  cambioManual?: LineaDenominacion[];
+  partyNombre?: string;
+  concepto?: string;
+  referencia?: string | null;
+  documentoId?: number | null;
+  externalSystem?: string | null;
+  externalDocumentId?: string | null;
+  externalDocumentReference?: string | null;
+}) => pedir<RespuestaOperacion>("/collections", json(datos));
+
+export const registrarPago = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  formasPago: { forma: string; importe: number; referencia?: string | null }[];
+  efectivoEntregado?: LineaDenominacion[];
+  partyNombre?: string;
+  concepto?: string;
+  referencia?: string | null;
+  documentoId?: number | null;
+  externalSystem?: string | null;
+  externalDocumentId?: string | null;
+}) => pedir<RespuestaOperacion>("/payments", json(datos));
+
+export const registrarMovimiento = (datos: {
+  sessionId: number;
+  tipo: "MANUAL_IN" | "MANUAL_OUT" | "CASH_DELIVERY" | "BANK_DEPOSIT" | "ADJUSTMENT";
+  importeCentimos: number;
+  efectivo: LineaDenominacion[];
+  concepto?: string;
+  partyNombre?: string;
+  referencia?: string | null;
+}) => pedir<RespuestaOperacion>("/movements", json(datos));
+
+export const anularOperacion = (operationId: number, motivo: string) =>
+  pedir<{ operacionId: number; numero: string }>(`/operations/${operationId}/reverse`, json({ motivo }));
+
+// ── Arqueo y cierre ────────────────────────────────────────────────────────
+
+export const guardarArqueo = (
+  sessionId: number,
+  datos: {
+    contado: LineaDenominacion[];
+    cartuchos?: LineaDenominacion[];
+    tipo?: "INTERMEDIATE" | "CLOSING";
+    notas?: string;
+  }
+) => pedir<ResultadoArqueo>(`/sessions/${sessionId}/count`, json(datos));
+
+export const proponerCierre = (sessionId: number, objetivoCentimos: number) =>
+  pedir<{ cambioFinal: LineaDenominacion[]; ingresoBancario: LineaDenominacion[] }>(
+    `/sessions/${sessionId}/closing-proposal?objetivo=${objetivoCentimos}`
+  );
+
+export const cerrarJornada = (
+  sessionId: number,
+  datos: { cambioFinal: LineaDenominacion[]; arqueoId?: number; notas?: string }
+) =>
+  pedir<{
+    sesion: Sesion;
+    cambioFinal: LineaDenominacion[];
+    ingresoBancario: LineaDenominacion[];
+    totalCambioCentimos: number;
+    totalIngresoCentimos: number;
+    diferenciaCentimos: number;
+    denominacionesCuadran: boolean;
+  }>(`/sessions/${sessionId}/close`, json(datos));
+
+// ── Histórico y documentos ─────────────────────────────────────────────────
+
+export const historico = (filtros: {
+  desde?: string;
+  hasta?: string;
+  registerId?: number;
+  estado?: string;
+}) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(filtros)) if (v) q.set(k, String(v));
+  return pedir<{ sesiones: Record<string, unknown>[] }>(`/sessions?${q}`);
+};
+
+export const documentos = (tipo: "RECEIVABLE" | "PAYABLE", q = "") =>
+  pedir<{ documentos: DocumentoExterno[] }>(
+    `/documents?tipo=${tipo}${q ? `&q=${encodeURIComponent(q)}` : ""}`
+  );
+
+// ── Integración ERP ────────────────────────────────────────────────────────
+
+export const estadoErp = () =>
+  pedir<{
+    estado: EstadoIntegracion;
+    connectorKey: string | null;
+    displayName: string | null;
+    capacidades: string[];
+    conectoresDisponibles: string[];
+    documentosRecibidos: number;
+    outbox: Record<string, number>;
+    errores: Record<string, unknown>[];
+    config: Record<string, unknown> | null;
+  }>("/erp/status");
+
+export const probarErp = () => pedir<{ ok: boolean; mensaje: string }>("/erp/test", json({}));
+export const sincronizarErp = () => pedir<{ importados: number }>("/erp/sync", json({}));
+export const reintentarErp = () =>
+  pedir<{ reencolados: number; tratados: number }>("/erp/retry", json({}));
+
+export const guardarConfigErp = (datos: {
+  connectorKey: string;
+  activo: boolean;
+  centro?: string;
+  permiteCobroParcial?: boolean;
+}) => pedir<{ config: Record<string, unknown> }>("/erp/config", { method: "PUT", body: JSON.stringify(datos) });

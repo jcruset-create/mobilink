@@ -1,0 +1,224 @@
+/**
+ * Tipos de Mobilink Cash en el navegador.
+ *
+ * Espejo de lo que devuelve `/api/cash/*`. Igual que en el servidor, **el
+ * dinero son céntimos enteros**: la interfaz nunca calcula con euros en coma
+ * flotante, solo formatea al pintar.
+ */
+
+export type TipoDenominacion = "BILLETE" | "MONEDA";
+
+export type Denominacion = {
+  id: number;
+  valor: number;
+  tipo: TipoDenominacion;
+  etiqueta: string;
+  piezasPorCartucho: number | null;
+  activa: boolean;
+  orden: number;
+};
+
+export type LineaDenominacion = { valor: number; cantidad: number };
+
+export type Caja = { id: number; centro: string; nombre: string };
+
+export type EstadoSesion =
+  | "DRAFT"
+  | "OPEN"
+  | "PENDING_CLOSE"
+  | "CLOSED"
+  | "REOPENED"
+  | "CANCELLED";
+
+export type Sesion = {
+  id: number;
+  empresaId: string;
+  registerId: number;
+  fecha: string;
+  estado: EstadoSesion;
+  abiertaPor: string | null;
+  abiertaAtMs: number | null;
+  cerradaPor: string | null;
+  cerradaAtMs: number | null;
+  fondoInicialCentimos: number;
+  fondoInicialHeredado: boolean;
+  sesionAnteriorId: number | null;
+  contadoCentimos: number | null;
+  diferenciaCentimos: number | null;
+  denominacionesCuadran: boolean | null;
+  cambioFinalCentimos: number | null;
+  ingresoBancarioCentimos: number | null;
+  notas: string | null;
+};
+
+export type TipoOperacion =
+  | "COLLECTION"
+  | "PAYMENT"
+  | "MANUAL_IN"
+  | "MANUAL_OUT"
+  | "CASH_DELIVERY"
+  | "BANK_DEPOSIT"
+  | "ADJUSTMENT"
+  | "OPENING_FLOAT"
+  | "CLOSING_FLOAT";
+
+export type OrigenOperacion = "MANUAL" | "ERP" | "API" | "IMPORT" | "POS" | "OTHER";
+
+export type FormaPago =
+  | "CASH"
+  | "BBVA_CARD"
+  | "CAIXABANK_CARD"
+  | "AMEX"
+  | "BANK_TRANSFER"
+  | "BIZUM"
+  | "OTHER";
+
+export type EstadoSyncErp =
+  | "NOT_APPLICABLE"
+  | "PENDING"
+  | "SYNCING"
+  | "SYNCED"
+  | "ERROR"
+  | "RETRY_PENDING"
+  | "CANCELLED";
+
+export type Operacion = {
+  id: number;
+  numero: string;
+  tipo: TipoOperacion;
+  origen: OrigenOperacion;
+  importeCentimos: number;
+  efectivoNetoCentimos: number;
+  estado: string;
+  erpSyncStatus: EstadoSyncErp;
+  partyNombre: string;
+  concepto: string;
+  referencia: string | null;
+  externalSystem: string | null;
+  externalDocumentId: string | null;
+  externalDocumentReference: string | null;
+  createdAtMs: number;
+};
+
+export type Movimiento = {
+  id: number;
+  operationId: number | null;
+  valor: number;
+  cantidad: number;
+  direccion: "IN" | "OUT";
+  motivo: string;
+  importe: number;
+  createdAtMs: number;
+};
+
+export type ResumenJornada = {
+  sesion: Sesion;
+  stock: LineaDenominacion[];
+  totalStockCentimos: number;
+  piezas: number;
+  porFormaPago: { forma: string; importeCentimos: number }[];
+  cobros: { erpCentimos: number; manualCentimos: number; totalCentimos: number };
+  pagos: { erpCentimos: number; manualCentimos: number; totalCentimos: number };
+  salidasCentimos: number;
+  entregasCentimos: number;
+  operaciones: number;
+  pendientesErp: number;
+};
+
+export type ResultadoCambio =
+  | { ok: true; lineas: LineaDenominacion[]; piezas: number }
+  | { ok: false; motivo: string; mensaje: string };
+
+export type DiferenciaDenominacion = {
+  valor: number;
+  teorico: number;
+  contado: number;
+  diferencia: number;
+  importeDiferencia: number;
+};
+
+export type ResultadoArqueo = {
+  arqueoId: number;
+  totalTeorico: number;
+  totalContado: number;
+  diferencia: number;
+  estado: "CUADRADA" | "SOBRANTE" | "FALTANTE";
+  cuadraImporte: boolean;
+  cuadranDenominaciones: boolean;
+  piezasTeoricas: number;
+  piezasContadas: number;
+  lineas: DiferenciaDenominacion[];
+  descuadres: DiferenciaDenominacion[];
+};
+
+export type DocumentoExterno = {
+  id: number;
+  external_system: string;
+  external_id: string;
+  external_reference: string | null;
+  tipo: string;
+  party_nombre: string;
+  numero: string;
+  fecha: string | null;
+  vencimiento: string | null;
+  total_centimos: string | number;
+  pendiente_centimos: string | number;
+  estado: string;
+  metadata: Record<string, unknown> | null;
+};
+
+export type EstadoIntegracion = "NO_CONFIGURADA" | "CONECTADA" | "ERROR" | "DESACTIVADA";
+
+export type Bootstrap = {
+  denominaciones: Denominacion[];
+  cajas: Caja[];
+  permisos: string[];
+  rol: string | null;
+  erp: { estado: EstadoIntegracion; connectorKey: string | null; displayName: string | null };
+  cambioMaximoCentimos: number;
+};
+
+/** Etiquetas en español. Se centralizan aquí para no repetirlas por pantalla. */
+export const ETIQUETA_FORMA_PAGO: Record<string, string> = {
+  CASH: "Efectivo",
+  BBVA_CARD: "TPV BBVA",
+  CAIXABANK_CARD: "TPV CaixaBank",
+  AMEX: "American Express",
+  BANK_TRANSFER: "Transferencia",
+  BIZUM: "Bizum",
+  OTHER: "Otra",
+};
+
+export const ETIQUETA_TIPO_OPERACION: Record<TipoOperacion, string> = {
+  COLLECTION: "Cobro",
+  PAYMENT: "Pago",
+  MANUAL_IN: "Ingreso manual",
+  MANUAL_OUT: "Salida manual",
+  CASH_DELIVERY: "Entrega de efectivo",
+  BANK_DEPOSIT: "Ingreso bancario",
+  ADJUSTMENT: "Ajuste",
+  OPENING_FLOAT: "Fondo inicial",
+  CLOSING_FLOAT: "Cambio final",
+};
+
+export const ETIQUETA_MOTIVO: Record<string, string> = {
+  OPENING_FLOAT: "Fondo inicial",
+  CUSTOMER_PAYMENT: "Entrega del cliente",
+  CHANGE_GIVEN: "Cambio devuelto",
+  SUPPLIER_PAYMENT: "Pago a proveedor",
+  MANUAL_IN: "Ingreso manual",
+  MANUAL_OUT: "Salida manual",
+  CASH_DELIVERY: "Entrega de efectivo",
+  BANK_DEPOSIT: "Ingreso bancario",
+  ADJUSTMENT: "Ajuste",
+  CLOSING_FLOAT: "Cambio final",
+};
+
+export const ETIQUETA_ESTADO_SESION: Record<EstadoSesion, string> = {
+  DRAFT: "Borrador",
+  OPEN: "Abierta",
+  PENDING_CLOSE: "Pendiente de cierre",
+  CLOSED: "Cerrada",
+  REOPENED: "Reabierta",
+  CANCELLED: "Anulada",
+};
