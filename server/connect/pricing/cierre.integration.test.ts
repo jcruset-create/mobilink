@@ -169,6 +169,36 @@ describe.skipIf(!RUN)("Cierre de la tarifa", () => {
     expect(formatear(r!.ventaTotal!)).toBe("331.00");
   });
 
+  it("descartar un kilometraje absurdo se AVISA, no se hace en silencio", async () => {
+    /*
+     * Descartarlo callando deja un cierre que parece correcto y una factura
+     * corta, y nadie va a ir a buscar por qué.
+     */
+    const id = await terminada({ odometerKm: 234_567 });
+    await bloquear(id, { distanceKm: 76 });
+
+    const r = await finalizar(id);
+    const aviso = r!.avisos.find((a) => a.codigo === "WORKSHOP_KM_IMPLAUSIBLE");
+    expect(aviso).toBeTruthy();
+    expect(aviso!.detalle).toContain("234567");
+  });
+
+  it("si los km son buenos no se avisa de nada", async () => {
+    const id = await terminada({ odometerKm: 125 });
+    await bloquear(id, { distanceKm: 76 });
+    const r = await finalizar(id);
+    expect(r!.avisos.some((a) => a.codigo === "WORKSHOP_KM_IMPLAUSIBLE")).toBe(false);
+  });
+
+  it("si se pasa la distancia a mano, lo que anotó el taller no molesta", async () => {
+    // Ya se ha corregido: no tiene sentido seguir avisando
+    const id = await terminada({ odometerKm: 234_567 });
+    await bloquear(id, { distanceKm: 76 });
+    const r = await finalizar(id, { distanceKm: 125 });
+    expect(r!.avisos.some((a) => a.codigo === "WORKSHOP_KM_IMPLAUSIBLE")).toBe(false);
+    expect(r!.lineas.some((l) => l.tipo === "EXTRA_KM")).toBe(true);
+  });
+
   it("una lectura de cuentakilómetros NO se cobra como distancia", async () => {
     /*
      * El campo se llama odometerKm y en la app del taller solo pone

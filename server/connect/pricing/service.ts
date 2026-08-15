@@ -266,12 +266,27 @@ export async function finalizar(
   );
 
   const atMs = instanteContractual(a);
-  const r = await tarificar(a, "final", real, atMs, {
+  const r = await tarificar(a, "final", real.opciones, atMs, {
     saleRuleId: bloqueada.rows[0]?.saleRuleId ?? null,
     purchaseRuleId: bloqueada.rows[0]?.purchaseRuleId ?? null,
   });
   if (!r) return null;
-  return guardar(a, r, atMs, real);
+
+  /*
+   * Si se ha descartado el kilometraje del taller por absurdo, tiene que
+   * verse. Descartarlo en silencio deja un cierre que parece correcto y una
+   * factura corta, y nadie va a ir a buscar por qué.
+   */
+  if (real.kmDescartados != null) {
+    r.avisos.push({
+      codigo: "WORKSHOP_KM_IMPLAUSIBLE",
+      detalle: `El taller anotó ${real.kmDescartados} km, que parece la lectura del ` +
+               `cuentakilómetros y no los del servicio. No se han cobrado kilómetros de más: ` +
+               `si el dato es bueno, corrígelo y ajusta el importe a mano.`,
+    });
+  }
+
+  return guardar(a, r, atMs, real.opciones);
 }
 
 /**
@@ -298,20 +313,27 @@ const MAX_KM_SERVICIO = 2000;
 function distanciaYTiempoReales(
   a: DatosAsistencia,
   opciones: OpcionesTarificacion,
-): OpcionesTarificacion {
-  if (opciones.distanceKm != null && opciones.durationMin != null) return opciones;
+): { opciones: OpcionesTarificacion; kmDescartados: number | null } {
+  if (opciones.distanceKm != null && opciones.durationMin != null) {
+    return { opciones, kmDescartados: null };
+  }
 
-  const kmTaller = a.odometerKm != null && a.odometerKm > 0 && a.odometerKm <= MAX_KM_SERVICIO
-    ? a.odometerKm : null;
+  const anotados = a.odometerKm != null && a.odometerKm > 0 ? a.odometerKm : null;
+  const plausibles = anotados != null && anotados <= MAX_KM_SERVICIO;
+  const kmTaller = plausibles ? anotados : null;
 
   return {
-    ...opciones,
-    distanceKm: opciones.distanceKm ?? kmTaller,
-    distanceSource: opciones.distanceKm != null
-      ? opciones.distanceSource
-      : kmTaller != null ? "routed" : opciones.distanceSource,
-    durationMin: opciones.durationMin ?? (a.workedMinutes != null && a.workedMinutes > 0
-      ? a.workedMinutes : null),
+    opciones: {
+      ...opciones,
+      distanceKm: opciones.distanceKm ?? kmTaller,
+      distanceSource: opciones.distanceKm != null
+        ? opciones.distanceSource
+        : kmTaller != null ? "routed" : opciones.distanceSource,
+      durationMin: opciones.durationMin ?? (a.workedMinutes != null && a.workedMinutes > 0
+        ? a.workedMinutes : null),
+    },
+    // Solo se avisa si se ha descartado algo que el taller SÍ había anotado
+    kmDescartados: opciones.distanceKm == null && anotados != null && !plausibles ? anotados : null,
   };
 }
 

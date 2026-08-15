@@ -197,7 +197,17 @@ export default function SeguimientoLiteTab({ assistanceId, canOperate, onChanged
           <h4 className="mb-1 font-semibold text-slate-200">Cierre del servicio</h4>
           <p className="text-slate-300">Resultado: {a.resultCode ?? "—"}</p>
           {a.resolutionNotes && <p className="mt-1 whitespace-pre-wrap text-slate-400">{a.resolutionNotes}</p>}
-          {a.odometerKm != null && <p className="text-slate-400">Kilómetros: {a.odometerKm}</p>}
+          {a.odometerKm != null && (
+            /*
+             * Se marca cuando el número parece la lectura del cuentakilómetros
+             * en vez de los kilómetros del servicio: de ahí salen los km que se
+             * facturan de más, y el motor lo descarta cuando pasa del límite.
+             */
+            <p className={a.odometerKm > 2000 ? "text-amber-300" : "text-slate-400"}>
+              Kilómetros recorridos: {a.odometerKm}
+              {a.odometerKm > 2000 && " · parece la lectura del cuentakilómetros, no se usa para facturar"}
+            </p>
+          )}
           {a.workedMinutes != null && <p className="text-slate-400">Tiempo trabajado: {a.workedMinutes} min</p>}
         </div>
       )}

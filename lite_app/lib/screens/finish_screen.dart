@@ -38,6 +38,19 @@ class _FinishScreenState extends State<FinishScreen> {
   bool _busy = false;
   List<String> _errores = const [];
 
+  /*
+   * Por encima de esto el número deja de parecer los kilómetros de un servicio
+   * y empieza a parecer la lectura del cuentakilómetros. No se bloquea el
+   * cierre —el operario sabrá lo que ha hecho— pero se le pregunta, porque de
+   * ese número salen los kilómetros que se facturan de más.
+   */
+  static const int _kmSospechosos = 2000;
+
+  bool get _kmParecenOdometro {
+    final v = int.tryParse(_km.text.trim());
+    return v != null && v > _kmSospechosos;
+  }
+
   @override
   void dispose() {
     _notas.dispose();
@@ -108,7 +121,7 @@ class _FinishScreenState extends State<FinishScreen> {
                       '${reglas['minPhotos']} fotografía(s) mínimo',
                     if (reglas['requireSignature'] == true) 'firma del cliente',
                     if (reglas['requireResolutionNotes'] != false) 'observación de resolución',
-                    if (reglas['requireOdometer'] == true) 'kilómetros',
+                    if (reglas['requireOdometer'] == true) 'kilómetros recorridos',
                   ].join(' · '),
                   style: const TextStyle(color: AppColors.textMuted, fontSize: 13),
                 ),
@@ -140,7 +153,23 @@ class _FinishScreenState extends State<FinishScreen> {
               controller: _km,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(labelText: 'Kilómetros'),
+              /*
+               * "Kilómetros recorridos", no "Kilómetros" a secas.
+               *
+               * Con la etiqueta antigua había quien anotaba aquí la lectura
+               * del cuentakilómetros del camión. Ese número se usa para
+               * cobrar los kilómetros que se pasan del forfait, así que un
+               * 234.567 en lugar de un 125 son miles de euros en una factura.
+               */
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                labelText: 'Kilómetros recorridos',
+                helperText: 'Del servicio, no del cuentakilómetros',
+                helperMaxLines: 2,
+                errorText: _kmParecenOdometro
+                    ? '¿Seguro? Parece la lectura del cuentakilómetros'
+                    : null,
+              ),
             ),
           ),
           const SizedBox(width: 12),
