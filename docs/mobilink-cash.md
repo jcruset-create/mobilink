@@ -89,7 +89,7 @@ operación. Una ERP caída nunca revierte un movimiento físico que ya ocurrió.
 
 Rutas `/cash/*`, layout propio con la misma topbar+sidebar que Administración.
 Pantallas: Jornada actual · Cobros · Pagos · Movimientos · Stock de caja ·
-Arqueo · Cierre · Histórico · Integración ERP.
+Arqueo · Cierre · Histórico · Integración ERP · Configuración.
 
 Componente central reutilizable: `DenominationGrid`, la rejilla de −/+ por
 denominación pensada para tablet, que se usa igual en cobro, pago, movimiento,
@@ -110,8 +110,14 @@ paralelo que mantener.
 |---|---|
 | `consulta` | ver |
 | `cajero` | cobrar, pagar, mover efectivo, arquear |
-| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP |
-| `admin` | además configurar la integración |
+| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas |
+| `admin` | además configurar la integración y el catálogo de denominaciones |
+
+`cash.configure` (cajas) y `cash.denominations.configure` (catálogo) van
+separados **porque su alcance es distinto**: las cajas son de la empresa, pero
+`cash_denominations` no tiene columna de empresa — es el catálogo de toda la
+instalación. Si un responsable pudiera desactivar la moneda de 1 c, se la
+estaría desactivando también a las demás empresas. La pantalla lo advierte.
 
 Los cobros y pagos distinguen permiso ERP de permiso manual
 (`cash.collection.create` vs `cash.collection.create_manual`), que era lo que
@@ -126,12 +132,23 @@ Implementado y probado:
 - Esquema, migración y alta del módulo `cash` en `app_licencias`.
 - Servicio transaccional, API `/api/cash/*` y montaje en `server/index.ts`.
 - Conector ERP + mock + outbox con reintentos e idempotencia.
-- Las nueve pantallas del módulo, dadas de alta en `/inicio` y en `modulosApp`.
+- Las diez pantallas del módulo, dadas de alta en `/inicio` y en `modulosApp`.
+- Configuración: alta, renombrado y baja de cajas físicas, y edición del
+  catálogo de denominaciones y cartuchos. Con dos protecciones que evitan dejar
+  el módulo en un estado sin salida: no se toca una caja con la jornada abierta
+  (quedaría dinero contado en una caja invisible que nadie podría cerrar), y no
+  se desactiva una denominación que aún tiene piezas en una caja abierta (el
+  arqueo no podría contarla ni el cierre sacarla).
 
-**893 pruebas en verde** (`npm test`), de las cuales 83 son de Mobilink Cash y
-16 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**900 pruebas en verde** (`npm test`), de las cuales 90 son de Mobilink Cash y
+23 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
+
+Para estrenarlo hace falta, una sola vez: licencia `cash` para la empresa
+(`app_licencias`), una fila por usuario en `app_usuario_modulos` con
+`modulo = 'cash'` y su rol, y dar de alta la primera caja desde Configuración.
+El esquema se aplica solo al arrancar.
 
 Queda fuera de esta fase, y conviene decirlo:
 

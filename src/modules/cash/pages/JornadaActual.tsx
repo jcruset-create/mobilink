@@ -23,7 +23,14 @@ export default function JornadaActual() {
   if (!cajaId) {
     return (
       <Aviso tono="aviso">
-        No hay ninguna caja dada de alta. Un administrador puede crearla desde la configuración.
+        No hay ninguna caja dada de alta, y sin caja no se puede abrir jornada.{" "}
+        {puede("cash.configure") ? (
+          <button onClick={() => navigate("/cash/configuracion")} className="underline">
+            Crea la primera en Configuración.
+          </button>
+        ) : (
+          "Pídele a un responsable que dé de alta una en Configuración."
+        )}
       </Aviso>
     );
   }

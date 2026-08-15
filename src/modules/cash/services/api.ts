@@ -11,6 +11,7 @@ import { sessionHeaders } from "../../sessionHeaders";
 import type {
   Bootstrap,
   Caja,
+  Denominacion,
   DocumentoExterno,
   EstadoIntegracion,
   LineaDenominacion,
@@ -79,8 +80,38 @@ const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.strin
 
 export const bootstrap = () => pedir<Bootstrap>("/bootstrap");
 
+// ── Configuración ──────────────────────────────────────────────────────────
+
+/** Cajas de la empresa, incluidas las dadas de baja. */
+export const listarCajas = () =>
+  pedir<{
+    cajas: (Caja & { activa: boolean; jornadas: string; jornada_abierta: number | null })[];
+  }>("/registers");
+
 export const crearCaja = (nombre: string, centro: string) =>
-  pedir<{ caja: Caja }>("/registers", json({ nombre, centro }));
+  pedir<{ caja: Caja & { activa: boolean } }>("/registers", json({ nombre, centro }));
+
+export const actualizarCaja = (
+  id: number,
+  datos: { nombre?: string; centro?: string; activa?: boolean }
+) =>
+  pedir<{ caja: Caja & { activa: boolean } }>(`/registers/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(datos),
+  });
+
+/** Catálogo completo, incluidas las denominaciones desactivadas. */
+export const listarDenominaciones = () =>
+  pedir<{ denominaciones: Denominacion[] }>("/denominations");
+
+export const actualizarDenominacion = (
+  id: number,
+  datos: { activa?: boolean; piezasPorCartucho?: number | null }
+) =>
+  pedir<{ denominacion: Denominacion }>(`/denominations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(datos),
+  });
 
 // ── Jornada ────────────────────────────────────────────────────────────────
 
