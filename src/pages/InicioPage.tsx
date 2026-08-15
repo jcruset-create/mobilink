@@ -9,6 +9,7 @@ import logoPresencia from "../assets/hub/logo-presencia.png";
 import logoToolControl from "../assets/hub/logo-toolcontrol.png";
 import logoLicencias from "../assets/hub/logo-licencias.png";
 import logoSafety from "../assets/hub/logo-safety.png";
+import logoCash from "../assets/hub/logo-cash.png";
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -44,6 +45,7 @@ const LOGOS: Record<string, string> = {
   presencia: logoPresencia,
   toolcontrol: logoToolControl,
   safety: logoSafety,
+  cash: logoCash,
 };
 
 /** Emblemas cuadrados: estos sí van dentro del recuadro del icono. */

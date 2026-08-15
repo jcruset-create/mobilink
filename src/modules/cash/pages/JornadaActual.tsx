@@ -133,12 +133,23 @@ export default function JornadaActual() {
 function Apertura({ cajaId }: { cajaId: number }) {
   const { denominaciones, refrescar, puede } = useCash();
   const [cantidades, setCantidades] = useState<CantidadesPorValor>({});
+  const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
   const [notas, setNotas] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
 
   const lineas = lineasDesde(cantidades);
-  const total = totalLineas(lineas);
+  const lineasCartuchos = lineasDesde(cartuchos);
+  // Un tubo de 1 € son 25 monedas: el fondo inicial no cuadraría si se contara
+  // como una pieza suelta.
+  const piezasPorCartucho = new Map(
+    denominaciones.filter((d) => d.piezasPorCartucho).map((d) => [d.valor, d.piezasPorCartucho as number])
+  );
+  const totalCartuchos = lineasCartuchos.reduce(
+    (a, l) => a + l.cantidad * (piezasPorCartucho.get(l.valor) ?? 0) * l.valor,
+    0
+  );
+  const total = totalLineas(lineas) + totalCartuchos;
 
   if (!puede("cash.open_session")) {
     return <Aviso tono="aviso">La caja está cerrada y no tienes permiso para abrirla.</Aviso>;
@@ -153,6 +164,7 @@ function Apertura({ cajaId }: { cajaId: number }) {
       await api.abrirJornada({
         registerId: cajaId,
         fondoManual: heredar ? [] : lineas,
+        fondoCartuchos: heredar ? [] : lineasCartuchos,
         notas: notas || undefined,
       });
       await refrescar();
@@ -192,6 +204,8 @@ function Apertura({ cajaId }: { cajaId: number }) {
         denominaciones={denominaciones}
         cantidades={cantidades}
         onChange={setCantidades}
+        cartuchos={cartuchos}
+        onCartuchosChange={setCartuchos}
         deshabilitado={guardando}
       />
 
