@@ -473,6 +473,32 @@ dos centros de control**.
 
 ---
 
+## 10 bis. Cobertura de la batería del §56
+
+Estado tras la FASE 6. Todo lo marcado se prueba sin base de datos salvo
+donde se indica.
+
+| Caso pedido | Dónde se cubre |
+| --- | --- |
+| Horario normal / nocturno | `timeBands.test.ts`, `engine.test.ts` |
+| Franja que cruza medianoche | `timeBands.test.ts` |
+| Cambio de hora (marzo y octubre) | `timeBands.test.ts` |
+| Festivo y festivo especial | `calendar.test.ts`, `engine.test.ts` |
+| Proximidad | `rules.test.ts`, `engine.test.ts` |
+| Km adicional y tiempo adicional | `extras.test.ts`, `engine.test.ts` |
+| Regla del 20 % | `extras.test.ts` (umbral configurable) |
+| Cancelación | `extras.test.ts`, `engine.test.ts` |
+| Neumático `NET_PRICE` | `tires.test.ts` |
+| Neumático `DISCOUNT_FROM_LIST` | `tires.test.ts` |
+| Tarifa no encontrada | `rules.test.ts`, `engine.test.ts` |
+| Versionado | `versions.test.ts` |
+| Snapshot | `snapshot.test.ts` |
+| Override | `snapshot.test.ts` |
+| Aislamiento multi-tenant | `tenant.integration.test.ts` *(con base de datos)* |
+| Idempotencia | `pricing/schema.integration.test.ts` (restricción) y `pricing/etapas.integration.test.ts` (servicio: bloquear dos veces, y dos bloqueos simultáneos) |
+
+---
+
 ## 11. Pendiente de confirmar antes de la FASE 3
 
 1. **Filtro por centro de control**: primero el recuento de asistencias sin

@@ -11,8 +11,7 @@ import { describe, it, expect } from "vitest";
 import { formatear } from "./money.ts";
 import { minutosDeHora } from "./time.ts";
 import { calcularTarifa, type ConfiguracionLado, type ConfiguracionTarifa, type ReglaConImporte } from "./engine.ts";
-import { claveNeumatico } from "./engine.ts";
-import { aDinero } from "./money.ts";
+import type { CatalogoNeumaticos } from "./tires.ts";
 import type { ContextoTarifa } from "./types.ts";
 import type { FranjaHoraria } from "./timeBands.ts";
 import type { DiaCalendario } from "./calendar.ts";
@@ -61,14 +60,21 @@ const reglas: ReglaConImporte[] = [
     includedDistanceKm: "100", includedDurationMin: 180 },
 ];
 
+const catalogo: CatalogoNeumaticos = {
+  precios: [{
+    id: 1, tireSizeCode: "315/70R22.5", brandName: "BRIDGESTONE", position: "STEER",
+    priceModel: "NET_PRICE", netAmount: "485.49", priority: 10,
+  }],
+  gruposPorMarca: new Map(),
+  baremos: [],
+};
+
 /** El mismo tarifario sirve de venta y de compra: es el caso de una central. */
 function lado(contractId: number): ConfiguracionLado {
   return {
     contractId, tariffPlanId: 1, tariffPlanName: "SEAS Nacional", tariffVersionId: 7,
     version: "2026", currency: "EUR", reglas, extras,
-    preciosNeumaticos: new Map([
-      [claveNeumatico("315/70R22.5", "BRIDGESTONE", "STEER"), aDinero("485.49")!],
-    ]),
+    catalogoNeumaticos: catalogo,
   };
 }
 
@@ -305,5 +311,82 @@ describe("motor de tarifas", () => {
     const r = calcularTarifa(ctx(), cfg, opciones);
     expect(r.engineVersion).toBe("1.0.0");
     expect(r.pricingRequestId).toBe("req-1");
+  });
+
+
+  describe("el festivo del taller sube la compra, no la venta", () => {
+    /*
+     * La central trabaja 365 días 24 horas y le cobra a su cliente según el
+     * calendario del contrato. El taller no: si en su pueblo es fiesta local,
+     * ese día trabaja en festivo y lo factura como tal. Es la única asimetría
+     * deliberada entre los dos lados del motor.
+     */
+    const MARTES = Date.parse("2026-08-11T10:30:00+02:00");   // laborable, diurno
+
+    it("un martes normal los dos lados cobran diurno", () => {
+      const r = calcularTarifa(ctx({ atMs: MARTES, distanceKm: 76 }), cfg, opciones);
+      expect(r.venta?.regla?.code).toBe("DIURNO");
+      expect(r.compra?.regla?.code).toBe("DIURNO");
+      expect(formatear(r.ventaTotal!)).toBe("198.00");
+      expect(formatear(r.compraTotal!)).toBe("198.00");
+    });
+
+    it("con fiesta local en el taller, la compra pasa a festivo y la venta no", () => {
+      const r = calcularTarifa(
+        ctx({ atMs: MARTES, distanceKm: 76, clasesDiaTaller: ["holiday_local", "holiday"] }),
+        cfg, opciones);
+
+      expect(r.venta?.regla?.code).toBe("DIURNO");        // el cliente paga su martes
+      expect(r.compra?.regla?.code).toBe("FESTIVO");      // el taller cobra festivo
+      expect(formatear(r.ventaTotal!)).toBe("198.00");
+      expect(formatear(r.compraTotal!)).toBe("331.00");
+    });
+
+    it("el margen negativo que sale de ahí se ve, no se maquilla", () => {
+      // 198 de venta contra 331 de compra: la central pierde 133 € en ese servicio
+      const r = calcularTarifa(
+        ctx({ atMs: MARTES, distanceKm: 76, clasesDiaTaller: ["holiday_local", "holiday"] }),
+        cfg, opciones);
+      expect(formatear(r.margen!)).toBe("-133.00");
+    });
+
+    it("y queda avisado, que si no parece un error de configuración", () => {
+      const r = calcularTarifa(
+        ctx({ atMs: MARTES, clasesDiaTaller: ["holiday_local", "holiday"] }), cfg, opciones);
+      const aviso = r.avisos.find((a) => a.codigo === "WORKSHOP_HOLIDAY");
+      expect(aviso).toBeTruthy();
+      expect(aviso!.lado).toBe("purchase");
+      expect(aviso!.detalle).toContain("holiday_local");
+    });
+
+    it("si el día ya era festivo para los dos, no se avisa: sería ruido", () => {
+      /*
+       * Un 25 de diciembre el taller también está de fiesta local, pero ese día
+       * los dos lados cobran festivo igual. Avisarlo no aporta nada, y un aviso
+       * que casi siempre sale deja de leerse.
+       */
+      const r = calcularTarifa(
+        ctx({ atMs: Date.parse("2026-12-25T22:00:00+01:00"),
+              clasesDiaTaller: ["holiday_local", "holiday"] }), cfg, opciones);
+      expect(r.venta?.regla?.code).toBe("FESTIVO_EXTRA");
+      expect(r.compra?.regla?.code).toBe("FESTIVO_EXTRA");
+      expect(r.avisos.some((a) => a.codigo === "WORKSHOP_HOLIDAY")).toBe(false);
+    });
+
+    it("el aviso dice de qué regla a qué regla se pasa", () => {
+      const r = calcularTarifa(
+        ctx({ atMs: MARTES, clasesDiaTaller: ["holiday_local", "holiday"] }), cfg, opciones);
+      const aviso = r.avisos.find((a) => a.codigo === "WORKSHOP_HOLIDAY")!;
+      expect(aviso.detalle).toContain("Diurno");
+      expect(aviso.detalle).toContain("Festivos");
+    });
+
+    it("sin festivos del taller el resultado no cambia en nada", () => {
+      const sin = calcularTarifa(ctx({ atMs: MARTES, distanceKm: 76 }), cfg, opciones);
+      const vacio = calcularTarifa(
+        ctx({ atMs: MARTES, distanceKm: 76, clasesDiaTaller: [] }), cfg, opciones);
+      expect(vacio.compraTotal).toBe(sin.compraTotal);
+      expect(vacio.avisos).toEqual(sin.avisos);
+    });
   });
 });

@@ -83,7 +83,23 @@ async function fetchImage(url: string, lado = 1200): Promise<Buffer | null> {
   }
 }
 
-export async function buildConnectReportPdf(assistanceId: number): Promise<{ buffer: Buffer; assistance: any }> {
+/**
+ * @param opciones.incluirImportes  Si se imprime el coste del servicio.
+ *
+ * Por defecto NO se imprime. El informe archivado se sube al almacenamiento
+ * con URL pública y se adjunta al expediente del taller, y desde que el motor
+ * de tarifas rellena `finalCost` ese número es el precio de VENTA: lo que la
+ * central le cobra a su cliente. Imprimirlo ahí le enseñaría al taller —y a
+ * quien reciba el enlace— el margen de la central. El informe cuenta lo que
+ * pasó; el dinero va en la factura.
+ *
+ * La ruta autenticada del panel sí lo pide, porque ahí quien mira es de la
+ * central y tiene el permiso.
+ */
+export async function buildConnectReportPdf(
+  assistanceId: number,
+  opciones: { incluirImportes?: boolean } = {},
+): Promise<{ buffer: Buffer; assistance: any }> {
   const r = await db.query(
     `SELECT ca.*, w.name AS "workshopName", w.phone AS "workshopPhone", w."integrationType",
             pc.name AS "providerName", cl.name AS "clientDisplayName", p.name AS "partnerName",
@@ -302,8 +318,10 @@ export async function buildConnectReportPdf(assistanceId: number): Promise<{ buf
       ["Resultado", SERVICE_RESULT_LABELS[String(a.resultCode)] ?? a.resultCode ?? "-"],
       ["Kilómetros", a.odometerKm != null ? String(a.odometerKm) : "-"],
       ["Tiempo trabajado", a.workedMinutes != null ? `${a.workedMinutes} min` : "-"],
-      ["Coste", a.finalCost != null ? `${Number(a.finalCost).toFixed(2)} ${a.costCurrency ?? "EUR"}`
-        : a.estimatedCost != null ? `${Number(a.estimatedCost).toFixed(2)} ${a.costCurrency ?? "EUR"} (estimado)` : "-"],
+      ...(opciones.incluirImportes
+        ? [["Coste", a.finalCost != null ? `${Number(a.finalCost).toFixed(2)} ${a.costCurrency ?? "EUR"}`
+            : a.estimatedCost != null ? `${Number(a.estimatedCost).toFixed(2)} ${a.costCurrency ?? "EUR"} (estimado)` : "-"]]
+        : []) as [string, string][],
     ]);
     if (a.resolutionNotes) {
       doc.fillColor("#000000").fontSize(9.5).font("Helvetica")
