@@ -199,20 +199,19 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
     expect(formatear(r.margenPct!)).toBe("16.92");
   });
 
-  it("el diurno proximidad da margen NEGATIVO, y eso es lo que dice el documento", async () => {
+  it("el diurno proximidad va invertido respecto al PDF: 125 de venta y 110 de compra", async () => {
     /*
-     * Venta 110, compra 125: SEAS paga al taller 15 € más de lo que le cobra
-     * a su cliente. Está así en la tarifa publicada. El motor no lo maquilla
-     * ni lo corta a cero: un margen negativo que se pinta es un margen que
-     * alguien puede corregir; uno que se esconde, no.
+     * El documento publica 110 de venta y 125 de compra. Se señaló como lo que
+     * era —las dos columnas cambiadas en esa fila— y la dirección lo resolvió
+     * invirtiéndolas. Es el único importe cargado que no coincide con el PDF.
      */
     const r = await tarifar({
       atMs: Date.parse("2026-08-11T10:30:00+02:00"), distanceKm: 22, durationMin: 60,
     });
     expect(r.venta?.regla?.code).toBe("DIURNO_PROX");
-    expect(formatear(r.ventaTotal!)).toBe("110.00");
-    expect(formatear(r.compraTotal!)).toBe("125.00");
-    expect(formatear(r.margen!)).toBe("-15.00");
+    expect(formatear(r.ventaTotal!)).toBe("125.00");
+    expect(formatear(r.compraTotal!)).toBe("110.00");
+    expect(formatear(r.margen!)).toBe("15.00");
   });
 
   it("martes a 76 km: diurno a 198 € de venta y 170 € de compra", async () => {
