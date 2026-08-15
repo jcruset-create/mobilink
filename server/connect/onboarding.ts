@@ -343,6 +343,15 @@ export async function guardarContrato(controlCenterId: number, c: Record<string,
     throw new ErrorPuestaEnMarcha("tarifario_no_encontrado", "Ese tarifario no es de tu centro", 404);
   }
 
+  // La restricción de la base lo rechazaría igual, pero con un error de
+  // PostgreSQL en lugar de algo que se pueda leer en pantalla.
+  const desde = Number(c.validFromMs) || Date.now();
+  const hasta = c.validToMs ? Number(c.validToMs) : null;
+  if (hasta != null && hasta <= desde) {
+    throw new ErrorPuestaEnMarcha("vigencia_invalida",
+      "La fecha de fin del contrato tiene que ser posterior a la de inicio");
+  }
+
   const now = Date.now();
   if (c.id) {
     const r = await db.query(
@@ -375,9 +384,18 @@ export async function borrarContrato(controlCenterId: number, contratoId: number
   /*
    * Se termina en lugar de borrarse: un contrato borrado dejaría sin explicar
    * las asistencias que se tarificaron con él.
+   *
+   * El GREATEST no es adorno. La fecha de fin tiene que ser POSTERIOR a la de
+   * inicio —hay una restricción que lo exige— y un contrato dado de alta y
+   * terminado en el mismo milisegundo las tendría iguales. Pasa al probar y
+   * pasaría el día que alguien cree un contrato y lo anule al momento por
+   * haberse equivocado de cliente.
    */
   const r = await db.query(
-    `UPDATE connect_contracts SET status = 'ended', "validToMs" = COALESCE("validToMs", $1), "updatedAtMs" = $1
+    `UPDATE connect_contracts
+        SET status = 'ended',
+            "validToMs" = COALESCE("validToMs", GREATEST($1, "validFromMs" + 1)),
+            "updatedAtMs" = $1
       WHERE id = $2 AND "controlCenterId" = $3 RETURNING id`,
     [Date.now(), contratoId, controlCenterId],
   );

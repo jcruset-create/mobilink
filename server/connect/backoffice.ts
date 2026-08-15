@@ -2161,6 +2161,70 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ ok });
   });
 
+  // ── Calendario de los talleres ───────────────────────────────────────────
+
+  /*
+   * No es el calendario de la central, que trabaja 365 días 24 horas. Es el de
+   * cada taller: los festivos de su comunidad y los de su municipio, que son
+   * los que hacen que un día no esté disponible o cobre distinto.
+   */
+  const wcal = () => import("./workshopCalendar.ts");
+
+  router.get("/workshop-holidays", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarFestivos } = await wcal();
+    res.json({ data: await listarFestivos(centro, {
+      desde: (req.query.desde as string) ?? null,
+      hasta: (req.query.hasta as string) ?? null,
+      workshopId: req.query.workshopId != null ? Number(req.query.workshopId) : null,
+    }) });
+  });
+
+  /** Cobertura por comunidad: dónde faltan festivos por cargar. */
+  router.get("/workshop-holidays/coverage", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { coberturaPorRegion } = await wcal();
+    res.json({ data: await coberturaPorRegion(centro, Number(req.query.anio) || new Date().getFullYear()) });
+  });
+
+  /** Alta en lote: los autonómicos llegan doce de golpe y los locales de dos en dos. */
+  router.post("/workshop-holidays", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarFestivos } = await wcal();
+    const entradas = Array.isArray(req.body?.festivos) ? req.body.festivos : [];
+    const r = await guardarFestivos(centro, entradas);
+    if (r.errores.length > 0) return err(res, 422, "festivos_invalidos", r.errores.join("; "));
+    await auditConnect({ req, action: "workshop_holidays.saved", detail: { escritos: r.escritos } });
+    res.json(r);
+  });
+
+  router.delete("/workshop-holidays/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { borrarFestivo } = await wcal();
+    res.json({ ok: await borrarFestivo(centro, Number(req.params.id)) });
+  });
+
+  /** Rellena la comunidad autónoma de los talleres a partir de su provincia. */
+  router.post("/workshop-holidays/resolve-regions", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { resolverRegiones } = await wcal();
+    const r = await resolverRegiones(centro);
+    await auditConnect({ req, action: "workshop_holidays.regions_resolved", detail: {
+      actualizados: r.actualizados, sinReconocer: r.sinReconocer.length } });
+    res.json(r);
+  });
+
+  /** Las comunidades, para los desplegables. */
+  router.get("/workshop-holidays/regions", ...requireConnectRole("analyst"), async (_req, res) => {
+    const { REGIONES } = await import("./regiones.ts");
+    res.json({ data: REGIONES });
+  });
+
   // ── Administración del tarifario ─────────────────────────────────────────
 
   /*
@@ -2612,7 +2676,67 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       a.rows[0].latitude, a.rows[0].longitude, a.rows[0].serviceType,
       excluded.rows.map((x) => x.workshopId),
     );
-    res.json({ data: candidates });
+
+    /*
+     * Festivo y precio de cada candidato.
+     *
+     * La central trabaja 365 días 24 horas, pero los talleres no: cada uno
+     * tiene los festivos de su comunidad y los de su municipio. El operador
+     * necesita verlo ANTES de llamar, porque con esa información puede elegir
+     * otro taller cercano que sí esté trabajando, y de paso más barato.
+     *
+     * El precio se calcula solo para los primeros: cada estimación son varias
+     * consultas, y nadie compara treinta talleres. Los de más abajo salen sin
+     * precio en vez de hacer esperar a la pantalla.
+     */
+    const centro = a.rows[0].controlCenterId;
+    const conPrecio = req.query.conPrecio !== "0";
+    const TOPE = 8;
+
+    let calendarios = new Map<number, any>();
+    if (centro != null && candidates.length > 0) {
+      const { calendarioDeTalleres } = await import("./workshopCalendar.ts");
+      const cuando = a.rows[0].serviceOrderedAtMs ?? Date.now();
+      calendarios = await calendarioDeTalleres(
+        Number(centro), candidates.map((c) => c.workshopId), new Date(Number(cuando)));
+    }
+
+    const { estimar } = await import("./pricing/service.ts");
+    const { formatear } = await import("./pricing/money.ts");
+    const verMargen = puedeEconomico(req.connectUser?.role as ConnectRole, "ver_margen");
+
+    const data = await Promise.all(candidates.map(async (c, i) => {
+      const cal = calendarios.get(c.workshopId);
+      let precio: Record<string, unknown> | null = null;
+
+      if (conPrecio && i < TOPE && centro != null) {
+        try {
+          const r = await estimar(id, { workshopId: c.workshopId, distanceKm: c.distanceKm });
+          if (r) {
+            precio = {
+              saleTotal: r.ventaTotal == null ? null : formatear(r.ventaTotal, 2),
+              purchaseTotal: r.compraTotal == null ? null : formatear(r.compraTotal, 2),
+              grossMargin: verMargen && r.margen != null ? formatear(r.margen, 2) : null,
+              rule: r.venta?.regla?.name ?? r.compra?.regla?.name ?? null,
+              currency: r.currency,
+            };
+          }
+        } catch {
+          // Un candidato sin tarifa no puede tumbar el comparador: sale sin precio
+        }
+      }
+
+      return {
+        ...c,
+        festivo: cal
+          ? { esFestivo: cal.esFestivo, festivos: cal.festivos,
+              regionName: cal.regionName, regionDesconocida: cal.regionDesconocida }
+          : null,
+        precio,
+      };
+    }));
+
+    res.json({ data, precioHasta: conPrecio ? Math.min(TOPE, candidates.length) : 0 });
   });
 
   // Historial de ofertas/asignaciones de la asistencia

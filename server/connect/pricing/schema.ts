@@ -515,6 +515,51 @@ export async function initPricing(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_billing_marks_centro
       ON connect_billing_marks ("controlCenterId", "exportedAtMs" DESC);
+
+    /*
+     * Festivos de los TALLERES, que no son los de la central.
+     *
+     * La central trabaja 365 días 24 horas: su calendario no cierra nunca. Los
+     * que cierran —o cobran distinto— son los talleres, cada uno con los
+     * festivos de su comunidad autónoma y los dos o tres de su municipio. Esos
+     * no los puede saber la central de antemano: los tiene cada taller.
+     *
+     * Una fila autonómica vale para TODOS los talleres de esa comunidad; una
+     * local, solo para el taller que la declara. Por eso una de las dos
+     * columnas va siempre a nulo y la otra no: guardar el festivo de Zaragoza
+     * repetido en cada taller de Zaragoza haría que corregir la fecha fuera
+     * corregirla catorce veces.
+     */
+    CREATE TABLE IF NOT EXISTS connect_workshop_holidays (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER NOT NULL REFERENCES connect_control_centers(id),
+      scope TEXT NOT NULL,                    -- regional | local
+      "regionCode" TEXT,                      -- AN, CT, MD… para los autonómicos
+      "workshopId" INTEGER REFERENCES connect_workshops(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      name TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      CONSTRAINT connect_workshop_holidays_ambito CHECK (
+        (scope = 'regional' AND "regionCode" IS NOT NULL AND "workshopId" IS NULL) OR
+        (scope = 'local'    AND "workshopId" IS NOT NULL AND "regionCode" IS NULL)
+      )
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_workshop_holidays_unico
+      ON connect_workshop_holidays
+         ("controlCenterId", date, scope, COALESCE("regionCode", ''), COALESCE("workshopId", 0));
+    CREATE INDEX IF NOT EXISTS idx_workshop_holidays_fecha
+      ON connect_workshop_holidays ("controlCenterId", date);
+  `);
+
+  /*
+   * La comunidad autónoma del taller se guarda resuelta a partir de su
+   * provincia. Se guarda en lugar de calcularse en cada consulta porque la
+   * provincia llega como texto libre y hay que poder corregir a mano el taller
+   * cuya provincia no se reconoce.
+   */
+  await db.query(`
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "regionCode" TEXT;
+    CREATE INDEX IF NOT EXISTS idx_workshops_region ON connect_workshops ("regionCode");
   `);
 
   // El plan apunta a su calendario; la clave se añade aparte porque
@@ -597,7 +642,7 @@ async function habilitarRls(): Promise<void> {
     "connect_tire_sizes", "connect_tire_brands", "connect_tire_brand_groups",
     "connect_manufacturer_price_lists", "connect_tariff_tire_prices",
     "connect_assistance_pricings", "connect_assistance_price_lines",
-    "connect_pricing_overrides", "connect_billing_marks",
+    "connect_pricing_overrides", "connect_billing_marks", "connect_workshop_holidays",
   ];
   for (const tabla of tablas) {
     await db.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`).catch(() => {});

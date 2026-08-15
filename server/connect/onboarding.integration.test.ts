@@ -294,8 +294,46 @@ describe.skipIf(!RUN)("Puesta en marcha de una central", () => {
       role: "sale", clientId: cl.rows[0].id, tariffPlanId: t.tariffPlanId, status: "active" });
 
     expect(await ob.borrarContrato(centro, c.id)).toBe(true);
-    const fila = await db.query(`SELECT status, "validToMs" FROM connect_contracts WHERE id = $1`, [c.id]);
+    const fila = await db.query(
+      `SELECT status, "validFromMs", "validToMs" FROM connect_contracts WHERE id = $1`, [c.id]);
     expect(fila.rows[0].status).toBe("ended");
-    expect(Number(fila.rows[0].validToMs)).toBeGreaterThan(0);
+    // La fecha de fin tiene que ser POSTERIOR a la de inicio, no igual: hay una
+    // restricción que lo exige y un alta+baja en el mismo milisegundo la violaba
+    expect(Number(fila.rows[0].validToMs)).toBeGreaterThan(Number(fila.rows[0].validFromMs));
+  });
+
+  it("crear y terminar un contrato en el mismo instante no rompe la vigencia", async () => {
+    /*
+     * Pasa de verdad: alguien da de alta un contrato, ve que se ha equivocado
+     * de cliente y lo anula al momento. Las dos fechas caían en el mismo
+     * milisegundo y la restricción de vigencia lo rechazaba.
+     */
+    const centro = await centroNuevo("m");
+    const t = await ob.aplicarPlantilla(centro, {
+      plantilla: "MINIMA", code: "T", nombre: "T", anio: ANIO });
+    const cl = await db.query(
+      `INSERT INTO connect_clients ("controlCenterId", name, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$3) RETURNING id`, [centro, `Cliente ${sufijo}`, now]);
+
+    for (let i = 0; i < 20; i++) {
+      const c = await ob.guardarContrato(centro, {
+        role: "sale", clientId: cl.rows[0].id, tariffPlanId: t.tariffPlanId,
+        name: `Contrato ${i}`, status: "active" });
+      expect(await ob.borrarContrato(centro, c.id), `intento ${i}`).toBe(true);
+    }
+  });
+
+  it("una vigencia al revés se rechaza con un mensaje legible", async () => {
+    const centro = await centroNuevo("n");
+    const t = await ob.aplicarPlantilla(centro, {
+      plantilla: "MINIMA", code: "T", nombre: "T", anio: ANIO });
+    const cl = await db.query(
+      `INSERT INTO connect_clients ("controlCenterId", name, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$3) RETURNING id`, [centro, `Cliente ${sufijo}`, now]);
+
+    await expect(ob.guardarContrato(centro, {
+      role: "sale", clientId: cl.rows[0].id, tariffPlanId: t.tariffPlanId,
+      validFromMs: Date.parse("2026-06-01"), validToMs: Date.parse("2026-01-01"),
+    })).rejects.toMatchObject({ codigo: "vigencia_invalida" });
   });
 });
