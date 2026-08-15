@@ -989,7 +989,7 @@ export async function initDb() {
   // aplica en el arranque para no depender de ejecutarlo a mano en el SQL
   // Editor. Es idempotente y sólo actúa si las tablas SaaS existen.
   const MODULOS_LICENCIABLES =
-    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner'";
+    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner','cash'";
   const EMPRESA_SEMILLA = "00000000-0000-4000-a000-000000000001";
 
   await pool

@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { esExito, esFallo } from "./result.ts";
 import { compararArqueo, repartirCierre, proponerCambioFinal } from "./arqueo.ts";
 import { type LineaDenominacion, inventarioDesdeLineas, totalInventario } from "./inventory.ts";
 
@@ -101,7 +102,7 @@ describe("reparto del cierre", () => {
     ];
     const r = repartirCierre(contado, cambioFinal);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
 
     expect(r.totalCambio).toBe(30000); // 300 €
     expect(r.totalCambio + r.totalIngreso).toBe(totalInventario(contado));
@@ -117,7 +118,7 @@ describe("reparto del cierre", () => {
   it("no se puede dejar como cambio una pieza que no se ha contado", () => {
     const r = repartirCierre(contado, [{ valor: 50000, cantidad: 1 }]);
     expect(r.ok).toBe(false);
-    if (r.ok) return;
+    if (esExito(r)) return;
     expect(r.codigo).toBe("CAMBIO_NO_DISPONIBLE");
     expect(r.detalle?.[0]).toMatchObject({ valor: 50000, pedido: 1, disponible: 0 });
   });
@@ -126,7 +127,7 @@ describe("reparto del cierre", () => {
     const todo = [...contado.entries()].map(([valor, cantidad]) => ({ valor, cantidad }));
     const r = repartirCierre(contado, todo);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
     expect(r.ingresoBancario).toEqual([]);
     expect(r.totalIngreso).toBe(0);
   });
@@ -134,7 +135,7 @@ describe("reparto del cierre", () => {
   it("un cambio final vacío manda todo el efectivo al banco", () => {
     const r = repartirCierre(contado, []);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
     expect(r.totalCambio).toBe(0);
     expect(r.totalIngreso).toBe(totalInventario(contado));
   });

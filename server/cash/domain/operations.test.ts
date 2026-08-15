@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { esExito, esFallo } from "./result.ts";
 import {
   validarOperacion,
   aplicarMovimientos,
@@ -49,7 +50,7 @@ describe("cobro en efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
 
     expect(r.efectivoNeto).toBe(10000);
     expect(r.movimientos).toHaveLength(1);
@@ -78,7 +79,7 @@ describe("cobro en efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
 
     // 205 − 18 = 187: el invariante central del cobro.
     expect(r.efectivoNeto).toBe(18700);
@@ -121,7 +122,7 @@ describe("cobro en efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("CAMBIO_SUPERA_ENTREGADO");
+    if (esFallo(r)) expect(r.codigo).toBe("CAMBIO_SUPERA_ENTREGADO");
   });
 
   it("rechaza un cobro en efectivo sin detalle de piezas", () => {
@@ -134,7 +135,7 @@ describe("cobro en efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("FALTA_DETALLE_DENOMINACIONES");
+    if (esFallo(r)) expect(r.codigo).toBe("FALTA_DETALLE_DENOMINACIONES");
   });
 
   it("rechaza que el cuadre recibido − cambio no dé el importe", () => {
@@ -148,7 +149,7 @@ describe("cobro en efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("EFECTIVO_NO_CUADRA");
+    if (esFallo(r)) expect(r.codigo).toBe("EFECTIVO_NO_CUADRA");
   });
 });
 
@@ -172,7 +173,7 @@ describe("pagos y salidas", () => {
     };
     const r = validarOperacion(op, cajaConCien);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
 
     expect(r.efectivoNeto).toBe(-12700);
     expect(r.movimientos).toHaveLength(1);
@@ -195,7 +196,7 @@ describe("pagos y salidas", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) {
+    if (esFallo(r)) {
       expect(r.codigo).toBe("STOCK_INSUFICIENTE");
       expect(r.mensaje).toMatch(/5000/);
     }
@@ -211,7 +212,7 @@ describe("pagos y salidas", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("EFECTIVO_NO_CUADRA");
+    if (esFallo(r)) expect(r.codigo).toBe("EFECTIVO_NO_CUADRA");
   });
 });
 
@@ -231,7 +232,7 @@ describe("operaciones mixtas y sin efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
 
     // Solo los 100 € en efectivo mueven el inventario; los 200 € de tarjeta no.
     expect(importeEnEfectivo(op.formasPago)).toBe(10000);
@@ -251,7 +252,7 @@ describe("operaciones mixtas y sin efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
+    if (esFallo(r)) return;
     expect(r.movimientos).toEqual([]);
     expect(r.efectivoNeto).toBe(0);
   });
@@ -266,7 +267,7 @@ describe("operaciones mixtas y sin efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("EFECTIVO_NO_CUADRA");
+    if (esFallo(r)) expect(r.codigo).toBe("EFECTIVO_NO_CUADRA");
   });
 
   it("las formas de pago tienen que sumar el importe del documento", () => {
@@ -281,7 +282,7 @@ describe("operaciones mixtas y sin efectivo", () => {
     };
     const r = validarOperacion(op, stock);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("FORMAS_PAGO_NO_CUADRAN");
+    if (esFallo(r)) expect(r.codigo).toBe("FORMAS_PAGO_NO_CUADRAN");
   });
 
   it("un cobro parcial es una operación válida por su propio importe", () => {
@@ -308,7 +309,7 @@ describe("entradas no válidas", () => {
         stock
       );
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.codigo).toBe("IMPORTE_NO_VALIDO");
+      if (esFallo(r)) expect(r.codigo).toBe("IMPORTE_NO_VALIDO");
     }
   });
 
@@ -326,6 +327,6 @@ describe("entradas no válidas", () => {
       stock
     );
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.codigo).toBe("IMPORTE_NO_VALIDO");
+    if (esFallo(r)) expect(r.codigo).toBe("IMPORTE_NO_VALIDO");
   });
 });
