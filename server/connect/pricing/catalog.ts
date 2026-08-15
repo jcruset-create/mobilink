@@ -279,6 +279,102 @@ export async function crearPrecio(
   return precios.find((p) => p.id === Number(r.rows[0].id))!;
 }
 
+export interface FilaLote extends EntradaPrecio {
+  /** Fila del origen, para poder decir cuál falla. */
+  fila?: number;
+}
+
+export interface ResultadoLote {
+  escritas: number;
+  borradas: number;
+  errores: { fila: number; motivo: string }[];
+}
+
+/**
+ * Carga en lote de precios de neumático, pensada para pegar una tabla entera.
+ *
+ * Un catálogo real son ciento y pico filas por lado. Meterlas de una en una
+ * por un formulario no lo hace nadie: acabarían otra vez en un fichero de
+ * código, que es de donde se quería salir.
+ *
+ * Dos decisiones que importan:
+ *
+ *  1. **Se valida TODO antes de escribir NADA.** Si la fila 90 tiene un
+ *     descuento imposible, no se han escrito ya 89 filas a medias. Se devuelve
+ *     la lista de fallos con su número de fila y no se toca la base.
+ *
+ *  2. **`reemplazar` borra lo que había en esa versión.** Es lo que se espera
+ *     al pegar la tabla del proveedor: la tabla nueva ES el catálogo, no un
+ *     añadido. Sin esto, volver a pegar tras corregir una errata duplicaría
+ *     las ciento y pico filas y el precio saldría de una de las dos copias sin
+ *     que nadie sepa cuál.
+ */
+export async function crearPreciosEnLote(
+  controlCenterId: number,
+  versionId: number,
+  filas: FilaLote[],
+  opciones: { reemplazar?: boolean } = {},
+): Promise<ResultadoLote> {
+  await exigirBorrador(controlCenterId, versionId);
+
+  const errores: { fila: number; motivo: string }[] = [];
+  filas.forEach((f, i) => {
+    const n = f.fila ?? i + 1;
+    try {
+      validarPrecio(f);
+      if (f.marca && f.grupoMarca) {
+        throw new ErrorCatalogo("marca_y_grupo", "No puede colgar de una marca y de un grupo a la vez");
+      }
+      if (!f.medida && !f.marca && !f.grupoMarca) {
+        throw new ErrorCatalogo("fila_vacia", "Sin medida, marca ni grupo esta fila valdría para todo");
+      }
+    } catch (e) {
+      errores.push({ fila: n, motivo: e instanceof ErrorCatalogo ? e.message : String(e) });
+    }
+  });
+
+  // Los grupos citados tienen que existir: se comprueba antes de borrar nada
+  const grupos = new Map<string, number>();
+  for (const code of new Set(filas.map((f) => f.grupoMarca).filter(Boolean) as string[])) {
+    try {
+      grupos.set(code, await idDeGrupo(controlCenterId, versionId, code));
+    } catch {
+      errores.push({ fila: 0, motivo: `El grupo ${code} no existe en esta versión` });
+    }
+  }
+
+  if (errores.length > 0) return { escritas: 0, borradas: 0, errores };
+
+  let borradas = 0;
+  if (opciones.reemplazar) {
+    const r = await db.query(
+      `DELETE FROM connect_tariff_tire_prices WHERE "tariffVersionId" = $1 AND "controlCenterId" = $2`,
+      [versionId, controlCenterId]);
+    borradas = r.rowCount ?? 0;
+  }
+
+  const now = Date.now();
+  let escritas = 0;
+  for (const f of filas) {
+    const medidaId = f.medida ? (await crearMedida(controlCenterId, f.medida)).id : null;
+    const marcaId = f.marca ? (await crearMarca(controlCenterId, f.marca)).id : null;
+    await db.query(
+      `INSERT INTO connect_tariff_tire_prices
+         ("controlCenterId", "tariffVersionId", "tireSizeId", "brandId", "brandGroupId",
+          position, "priceModel", "netAmount", "discountPercent", "manufacturerPriceListId",
+          priority, active, "createdAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12)`,
+      [controlCenterId, versionId, medidaId, marcaId,
+       f.grupoMarca ? grupos.get(f.grupoMarca) ?? null : null,
+       f.posicion ?? "ANY", f.modeloPrecio, f.importeNeto ?? null,
+       f.descuentoPorcentaje ?? null, f.baremoId ?? null,
+       f.prioridad ?? (f.marca ? 20 : f.grupoMarca ? 10 : 5), now]);
+    escritas++;
+  }
+
+  return { escritas, borradas, errores: [] };
+}
+
 /**
  * Baja de un precio. Se desactiva en lugar de borrarse: el precio puede estar
  * referenciado desde el snapshot de una asistencia, y aunque el snapshot se
