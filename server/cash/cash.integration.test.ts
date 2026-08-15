@@ -824,6 +824,74 @@ describe.runIf(RUN)("cartuchos", () => {
     expect(await stock(manana.sesion.id, 100)).toEqual({ sueltas: 2, tubos: 2 });
   });
 
+  it("el banco trae cartuchos a media jornada y entran precintados", async () => {
+    const caja = await crearCaja("cartucho-aportacion");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 3 }],
+    });
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 3, tubos: 0 });
+
+    // Aportación de cambio: 2 tubos de 1 € (50 €) y 5 monedas sueltas.
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_IN",
+      importeCentimos: 5500,
+      formasPago: [{ forma: "CASH", importe: 5500 }],
+      efectivoRecibido: [{ valor: 100, cantidad: 5 }],
+      cartuchosRecibidos: [{ valor: 100, cantidad: 2 }],
+      concepto: "Aportación de cambio del banco",
+    });
+
+    expect(r.efectivoNetoCentimos).toBe(5500);
+    // Los tubos entran CERRADOS: no se abren al entrar.
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 8, tubos: 2 });
+    expect(r.aperturas).toEqual([]);
+  });
+
+  it("un tubo puede salir precintado sin abrirse", async () => {
+    const caja = await crearCaja("cartucho-salida");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 4 }],
+      fondoCartuchos: [{ valor: 100, cantidad: 3 }],
+    });
+
+    // Se devuelven 2 tubos al banco, sin tocar las monedas sueltas.
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "BANK_DEPOSIT",
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      cartuchosEntregados: [{ valor: 100, cantidad: 2 }],
+      concepto: "Devolución de cambio al banco",
+    });
+
+    // Salen enteros: ni se abre ninguno ni se tocan las sueltas.
+    expect(r.aperturas).toEqual([]);
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 4, tubos: 1 });
+  });
+
+  it("no se pueden sacar más tubos de los que hay", async () => {
+    const caja = await crearCaja("cartucho-sin-tubos");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 100 }],
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    await expect(
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "BANK_DEPOSIT",
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        cartuchosEntregados: [{ valor: 100, cantidad: 2 }],
+        concepto: "Más tubos de los que hay",
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+  });
+
   it("la propuesta de cierre deja los tubos en caja y manda el resto al banco", async () => {
     const caja = await crearCaja("cartucho-propuesta-cierre");
     const { sesion } = await servicio.abrirJornada(ctx, {

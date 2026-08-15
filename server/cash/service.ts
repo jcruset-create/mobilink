@@ -42,6 +42,7 @@ import {
   type FormaPago,
   type OperacionNormalizada,
   type OrigenOperacion,
+  type LineaMovimiento,
   type TipoOperacion,
   importeEnEfectivo,
   validarOperacion,
@@ -314,6 +315,10 @@ export type EntradaOperacion = {
   formasPago: { forma: FormaPago; importe: Centimos; referencia?: string | null }[];
   efectivoRecibido?: LineaDenominacion[];
   efectivoEntregado?: LineaDenominacion[];
+  /** Tubos precintados que ENTRAN: `cantidad` son tubos, no monedas. */
+  cartuchosRecibidos?: LineaDenominacion[];
+  /** Tubos precintados que SALEN sin abrirse (al banco, por ejemplo). */
+  cartuchosEntregados?: LineaDenominacion[];
   partyNombre?: string;
   concepto?: string;
   referencia?: string | null;
@@ -358,13 +363,34 @@ export async function registrarOperacion(
     const stock = await stockTeorico(client, e.sessionId);
     const denominaciones = await cargarDenominaciones(client);
 
+    /*
+     * Los tubos se convierten a líneas de asiento: `cantidad` son las monedas
+     * que trae el tubo y `cartuchos` cuántos tubos son. Se añaden a las líneas
+     * sueltas sin fusionarlas, para que el libro mayor distinga un tubo entero
+     * de las monedas sueltas del mismo valor.
+     */
+    const aLineasTubo = (tubos: readonly LineaDenominacion[] | undefined) =>
+      (tubos ?? [])
+        .filter((t) => t.cantidad > 0)
+        .map((t) => {
+          const n = piezasPorCartuchoDe(denominaciones).get(t.valor) ?? 0;
+          if (n <= 0) {
+            throw new ErrorCaja(
+              "CARTUCHO_NO_CONFIGURADO",
+              `La denominación de ${t.valor} céntimos no tiene cartuchos configurados.`,
+              400
+            );
+          }
+          return { valor: t.valor, cantidad: t.cantidad * n, cartuchos: t.cantidad };
+        });
+
     const normalizada: OperacionNormalizada = {
       tipo: e.tipo,
       origen,
       importe: e.importeCentimos,
       formasPago: e.formasPago,
-      efectivoRecibido: e.efectivoRecibido,
-      efectivoEntregado: e.efectivoEntregado,
+      efectivoRecibido: [...(e.efectivoRecibido ?? []), ...aLineasTubo(e.cartuchosRecibidos)],
+      efectivoEntregado: [...(e.efectivoEntregado ?? []), ...aLineasTubo(e.cartuchosEntregados)],
     };
 
     const validacion = validarOperacion(normalizada, stock);
@@ -1436,19 +1462,41 @@ async function abrirCartuchosSiHaceFalta(
   e: {
     sessionId: number;
     operationId: number;
-    salidas: readonly { lineas: readonly LineaDenominacion[] }[];
+    salidas: readonly { lineas: readonly LineaMovimiento[] }[];
     denominaciones: readonly import("./domain/denominations.ts").Denominacion[];
     userId: string | null;
     ahora: number;
   }
 ): Promise<AperturaCartucho[]> {
-  const entrega = e.salidas.flatMap((m) => m.lineas);
-  if (entrega.length === 0) return [];
+  const todas = e.salidas.flatMap((m) => m.lineas);
+  if (todas.length === 0) return [];
 
   const porCartucho = piezasPorCartuchoDe(e.denominaciones);
   if (porCartucho.size === 0) return [];
 
   const stock = await stockPorFormato(client, e.sessionId);
+
+  /*
+   * Un tubo que SALE precintado no se abre: se entrega tal cual. Esas líneas no
+   * entran en el cálculo de aperturas —si entraran, el sistema creería que hacen
+   * falta 25 monedas sueltas y rompería un tubo para nada— pero sí hay que
+   * comprobar que existen los tubos que se quieren sacar.
+   */
+  const salenPrecintados = todas.filter((l) => (l.cartuchos ?? 0) > 0);
+  for (const l of salenPrecintados) {
+    const disponibles = stock.cartuchos.get(l.valor) ?? 0;
+    if ((l.cartuchos ?? 0) > disponibles) {
+      throw new ErrorCaja(
+        "STOCK_INSUFICIENTE",
+        `Se quieren sacar ${l.cartuchos} cartuchos de ${l.valor} céntimos y en caja hay ${disponibles}.`,
+        400
+      );
+    }
+  }
+
+  const entrega = todas.filter((l) => (l.cartuchos ?? 0) === 0);
+  if (entrega.length === 0) return [];
+
   const r = aperturasNecesarias(entrega, stock, porCartucho);
 
   if (esFallo(r)) {

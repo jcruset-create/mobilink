@@ -43,13 +43,23 @@ export default function Movimientos() {
   const [importeTexto, setImporteTexto] = useState("");
   const [concepto, setConcepto] = useState("");
   const [efectivo, setEfectivo] = useState<CantidadesPorValor>({});
+  const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [ultimo, setUltimo] = useState<string | null>(null);
 
   const definicion = TIPOS.find((t) => t.valor === tipo)!;
   const importe = aCentimos(importeTexto) ?? 0;
-  const total = totalLineas(lineasDesde(efectivo));
+
+  // Un tubo vale lo que traen sus monedas: cuenta igual en el importe.
+  const piezasDe = (valor: number) =>
+    denominaciones.find((d) => d.valor === valor)?.piezasPorCartucho ?? 0;
+  const lineasCartucho = lineasDesde(cartuchos);
+  const totalCartuchos = lineasCartucho.reduce(
+    (a, l) => a + l.valor * l.cantidad * piezasDe(l.valor),
+    0
+  );
+  const total = totalLineas(lineasDesde(efectivo)) + totalCartuchos;
 
   // El importe se deduce de las piezas: en un movimiento manual lo que manda es
   // lo que físicamente se mete o se saca, no un número tecleado aparte.
@@ -74,10 +84,12 @@ export default function Movimientos() {
         tipo,
         importeCentimos: importe,
         efectivo: lineasDesde(efectivo),
+        cartuchos: lineasCartucho,
         concepto,
       });
       setUltimo(r.numero);
       setEfectivo({});
+      setCartuchos({});
       setImporteTexto("");
       setConcepto("");
       await refrescar();
@@ -108,6 +120,7 @@ export default function Movimientos() {
                     onClick={() => {
                       setTipo(t.valor);
                       setEfectivo({});
+                      setCartuchos({});
                     }}
                     disabled={bloqueado}
                     className={`rounded-xl px-3 py-2 text-[12px] font-bold disabled:opacity-30 ${
@@ -146,15 +159,25 @@ export default function Movimientos() {
           </BotonAccion>
         </div>
 
-        <DenominationGrid
-          titulo={definicion.entra ? "Efectivo que entra" : "Efectivo que sale"}
-          denominaciones={denominaciones}
-          cantidades={efectivo}
-          onChange={setEfectivo}
-          disponible={definicion.entra ? undefined : disponible}
-          mostrarDisponible={!definicion.entra}
-          deshabilitado={guardando}
-        />
+        <div className="space-y-2">
+          <DenominationGrid
+            titulo={definicion.entra ? "Efectivo que entra" : "Efectivo que sale"}
+            denominaciones={denominaciones}
+            cantidades={efectivo}
+            onChange={setEfectivo}
+            cartuchos={cartuchos}
+            onCartuchosChange={setCartuchos}
+            disponible={definicion.entra ? undefined : disponible}
+            mostrarDisponible={!definicion.entra}
+            deshabilitado={guardando}
+          />
+          <p className="text-[11px] text-slate-500">
+            La columna estrecha de las monedas es para <strong>cartuchos precintados</strong>. Un
+            tubo entra o sale entero, sin abrirse: es como llega la aportación de cambio del banco y
+            como se le devuelve. Para abrir uno no hay que hacer nada — se abre solo cuando un cobro
+            o un pago necesita monedas sueltas que no hay.
+          </p>
+        </div>
       </div>
 
       <HistorialMovimientos sessionId={jornada.sesion.id} clave={ultimo} />

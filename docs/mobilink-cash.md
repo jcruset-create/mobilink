@@ -77,6 +77,11 @@ hay saldo acumulado que se pueda desincronizar.
   devolvería con menos piezas. El stock distingue sueltas de encartuchadas y
   abrir un tubo deja su propio par de asientos (`CARTRIDGE_OPENED`).
 
+  Los tubos **entran y salen precintados** —la aportación de cambio del banco
+  llega en tubos y se le devuelve igual— y solo se abren cuando un cobro o un
+  pago necesita monedas sueltas que no hay. Sacar un tubo cerrado no es abrirlo:
+  se comprueba que existe, y no se rompe nada.
+
 ## 5. Integración ERP
 
 `server/cash/erp/`: interfaz `ICashErpConnector` (`getReceivables`,
