@@ -25,6 +25,7 @@ import {
   Cabecera,
   ErrorBox,
   OrigenBadge,
+  AvisoCartuchos,
   TableWrap,
   thCls,
   tdCls,
@@ -33,7 +34,12 @@ import {
 } from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
-import { ETIQUETA_FORMA_PAGO, type DocumentoExterno, type FormaPago } from "../types";
+import {
+  ETIQUETA_FORMA_PAGO,
+  type AperturaCartucho,
+  type DocumentoExterno,
+  type FormaPago,
+} from "../types";
 import * as api from "../services/api";
 
 /** Formas de pago que se ofrecen al cobrar. */
@@ -56,7 +62,8 @@ export default function Cobros() {
   const [avisoCambio, setAvisoCambio] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
-  const [ultimo, setUltimo] = useState<{ numero: string; cambio: number } | null>(null);
+  const [ultimo, setUltimo] = useState<{ numero: string; cambio: number; aperturas: AperturaCartucho[] } | null>(null);
+  const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -92,6 +99,7 @@ export default function Cobros() {
   const pedirPropuesta = useCallback(async () => {
     if (!jornada || cambioRequerido <= 0) {
       setCambioPropuesto({});
+      setAperturas([]);
       setAvisoCambio("");
       return;
     }
@@ -99,9 +107,11 @@ export default function Cobros() {
       const r = await api.proponerCambio(jornada.sesion.id, cambioRequerido);
       if (esFallo(r)) {
         setCambioPropuesto({});
+        setAperturas([]);
         setAvisoCambio(r.mensaje);
       } else {
         setCambioPropuesto(cantidadesDesde(r.lineas));
+        setAperturas(r.aperturas ?? []);
         setAvisoCambio("");
       }
     } catch (e) {
@@ -167,7 +177,7 @@ export default function Cobros() {
         externalDocumentId: documento?.external_id ?? null,
         externalDocumentReference: documento?.external_reference ?? null,
       });
-      setUltimo({ numero: r.numero, cambio: cambioRequerido });
+      setUltimo({ numero: r.numero, cambio: cambioRequerido, aperturas: r.aperturas ?? [] });
       limpiar();
       await refrescar();
     } catch (e) {
@@ -182,10 +192,13 @@ export default function Cobros() {
       <Cabecera titulo="Cobros" descripcion="Facturas de la ERP y cobros manuales, con el mismo motor de caja." />
 
       {ultimo && (
-        <Aviso tono="bien">
-          Cobro <strong>{ultimo.numero}</strong> registrado.
-          {ultimo.cambio > 0 && <> Cambio entregado: <strong>{euros(ultimo.cambio)}</strong>.</>}
-        </Aviso>
+        <>
+          <Aviso tono="bien">
+            Cobro <strong>{ultimo.numero}</strong> registrado.
+            {ultimo.cambio > 0 && <> Cambio entregado: <strong>{euros(ultimo.cambio)}</strong>.</>}
+          </Aviso>
+          <AvisoCartuchos aperturas={ultimo.aperturas} />
+        </>
       )}
       {error && <ErrorBox>{error}</ErrorBox>}
 
@@ -307,6 +320,7 @@ export default function Cobros() {
           {cambioRequerido > 0 && (
             <>
               {avisoCambio && <Aviso tono="mal">{avisoCambio}</Aviso>}
+              <AvisoCartuchos aperturas={aperturas} />
               <DenominationGrid
                 titulo={cambioManual ? "Cambio (modificado a mano)" : "Cambio propuesto"}
                 denominaciones={denominaciones}

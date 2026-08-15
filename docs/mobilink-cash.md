@@ -71,6 +71,11 @@ hay saldo acumulado que se pueda desincronizar.
   mixtos, parciales).
 - `arqueo.ts` — teórico vs contado por denominación, doble cuadre, reparto
   cambio final / ingreso bancario.
+- `cartridges.ts` — cartuchos de monedas. Un tubo **se abre y no se vuelve a
+  cerrar**, y **solo se abre si hace falta**: si hay sueltas suficientes de esa
+  denominación, el precinto no se toca, ni siquiera cuando abriéndolo se
+  devolvería con menos piezas. El stock distingue sueltas de encartuchadas y
+  abrir un tubo deja su propio par de asientos (`CARTRIDGE_OPENED`).
 
 ## 5. Integración ERP
 

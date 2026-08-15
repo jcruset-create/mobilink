@@ -271,12 +271,19 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
 
 export async function stockDeJornada(sessionId: number): Promise<{
   lineas: LineaDenominacion[];
+  sueltas: LineaDenominacion[];
+  cartuchos: LineaDenominacion[];
   totalCentimos: Centimos;
   piezas: number;
 }> {
-  const inv = await stockTeorico(pool, sessionId);
+  const [inv, porFormato] = await Promise.all([
+    stockTeorico(pool, sessionId),
+    stockPorFormato(pool, sessionId),
+  ]);
   return {
     lineas: lineasDesdeInventario(inv),
+    sueltas: lineasDesdeInventario(porFormato.sueltas),
+    cartuchos: lineasDesdeInventario(porFormato.cartuchos),
     totalCentimos: totalInventario(inv),
     piezas: totalPiezas(inv),
   };
@@ -590,8 +597,13 @@ export async function guardarArqueo(
     const denominaciones = await cargarDenominaciones(client);
     const porValor = new Map(denominaciones.map((d) => [d.valor, d]));
 
-    // Los cartuchos se cuentan como cartuchos y se guardan como piezas: 3
-    // cartuchos de 2 € son 75 monedas, y el inventario habla de monedas.
+    /*
+     * Los cartuchos se cuentan aparte y se GUARDAN aparte: `cantidad_contada`
+     * son monedas sueltas y `cartuchos_contados` son tubos precintados. La
+     * comparación con el teórico sí se hace en piezas —un tubo se puede abrir,
+     * así que sus monedas cuentan— pero el formato no se pierde, y por eso un
+     * tubo que se cuenta cerrado al cerrar sigue cerrado mañana.
+     */
     const lineas: LineaDenominacion[] = [...e.contado];
     for (const c of e.cartuchos ?? []) {
       const d = porValor.get(c.valor);
@@ -603,6 +615,12 @@ export async function guardarArqueo(
         );
       }
       lineas.push({ valor: c.valor, cantidad: c.cantidad * d.piezasPorCartucho });
+    }
+
+    // Sueltas contadas, para guardarlas sin mezclar con las de los tubos.
+    const sueltasContadas = new Map<Centimos, number>();
+    for (const l of e.contado) {
+      if (l.cantidad > 0) sueltasContadas.set(l.valor, (sueltasContadas.get(l.valor) ?? 0) + l.cantidad);
     }
 
     const contado = inventarioDesdeLineas(lineas);
@@ -645,7 +663,7 @@ export async function guardarArqueo(
            SET cantidad_contada = EXCLUDED.cantidad_contada,
                cartuchos_contados = EXCLUDED.cartuchos_contados,
                diferencia = EXCLUDED.diferencia`,
-        [arqueoId, d.id, l.valor, l.teorico, l.contado, cartuchos, l.diferencia]
+        [arqueoId, d.id, l.valor, l.teorico, sueltasContadas.get(l.valor) ?? 0, cartuchos, l.diferencia]
       );
     }
 
@@ -676,8 +694,10 @@ export async function guardarArqueo(
 
 export type EntradaCierre = {
   sessionId: number;
-  /** Piezas que se quedan en caja para mañana. */
+  /** Monedas sueltas que se quedan en caja para mañana. */
   cambioFinal: LineaDenominacion[];
+  /** Tubos precintados que se quedan: `cantidad` son tubos, no monedas. */
+  cambioFinalCartuchos?: LineaDenominacion[];
   /** Arqueo que respalda el cierre. Si no se pasa, se usa el último guardado. */
   arqueoId?: number;
   notas?: string;
@@ -686,7 +706,9 @@ export type EntradaCierre = {
 export type ResultadoCierre = {
   sesion: Sesion;
   cambioFinal: LineaDenominacion[];
+  cambioFinalCartuchos: LineaDenominacion[];
   ingresoBancario: LineaDenominacion[];
+  ingresoBancarioCartuchos: LineaDenominacion[];
   totalCambioCentimos: Centimos;
   totalIngresoCentimos: Centimos;
   diferenciaCentimos: Centimos;
@@ -737,11 +759,16 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
     // Se reparte lo CONTADO, no lo teórico: si hay descuadre, el dinero que
     // existe de verdad es el contado, y es el que se reparte entre caja y banco.
     const { rows: lineasArqueo } = await client.query(
-      `SELECT valor_unitario_centimos, cantidad_contada
+      `SELECT valor_unitario_centimos, cantidad_contada, cartuchos_contados
          FROM cash_count_lines WHERE count_id = $1`,
       [arqueo.id]
     );
-    const contado = inventarioDesdeLineas(
+
+    const denominacionesCierre = await cargarDenominaciones(client);
+    const porCartuchoCierre = piezasPorCartuchoDe(denominacionesCierre);
+
+    // Lo contado, en dos dimensiones: monedas sueltas y tubos precintados.
+    const contadoSueltas = inventarioDesdeLineas(
       lineasArqueo
         .map((r: { valor_unitario_centimos: number; cantidad_contada: number }) => ({
           valor: r.valor_unitario_centimos,
@@ -749,13 +776,69 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         }))
         .filter((l: LineaDenominacion) => l.cantidad > 0)
     );
+    const contadoTubos = inventarioDesdeLineas(
+      lineasArqueo
+        .map((r: { valor_unitario_centimos: number; cartuchos_contados: number }) => ({
+          valor: r.valor_unitario_centimos,
+          cantidad: r.cartuchos_contados,
+        }))
+        .filter((l: LineaDenominacion) => l.cantidad > 0)
+    );
 
-    const reparto = repartirCierre(contado, e.cambioFinal);
-    if (esFallo(reparto)) {
-      throw new ErrorCaja(reparto.codigo, reparto.mensaje, 400, reparto.detalle);
+    // Para el cuadre con el teórico se cuenta en piezas: un tubo se puede
+    // abrir, así que sus monedas son dinero disponible igual que las sueltas.
+    const contado = inventarioDesdeLineas([
+      ...lineasDesdeInventario(contadoSueltas),
+      ...lineasDesdeInventario(contadoTubos).map((l) => ({
+        valor: l.valor,
+        cantidad: l.cantidad * (porCartuchoCierre.get(l.valor) ?? 0),
+      })),
+    ]);
+
+    /*
+     * El reparto va en las DOS dimensiones. Un tubo precintado que se queda en
+     * caja tiene que seguir precintado mañana: si se repartiera solo en piezas,
+     * amanecería como monedas sueltas y se habría perdido el formato sin que
+     * nadie tocara nada.
+     */
+    const cambioTubos = inventarioDesdeLineas(e.cambioFinalCartuchos ?? []);
+    const repartoSueltas = repartirCierre(contadoSueltas, e.cambioFinal);
+    if (esFallo(repartoSueltas)) {
+      throw new ErrorCaja(repartoSueltas.codigo, repartoSueltas.mensaje, 400, repartoSueltas.detalle);
+    }
+    const repartoTubos = repartirCierre(contadoTubos, lineasDesdeInventario(cambioTubos));
+    if (esFallo(repartoTubos)) {
+      throw new ErrorCaja(
+        "CAMBIO_NO_DISPONIBLE",
+        "El cambio final incluye cartuchos que no se han contado en el arqueo.",
+        400,
+        repartoTubos.detalle
+      );
     }
 
     const denominaciones = await cargarDenominaciones(client);
+    const porCartucho = piezasPorCartuchoDe(denominaciones);
+
+    /** Convierte tubos a líneas de asiento (piezas + contador de tubos). */
+    const aLineasTubo = (tubos: readonly LineaDenominacion[]) =>
+      tubos
+        .filter((t) => t.cantidad > 0)
+        .map((t) => ({
+          valor: t.valor,
+          cantidad: t.cantidad * (porCartucho.get(t.valor) ?? 0),
+          cartuchos: t.cantidad,
+        }));
+
+    const valorDeTubos = (tubos: readonly LineaDenominacion[]) =>
+      tubos.reduce((a, t) => a + t.valor * t.cantidad * (porCartucho.get(t.valor) ?? 0), 0);
+
+    const cambioFinalTubos = lineasDesdeInventario(cambioTubos);
+    const reparto = {
+      ingresoBancario: repartoSueltas.ingresoBancario,
+      ingresoTubos: repartoTubos.ingresoBancario,
+      totalCambio: repartoSueltas.totalCambio + valorDeTubos(cambioFinalTubos),
+      totalIngreso: repartoSueltas.totalIngreso + valorDeTubos(repartoTubos.ingresoBancario),
+    };
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
 
@@ -827,7 +910,13 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       await insertarMovimientos(client, {
         sessionId: e.sessionId,
         operationId: opId,
-        movimientos: [{ direccion: "OUT", motivo: "CLOSING_FLOAT", lineas: e.cambioFinal }],
+        movimientos: [
+          {
+            direccion: "OUT",
+            motivo: "CLOSING_FLOAT",
+            lineas: [...e.cambioFinal, ...aLineasTubo(cambioFinalTubos)],
+          },
+        ],
         denominaciones,
         userId: ctx.userId,
         ahora,
@@ -853,7 +942,13 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       await insertarMovimientos(client, {
         sessionId: e.sessionId,
         operationId: opId,
-        movimientos: [{ direccion: "OUT", motivo: "BANK_DEPOSIT", lineas: reparto.ingresoBancario }],
+        movimientos: [
+          {
+            direccion: "OUT",
+            motivo: "BANK_DEPOSIT",
+            lineas: [...reparto.ingresoBancario, ...aLineasTubo(reparto.ingresoTubos)],
+          },
+        ],
         denominaciones,
         userId: ctx.userId,
         ahora,
@@ -884,7 +979,9 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
     return {
       sesion: sesionFinal,
       cambioFinal: [...e.cambioFinal].sort((a, b) => b.valor - a.valor),
+      cambioFinalCartuchos: cambioFinalTubos,
       ingresoBancario: reparto.ingresoBancario,
+      ingresoBancarioCartuchos: reparto.ingresoTubos,
       totalCambioCentimos: reparto.totalCambio,
       totalIngresoCentimos: reparto.totalIngreso,
       diferenciaCentimos: comparacion.diferencia,
@@ -912,26 +1009,43 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
   return resultado;
 }
 
-/** Propuesta de composición del cambio final a partir del último arqueo. */
+/**
+ * Propuesta de composición del cambio final a partir del último arqueo.
+ *
+ * Los tubos precintados se quedan en caja mientras quepan en el objetivo: son
+ * cambio listo para mañana y abrirlos es irreversible, así que mandarlos al
+ * banco sería tirar por la borda justo lo que hace falta en el mostrador. El
+ * resto se completa con monedas sueltas, empezando por el menudo.
+ */
 export async function proponerCierre(
   sessionId: number,
   objetivoCentimos: Centimos
-): Promise<{ cambioFinal: LineaDenominacion[]; ingresoBancario: LineaDenominacion[] }> {
-  const { rows } = await pool.query(
-    `SELECT l.valor_unitario_centimos, l.cantidad_contada
-       FROM cash_count_lines l
-       JOIN cash_counts c ON c.id = l.count_id
-      WHERE c.session_id = $1
-      ORDER BY c.id DESC`,
+): Promise<{
+  cambioFinal: LineaDenominacion[];
+  cambioFinalCartuchos: LineaDenominacion[];
+  ingresoBancario: LineaDenominacion[];
+  ingresoBancarioCartuchos: LineaDenominacion[];
+}> {
+  // Solo el arqueo MÁS RECIENTE. Antes se sumaban las líneas de todos, así que
+  // con dos arqueos en la misma jornada el contado salía duplicado.
+  const { rows: ultimo } = await pool.query<{ id: number }>(
+    `SELECT id FROM cash_counts WHERE session_id = $1 ORDER BY id DESC LIMIT 1`,
     [sessionId]
   );
-  if (rows.length === 0) {
+  if (ultimo.length === 0) {
     throw new ErrorCaja("FALTA_ARQUEO", "Hay que hacer el arqueo antes de preparar el cierre.", 409);
   }
 
-  // Solo el arqueo más reciente: la consulta viene ordenada por id de arqueo
-  // descendente, así que se toma la primera tanda de líneas.
-  const contado = inventarioDesdeLineas(
+  const { rows } = await pool.query(
+    `SELECT valor_unitario_centimos, cantidad_contada, cartuchos_contados
+       FROM cash_count_lines WHERE count_id = $1`,
+    [ultimo[0].id]
+  );
+
+  const denominaciones = await cargarDenominaciones(pool);
+  const porCartucho = piezasPorCartuchoDe(denominaciones);
+
+  const sueltas = inventarioDesdeLineas(
     rows
       .map((r: { valor_unitario_centimos: number; cantidad_contada: number }) => ({
         valor: r.valor_unitario_centimos,
@@ -939,12 +1053,40 @@ export async function proponerCierre(
       }))
       .filter((l: LineaDenominacion) => l.cantidad > 0)
   );
+  const tubos = rows
+    .map((r: { valor_unitario_centimos: number; cartuchos_contados: number }) => ({
+      valor: r.valor_unitario_centimos,
+      cantidad: r.cartuchos_contados,
+    }))
+    .filter((l: LineaDenominacion) => l.cantidad > 0)
+    .sort((a: LineaDenominacion, b: LineaDenominacion) => a.valor - b.valor);
 
-  const cambioFinal = proponerCambioFinal(contado, objetivoCentimos);
-  const reparto = repartirCierre(contado, cambioFinal);
+  // Tubos que se quedan: los de menor valor primero, mientras quepan.
+  const cambioFinalCartuchos: LineaDenominacion[] = [];
+  let restante = objetivoCentimos;
+  for (const t of tubos) {
+    const valorTubo = t.valor * (porCartucho.get(t.valor) ?? 0);
+    if (valorTubo <= 0) continue;
+    const caben = Math.min(t.cantidad, Math.floor(restante / valorTubo));
+    if (caben > 0) {
+      cambioFinalCartuchos.push({ valor: t.valor, cantidad: caben });
+      restante -= valorTubo * caben;
+    }
+  }
+
+  const cambioFinal = proponerCambioFinal(sueltas, restante);
+
+  const repartoSueltas = repartirCierre(sueltas, cambioFinal);
+  const repartoTubos = repartirCierre(
+    inventarioDesdeLineas(tubos),
+    cambioFinalCartuchos
+  );
+
   return {
     cambioFinal,
-    ingresoBancario: reparto.ok ? reparto.ingresoBancario : [],
+    cambioFinalCartuchos,
+    ingresoBancario: repartoSueltas.ok ? repartoSueltas.ingresoBancario : [],
+    ingresoBancarioCartuchos: repartoTubos.ok ? repartoTubos.ingresoBancario : [],
   };
 }
 
@@ -1172,7 +1314,12 @@ async function encolarEventoErp(
 
 export type ResumenJornada = {
   sesion: Sesion;
+  /** Piezas totales por valor, tubos incluidos: es el dinero disponible. */
   stock: LineaDenominacion[];
+  /** De esas piezas, cuántas están sueltas. */
+  stockSueltas: LineaDenominacion[];
+  /** Tubos precintados por valor de la moneda. */
+  stockCartuchos: LineaDenominacion[];
   totalStockCentimos: Centimos;
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: Centimos }[];
@@ -1188,7 +1335,10 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const sesion = await obtenerSesion(sessionId);
   if (!sesion) throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
 
-  const inv = await stockTeorico(pool, sessionId);
+  const [inv, porFormato] = await Promise.all([
+    stockTeorico(pool, sessionId),
+    stockPorFormato(pool, sessionId),
+  ]);
 
   // Los totales por forma de pago salen de las operaciones vivas: una anulada y
   // su reversión se compensan solas porque la reversión no se cuenta y la
@@ -1230,6 +1380,8 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   return {
     sesion,
     stock: lineasDesdeInventario(inv),
+    stockSueltas: lineasDesdeInventario(porFormato.sueltas),
+    stockCartuchos: lineasDesdeInventario(porFormato.cartuchos),
     totalStockCentimos: totalInventario(inv),
     piezas: totalPiezas(inv),
     porFormaPago: formas.map((r: { forma_pago: string; importe: string }) => ({

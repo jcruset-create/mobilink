@@ -9,6 +9,7 @@
 
 import { sessionHeaders } from "../../sessionHeaders";
 import type {
+  AperturaCartucho,
   Bootstrap,
   Caja,
   Denominacion,
@@ -121,6 +122,8 @@ export const jornadaAbierta = (registerId: number) =>
 export const abrirJornada = (datos: {
   registerId: number;
   fondoManual?: LineaDenominacion[];
+  /** Tubos precintados del fondo: `cantidad` son tubos, no monedas. */
+  fondoCartuchos?: LineaDenominacion[];
   motivoFondoManual?: string;
   notas?: string;
 }) => pedir<{ sesion: Sesion; stock: LineaDenominacion[] }>("/sessions", json(datos));
@@ -129,9 +132,13 @@ export const detalleJornada = (sessionId: number) =>
   pedir<ResumenJornada & { operaciones: Operacion[]; arqueos: unknown[] }>(`/sessions/${sessionId}`);
 
 export const stockJornada = (sessionId: number) =>
-  pedir<{ lineas: LineaDenominacion[]; totalCentimos: number; piezas: number }>(
-    `/sessions/${sessionId}/stock`
-  );
+  pedir<{
+    lineas: LineaDenominacion[];
+    sueltas: LineaDenominacion[];
+    cartuchos: LineaDenominacion[];
+    totalCentimos: number;
+    piezas: number;
+  }>(`/sessions/${sessionId}/stock`);
 
 export const movimientosJornada = (sessionId: number) =>
   pedir<{ movimientos: Movimiento[] }>(`/sessions/${sessionId}/movements`);
@@ -155,6 +162,8 @@ export type RespuestaOperacion = {
   stock: LineaDenominacion[];
   totalStockCentimos: number;
   erpSyncStatus: string;
+  /** Cartuchos que ha habido que abrir para poder entregar. */
+  aperturas: AperturaCartucho[];
 };
 
 export const registrarCobro = (datos: {
@@ -211,13 +220,23 @@ export const guardarArqueo = (
 ) => pedir<ResultadoArqueo>(`/sessions/${sessionId}/count`, json(datos));
 
 export const proponerCierre = (sessionId: number, objetivoCentimos: number) =>
-  pedir<{ cambioFinal: LineaDenominacion[]; ingresoBancario: LineaDenominacion[] }>(
+  pedir<{
+    cambioFinal: LineaDenominacion[];
+    cambioFinalCartuchos: LineaDenominacion[];
+    ingresoBancario: LineaDenominacion[];
+    ingresoBancarioCartuchos: LineaDenominacion[];
+  }>(
     `/sessions/${sessionId}/closing-proposal?objetivo=${objetivoCentimos}`
   );
 
 export const cerrarJornada = (
   sessionId: number,
-  datos: { cambioFinal: LineaDenominacion[]; arqueoId?: number; notas?: string }
+  datos: {
+    cambioFinal: LineaDenominacion[];
+    cambioFinalCartuchos?: LineaDenominacion[];
+    arqueoId?: number;
+    notas?: string;
+  }
 ) =>
   pedir<{
     sesion: Sesion;

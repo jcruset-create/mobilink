@@ -111,9 +111,22 @@ export type Movimiento = {
   createdAtMs: number;
 };
 
+/** Tubos que hay que abrir para poder entregar una combinación. */
+export type AperturaCartucho = {
+  valor: number;
+  cartuchos: number;
+  /** Monedas que salen del tubo al abrirlo. */
+  piezas: number;
+};
+
 export type ResumenJornada = {
   sesion: Sesion;
+  /** Piezas totales por valor, tubos incluidos. */
   stock: LineaDenominacion[];
+  /** De esas piezas, cuántas están sueltas. */
+  stockSueltas: LineaDenominacion[];
+  /** Tubos precintados por valor de la moneda. */
+  stockCartuchos: LineaDenominacion[];
   totalStockCentimos: number;
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: number }[];
@@ -126,7 +139,13 @@ export type ResumenJornada = {
 };
 
 export type ResultadoCambio =
-  | { ok: true; lineas: LineaDenominacion[]; piezas: number }
+  | {
+      ok: true;
+      lineas: LineaDenominacion[];
+      piezas: number;
+      /** Vacío cuando ha bastado con las monedas sueltas. */
+      aperturas: AperturaCartucho[];
+    }
   | { ok: false; motivo: string; mensaje: string };
 
 export type DiferenciaDenominacion = {
