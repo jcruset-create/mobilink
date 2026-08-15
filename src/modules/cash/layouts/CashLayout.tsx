@@ -10,7 +10,8 @@
 
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Menu, Home, Wallet, CircleDot } from "lucide-react";
+import { Menu, Home, CircleDot } from "lucide-react";
+import logoCash from "../../../assets/logo-cash.png";
 import { useCash } from "../contexts/CashContext";
 import { NAV, navVisible } from "../config/navigation";
 import { euros } from "../utils/money";
@@ -34,8 +35,8 @@ export default function CashLayout() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <Wallet className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">Mobilink Cash</span>
+          {/* El logotipo ya lleva el nombre: repetirlo al lado sobra. */}
+          <img src={logoCash} alt="Mobilink Cash" className="h-7 w-auto shrink-0 md:h-8" />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
