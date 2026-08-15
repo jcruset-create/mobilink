@@ -39,10 +39,18 @@ export default function Arqueo() {
     return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
   }
 
-  /** Copia el teórico como punto de partida: acelera el arqueo de una caja que cuadra. */
+  /**
+   * Copia el teórico como punto de partida: acelera el arqueo de una caja que
+   * cuadra.
+   *
+   * Copia las dos dimensiones por separado. Volcar el total de piezas en la
+   * columna de sueltas —que es lo que hacía antes— contaba las monedas de los
+   * tubos como si estuvieran sueltas y dejaba los cartuchos a cero: al cerrar,
+   * los tubos precintados desaparecían sin que nadie los hubiera abierto.
+   */
   function precargarTeorico() {
-    setContado(cantidadesDesde(jornada!.stock));
-    setCartuchos({});
+    setContado(cantidadesDesde(jornada!.stockSueltas ?? []));
+    setCartuchos(cantidadesDesde(jornada!.stockCartuchos ?? []));
   }
 
   async function guardar() {
