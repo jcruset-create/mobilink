@@ -10,7 +10,9 @@
  *  · botones −/+ grandes (44 px, que es el mínimo cómodo con el dedo);
  *  · el campo acepta teclado numérico (`inputMode="numeric"`);
  *  · el total se ve siempre, sin tener que bajar;
- *  · cada fila enseña su subtotal, que es como se cuenta un cajón de verdad.
+ *  · cada fila enseña su subtotal —como se cuenta un cajón de verdad— salvo
+ *    cuando hay que mostrar las existencias, porque las dos cifras no caben en
+ *    la misma fila y al sacar dinero importa más cuántas piezas quedan.
  *
  * El estado se lleva en céntimos → cantidad. Nunca hay un euro en coma
  * flotante por el medio.
@@ -191,6 +193,11 @@ function Grupo({
 }) {
   if (denominaciones.length === 0) return null;
 
+  // Existencias y cartuchos ocupan el hueco del subtotal. Con cualquiera de los
+  // dos la fila ya no da de sí, y antes que encoger un importe hasta cortarlo
+  // se prescinde de él: el total de la rejilla sigue abajo, entero.
+  const hayColumnaExtra = mostrarDisponible || Boolean(fijarCartuchos);
+
   return (
     <div>
       <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
@@ -206,11 +213,11 @@ function Grupo({
           return (
             <div
               key={d.valor}
-              className={`flex items-center gap-1.5 rounded-lg px-1.5 py-1 ${
+              className={`flex items-center gap-1.5 overflow-hidden rounded-lg px-1.5 py-1 ${
                 cantidad > 0 ? "bg-slate-900/70" : ""
               } ${sinExistencias ? "opacity-40" : ""}`}
             >
-              <div className="w-16 shrink-0 text-sm font-bold tabular-nums text-slate-200">
+              <div className="w-14 shrink-0 text-sm font-bold tabular-nums text-slate-200">
                 {d.etiqueta}
               </div>
 
@@ -225,7 +232,7 @@ function Grupo({
                 aria-label={`Quitar una pieza de ${d.etiqueta}`}
                 onClick={() => fijar(d.valor, cantidad - 1)}
                 disabled={deshabilitado || cantidad === 0}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
               >
                 <Minus className="h-4 w-4" />
               </button>
@@ -243,7 +250,7 @@ function Grupo({
                 }}
                 onFocus={(e) => e.target.select()}
                 disabled={deshabilitado}
-                className="h-9 w-14 shrink-0 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+                className="h-11 w-12 shrink-0 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
               />
 
               <button
@@ -251,7 +258,7 @@ function Grupo({
                 aria-label={`Añadir una pieza de ${d.etiqueta}`}
                 onClick={() => fijar(d.valor, cantidad + 1)}
                 disabled={deshabilitado || (tope != null && cantidad >= tope)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
               >
                 <Plus className="h-4 w-4" />
               </button>
@@ -271,13 +278,22 @@ function Grupo({
                   }}
                   onFocus={(e) => e.target.select()}
                   disabled={deshabilitado}
-                  className="h-9 w-14 shrink-0 rounded-lg border border-slate-600 bg-slate-900 text-center text-xs tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
+                  className="h-11 w-12 shrink-0 rounded-lg border border-slate-600 bg-slate-900 text-center text-xs tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
                 />
               )}
 
-              <div className="ml-auto min-w-[72px] text-right text-xs tabular-nums text-slate-400">
-                {subtotal > 0 ? euros(subtotal) : ""}
-              </div>
+              {/*
+                El subtotal y la columna de existencias se disputan el mismo
+                hueco: con las dos a la vez la fila no cabe y el importe se
+                solapaba con la columna de al lado. Cuando se enseñan las
+                existencias —sacar dinero— manda saber cuántas piezas hay; el
+                importe de la línea se deduce y el total va abajo.
+              */}
+              {!hayColumnaExtra && (
+                <div className="ml-auto whitespace-nowrap text-right text-xs tabular-nums text-slate-400">
+                  {subtotal > 0 ? euros(subtotal) : ""}
+                </div>
+              )}
             </div>
           );
         })}
