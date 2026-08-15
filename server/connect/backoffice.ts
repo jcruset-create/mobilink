@@ -2049,6 +2049,118 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     });
   });
 
+  // ── Puesta en marcha de una central ──────────────────────────────────────
+
+  /*
+   * Lo que lleva a una central de "no hay nada" a "ya factura". Configurar
+   * esto tiene ocho pasos y siete de ellos no dan error si te los saltas:
+   * simplemente no se factura, y nadie se entera hasta fin de mes.
+   */
+  const puesta = () => import("./onboarding.ts");
+
+  async function conPuesta(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorPuestaEnMarcha } = await puesta();
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorPuestaEnMarcha) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
+
+  /** Las plantillas disponibles. Son datos: añadir una es añadir un fichero. */
+  router.get("/setup/templates", ...requireConnectRole("cc_admin"), async (_req, res) => {
+    const { catalogoPlantillas } = await import("./pricing/plantillas/index.ts");
+    res.json({ data: catalogoPlantillas() });
+  });
+
+  /** Qué le falta a esta central para poder facturar, en orden y con el porqué. */
+  router.get("/setup/status", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroDe(req) ?? (req.query.controlCenterId != null ? Number(req.query.controlCenterId) : null);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { estadoPuestaEnMarcha } = await puesta();
+    res.json(await estadoPuestaEnMarcha(centro));
+  });
+
+  /**
+   * Crea un tarifario desde una plantilla. Nace como borrador y con los
+   * importes a cero: una plantilla con precios inventados es un número que
+   * alguien publica con prisa y acaba en una factura.
+   */
+  router.post("/setup/apply-template", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroDe(req) ?? (req.body?.controlCenterId != null ? Number(req.body.controlCenterId) : null);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { aplicarPlantilla } = await puesta();
+    await conPuesta(res, async () => {
+      const r = await aplicarPlantilla(centro, {
+        plantilla: String(req.body?.plantilla ?? ""),
+        code: String(req.body?.code ?? ""),
+        nombre: String(req.body?.nombre ?? ""),
+        anio: req.body?.anio != null ? Number(req.body.anio) : undefined,
+        pais: req.body?.pais, zonaHoraria: req.body?.zonaHoraria, moneda: req.body?.moneda,
+      });
+      await auditConnect({ req, action: "setup.template_applied", resourceType: "tariff_plan",
+        resourceId: r.tariffPlanId, detail: { plantilla: r.plantilla, reglas: r.reglas } });
+      return r;
+    });
+  });
+
+  /**
+   * Alta de una central nueva. Solo el superadministrador del hub: es quien da
+   * de alta y da soporte a las centrales.
+   */
+  router.post("/setup/control-centers", ...requireConnectRole("superadmin"), async (req, res) => {
+    const { crearCentro } = await puesta();
+    await conPuesta(res, async () => {
+      const r = await crearCentro({
+        nombre: String(req.body?.nombre ?? ""),
+        emailAdmin: String(req.body?.emailAdmin ?? ""),
+        nombreAdmin: req.body?.nombreAdmin ?? null,
+        pais: req.body?.pais, zonaHoraria: req.body?.zonaHoraria, moneda: req.body?.moneda,
+      });
+      await auditConnect({ req, action: "setup.control_center_created", resourceType: "control_center",
+        resourceId: r.controlCenterId, detail: { nombre: req.body?.nombre } });
+      return r;
+    });
+  });
+
+  // ── Contratos ────────────────────────────────────────────────────────────
+
+  /*
+   * El eslabón que más se olvida: se configura el tarifario, se publica, y no
+   * pasa nada porque nadie ha dicho qué cliente usa cuál.
+   */
+  router.get("/contracts", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarContratos } = await puesta();
+    res.json({ data: await listarContratos(centro) });
+  });
+
+  router.put("/contracts", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarContrato } = await puesta();
+    await conPuesta(res, async () => {
+      const r = await guardarContrato(centro, req.body ?? {});
+      await auditConnect({ req, action: "contract.saved", resourceType: "contract",
+        resourceId: r.id, detail: { role: req.body?.role, status: req.body?.status } });
+      return r;
+    });
+  });
+
+  router.delete("/contracts/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroAdmin(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { borrarContrato } = await puesta();
+    const ok = await borrarContrato(centro, Number(req.params.id));
+    if (ok) {
+      await auditConnect({ req, action: "contract.ended", resourceType: "contract",
+        resourceId: Number(req.params.id), detail: {} });
+    }
+    res.json({ ok });
+  });
+
   // ── Administración del tarifario ─────────────────────────────────────────
 
   /*
