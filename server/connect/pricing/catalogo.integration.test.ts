@@ -319,4 +319,107 @@ describe.skipIf(!RUN)("Catálogo de neumáticos y consulta de precio", () => {
     expect(await cat.desactivarPrecio(otroCentroId, p.id)).toBe(false);
     await publicarVersion(b.tariffVersionId, null);
   });
+
+  // ── Carga en lote ────────────────────────────────────────────────────────
+
+  it("una tabla entera se carga de una vez", async () => {
+    const { cargarTarifario } = await import("./tarifario.ts");
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `LOTE_${sufijo}`, preciosNeumaticos: [] });
+    await cat.guardarGrupo(centroId, b.tariffVersionId,
+      { code: "EUR1", name: "Europeas", marcas: ["Falken", "Sava"] });
+
+    const r = await cat.crearPreciosEnLote(centroId, b.tariffVersionId, [
+      { medida: "315/70R22.5", posicion: "STEER", marca: "Bridgestone", modeloPrecio: "NET_PRICE", importeNeto: "485.49" },
+      { medida: "315/70R22.5", posicion: "DRIVE", marca: "Bridgestone", modeloPrecio: "NET_PRICE", importeNeto: "485.49" },
+      { medida: "315/70R22.5", posicion: "STEER", grupoMarca: "EUR1", modeloPrecio: "NET_PRICE", importeNeto: "436.17" },
+    ]);
+    expect(r.escritas).toBe(3);
+    expect(r.errores).toEqual([]);
+
+    // La marca concreta se guarda con más prioridad que el grupo
+    const precios = await cat.listarPrecios(centroId, b.tariffVersionId);
+    expect(precios.find((p) => p.brandName === "Bridgestone")!.priority)
+      .toBeGreaterThan(precios.find((p) => p.brandGroupCode === "EUR1")!.priority);
+  });
+
+  it("si una fila falla no se escribe NINGUNA", async () => {
+    /*
+     * Con 150 filas pegadas, escribir las 89 primeras y fallar en la 90 deja un
+     * catálogo a medias que nadie sabe dónde se cortó.
+     */
+    const { cargarTarifario } = await import("./tarifario.ts");
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `LOTEMAL_${sufijo}`, preciosNeumaticos: [] });
+
+    const r = await cat.crearPreciosEnLote(centroId, b.tariffVersionId, [
+      { fila: 2, medida: "315/70R22.5", marca: "Bridgestone", modeloPrecio: "NET_PRICE", importeNeto: "485.49" },
+      { fila: 3, medida: "315/80R22.5", marca: "Hankook", modeloPrecio: "DISCOUNT_FROM_LIST", descuentoPorcentaje: "610" },
+      { fila: 4, medida: "295/80R22.5", marca: "Pirelli", modeloPrecio: "NET_PRICE", importeNeto: "420" },
+    ]);
+
+    expect(r.escritas).toBe(0);
+    expect(r.errores).toHaveLength(1);
+    expect(r.errores[0].fila).toBe(3);
+    expect(await cat.listarPrecios(centroId, b.tariffVersionId)).toHaveLength(0);
+  });
+
+  it("un grupo que no existe se detecta antes de borrar nada", async () => {
+    const { cargarTarifario } = await import("./tarifario.ts");
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `LOTEG_${sufijo}`, preciosNeumaticos: [] });
+    await cat.crearPreciosEnLote(centroId, b.tariffVersionId, [
+      { medida: "315/70R22.5", marca: "Bridgestone", modeloPrecio: "NET_PRICE", importeNeto: "100" },
+    ]);
+
+    const r = await cat.crearPreciosEnLote(centroId, b.tariffVersionId, [
+      { fila: 2, medida: "315/70R22.5", grupoMarca: "NO_EXISTE", modeloPrecio: "NET_PRICE", importeNeto: "100" },
+    ], { reemplazar: true });
+
+    expect(r.escritas).toBe(0);
+    expect(r.errores[0].motivo).toContain("NO_EXISTE");
+    // Y lo que había sigue ahí: no se ha borrado antes de fallar
+    expect(await cat.listarPrecios(centroId, b.tariffVersionId)).toHaveLength(1);
+  });
+
+  it("reemplazar sustituye la tabla en vez de duplicarla", async () => {
+    /*
+     * Sin esto, corregir una errata y volver a pegar dejaría dos copias de
+     * ciento y pico filas y el precio saldría de una de ellas sin saber cuál.
+     */
+    const { cargarTarifario } = await import("./tarifario.ts");
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `LOTER_${sufijo}`, preciosNeumaticos: [] });
+    const filas = [
+      { medida: "315/70R22.5", marca: "Bridgestone", modeloPrecio: "NET_PRICE", importeNeto: "485.49" },
+      { medida: "315/80R22.5", marca: "Bridgestone", modeloPrecio: "NET_PRICE", importeNeto: "485.49" },
+    ];
+
+    await cat.crearPreciosEnLote(centroId, b.tariffVersionId, filas);
+    const segunda = await cat.crearPreciosEnLote(centroId, b.tariffVersionId, filas, { reemplazar: true });
+
+    expect(segunda.borradas).toBe(2);
+    expect(segunda.escritas).toBe(2);
+    expect(await cat.listarPrecios(centroId, b.tariffVersionId)).toHaveLength(2);
+  });
+
+  it("sin reemplazar se acumulan, que es lo que pasa al pegar dos veces sin querer", async () => {
+    const { cargarTarifario } = await import("./tarifario.ts");
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `LOTEA_${sufijo}`, preciosNeumaticos: [] });
+    const fila = [{ medida: "315/70R22.5", marca: "Dunlop", modeloPrecio: "NET_PRICE", importeNeto: "460" }];
+    await cat.crearPreciosEnLote(centroId, b.tariffVersionId, fila);
+    await cat.crearPreciosEnLote(centroId, b.tariffVersionId, fila);
+    expect(await cat.listarPrecios(centroId, b.tariffVersionId)).toHaveLength(2);
+  });
+
+  it("una fila sin medida, marca ni grupo se rechaza: valdría para todo", async () => {
+    const { cargarTarifario } = await import("./tarifario.ts");
+    const b = await cargarTarifario(centroId, { ...SEAS_2026, code: `LOTEV_${sufijo}`, preciosNeumaticos: [] });
+    const r = await cat.crearPreciosEnLote(centroId, b.tariffVersionId, [
+      { fila: 2, modeloPrecio: "NET_PRICE", importeNeto: "100" },
+    ]);
+    expect(r.errores[0].motivo).toContain("valdría para todo");
+  });
+
+  it("en una versión publicada no se carga ningún lote", async () => {
+    await expect(cat.crearPreciosEnLote(centroId, versionVenta, [
+      { medida: "315/70R22.5", marca: "Dunlop", modeloPrecio: "NET_PRICE", importeNeto: "460" },
+    ])).rejects.toMatchObject({ codigo: "version_publicada" });
+  });
 });

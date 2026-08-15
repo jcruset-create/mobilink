@@ -2444,6 +2444,30 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     });
   });
 
+  /**
+   * Carga en lote: pegar la tabla del proveedor de una vez.
+   *
+   * Un catálogo real son ciento y pico filas por lado; de una en una no las
+   * mete nadie. Se valida todo antes de escribir nada, y si algo falla se
+   * devuelve qué fila y por qué sin haber tocado la base.
+   */
+  router.post("/pricing/catalog/versions/:versionId/tire-prices/bulk", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroCatalogo(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearPreciosEnLote } = await catalogo();
+    const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
+
+    await conCatalogo(res, async () => {
+      const r = await crearPreciosEnLote(centro, Number(req.params.versionId), filas,
+        { reemplazar: req.body?.reemplazar === true });
+      if (r.escritas > 0 || r.borradas > 0) {
+        await auditConnect({ req, action: "pricing.catalog.tire_prices_bulk", resourceType: "tariff_version",
+          resourceId: Number(req.params.versionId), detail: r });
+      }
+      return r;
+    });
+  });
+
   router.delete("/pricing/catalog/tire-prices/:priceId", ...requireConnectRole("cc_admin"), async (req, res) => {
     const centro = centroCatalogo(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
