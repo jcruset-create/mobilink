@@ -31,6 +31,7 @@ let clienteId = 0;
 let empresaId = 0;
 let versionId = 0;
 let versionCompraId = 0;
+let partnerId = 0;
 
 /** Tarifica un instante concreto con lo que hay cargado en la base. */
 async function tarifar(p: {
@@ -95,6 +96,13 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
     );
     empresaId = em.rows[0].id;
 
+    // Hace falta para poder crear asistencias de verdad en las pruebas de abajo
+    const pa = await db.query(
+      `INSERT INTO connect_partners (uuid, name, "controlCenterId", "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$4) RETURNING id`,
+      [`pa-seas-${sufijo}`, `Partner ${sufijo}`, centroId, now]);
+    partnerId = Number(pa.rows[0].id);
+
     /*
      * Los dos tarifarios del documento: la tabla de venta y la de compra. No
      * coinciden, y por eso son dos planes. Se cargan con un código propio de
@@ -123,6 +131,10 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
 
   afterAll(async () => {
     if (!RUN || !centroId) return;
+    await db.query(`DELETE FROM connect_workshop_holidays WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
+    await db.query(`DELETE FROM connect_assistances WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
+    await db.query(`DELETE FROM connect_partners WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
+    await db.query(`DELETE FROM connect_provider_authorizations WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
     await db.query(`DELETE FROM connect_contracts WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
     await db.query(`DELETE FROM connect_tariff_plans WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
     await db.query(`DELETE FROM connect_calendars WHERE "controlCenterId" = $1`, [centroId]).catch(() => {});
@@ -339,5 +351,85 @@ describe.skipIf(!RUN)("SEAS 2026 cargado desde la base", () => {
       if (/\bSEAS\b/i.test(contenido)) culpables.push(f);
     }
     expect(culpables).toEqual([]);
+  });
+
+
+  it("la fiesta local del taller sube su compra, y la venta al cliente no se mueve", async () => {
+    /*
+     * Un martes de agosto: para el cliente de la central es un día laborable y
+     * paga el diurno. Pero si en el pueblo del taller es fiesta local, ese día
+     * el taller trabaja en festivo y lo factura como tal.
+     *
+     * Es la única asimetría deliberada entre los dos lados del motor, y aquí se
+     * comprueba de punta a punta: el festivo está en la base, no en el contexto
+     * de la prueba.
+     */
+    const w = await db.query(
+      `INSERT INTO connect_workshops (name, latitude, longitude, "providerCompanyId", province, city,
+                                      "createdAtMs", "updatedAtMs")
+       VALUES ($1,41.6,-0.9,$2,'Zaragoza','Zaragoza',$3,$3) RETURNING id`,
+      [`Taller festivo ${sufijo}`, empresaId, now]);
+    const tallerId = Number(w.rows[0].id);
+
+    await db.query(
+      `INSERT INTO connect_provider_authorizations ("controlCenterId", "providerCompanyId", "createdAtMs")
+       VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [centroId, empresaId, now]).catch(() => {});
+
+    const { guardarFestivos } = await import("../workshopCalendar.ts");
+    await guardarFestivos(centroId, [
+      { scope: "local", workshopId: tallerId, date: "2026-08-11", name: "Fiesta del barrio" },
+    ]);
+
+    const MARTES = Date.parse("2026-08-11T10:30:00+02:00");
+    const a = await db.query(
+      `INSERT INTO connect_assistances
+         (uuid, "partnerId", "controlCenterId", "clientId", "workshopId", status,
+          "serviceType", vehicle, "serviceOrderedAtMs", "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,'assigned','tyres',$6,$7,$8,$8) RETURNING id`,
+      [`fest-${sufijo}`, partnerId, centroId, clienteId, tallerId,
+       JSON.stringify({ type: "truck" }), MARTES, now]);
+
+    const { estimar } = await import("./service.ts");
+    const r = await estimar(Number(a.rows[0].id), { distanceKm: 76 });
+
+    // El cliente paga su martes; el taller cobra festivo
+    expect(r!.venta?.regla?.code).toBe("DIURNO");
+    expect(formatear(r!.ventaTotal!)).toBe("198.00");
+    expect(r!.compra?.regla?.code).toBe("FESTIVO");
+    expect(formatear(r!.compraTotal!)).toBe("275.00");
+
+    // Y el margen negativo que sale de ahí se ve, con su motivo
+    expect(formatear(r!.margen!)).toBe("-77.00");
+    expect(r!.avisos.map((x) => x.codigo)).toContain("WORKSHOP_HOLIDAY");
+
+    await db.query(`DELETE FROM connect_assistances WHERE id = $1`, [a.rows[0].id]);
+    await db.query(`DELETE FROM connect_workshop_holidays WHERE "workshopId" = $1`, [tallerId]);
+    await db.query(`DELETE FROM connect_workshops WHERE id = $1`, [tallerId]);
+  });
+
+  it("el mismo taller un martes sin fiesta cobra diurno como todos", async () => {
+    const w = await db.query(
+      `INSERT INTO connect_workshops (name, latitude, longitude, "providerCompanyId", province, city,
+                                      "createdAtMs", "updatedAtMs")
+       VALUES ($1,41.6,-0.9,$2,'Zaragoza','Zaragoza',$3,$3) RETURNING id`,
+      [`Taller normal ${sufijo}`, empresaId, now]);
+    const tallerId = Number(w.rows[0].id);
+
+    const a = await db.query(
+      `INSERT INTO connect_assistances
+         (uuid, "partnerId", "controlCenterId", "clientId", "workshopId", status,
+          "serviceType", vehicle, "serviceOrderedAtMs", "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,'assigned','tyres',$6,$7,$8,$8) RETURNING id`,
+      [`nofest-${sufijo}`, partnerId, centroId, clienteId, tallerId,
+       JSON.stringify({ type: "truck" }), Date.parse("2026-08-11T10:30:00+02:00"), now]);
+
+    const { estimar } = await import("./service.ts");
+    const r = await estimar(Number(a.rows[0].id), { distanceKm: 76 });
+    expect(r!.compra?.regla?.code).toBe("DIURNO");
+    expect(formatear(r!.compraTotal!)).toBe("170.00");
+    expect(r!.avisos.map((x) => x.codigo)).not.toContain("WORKSHOP_HOLIDAY");
+
+    await db.query(`DELETE FROM connect_assistances WHERE id = $1`, [a.rows[0].id]);
+    await db.query(`DELETE FROM connect_workshops WHERE id = $1`, [tallerId]);
   });
 });

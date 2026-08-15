@@ -65,6 +65,34 @@ sabe nada.
 con lo que salió al ERP. Hay que deshacer la exportación primero
 (`DELETE /billing/mark-exported/:id`), que también queda auditado.
 
+## El festivo del taller sube su compra, no la venta
+
+La central trabaja 365 días 24 horas y le cobra a su cliente según el
+calendario de su contrato. El taller no: si en su pueblo es fiesta local, ese
+día trabaja en festivo y lo factura como tal.
+
+Por eso el lado de **compra** puede resolverse con más clases de día que el de
+venta. Un martes de agosto con fiesta local en el taller:
+
+| | Regla | Importe |
+|---|---|---:|
+| Venta al cliente | Diurno | 198 € |
+| Compra al taller | Festivos | 275 € |
+| Margen | | **−77 €** |
+
+Es la única asimetría deliberada entre los dos lados del motor, y va con su
+propio aviso (`WORKSHOP_HOLIDAY`) diciendo de qué regla a qué regla se pasa:
+un forfait de compra más caro que el de venta sin explicación parece un error
+de configuración.
+
+El aviso solo salta si el festivo del taller **cambia** la regla. Un 25 de
+diciembre el taller también está de fiesta local, pero ese día los dos lados
+cobran festivo igual; avisarlo sería ruido, y un aviso que casi siempre sale
+deja de leerse.
+
+Los festivos de cada taller se cargan en **Talleres → Festivos**: los
+autonómicos una vez por comunidad y los locales por taller.
+
 ## Auditoría económica
 
 `GET /pricing/audit` y la pestaña **Económica** de Auditoría responden la

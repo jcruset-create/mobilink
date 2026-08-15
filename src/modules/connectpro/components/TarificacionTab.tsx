@@ -99,6 +99,7 @@ const AVISOS: Record<string, string> = {
   EXTRA_PERCENTAGE_MISSING: "Un suplemento porcentual no tiene porcentaje",
   EXTRA_BASE_MISSING: "Un suplemento porcentual no tiene base sobre la que aplicarse",
   MANUAL_OVERRIDE: "Importe ajustado a mano",
+  WORKSHOP_HOLIDAY: "El taller estaba de festivo: su lado de compra se tarifica como festivo",
 };
 
 const LADOS: Record<string, string> = { sale: "venta", purchase: "compra" };

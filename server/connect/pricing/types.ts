@@ -34,7 +34,8 @@ export type CodigoAviso =
   | "EXTRA_AMOUNT_MISSING"
   | "EXTRA_PERCENTAGE_MISSING"
   | "EXTRA_BASE_MISSING"
-  | "MANUAL_OVERRIDE";
+  | "MANUAL_OVERRIDE"
+  | "WORKSHOP_HOLIDAY";        // el taller está de festivo: su compra sube
 
 export interface Aviso {
   codigo: CodigoAviso;
@@ -93,6 +94,17 @@ export interface ContextoTarifa {
   conceptos?: ConceptoServicio[];
   /** Se anuló el servicio después de dar la orden de salida. */
   cancelado?: boolean;
+
+  /**
+   * Festivos DEL TALLER que atiende, que no son los del servicio.
+   *
+   * La central trabaja 365 días 24 horas y le cobra a su cliente según el
+   * calendario del contrato. El taller no: si en su pueblo es fiesta local, ese
+   * día trabaja en festivo y lo factura como tal. Son dos cosas distintas y por
+   * eso estas clases se aplican SOLO al lado de compra: lo que paga el cliente
+   * no depende de dónde tenga el taller su ayuntamiento.
+   */
+  clasesDiaTaller?: string[];
 }
 
 /** Lo que se ha resuelto en un lado (compra o venta). */
