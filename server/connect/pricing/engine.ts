@@ -29,6 +29,7 @@ import {
   CERO, aDinero, multiplicar, aCantidad, porcentajeDe, redondearCentimos, type Dinero,
 } from "./money.ts";
 import { resolverRegla, type ContextoRegla, type ReglaTarifa } from "./rules.ts";
+import { resolverPrecioNeumatico, type CatalogoNeumaticos, type PosicionNeumatico } from "./tires.ts";
 import { instanteLocal } from "./time.ts";
 import { describirFranja, franjasAplicables, type FranjaHoraria } from "./timeBands.ts";
 import {
@@ -59,8 +60,8 @@ export interface ConfiguracionLado {
   currency: string;
   reglas: ReglaConImporte[];
   extras: Extra[];
-  /** Precio ya resuelto por neumático, indexado por su clave de concepto. */
-  preciosNeumaticos?: Map<string, Dinero>;
+  /** Catálogo de precios de neumático de esta versión tarifaria. */
+  catalogoNeumaticos?: CatalogoNeumaticos;
 }
 
 export interface ConfiguracionTarifa {
@@ -145,11 +146,6 @@ function resolverLado(
   };
 }
 
-/** Clave con la que se busca el precio de un neumático concreto. */
-export function claveNeumatico(medida: string, marca?: string | null, posicion?: string | null): string {
-  return [medida, marca ?? "*", posicion ?? "ANY"].join("|").toUpperCase();
-}
-
 // ---------------------------------------------------------------------------
 
 export function calcularTarifa(
@@ -180,9 +176,48 @@ export function calcularTarifa(
     durationMin: ctx.durationMin,
   };
 
+  /*
+   * El lado de compra puede tener MÁS clases de día que el de venta.
+   *
+   * Si en el pueblo del taller es fiesta local, ese taller trabaja en festivo y
+   * lo factura como tal, aunque para el cliente de la central sea un martes
+   * cualquiera. Es la única asimetría deliberada entre los dos lados, y por eso
+   * va con su propio aviso: un forfait de compra más caro que el de venta sin
+   * explicación parece un error de configuración.
+   */
+  const extraTaller = (ctx.clasesDiaTaller ?? []).filter((c) => !dia.clases.includes(c));
+  const ctxCompra: ContextoRegla = extraTaller.length === 0 ? ctxRegla : {
+    ...ctxRegla,
+    // El genérico 'holiday' al final: si adelantara a 'holiday_local', una
+    // regla de festivo local dejaría de ser la más específica.
+    dayClasses: [
+      ...extraTaller.filter((c) => c !== "holiday"),
+      ...ctxRegla.dayClasses,
+      ...(extraTaller.includes("holiday") ? ["holiday"] : []),
+    ],
+  };
+
   const venta = resolverLado(cfg.venta, ctxRegla, "sale", opciones.reglaVentaBloqueadaId);
-  const compra = resolverLado(cfg.compra, ctxRegla, "purchase", opciones.reglaCompraBloqueadaId);
+  const compra = resolverLado(cfg.compra, ctxCompra, "purchase", opciones.reglaCompraBloqueadaId);
   avisos.push(...venta.avisos, ...compra.avisos);
+
+  /*
+   * Se avisa solo si el festivo del taller ha CAMBIADO algo. Un 25 de diciembre
+   * el taller también está de fiesta local, pero ese día los dos lados cobran
+   * festivo igual: avisarlo sería ruido, y un aviso que casi siempre sale deja
+   * de leerse.
+   */
+  if (extraTaller.length > 0 && cfg.compra) {
+    const sinTaller = resolverLado(cfg.compra, ctxRegla, "purchase", opciones.reglaCompraBloqueadaId);
+    if (sinTaller.regla?.id !== compra.regla?.id) {
+      avisos.push({
+        codigo: "WORKSHOP_HOLIDAY", lado: "purchase",
+        detalle: `El taller está de festivo (${extraTaller.filter((c) => c !== "holiday").join(", ")}): ` +
+                 `su lado de compra pasa de "${sinTaller.regla?.name ?? "sin regla"}" a ` +
+                 `"${compra.regla?.name ?? "sin regla"}" aunque para el cliente no sea festivo`,
+      });
+    }
+  }
 
   // ── Líneas ──────────────────────────────────────────────────────────────
   const lineas: LineaPrecio[] = [];
@@ -254,7 +289,7 @@ export function calcularTarifa(
 
   return {
     etapa: opciones.etapa,
-    estado: estadoDe(ventaTotal, compraTotal, avisos),
+    estado: estadoDe(ventaTotal, compraTotal, avisos, lineas),
     currency: venta.lado?.currency ?? compra.lado?.currency ?? "EUR",
     compraTotal,
     ventaTotal,
@@ -289,10 +324,28 @@ function totalDe(lineas: LineaPrecio[], columna: "ventaTotal" | "compraTotal", r
   return alguna ? redondearCentimos(total) : CERO;
 }
 
-function estadoDe(venta: Dinero | null, compra: Dinero | null, avisos: Aviso[]): EstadoTarifa {
+/**
+ * `manual_review` significa que nadie debería facturar esto sin mirarlo.
+ * `partial` es que el precio está pero incompleto —venta sí y compra no, por
+ * ejemplo—, que es corriente y no bloquea nada.
+ *
+ * Una línea SIN precio de venta es motivo de revisión aunque el total salga:
+ * el total sale porque esa línea suma cero, y la factura iría corta por un
+ * importe que nadie ha decidido. Es el caso del neumático sin precio, que los
+ * tarifarios suelen mandar a revisión manual expresamente.
+ */
+function estadoDe(
+  venta: Dinero | null,
+  compra: Dinero | null,
+  avisos: Aviso[],
+  lineas: LineaPrecio[],
+): EstadoTarifa {
   const graves: CodigoAviso[] = ["NO_TARIFF_PLAN", "NO_MATCHING_RULE", "FORMULA_NOT_SUPPORTED"];
-  if (venta == null || avisos.some((a) => graves.includes(a.codigo))) return "manual_review";
-  if (compra == null || avisos.length > 0) return "partial";
+  const lineaSinPrecio = lineas.some((l) => l.ventaTotal == null);
+  if (venta == null || lineaSinPrecio || avisos.some((a) => graves.includes(a.codigo))) {
+    return "manual_review";
+  }
+  if (compra == null || lineas.some((l) => l.compraTotal == null) || avisos.length > 0) return "partial";
   return "ok";
 }
 
@@ -374,12 +427,22 @@ function anadirConceptos(
     const cantidad = c.cantidad ?? 1;
 
     if (c.neumatico) {
-      const clave = claveNeumatico(c.neumatico.medida, c.neumatico.marca, c.neumatico.posicion);
-      const pv = cfg.venta?.preciosNeumaticos?.get(clave) ?? null;
-      const pc = cfg.compra?.preciosNeumaticos?.get(clave) ?? null;
-      if (pv == null && pc == null) {
+      const peticion = {
+        medida: c.neumatico.medida,
+        marca: c.neumatico.marca,
+        posicion: (c.neumatico.posicion ?? "ANY") as PosicionNeumatico,
+      };
+      const resolver = (l: ConfiguracionLado | null) =>
+        l?.catalogoNeumaticos ? resolverPrecioNeumatico(peticion, l.catalogoNeumaticos) : null;
+      const rv = resolver(cfg.venta);
+      const rc = resolver(cfg.compra);
+      const pv = rv?.importe ?? null;
+      const pc = rc?.importe ?? null;
+      for (const aviso of [...(rv?.avisos ?? []), ...(rc?.avisos ?? [])]) {
         // No se inventa un precio de neumático: va a revisión.
-        avisos.push({ codigo: "TIRE_PRICE_NOT_FOUND", detalle: clave });
+        if (!avisos.some((a) => a.codigo === aviso)) {
+          avisos.push({ codigo: aviso as CodigoAviso, detalle: peticion.medida });
+        }
       }
       anadir({
         tipo: c.tipo,
@@ -392,7 +455,7 @@ function anadirConceptos(
         compraTotal: pc != null ? redondearCentimos(multiplicar(pc, aCantidad(cantidad))) : null,
         ventaTotal: pv != null ? redondearCentimos(multiplicar(pv, aCantidad(cantidad))) : null,
         saleRuleId: null, purchaseRuleId: null, extraId: null,
-        metadata: { neumatico: c.neumatico },
+        metadata: { neumatico: c.neumatico, tarifa: rv?.explicacion ?? rc?.explicacion ?? null },
       });
       continue;
     }
