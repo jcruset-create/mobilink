@@ -155,10 +155,17 @@ Implementado y probado:
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 
-Para estrenarlo hace falta, una sola vez: licencia `cash` para la empresa
-(`app_licencias`), una fila por usuario en `app_usuario_modulos` con
-`modulo = 'cash'` y su rol, y dar de alta la primera caja desde Configuración.
-El esquema se aplica solo al arrancar.
+Para estrenarlo hace falta, una sola vez, y los tres pasos se hacen desde la
+interfaz —no hace falta tocar la base de datos a mano:
+
+1. **Licencia**: Administración → Empresas → licencias, módulo `cash`. El
+   esquema (tablas `cash_*` y el catálogo de denominaciones) se aplica solo al
+   arrancar el servidor; la licencia no, porque es una decisión comercial.
+2. **Permisos**: Administración → Usuarios, una fila por usuario en el módulo
+   Mobilink Cash con su rol (`cajero` para mostrador, `responsable` para quien
+   abre y cierra).
+3. **La primera caja**: Mobilink Cash → Configuración. Sin ninguna caja dada de
+   alta no se puede abrir jornada, así que este paso no es opcional.
 
 Queda fuera de esta fase, y conviene decirlo:
 
