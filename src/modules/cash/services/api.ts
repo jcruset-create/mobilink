@@ -199,6 +199,8 @@ export const registrarMovimiento = (datos: {
   tipo: "MANUAL_IN" | "MANUAL_OUT" | "CASH_DELIVERY" | "BANK_DEPOSIT" | "ADJUSTMENT";
   importeCentimos: number;
   efectivo: LineaDenominacion[];
+  /** Tubos precintados que entran o salen sin abrirse. */
+  cartuchos?: LineaDenominacion[];
   concepto?: string;
   partyNombre?: string;
   referencia?: string | null;

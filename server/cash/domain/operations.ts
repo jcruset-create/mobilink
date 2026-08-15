@@ -118,10 +118,17 @@ export type OperacionNormalizada = {
   importe: Centimos;
   /** Desglose por forma de pago. En una operación mixta hay más de una línea. */
   formasPago: LineaFormaPago[];
-  /** Piezas que entrega el cliente (cobros) o que entran en caja. */
-  efectivoRecibido?: readonly LineaDenominacion[];
+  /**
+   * Piezas que entrega el cliente (cobros) o que entran en caja.
+   *
+   * Una línea puede venir marcada como cartucho (`cartuchos > 0`), y entonces
+   * `cantidad` son las monedas que trae el tubo. El invariante de importe se
+   * comprueba igual —las monedas son monedas— y la marca viaja intacta hasta el
+   * asiento, que es lo que permite que un tubo entre y salga precintado.
+   */
+  efectivoRecibido?: readonly LineaMovimiento[];
   /** Piezas que salen de caja: cambio de un cobro, o el pago entero. */
-  efectivoEntregado?: readonly LineaDenominacion[];
+  efectivoEntregado?: readonly LineaMovimiento[];
 };
 
 export type ResultadoValidacion =
@@ -312,7 +319,12 @@ function sumarStock(a: Inventario, b: Inventario): Inventario {
   return m;
 }
 
-function ordenar(lineas: readonly LineaDenominacion[]): LineaDenominacion[] {
+/**
+ * Ordena de mayor a menor SIN fusionar líneas: una de monedas sueltas y otra de
+ * un cartucho del mismo valor son dos asientos distintos, y juntarlas perdería
+ * el formato.
+ */
+function ordenar(lineas: readonly LineaMovimiento[]): LineaMovimiento[] {
   return [...lineas].filter((l) => l.cantidad > 0).sort((a, b) => b.valor - a.valor);
 }
 

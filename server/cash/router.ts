@@ -384,6 +384,9 @@ export function createCashRouter(): Router {
         formasPago: [{ forma: "CASH" as never, importe }],
         efectivoRecibido: entra ? lineas(b.efectivo, "efectivo") : undefined,
         efectivoEntregado: entra ? undefined : lineas(b.efectivo, "efectivo"),
+        // Tubos precintados: entran o salen sin abrirse. `cantidad` son tubos.
+        cartuchosRecibidos: entra ? lineas(b.cartuchos, "cartuchos") : undefined,
+        cartuchosEntregados: entra ? undefined : lineas(b.cartuchos, "cartuchos"),
         partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
         concepto,
         referencia: typeof b.referencia === "string" ? b.referencia : null,
