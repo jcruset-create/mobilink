@@ -47,6 +47,11 @@ import {
   validarOperacion,
 } from "./domain/operations.ts";
 import { calcularCambio, validarCambioManual, type ResultadoCambio } from "./domain/change.ts";
+import {
+  aperturasNecesarias,
+  calcularCambioConCartuchos,
+  type AperturaCartucho,
+} from "./domain/cartridges.ts";
 import { esFallo } from "./domain/result.ts";
 import { compararArqueo, proponerCambioFinal, repartirCierre, type ResultadoArqueo } from "./domain/arqueo.ts";
 import {
@@ -58,6 +63,8 @@ import {
   enTransaccion,
   formasPagoDeOperacion,
   insertarFormasPago,
+  piezasPorCartuchoDe,
+  stockPorFormato,
   insertarMovimientos,
   insertarOperacion,
   movimientosDeOperacion,
@@ -86,6 +93,8 @@ export type EntradaApertura = {
    * caja, o corrección manual). Si se omite y hay cierre anterior, se hereda.
    */
   fondoManual?: LineaDenominacion[];
+  /** Tubos precintados del fondo inicial: `cantidad` son tubos, no monedas. */
+  fondoCartuchos?: LineaDenominacion[];
   motivoFondoManual?: string;
   fecha?: string;
   notas?: string;
@@ -125,36 +134,63 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
 
     // Composición heredada: las piezas que el cierre anterior dejó en caja.
     let composicion: LineaDenominacion[] = [];
+    let cartuchos: LineaDenominacion[] = [];
     let heredado = false;
 
     if (anterior) {
       const { rows } = await client.query(
-        `SELECT valor_unitario_centimos, SUM(cantidad) AS cantidad
+        `SELECT valor_unitario_centimos,
+                SUM(CASE WHEN cartuchos = 0 THEN cantidad ELSE 0 END) AS sueltas,
+                SUM(cartuchos) AS tubos
            FROM cash_denomination_movements
           WHERE session_id = $1 AND motivo = 'CLOSING_FLOAT' AND direccion = 'OUT'
           GROUP BY valor_unitario_centimos`,
         [anterior.id]
       );
       composicion = rows
-        .map((r: { valor_unitario_centimos: number; cantidad: string }) => ({
+        .map((r: { valor_unitario_centimos: number; sueltas: string }) => ({
           valor: r.valor_unitario_centimos,
-          cantidad: Number(r.cantidad),
+          cantidad: Number(r.sueltas),
         }))
         .filter((l) => l.cantidad > 0);
-      heredado = composicion.length > 0;
+      // Un tubo que quedó precintado ayer sigue precintado hoy.
+      cartuchos = rows
+        .map((r: { valor_unitario_centimos: number; tubos: string }) => ({
+          valor: r.valor_unitario_centimos,
+          cantidad: Number(r.tubos),
+        }))
+        .filter((l) => l.cantidad > 0);
+      heredado = composicion.length > 0 || cartuchos.length > 0;
     }
 
     if (!heredado) {
       // Sin cierre anterior (o con cambio final vacío) se introduce a mano.
       composicion = (e.fondoManual ?? []).filter((l) => l.cantidad > 0);
-    } else if (e.fondoManual && e.fondoManual.length > 0) {
+      cartuchos = (e.fondoCartuchos ?? []).filter((l) => l.cantidad > 0);
+    } else if ((e.fondoManual && e.fondoManual.length > 0) || (e.fondoCartuchos && e.fondoCartuchos.length > 0)) {
       // Se ha heredado PERO alguien lo corrige: es exactamente el caso que el
       // encargo pide auditar, porque cambia el punto de partida del día.
-      composicion = e.fondoManual.filter((l) => l.cantidad > 0);
+      composicion = (e.fondoManual ?? []).filter((l) => l.cantidad > 0);
+      cartuchos = (e.fondoCartuchos ?? []).filter((l) => l.cantidad > 0);
       heredado = false;
     }
 
-    const inventarioInicial = inventarioDesdeLineas(composicion);
+    const porCartucho = piezasPorCartuchoDe(denominaciones);
+    // Las líneas de tubos se guardan como piezas (tubos × piezas del tubo) con
+    // su contador de cartuchos: así el total de piezas no necesita casos aparte.
+    const lineasCartucho = cartuchos.map((c) => {
+      const n = porCartucho.get(c.valor) ?? 0;
+      if (n <= 0) {
+        throw new ErrorCaja(
+          "CARTUCHO_NO_CONFIGURADO",
+          `La denominación de ${c.valor} céntimos no tiene cartuchos configurados.`,
+          400
+        );
+      }
+      return { valor: c.valor, cantidad: c.cantidad * n, cartuchos: c.cantidad };
+    });
+
+    const inventarioInicial = inventarioDesdeLineas([...composicion, ...lineasCartucho]);
     const fondo = totalInventario(inventarioInicial);
 
     const { rows: creada } = await client.query(
@@ -178,7 +214,7 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     );
     const sessionId = creada[0].id as number;
 
-    if (composicion.length > 0) {
+    if (composicion.length > 0 || lineasCartucho.length > 0) {
       // El fondo inicial también es una operación con sus piezas: así el libro
       // mayor cuadra desde el primer asiento y el stock se reconstruye entero
       // sumando movimientos, sin ningún caso especial.
@@ -199,7 +235,9 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       await insertarMovimientos(client, {
         sessionId,
         operationId: opId,
-        movimientos: [{ direccion: "IN", motivo: "OPENING_FLOAT", lineas: composicion }],
+        movimientos: [
+          { direccion: "IN", motivo: "OPENING_FLOAT", lineas: [...composicion, ...lineasCartucho] },
+        ],
         denominaciones,
         userId: ctx.userId,
         ahora,
@@ -251,9 +289,12 @@ export async function stockDeJornada(sessionId: number): Promise<{
  * stock puede cambiar, y por eso la confirmación vuelve a validar con la
  * jornada bloqueada.
  */
-export async function proponerCambio(sessionId: number, importe: Centimos): Promise<ResultadoCambio> {
-  const inv = await stockTeorico(pool, sessionId);
-  return calcularCambio(importe, inv);
+export async function proponerCambio(sessionId: number, importe: Centimos) {
+  const [stock, denominaciones] = await Promise.all([
+    stockPorFormato(pool, sessionId),
+    cargarDenominaciones(pool),
+  ]);
+  return calcularCambioConCartuchos(importe, stock, piezasPorCartuchoDe(denominaciones));
 }
 
 // ── Operaciones que mueven efectivo ────────────────────────────────────────
@@ -283,6 +324,8 @@ export type ResultadoOperacion = {
   stock: LineaDenominacion[];
   totalStockCentimos: Centimos;
   erpSyncStatus: string;
+  /** Cartuchos que ha habido que abrir para poder entregar. */
+  aperturas: AperturaCartucho[];
 };
 
 /**
@@ -357,6 +400,23 @@ export async function registrarOperacion(
     });
 
     await insertarFormasPago(client, operacionId, e.formasPago, ahora);
+
+    /*
+     * Cartuchos. Si lo que sale de caja no cabe en las monedas sueltas, hay que
+     * abrir tubos. Se asienta ANTES de la salida y con su propio motivo: sale
+     * el tubo y entran sus monedas sueltas, valor neto cero. Así el libro mayor
+     * refleja que el precinto se rompió —que es irreversible— y el operador ve
+     * en el histórico por qué de pronto había 25 monedas más.
+     */
+    const aperturas = await abrirCartuchosSiHaceFalta(client, {
+      sessionId: e.sessionId,
+      operationId: operacionId,
+      salidas: validacion.movimientos.filter((m) => m.direccion === "OUT"),
+      denominaciones,
+      userId: ctx.userId,
+      ahora,
+    });
+
     await insertarMovimientos(client, {
       sessionId: e.sessionId,
       operationId: operacionId,
@@ -414,6 +474,7 @@ export async function registrarOperacion(
       stock: lineasDesdeInventario(stockFinal),
       totalStockCentimos: totalInventario(stockFinal),
       erpSyncStatus,
+      aperturas,
     };
   });
 
@@ -1206,3 +1267,72 @@ export async function detalleJornada(sessionId: number) {
 }
 
 export { validarCambioManual };
+
+
+/**
+ * Abre los cartuchos que hagan falta para poder entregar unas salidas.
+ *
+ * Devuelve las aperturas realizadas, para que la interfaz pueda decírselo al
+ * operador: sin ese aviso, la pantalla le pide cuatro monedas de 1 € y él solo
+ * ve una suelta en el cajón.
+ *
+ * Un tubo abierto no se vuelve a cerrar, así que esto no tiene inversa: la
+ * anulación de la operación devuelve las monedas, pero sueltas.
+ */
+async function abrirCartuchosSiHaceFalta(
+  client: PoolClient,
+  e: {
+    sessionId: number;
+    operationId: number;
+    salidas: readonly { lineas: readonly LineaDenominacion[] }[];
+    denominaciones: readonly import("./domain/denominations.ts").Denominacion[];
+    userId: string | null;
+    ahora: number;
+  }
+): Promise<AperturaCartucho[]> {
+  const entrega = e.salidas.flatMap((m) => m.lineas);
+  if (entrega.length === 0) return [];
+
+  const porCartucho = piezasPorCartuchoDe(e.denominaciones);
+  if (porCartucho.size === 0) return [];
+
+  const stock = await stockPorFormato(client, e.sessionId);
+  const r = aperturasNecesarias(entrega, stock, porCartucho);
+
+  if (esFallo(r)) {
+    throw new ErrorCaja(
+      "STOCK_INSUFICIENTE",
+      `No hay suficientes piezas de ${r.valor} céntimos: se necesitan ${r.pedido} y hay ${r.disponible} contando los cartuchos.`,
+      400
+    );
+  }
+  if (r.aperturas.length === 0) return [];
+
+  await insertarMovimientos(client, {
+    sessionId: e.sessionId,
+    operationId: e.operationId,
+    movimientos: [
+      // Sale el tubo precintado…
+      {
+        direccion: "OUT",
+        motivo: "CARTRIDGE_OPENED",
+        lineas: r.aperturas.map((a) => ({
+          valor: a.valor,
+          cantidad: a.piezas,
+          cartuchos: a.cartuchos,
+        })),
+      },
+      // …y entran sus monedas, ya sueltas. Valor neto cero.
+      {
+        direccion: "IN",
+        motivo: "CARTRIDGE_OPENED",
+        lineas: r.aperturas.map((a) => ({ valor: a.valor, cantidad: a.piezas })),
+      },
+    ],
+    denominaciones: e.denominaciones,
+    userId: e.userId,
+    ahora: e.ahora,
+  });
+
+  return r.aperturas;
+}

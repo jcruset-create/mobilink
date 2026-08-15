@@ -696,3 +696,131 @@ describe.runIf(RUN)("configuración", () => {
     }
   });
 });
+
+describe.runIf(RUN)("cartuchos", () => {
+  /** Cuántas monedas sueltas y cuántos tubos hay de una denominación. */
+  async function stock(sessionId: number, valor: number) {
+    const { rows } = await db.query(
+      `SELECT SUM(CASE WHEN cartuchos = 0
+                       THEN (CASE WHEN direccion='IN' THEN cantidad ELSE -cantidad END)
+                       ELSE 0 END) AS sueltas,
+              SUM(CASE WHEN direccion='IN' THEN cartuchos ELSE -cartuchos END) AS tubos
+         FROM cash_denomination_movements
+        WHERE session_id = $1 AND valor_unitario_centimos = $2`,
+      [sessionId, valor]
+    );
+    return { sueltas: Number(rows[0].sueltas ?? 0), tubos: Number(rows[0].tubos ?? 0) };
+  }
+
+  it("el caso del encargo: se abre el tubo y quedan 22 monedas sueltas", async () => {
+    const caja = await crearCaja("cartucho");
+    // 1 moneda de 1 € suelta + 1 tubo de 25. Nada de 2 €.
+    // Un billete de 50 € para que el pago no dependa de las monedas.
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 100, cantidad: 1 },
+        { valor: 5000, cantidad: 1 },
+      ],
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    // Fondo = 50 € + 1 € suelto + 25 € del tubo = 76 €.
+    expect(sesion.fondoInicialCentimos).toBe(7600);
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 1, tubos: 1 });
+
+    // Salida de 4 € en monedas de 1 €: solo hay 1 suelta, hay que abrir el tubo.
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_OUT",
+      importeCentimos: 400,
+      formasPago: [{ forma: "CASH", importe: 400 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 4 }],
+      concepto: "Salida que obliga a abrir el cartucho",
+    });
+
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+
+    // 1 suelta + 25 del tubo − 4 entregadas = 22 sueltas, y ya no queda tubo.
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 22, tubos: 0 });
+    expect(r.totalStockCentimos).toBe(7600 - 400);
+
+    // Y el libro mayor deja constancia de que el precinto se rompió.
+    const { rows } = await db.query(
+      `SELECT direccion, cantidad, cartuchos FROM cash_denomination_movements
+        WHERE session_id = $1 AND motivo = 'CARTRIDGE_OPENED' ORDER BY id`,
+      [sesion.id]
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ direccion: "OUT", cantidad: 25, cartuchos: 1 });
+    expect(rows[1]).toMatchObject({ direccion: "IN", cantidad: 25, cartuchos: 0 });
+  });
+
+  it("con sueltas de sobra el precinto no se toca", async () => {
+    const caja = await crearCaja("cartucho-intacto");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 30 }],
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_OUT",
+      importeCentimos: 400,
+      formasPago: [{ forma: "CASH", importe: 400 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 4 }],
+      concepto: "Salida que NO debe abrir el cartucho",
+    });
+
+    expect(r.aperturas).toEqual([]);
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 26, tubos: 1 });
+  });
+
+  it("la propuesta de cambio avisa de los tubos que hay que abrir", async () => {
+    const caja = await crearCaja("cartucho-propuesta");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 1 }],
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    const p = await servicio.proponerCambio(sesion.id, 400);
+    expect(p.ok).toBe(true);
+    if (esFallo(p)) return;
+    expect(p.lineas).toEqual([{ valor: 100, cantidad: 4 }]);
+    expect(p.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+  });
+
+  /*
+   * PENDIENTE: hoy el arqueo y el cierre trabajan en piezas, así que un tubo
+   * que se cuenta precintado al cerrar amanece como monedas sueltas. El importe
+   * se conserva —el dinero no se pierde— pero el formato sí. Esta prueba fija
+   * el comportamiento ACTUAL para que el día que se complete el cierre con
+   * formato se vea aquí que cambia.
+   */
+  it("al cerrar, el importe se conserva aunque el tubo pase a monedas sueltas", async () => {
+    const caja = await crearCaja("cartucho-herencia");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 2 }],
+      fondoCartuchos: [{ valor: 100, cantidad: 2 }],
+    });
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 2, tubos: 2 });
+
+    // No se toca nada: se arquea y se cierra dejándolo todo como cambio.
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: teorico.lineas });
+
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialHeredado).toBe(true);
+    // El importe se conserva entero: 2 sueltas + 2 tubos de 25 = 52 monedas.
+    expect(manana.sesion.fondoInicialCentimos).toBe(sesion.fondoInicialCentimos);
+    expect(manana.sesion.fondoInicialCentimos).toBe(5200);
+
+    // Pero el formato no: las 52 monedas amanecen sueltas y sin tubos. Esto es
+    // lo que queda por completar.
+    expect(await stock(manana.sesion.id, 100)).toEqual({ sueltas: 52, tubos: 0 });
+  });
+});
