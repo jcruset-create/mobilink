@@ -14,7 +14,11 @@ import type {
   Caja,
   Denominacion,
   DocumentoExterno,
+  EntregaDinero,
   FormaPagoConfig,
+  PedidoCambio,
+  Pendientes,
+  PropuestaPedido,
   EstadoIntegracion,
   LineaDenominacion,
   Movimiento,
@@ -154,6 +158,60 @@ export const subirImagenFormaPago = (id: number, fichero: File) => {
     body: cuerpo,
   });
 };
+
+// ── Tesorería: cambio al banco y entregas de dinero ────────────────────────
+
+export const tesoreria = (registerId: number) =>
+  pedir<{ pedidos: PedidoCambio[]; entregas: EntregaDinero[] }>(`/registers/${registerId}/treasury`);
+
+/** Lo que está fuera de la caja: para los avisos de jornada y de cierre. */
+export const pendientesTesoreria = (registerId: number) =>
+  pedir<Pendientes>(`/registers/${registerId}/treasury/pending`);
+
+export const proponerPedidoCambio = (sessionId: number, importeCentimos: number) =>
+  pedir<PropuestaPedido>(`/sessions/${sessionId}/change-order/proposal?importe=${importeCentimos}`);
+
+export const crearPedidoCambio = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  solicitado: { valor: number; cantidad: number; cartuchos?: number; motivo?: string }[];
+  salida?: LineaDenominacion[];
+  notas?: string;
+}) => pedir<{ pedido: PedidoCambio }>("/change-orders", json(datos));
+
+export const recibirPedidoCambio = (
+  id: number,
+  datos: {
+    sessionId: number;
+    recibido: { valor: number; cantidad: number; cartuchos?: number }[];
+    diferenciaMotivo?: string;
+  }
+) => pedir<{ pedido: PedidoCambio }>(`/change-orders/${id}/receive`, json(datos));
+
+export const cancelarPedidoCambio = (id: number, sessionId: number, motivo: string) =>
+  pedir<{ pedido: PedidoCambio }>(`/change-orders/${id}/cancel`, json({ sessionId, motivo }));
+
+export const entregarDinero = (datos: {
+  sessionId: number;
+  persona: string;
+  motivo: string;
+  importeCentimos: number;
+  entregado: LineaDenominacion[];
+  notas?: string;
+}) => pedir<{ entrega: EntregaDinero }>("/advances", json(datos));
+
+export const liquidarEntrega = (
+  id: number,
+  datos: {
+    sessionId: number;
+    gastoCentimos: number;
+    devuelto?: LineaDenominacion[];
+    proveedor?: string;
+    facturaReferencia?: string;
+    concepto?: string;
+    diferenciaMotivo?: string;
+  }
+) => pedir<{ entrega: EntregaDinero }>(`/advances/${id}/settle`, json(datos));
 
 // ── Jornada ────────────────────────────────────────────────────────────────
 

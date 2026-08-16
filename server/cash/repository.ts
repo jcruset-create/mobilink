@@ -457,7 +457,18 @@ export async function siguienteNumero(
   tipo: TipoOperacion,
   anio: number
 ): Promise<string> {
-  const prefijo = PREFIJO_POR_TIPO[tipo] ?? "X";
+  return siguienteNumeroDe(client, PREFIJO_POR_TIPO[tipo] ?? "X", anio);
+}
+
+/**
+ * El mismo contador para documentos que no son operaciones: los pedidos de
+ * cambio al banco (`CB`) y las entregas de dinero a personas (`EN`).
+ */
+export async function siguienteNumeroDe(
+  client: PoolClient,
+  prefijo: string,
+  anio: number
+): Promise<string> {
   const clave = `${prefijo}:${anio}`;
   const { rows } = await client.query<{ last_seq: number }>(
     `INSERT INTO cash_document_counters (clave, last_seq)

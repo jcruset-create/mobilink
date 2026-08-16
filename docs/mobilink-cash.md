@@ -127,7 +127,7 @@ paralelo que mantener.
 |---|---|
 | `consulta` | ver |
 | `cajero` | cobrar, pagar, mover efectivo, arquear |
-| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas |
+| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
 | `admin` | además configurar la integración y el catálogo de denominaciones |
 
 `cash.configure` (cajas) y `cash.denominations.configure` (catálogo) van
@@ -176,6 +176,56 @@ La imagen del botón se sube a Supabase Storage y de ella se guarda la URL, igua
 que el avatar de técnicos. En disco local no: el contenedor de Render es
 efímero y la imagen se perdería en el siguiente despliegue.
 
+## 7 ter. Tesorería: cambio del banco y entregas de dinero
+
+Dos documentos para el mismo problema: **dinero que sale hoy de la caja y
+vuelve más tarde**. Ese hueco era lo que el módulo no sabía representar, y es
+lo que hace que un arqueo descuadre 200 € sin que nadie recuerde por qué.
+
+`cash_change_orders` — se va al banco con billetes y se vuelve con calderilla.
+`cash_advances` — se le dan 50 € a alguien para que compre algo.
+
+Tres decisiones sostienen lo demás:
+
+- **Los asientos se hacen cuando el dinero se mueve**, no cuando se planea. Al
+  crear el pedido salen los billetes; al recibirlo entra la calderilla. En
+  medio, el stock teórico ya no cuenta ese dinero, así que el arqueo de la
+  tarde cuadra sin trucos, y las pantallas de jornada y cierre dicen cuánto hay
+  fuera y de quién.
+- **Cruzan jornadas.** El banco no contesta el mismo día y el empleado vuelve
+  en el turno siguiente. Cada asiento pertenece a la jornada en la que ocurrió.
+  Era el encargo: que un billete de 50 € no desaparezca en un cambio de turno.
+- **La liquidación de una entrega registra el pago REAL y no vuelve a mover
+  piezas.** Si se entregan 50 €, la factura es de 40 € y devuelve 10 €, en el
+  listado hay un pago de 40 € y en el libro mayor dos asientos: sale un billete
+  de 50 y entra uno de 10. Volver a asentar las piezas del pago sacaría 90 € de
+  una caja de la que solo salieron 50. Es la única excepción a "todo efectivo
+  lleva su detalle de piezas" (`liquidaEntregaId` en el dominio), y no la
+  rompe: las piezas existen y están asentadas, solo que en la entrega.
+
+Si las cuentas no cuadran —factura de 40 € y solo devuelve 8— no se bloquea: el
+dinero ya no está y negarse a registrarlo solo esconde el problema. Se exige un
+motivo y queda auditado con el nombre de quien lo tenía. Lo mismo con el banco
+cuando da algo distinto de lo pedido.
+
+### Qué pedirle al banco
+
+`domain/restock.ts`, y **sin ningún modelo de lenguaje**, a propósito: el libro
+mayor registra cada moneda que ha salido al dar cambio, así que el consumo es
+un dato y no una estimación. Una fórmula da siempre la misma respuesta, se
+prueba y se audita; un modelo daría respuestas distintas para el mismo caso, y
+en dinero eso es un defecto.
+
+Consumo medio diario por denominación de las últimas jornadas → objetivo por
+días de colchón → resta de lo que hay → redondeo a cartucho (al banco las
+monedas se piden en tubos) → ajuste al importe que se cambia, priorizando lo
+que antes se va a agotar. Cada línea sale con su porqué —"gastas unas 40
+monedas de 1 € al día y te quedan 20"— porque una propuesta que no se entiende
+no se corrige: se ignora.
+
+Los billetes que salen a pagar el pedido se componen con los **más grandes**
+que haya, que es lo contrario de dar un cambio: son justo los que sobran.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:
@@ -192,8 +242,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**930 pruebas en verde** (`npm test`), de las cuales 120 son de Mobilink Cash y
-40 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**950 pruebas en verde** (`npm test`), de las cuales 140 son de Mobilink Cash y
+49 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

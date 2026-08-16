@@ -428,9 +428,107 @@ export async function initCash(): Promise<void> {
       ON cash_erp_logs(empresa_id, created_at_ms DESC);
   `);
 
+  // ── Pedidos de cambio al banco ────────────────────────────────────────────
+  // Se acumulan billetes y se va al banco a por calderilla. Entre que el dinero
+  // sale y vuelve pasan horas o días, y ese hueco TIENE que verse: si no, el
+  // arqueo de la tarde descuadra 200 € sin explicación.
+  //
+  // Cruza jornadas a propósito (`session_id_salida` ≠ `session_id_entrada`): el
+  // banco no siempre contesta el mismo día. Cada asiento pertenece a la jornada
+  // en la que ocurrió, así que los dos arqueos cuadran por separado.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_change_orders (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      numero TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado IN ('PENDIENTE','RECIBIDO','CANCELADO')),
+
+      importe_centimos BIGINT NOT NULL,
+      /* Lo que el banco ha dado de verdad. Puede no coincidir con lo pedido. */
+      importe_recibido_centimos BIGINT,
+      diferencia_motivo TEXT,
+
+      session_id_salida INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      session_id_entrada INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      operation_salida_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      operation_entrada_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+
+      notas TEXT,
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      cerrado_por UUID,
+      cerrado_at_ms BIGINT,
+      UNIQUE (empresa_id, numero)
+    );
+    CREATE INDEX IF NOT EXISTS cash_change_orders_abiertos_idx
+      ON cash_change_orders(register_id, estado);
+
+    CREATE TABLE IF NOT EXISTS cash_change_order_lines (
+      id SERIAL PRIMARY KEY,
+      change_order_id INTEGER NOT NULL REFERENCES cash_change_orders(id) ON DELETE CASCADE,
+      /* SOLICITADO: lo que se le pide al banco. ENVIADO: los billetes que salen
+         de la caja. RECIBIDO: lo que el banco acaba dando. */
+      rol TEXT NOT NULL CHECK (rol IN ('SOLICITADO','ENVIADO','RECIBIDO')),
+      valor_centimos INTEGER NOT NULL,
+      cantidad INTEGER NOT NULL CHECK (cantidad > 0),
+      cartuchos INTEGER NOT NULL DEFAULT 0,
+      motivo TEXT
+    );
+    CREATE INDEX IF NOT EXISTS cash_change_order_lines_idx
+      ON cash_change_order_lines(change_order_id, rol);
+  `);
+
+  // ── Entregas de dinero a personas ─────────────────────────────────────────
+  // Se le dan 50 € a un empleado para que compre algo. Ese billete ya no está
+  // en el cajón, y sin registrarlo el descuadre aparece en el arqueo del turno
+  // siguiente sin que nadie recuerde a quién se le dio.
+  //
+  // Al liquidar, el pago que se registra es el REAL (la factura), y no vuelve a
+  // mover piezas: salieron al entregar. Solo entra la vuelta.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_advances (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      numero TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'ABIERTA'
+        CHECK (estado IN ('ABIERTA','LIQUIDADA','DEVUELTA','CANCELADA')),
+
+      persona TEXT NOT NULL,
+      motivo TEXT NOT NULL,
+      importe_centimos BIGINT NOT NULL,
+
+      /* Al liquidar: lo que dice la factura y lo que ha vuelto en piezas. */
+      gasto_centimos BIGINT,
+      devuelto_centimos BIGINT,
+      /* Entregado − devuelto − gastado. Distinto de cero = falta dinero. */
+      diferencia_centimos BIGINT,
+      diferencia_motivo TEXT,
+      factura_referencia TEXT,
+      proveedor TEXT,
+
+      session_id_entrega INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      session_id_liquidacion INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      operation_entrega_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      operation_devolucion_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      operation_pago_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+
+      notas TEXT,
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      cerrado_por UUID,
+      cerrado_at_ms BIGINT,
+      UNIQUE (empresa_id, numero)
+    );
+    CREATE INDEX IF NOT EXISTS cash_advances_abiertas_idx
+      ON cash_advances(register_id, estado);
+  `);
+
   // ── Contador de numeración propia (MC-C-2026-000001) ──────────────────────
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS cash_document_counters (
+  CREATE TABLE IF NOT EXISTS cash_document_counters (
       clave TEXT PRIMARY KEY,
       last_seq INTEGER NOT NULL DEFAULT 0
     );

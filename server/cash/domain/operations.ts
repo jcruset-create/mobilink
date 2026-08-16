@@ -151,6 +151,17 @@ export type OperacionNormalizada = {
   efectivoRecibido?: readonly LineaMovimiento[];
   /** Piezas que salen de caja: cambio de un cobro, o el pago entero. */
   efectivoEntregado?: readonly LineaMovimiento[];
+  /**
+   * El efectivo de esta operación YA salió con una entrega de dinero a una
+   * persona, y esto es la factura que la liquida.
+   *
+   * Es la única excepción a "todo efectivo lleva su detalle de piezas", y no la
+   * rompe: las piezas existen y están asentadas, solo que en la entrega. Sin
+   * esto, registrar el pago de 40 € de la compra sacaría de la caja unas piezas
+   * que ya salieron cuando se le dieron 50 € al empleado, y el cajón acabaría
+   * con 90 € de menos habiendo salido 50.
+   */
+  liquidaEntregaId?: number;
 };
 
 export type ResultadoValidacion =
@@ -272,6 +283,25 @@ export function validarOperacion(
   // 3. Con parte en efectivo tiene que haber detalle de piezas. Ésta es la
   //    regla que impide que se cuele un "+187 €" sin composición.
   const entraEfectivo = ENTRAN.has(op.tipo);
+
+  /*
+   * Salvo que sea la liquidación de una entrega: ahí las piezas salieron
+   * cuando se le dio el dinero a la persona, y este documento solo pone la
+   * factura. Asentar piezas otra vez descuadraría la caja por el importe
+   * entregado.
+   */
+  if (op.liquidaEntregaId != null) {
+    if (totalRecibido !== 0 || totalEntregado !== 0) {
+      return {
+        ok: false,
+        codigo: "EFECTIVO_NO_CUADRA",
+        mensaje:
+          "La liquidación de una entrega no mueve piezas: ya salieron al entregar el dinero.",
+      };
+    }
+    return { ok: true, movimientos: [], efectivoNeto: 0 };
+  }
+
   if (entraEfectivo && totalRecibido === 0) {
     return {
       ok: false,
