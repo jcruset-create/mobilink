@@ -237,6 +237,10 @@ export type FormaPagoConfig = {
   afectaEfectivo: boolean;
   pideReferencia: boolean;
   activa: boolean;
+  /** Sale como botón al cobrar. */
+  enCobros: boolean;
+  /** Sale como botón al pagar. */
+  enPagos: boolean;
   orden: number;
   /** Cobros y pagos ya registrados con esta forma. Solo informativo. */
   usos: number;
@@ -252,6 +256,8 @@ function aFormaPago(r: any): FormaPagoConfig {
     afectaEfectivo: r.afecta_efectivo,
     pideReferencia: r.pide_referencia,
     activa: r.activa,
+    enCobros: r.en_cobros,
+    enPagos: r.en_pagos,
     orden: r.orden,
     usos: Number(r.usos ?? 0),
   };
@@ -278,11 +284,21 @@ export async function asegurarFormasPago(empresaId: string): Promise<void> {
   for (const f of FORMAS_PAGO_SEMILLA) {
     await pool.query(
       `INSERT INTO cash_payment_methods
-         (empresa_id, codigo, nombre, afecta_efectivo, pide_referencia, activa, orden,
-          created_at_ms, updated_at_ms)
-       VALUES ($1,$2,$3,$4,$5,true,$6,$7,$7)
+         (empresa_id, codigo, nombre, afecta_efectivo, pide_referencia, activa,
+          en_cobros, en_pagos, orden, created_at_ms, updated_at_ms)
+       VALUES ($1,$2,$3,$4,$5,true,$6,$7,$8,$9,$9)
        ON CONFLICT (empresa_id, codigo) DO NOTHING`,
-      [empresaId, f.codigo, f.nombre, f.afectaEfectivo, f.pideReferencia, f.orden, ahora]
+      [
+        empresaId,
+        f.codigo,
+        f.nombre,
+        f.afectaEfectivo,
+        f.pideReferencia,
+        f.enCobros,
+        f.enPagos,
+        f.orden,
+        ahora,
+      ]
     );
   }
 }
@@ -320,7 +336,14 @@ function normalizarCodigo(codigo: string): string {
 
 export async function crearFormaPago(
   ctx: Contexto,
-  datos: { nombre: string; codigo?: string; pideReferencia?: boolean; orden?: number }
+  datos: {
+    nombre: string;
+    codigo?: string;
+    pideReferencia?: boolean;
+    enCobros?: boolean;
+    enPagos?: boolean;
+    orden?: number;
+  }
 ): Promise<FormaPagoConfig> {
   const nombre = String(datos.nombre ?? "").trim();
   if (!nombre) {
@@ -357,11 +380,22 @@ export async function crearFormaPago(
   const ahora = Date.now();
   const { rows } = await pool.query(
     `INSERT INTO cash_payment_methods
-       (empresa_id, codigo, nombre, afecta_efectivo, pide_referencia, activa, orden,
-        created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,false,$4,true,$5,$6,$6)
+       (empresa_id, codigo, nombre, afecta_efectivo, pide_referencia, activa,
+        en_cobros, en_pagos, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,false,$4,true,$5,$6,$7,$8,$8)
      RETURNING *`,
-    [ctx.empresaId, codigo, nombre, datos.pideReferencia ?? true, datos.orden ?? 100, ahora]
+    [
+      ctx.empresaId,
+      codigo,
+      nombre,
+      datos.pideReferencia ?? true,
+      datos.enCobros ?? true,
+      // Una forma nueva se estrena en cobros: a un proveedor se le paga del
+      // cajón, y si alguna vez hace falta se activa desde aquí mismo.
+      datos.enPagos ?? false,
+      datos.orden ?? 100,
+      ahora,
+    ]
   );
 
   await registrarAuditoria({
@@ -392,6 +426,8 @@ export async function actualizarFormaPago(
     nombre?: string;
     activa?: boolean;
     pideReferencia?: boolean;
+    enCobros?: boolean;
+    enPagos?: boolean;
     orden?: number;
     imagenUrl?: string | null;
   }
@@ -413,6 +449,8 @@ export async function actualizarFormaPago(
   const pideReferencia =
     cambios.pideReferencia === undefined ? antes.pide_referencia : cambios.pideReferencia;
   const orden = cambios.orden === undefined ? antes.orden : cambios.orden;
+  const enCobros = cambios.enCobros === undefined ? antes.en_cobros : cambios.enCobros;
+  const enPagos = cambios.enPagos === undefined ? antes.en_pagos : cambios.enPagos;
   const imagenUrl = cambios.imagenUrl === undefined ? antes.imagen_url : cambios.imagenUrl;
 
   // El efectivo no se da de baja. Todo el módulo existe para contar piezas: sin
@@ -421,6 +459,16 @@ export async function actualizarFormaPago(
     throw new ErrorCaja(
       "FORMA_PAGO_PROTEGIDA",
       "El efectivo no se puede dar de baja: es la única forma que mueve el cajón, y sin ella no hay arqueo ni cierre.",
+      409
+    );
+  }
+
+  // Y tampoco se puede quitar de una de las dos pantallas: sin efectivo no se
+  // podría cobrar ni pagar del cajón, que es de lo que va el módulo.
+  if (antes.afecta_efectivo && (!enCobros || !enPagos)) {
+    throw new ErrorCaja(
+      "FORMA_PAGO_PROTEGIDA",
+      "El efectivo tiene que estar disponible en cobros y en pagos.",
       409
     );
   }
@@ -443,10 +491,21 @@ export async function actualizarFormaPago(
   const { rows } = await pool.query(
     `UPDATE cash_payment_methods
         SET nombre = $3, activa = $4, pide_referencia = $5, orden = $6, imagen_url = $7,
-            updated_at_ms = $8
+            en_cobros = $8, en_pagos = $9, updated_at_ms = $10
       WHERE id = $1 AND empresa_id = $2
       RETURNING *`,
-    [id, ctx.empresaId, nombre, activa, pideReferencia, orden, imagenUrl, Date.now()]
+    [
+      id,
+      ctx.empresaId,
+      nombre,
+      activa,
+      pideReferencia,
+      orden,
+      imagenUrl,
+      enCobros,
+      enPagos,
+      Date.now(),
+    ]
   );
 
   await registrarAuditoria({
@@ -461,10 +520,12 @@ export async function actualizarFormaPago(
         nombre: antes.nombre,
         activa: antes.activa,
         pideReferencia: antes.pide_referencia,
+        enCobros: antes.en_cobros,
+        enPagos: antes.en_pagos,
         orden: antes.orden,
         imagenUrl: antes.imagen_url,
       },
-      despues: { nombre, activa, pideReferencia, orden, imagenUrl },
+      despues: { nombre, activa, pideReferencia, enCobros, enPagos, orden, imagenUrl },
     },
     ip: ctx.ip,
   });

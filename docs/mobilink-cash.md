@@ -166,6 +166,13 @@ Dos reglas que el backend impone dentro de la transacción, no en la pantalla:
 `pide_referencia` obliga a introducirla al cobrar. Viene activada en todo lo
 que no es efectivo, porque es lo que luego permite cuadrar con el banco.
 
+`en_cobros` y `en_pagos` deciden en qué pantalla sale cada botón, porque **no
+son la misma lista**: se cobra por tarjeta, Bizum o transferencia, pero a un
+proveedor se le paga del cajón. De salida solo el efectivo aparece en pagos, y
+el resto se marca desde Configuración el día que haga falta. El efectivo no se
+puede quitar de ninguna de las dos: es el único que mueve el cajón. Se valida
+en la transacción, como todo lo demás del catálogo.
+
 Esto obligó a **abrir `FormaPago` en el dominio**: era una unión cerrada y
 `afectaAlEfectivo()` comparaba con el literal `"CASH"`. Ahora es un código y las
 funciones del motor reciben el conjunto de códigos que son efectivo. El motor
@@ -242,8 +249,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**950 pruebas en verde** (`npm test`), de las cuales 140 son de Mobilink Cash y
-49 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**954 pruebas en verde** (`npm test`), de las cuales 144 son de Mobilink Cash y
+53 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

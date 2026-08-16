@@ -39,7 +39,7 @@ import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
 export default function Cobros() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasPagoActivas } = useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros } = useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -66,21 +66,21 @@ export default function Cobros() {
   const importe = aCentimos(importeTexto) ?? 0;
 
   const formaEfectivo = useMemo(
-    () => formasPagoActivas.find((f) => f.afectaEfectivo) ?? null,
-    [formasPagoActivas]
+    () => formasParaCobros.find((f) => f.afectaEfectivo) ?? null,
+    [formasParaCobros]
   );
 
   // El modo por defecto es el efectivo. Si la empresa lo tuviera desactivado
   // —hoy no se puede, pero el catálogo es suyo— se cae a la primera forma.
   useEffect(() => {
-    if (modo || formasPagoActivas.length === 0) return;
-    setModo(formaEfectivo?.codigo ?? formasPagoActivas[0].codigo);
-  }, [modo, formaEfectivo, formasPagoActivas]);
+    if (modo || formasParaCobros.length === 0) return;
+    setModo(formaEfectivo?.codigo ?? formasParaCobros[0].codigo);
+  }, [modo, formaEfectivo, formasParaCobros]);
 
   const esMixto = modo === MIXTO;
   const formaElegida = useMemo(
-    () => formasPagoActivas.find((f) => f.codigo === modo) ?? null,
-    [formasPagoActivas, modo]
+    () => formasParaCobros.find((f) => f.codigo === modo) ?? null,
+    [formasParaCobros, modo]
   );
 
   // Reparto del cobro mixto: solo las líneas con importe.
@@ -120,7 +120,7 @@ export default function Cobros() {
   /** Formas del reparto a las que les falta la referencia que exigen. */
   const referenciasQueFaltan = esMixto
     ? formasUsadas
-        .map((f) => formasPagoActivas.find((x) => x.codigo === f.forma))
+        .map((f) => formasParaCobros.find((x) => x.codigo === f.forma))
         .filter((f) => f?.pideReferencia && !referenciasReparto[f.codigo]?.trim())
         .map((f) => f!.nombre)
     : formaElegida?.pideReferencia && !referencia.trim()
@@ -303,7 +303,7 @@ export default function Cobros() {
                 Forma de cobro
               </span>
               <PaymentMethodPicker
-                formas={formasPagoActivas}
+                formas={formasParaCobros}
                 valor={modo}
                 onChange={(v) => {
                   setModo(v);
@@ -326,7 +326,7 @@ export default function Cobros() {
                   Reparto entre formas
                 </span>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {formasPagoActivas.map((f) => (
+                  {formasParaCobros.map((f) => (
                     <div key={f.codigo} className="space-y-1">
                       <label className="block">
                         <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">

@@ -437,6 +437,26 @@ export async function registrarOperacion(
           409
         );
       }
+      /*
+       * Dónde se puede usar. Se cobra por muchas vías y se paga casi siempre en
+       * efectivo, así que el catálogo dice en qué pantalla sale cada forma. Se
+       * comprueba aquí y no solo al pintar los botones, por lo de siempre: la
+       * pantalla puede llevar minutos abierta.
+       */
+      if (e.tipo === "COLLECTION" && !forma.enCobros) {
+        throw new ErrorCaja(
+          "FORMA_PAGO_NO_EN_COBROS",
+          `"${forma.nombre}" no está habilitada para cobros. Actívala en Configuración.`,
+          409
+        );
+      }
+      if (e.tipo === "PAYMENT" && !forma.enPagos) {
+        throw new ErrorCaja(
+          "FORMA_PAGO_NO_EN_PAGOS",
+          `"${forma.nombre}" no está habilitada para pagos. Actívala en Configuración.`,
+          409
+        );
+      }
       if (forma.pideReferencia && !String(linea.referencia ?? "").trim()) {
         throw new ErrorCaja(
           "REFERENCIA_REQUERIDA",

@@ -77,6 +77,11 @@ export async function initCash(): Promise<void> {
       imagen_url TEXT,
       afecta_efectivo BOOLEAN NOT NULL DEFAULT false,
       pide_referencia BOOLEAN NOT NULL DEFAULT false,
+      -- Dónde sale el botón. Se cobra por muchas vías y se paga casi siempre en
+      -- efectivo, así que no es la misma lista: llenar la pantalla de pagos de
+      -- botones que nadie pulsa solo estorba al que tiene prisa.
+      en_cobros BOOLEAN NOT NULL DEFAULT true,
+      en_pagos BOOLEAN NOT NULL DEFAULT false,
       activa BOOLEAN NOT NULL DEFAULT true,
       orden INTEGER NOT NULL DEFAULT 0,
       created_at_ms BIGINT NOT NULL,
@@ -87,6 +92,15 @@ export async function initCash(): Promise<void> {
       ON cash_payment_methods(empresa_id, activa, orden);
     CREATE UNIQUE INDEX IF NOT EXISTS cash_pay_methods_un_efectivo_idx
       ON cash_payment_methods(empresa_id) WHERE afecta_efectivo;
+
+    ALTER TABLE cash_payment_methods
+      ADD COLUMN IF NOT EXISTS en_cobros BOOLEAN NOT NULL DEFAULT true;
+    ALTER TABLE cash_payment_methods
+      ADD COLUMN IF NOT EXISTS en_pagos BOOLEAN NOT NULL DEFAULT false;
+
+    -- El efectivo sale en las dos pantallas siempre: es el único que mueve el
+    -- cajón, y una caja en la que no se pueda pagar en efectivo no es una caja.
+    UPDATE cash_payment_methods SET en_pagos = true WHERE afecta_efectivo AND NOT en_pagos;
   `);
 
   // ── Jornadas de caja ──────────────────────────────────────────────────────
