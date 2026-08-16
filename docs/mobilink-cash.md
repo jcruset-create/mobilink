@@ -68,14 +68,21 @@ hay saldo acumulado que se pueda desincronizar.
 - `change.ts` — cambio con **stock limitado**: programación dinámica exacta,
   minimiza piezas, `NO_SOLUTION` explícito cuando no hay combinación.
 - `operations.ts` — invariantes de la operación (recibido − cambio = cobrado,
-  mixtos, parciales).
+  mixtos, parciales). En un pago el cuadre es el mismo del revés, y por eso
+  admite **vuelta**: pagar 19,50 € con un billete de 20 € y recibir 0,50 € son
+  dos movimientos —sale el billete, entra la moneda— y el pago es la
+  diferencia. Registrarlo como "salen 19,50 €" sería mentir sobre las piezas.
 - `arqueo.ts` — teórico vs contado por denominación, doble cuadre, reparto
   cambio final / ingreso bancario.
 - `cartridges.ts` — cartuchos de monedas. Un tubo **se abre y no se vuelve a
-  cerrar**, y **solo se abre si hace falta**: si hay sueltas suficientes de esa
-  denominación, el precinto no se toca, ni siquiera cuando abriéndolo se
-  devolvería con menos piezas. El stock distingue sueltas de encartuchadas y
-  abrir un tubo deja su propio par de asientos (`CARTRIDGE_OPENED`).
+  cerrar**. La regla que manda es **dar siempre las piezas de mayor valor**: si
+  la moneda que toca está encartuchada, el tubo se abre. El precinto solo se
+  respeta DENTRO de cada denominación — si de esa misma moneda hay sueltas
+  suficientes, se gastan las sueltas. Lo que no se hace es esquivar la apertura
+  a base de piezas más pequeñas: devolver 19,50 € con nueve monedas de 0,50 €
+  teniendo un tubo de 2 € deja la caja sin calderilla, que es justo lo que hay
+  que conservar. El stock distingue sueltas de encartuchadas y abrir un tubo
+  deja su propio par de asientos (`CARTRIDGE_OPENED`).
 
   Los tubos **entran y salen precintados** —la aportación de cambio del banco
   llega en tubos y se le devuelve igual— y solo se abren cuando un cobro o un
@@ -185,8 +192,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**927 pruebas en verde** (`npm test`), de las cuales 117 son de Mobilink Cash y
-38 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**930 pruebas en verde** (`npm test`), de las cuales 120 son de Mobilink Cash y
+40 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

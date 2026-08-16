@@ -42,6 +42,8 @@ export default function Pagos() {
   const [forma, setForma] = useState<string>("");
 
   const [entregado, setEntregado] = useState<CantidadesPorValor>({});
+  /** Lo que devuelve el proveedor cuando se paga con un billete de más. */
+  const [vuelta, setVuelta] = useState<CantidadesPorValor>({});
   const [tocadoAMano, setTocadoAMano] = useState(false);
   const [avisoComposicion, setAvisoComposicion] = useState("");
   const [error, setError] = useState("");
@@ -71,6 +73,14 @@ export default function Pagos() {
   const esEfectivo = Boolean(formaElegida?.afectaEfectivo);
   const faltaReferencia = Boolean(formaElegida?.pideReferencia) && !referencia.trim();
   const totalEntregado = totalLineas(lineasDesde(entregado));
+  const totalVuelta = totalLineas(lineasDesde(vuelta));
+  /**
+   * Lo que de verdad sale de la caja. Pagar 19,50 € con un billete de 20 € y
+   * recibir 0,50 € de vuelta son DOS movimientos —sale el billete, entra la
+   * moneda— y el pago es la diferencia. Registrarlo como "salen 19,50 €" sería
+   * mentir sobre las piezas, que es justo lo que este módulo no puede hacer.
+   */
+  const netoSalida = totalEntregado - totalVuelta;
 
   /**
    * Propuesta de qué sacar. Se pide al mismo endpoint que el cambio porque el
@@ -86,6 +96,7 @@ export default function Pagos() {
         setAvisoComposicion(r.mensaje);
       } else {
         setEntregado(cantidadesDesde(r.lineas));
+        setVuelta({});
         setAperturas(r.aperturas ?? []);
         setAvisoComposicion("");
       }
@@ -109,6 +120,7 @@ export default function Pagos() {
     setConcepto("");
     setReferencia("");
     setEntregado({});
+    setVuelta({});
     setTocadoAMano(false);
     setAvisoComposicion("");
   }
@@ -126,7 +138,7 @@ export default function Pagos() {
     importe > 0 &&
     Boolean(forma) &&
     !faltaReferencia &&
-    (!esEfectivo || totalEntregado === importe) &&
+    (!esEfectivo || netoSalida === importe) &&
     !guardando;
 
   async function confirmar() {
@@ -138,6 +150,7 @@ export default function Pagos() {
         importeCentimos: importe,
         formasPago: [{ forma, importe, referencia: referencia.trim() || null }],
         efectivoEntregado: esEfectivo ? lineasDesde(entregado) : [],
+        efectivoRecibido: esEfectivo ? lineasDesde(vuelta) : [],
         partyNombre: proveedor,
         concepto,
         referencia: referencia || null,
@@ -208,6 +221,7 @@ export default function Pagos() {
                   onChange={(v) => {
                     setForma(v);
                     setEntregado({});
+                    setVuelta({});
                     setTocadoAMano(false);
                   }}
                   permitirMixto={false}
@@ -258,15 +272,55 @@ export default function Pagos() {
                 >
                   <RefreshCw className="h-3.5 w-3.5" /> Proponer composición
                 </button>
-                {importe > 0 && totalEntregado !== importe && (
-                  <span className="self-center text-[12px] text-amber-300">
-                    Las piezas suman {euros(totalEntregado)} y el pago es de {euros(importe)}.
+              </div>
+
+              {/* Vuelta del proveedor. No siempre se puede componer el importe
+                  exacto con lo que hay: se paga con un billete de más y se
+                  recibe el cambio, y las dos cosas se registran. */}
+              <DenominationGrid
+                titulo="Vuelta que devuelve el proveedor"
+                denominaciones={denominaciones}
+                cantidades={vuelta}
+                onChange={(c) => {
+                  setVuelta(c);
+                  setTocadoAMano(true);
+                }}
+                deshabilitado={guardando}
+              />
+
+              <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                  <span className="text-slate-400">Sale de la caja</span>
+                  <span className="font-bold tabular-nums text-slate-100">{euros(totalEntregado)}</span>
+                </div>
+                <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                  <span className="text-slate-400">Vuelve del proveedor</span>
+                  <span className="font-bold tabular-nums text-slate-100">{euros(totalVuelta)}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2 border-t border-slate-700 pt-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                    Pago neto
                   </span>
+                  <span
+                    className={`text-2xl font-black tabular-nums ${
+                      importe > 0 && netoSalida === importe ? "text-emerald-400" : "text-amber-300"
+                    }`}
+                  >
+                    {euros(netoSalida)}
+                  </span>
+                </div>
+                {importe > 0 && netoSalida !== importe && (
+                  <p className="mt-1 text-[12px] text-amber-300">
+                    Lo que sale menos lo que vuelve son {euros(netoSalida)} y el pago es de{" "}
+                    {euros(importe)}.
+                  </p>
                 )}
               </div>
+
               <p className="text-[11px] text-slate-500">
-                Confirma exactamente las piezas que entregas: es lo que quedará registrado y lo que
-                se descontará del inventario.
+                Confirma exactamente las piezas que entregas y las que te devuelven: es lo que
+                quedará registrado y lo que moverá el inventario. Si pagas 19,50 € con un billete de
+                20 €, salen 20 € y entran 0,50 €.
               </p>
             </>
           ) : (

@@ -32,9 +32,10 @@ const POR_CARTUCHO = new Map([
 const totalDe = (l: readonly { valor: number; cantidad: number }[]) =>
   l.reduce((a, x) => a + x.valor * x.cantidad, 0);
 
-describe("el tubo se abre solo si hace falta", () => {
-  it("con sueltas suficientes no se rompe ningún precinto", () => {
-    // 30 monedas de 1 € sueltas y un tubo. Los 4 € salen de lo suelto.
+describe("primero las piezas de mayor valor, y el tubo se abre si hace falta", () => {
+  it("con sueltas suficientes de esa misma moneda no se rompe ningún precinto", () => {
+    // 30 monedas de 1 € sueltas y un tubo de 1 €. Los 4 € salen de lo suelto:
+    // el precinto se respeta DENTRO de la denominación.
     const stock = stockDesdeLineas([{ valor: 100, cantidad: 30 }], [{ valor: 100, cantidad: 1 }]);
     const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO);
 
@@ -44,9 +45,9 @@ describe("el tubo se abre solo si hace falta", () => {
     expect(totalDe(r.lineas)).toBe(400);
   });
 
-  it("no rompe aunque abriendo saliera con menos piezas", () => {
-    // 4 € en monedas de 1 €: cuatro piezas. Con un tubo de 2 € abierto serían
-    // dos. Da igual: mientras haya suelto, el precinto no se toca.
+  it("abre el tubo de 2 € antes que devolver cuatro monedas de 1 € sueltas", () => {
+    // Es la regla principal: mandan las piezas de mayor valor. Aunque haya
+    // sueltas de 1 € de sobra, si la de 2 € está en un tubo, el tubo se abre.
     const stock = stockDesdeLineas(
       [{ valor: 100, cantidad: 10 }],
       [{ valor: 200, cantidad: 1 }]
@@ -55,8 +56,37 @@ describe("el tubo se abre solo si hace falta", () => {
 
     expect(r.ok).toBe(true);
     if (esFallo(r)) return;
-    expect(r.aperturas).toEqual([]);
-    expect(r.lineas).toEqual([{ valor: 100, cantidad: 4 }]);
+    expect(r.lineas).toEqual([{ valor: 200, cantidad: 2 }]);
+    expect(r.aperturas).toEqual([{ valor: 200, cartuchos: 1, piezas: 25 }]);
+  });
+
+  it("el caso real: 19,50 € no se devuelven con nueve monedas de 0,50 €", () => {
+    // Caja con billetes de 10 y 5, los 2 € y 1 € encartuchados y nueve monedas
+    // de 0,50 € sueltas. Antes salían 10 + 5 + 0,50 × 9, que dejaba la caja sin
+    // calderilla. Ahora se abre el tubo de 2 €.
+    const stock = stockDesdeLineas(
+      [
+        { valor: 1000, cantidad: 3 },
+        { valor: 500, cantidad: 2 },
+        { valor: 50, cantidad: 9 },
+      ],
+      [
+        { valor: 200, cantidad: 1 },
+        { valor: 100, cantidad: 1 },
+      ]
+    );
+    const r = calcularCambioConCartuchos(1950, stock, POR_CARTUCHO);
+
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    expect(r.lineas).toEqual([
+      { valor: 1000, cantidad: 1 },
+      { valor: 500, cantidad: 1 },
+      { valor: 200, cantidad: 2 },
+      { valor: 50, cantidad: 1 },
+    ]);
+    expect(r.piezas).toBe(5);
+    expect(r.aperturas).toEqual([{ valor: 200, cartuchos: 1, piezas: 25 }]);
   });
 
   it("el caso del encargo: 4 € con 1 suelta y un tubo de 25", () => {
