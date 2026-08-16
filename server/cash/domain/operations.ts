@@ -39,30 +39,52 @@ export type TipoOperacion =
 export type OrigenOperacion = "MANUAL" | "ERP" | "API" | "IMPORT" | "POS" | "OTHER";
 
 /**
- * Formas de pago. Solo `CASH` toca el inventario físico; las demás se registran
- * económicamente y no mueven ni una moneda.
+ * Forma de pago: el CÓDIGO de una fila del catálogo (`cash_payment_methods`),
+ * que cada empresa administra desde Configuración. Es texto libre y no una
+ * unión cerrada porque el catálogo se amplía sin tocar el código.
+ *
+ * Lo único que el motor necesita saber de una forma de pago es si mueve el
+ * cajón físico, y eso no se deduce del código: se consulta al catálogo. De ahí
+ * que las funciones de aquí reciban el conjunto de códigos que son efectivo en
+ * vez de compararlo con la constante `CASH`.
  */
-export type FormaPago =
-  | "CASH"
-  | "BBVA_CARD"
-  | "CAIXABANK_CARD"
-  | "AMEX"
-  | "BANK_TRANSFER"
-  | "BIZUM"
-  | "OTHER";
+export type FormaPago = string;
 
-export const FORMAS_PAGO: readonly FormaPago[] = [
-  "CASH",
-  "BBVA_CARD",
-  "CAIXABANK_CARD",
-  "AMEX",
-  "BANK_TRANSFER",
-  "BIZUM",
-  "OTHER",
+/** Código reservado del efectivo. Es la única forma que mueve piezas. */
+export const CODIGO_EFECTIVO = "CASH";
+
+export const CODIGOS_EFECTIVO_POR_DEFECTO: ReadonlySet<string> = new Set([CODIGO_EFECTIVO]);
+
+export type FormaPagoSemilla = {
+  codigo: string;
+  nombre: string;
+  afectaEfectivo: boolean;
+  /** Sin referencia no se puede cobrar: el número de autorización del TPV. */
+  pideReferencia: boolean;
+  orden: number;
+};
+
+/**
+ * Catálogo de partida. Son los códigos que ya viven en
+ * `cash_operation_payments.forma_pago`, así que el histórico conserva su
+ * etiqueta. El efectivo no pide referencia; las demás sí, que es de lo que
+ * luego se tira para cuadrar con el banco.
+ */
+export const FORMAS_PAGO_SEMILLA: readonly FormaPagoSemilla[] = [
+  { codigo: "CASH", nombre: "Efectivo", afectaEfectivo: true, pideReferencia: false, orden: 10 },
+  { codigo: "BBVA_CARD", nombre: "TPV BBVA", afectaEfectivo: false, pideReferencia: true, orden: 20 },
+  { codigo: "CAIXABANK_CARD", nombre: "TPV CaixaBank", afectaEfectivo: false, pideReferencia: true, orden: 30 },
+  { codigo: "AMEX", nombre: "American Express", afectaEfectivo: false, pideReferencia: true, orden: 40 },
+  { codigo: "BANK_TRANSFER", nombre: "Transferencia", afectaEfectivo: false, pideReferencia: true, orden: 50 },
+  { codigo: "BIZUM", nombre: "Bizum", afectaEfectivo: false, pideReferencia: true, orden: 60 },
+  { codigo: "OTHER", nombre: "Otra", afectaEfectivo: false, pideReferencia: true, orden: 70 },
 ];
 
-export function afectaAlEfectivo(forma: FormaPago): boolean {
-  return forma === "CASH";
+export function afectaAlEfectivo(
+  forma: FormaPago,
+  codigosEfectivo: ReadonlySet<string> = CODIGOS_EFECTIVO_POR_DEFECTO
+): boolean {
+  return codigosEfectivo.has(forma);
 }
 
 /** Motivo del movimiento de piezas: por qué entró o salió este billete. */
@@ -180,8 +202,13 @@ const MOTIVO_SALIDA: Record<string, MotivoMovimiento> = {
 };
 
 /** Importe de la operación que se paga en efectivo. */
-export function importeEnEfectivo(formasPago: readonly LineaFormaPago[]): Centimos {
-  return sumar(...formasPago.filter((f) => afectaAlEfectivo(f.forma)).map((f) => f.importe));
+export function importeEnEfectivo(
+  formasPago: readonly LineaFormaPago[],
+  codigosEfectivo: ReadonlySet<string> = CODIGOS_EFECTIVO_POR_DEFECTO
+): Centimos {
+  return sumar(
+    ...formasPago.filter((f) => afectaAlEfectivo(f.forma, codigosEfectivo)).map((f) => f.importe)
+  );
 }
 
 /**
@@ -191,8 +218,16 @@ export function importeEnEfectivo(formasPago: readonly LineaFormaPago[]): Centim
  * No escribe nada: decide. Quien persiste es el servicio, y lo hace dentro de
  * una transacción que vuelve a validar contra el stock bloqueado — esto de aquí
  * es la regla de negocio, no la última palabra sobre concurrencia.
+ *
+ * `codigosEfectivo` viene del catálogo de la empresa. Sin él se asume el código
+ * reservado `CASH`, que es lo que sembramos: así los tests del motor siguen
+ * siendo puros y quien llama de verdad —el servicio— pasa el catálogo real.
  */
-export function validarOperacion(op: OperacionNormalizada, stock: Inventario): ResultadoValidacion {
+export function validarOperacion(
+  op: OperacionNormalizada,
+  stock: Inventario,
+  codigosEfectivo: ReadonlySet<string> = CODIGOS_EFECTIVO_POR_DEFECTO
+): ResultadoValidacion {
   if (!Number.isSafeInteger(op.importe) || op.importe <= 0) {
     return { ok: false, codigo: "IMPORTE_NO_VALIDO", mensaje: "El importe de la operación debe ser un número entero de céntimos mayor que cero." };
   }
@@ -215,7 +250,7 @@ export function validarOperacion(op: OperacionNormalizada, stock: Inventario): R
     };
   }
 
-  const efectivo = importeEnEfectivo(op.formasPago);
+  const efectivo = importeEnEfectivo(op.formasPago, codigosEfectivo);
   const recibido = inventarioDesdeLineas(op.efectivoRecibido ?? []);
   const entregado = inventarioDesdeLineas(op.efectivoEntregado ?? []);
   const totalRecibido = totalInventario(recibido);

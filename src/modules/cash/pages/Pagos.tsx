@@ -7,7 +7,7 @@
  * ser lo que realmente entregó.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
@@ -27,25 +27,19 @@ import {
 import { BuscadorDocumentos } from "./Cobros";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
-import {
-  ETIQUETA_FORMA_PAGO,
-  type AperturaCartucho,
-  type DocumentoExterno,
-  type FormaPago,
-} from "../types";
+import PaymentMethodPicker from "../components/PaymentMethodPicker";
+import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
-const FORMAS: FormaPago[] = ["CASH", "BANK_TRANSFER", "BBVA_CARD", "CAIXABANK_CARD", "OTHER"];
-
 export default function Pagos() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede } = useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasPagoActivas } = useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
   const [proveedor, setProveedor] = useState("");
   const [concepto, setConcepto] = useState("");
   const [referencia, setReferencia] = useState("");
-  const [forma, setForma] = useState<FormaPago>("CASH");
+  const [forma, setForma] = useState<string>("");
 
   const [entregado, setEntregado] = useState<CantidadesPorValor>({});
   const [tocadoAMano, setTocadoAMano] = useState(false);
@@ -56,7 +50,26 @@ export default function Pagos() {
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
 
   const importe = aCentimos(importeTexto) ?? 0;
-  const esEfectivo = forma === "CASH";
+
+  const formaEfectivo = useMemo(
+    () => formasPagoActivas.find((f) => f.afectaEfectivo) ?? null,
+    [formasPagoActivas]
+  );
+
+  // Los pagos a proveedor de este mostrador son en efectivo, así que se
+  // preselecciona. Las demás formas siguen disponibles: un pago por
+  // transferencia se registra igual, solo que sin tocar el cajón.
+  useEffect(() => {
+    if (forma || formasPagoActivas.length === 0) return;
+    setForma(formaEfectivo?.codigo ?? formasPagoActivas[0].codigo);
+  }, [forma, formaEfectivo, formasPagoActivas]);
+
+  const formaElegida = useMemo(
+    () => formasPagoActivas.find((f) => f.codigo === forma) ?? null,
+    [formasPagoActivas, forma]
+  );
+  const esEfectivo = Boolean(formaElegida?.afectaEfectivo);
+  const faltaReferencia = Boolean(formaElegida?.pideReferencia) && !referencia.trim();
   const totalEntregado = totalLineas(lineasDesde(entregado));
 
   /**
@@ -110,7 +123,11 @@ export default function Pagos() {
   }
 
   const puedeConfirmar =
-    importe > 0 && (!esEfectivo || totalEntregado === importe) && !guardando;
+    importe > 0 &&
+    Boolean(forma) &&
+    !faltaReferencia &&
+    (!esEfectivo || totalEntregado === importe) &&
+    !guardando;
 
   async function confirmar() {
     setGuardando(true);
@@ -119,7 +136,7 @@ export default function Pagos() {
       const r = await api.registrarPago({
         sessionId: jornada!.sesion.id,
         importeCentimos: importe,
-        formasPago: [{ forma, importe }],
+        formasPago: [{ forma, importe, referencia: referencia.trim() || null }],
         efectivoEntregado: esEfectivo ? lineasDesde(entregado) : [],
         partyNombre: proveedor,
         concepto,
@@ -183,18 +200,22 @@ export default function Pagos() {
                   className={`${inputCls} text-lg font-bold tabular-nums`}
                 />
               </label>
-              <label className="block">
+              <div className="sm:col-span-2">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Forma de pago</span>
-                <select value={forma} onChange={(e) => setForma(e.target.value as FormaPago)} className={inputCls}>
-                  {FORMAS.map((f) => (
-                    <option key={f} value={f}>
-                      {ETIQUETA_FORMA_PAGO[f]}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <PaymentMethodPicker
+                  formas={formasPagoActivas}
+                  valor={forma}
+                  onChange={(v) => {
+                    setForma(v);
+                    setEntregado({});
+                    setTocadoAMano(false);
+                  }}
+                  permitirMixto={false}
+                  deshabilitado={guardando}
+                />
+              </div>
               <label className="block">
-                <span className="mb-1 block text-[10px] fontetsemibold uppercase text-slate-400">Proveedor</span>
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Proveedor</span>
                 <input value={proveedor} onChange={(e) => setProveedor(e.target.value)} className={inputCls} placeholder="Proveedor XYZ" />
               </label>
               <label className="block">
@@ -250,9 +271,16 @@ export default function Pagos() {
             </>
           ) : (
             <Aviso tono="info">
-              Un pago por {ETIQUETA_FORMA_PAGO[forma]} se registra económicamente pero no mueve el
-              efectivo de la caja.
+              Un pago por {formaElegida?.nombre ?? forma} se registra económicamente pero no mueve
+              el efectivo de la caja.
             </Aviso>
+          )}
+
+          {faltaReferencia && (
+            <p className="text-[12px] text-amber-300">
+              Falta la referencia de {formaElegida?.nombre}: es lo que luego permite cuadrar con el
+              banco.
+            </p>
           )}
 
           <BotonAccion tono="pago" onClick={() => void confirmar()} disabled={!puedeConfirmar}>

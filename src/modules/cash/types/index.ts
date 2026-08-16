@@ -188,8 +188,24 @@ export type DocumentoExterno = {
 
 export type EstadoIntegracion = "NO_CONFIGURADA" | "CONECTADA" | "ERROR" | "DESACTIVADA";
 
+export type FormaPagoConfig = {
+  id: number;
+  /** Lo que se guarda en cada cobro. No cambia nunca. */
+  codigo: string;
+  nombre: string;
+  /** Imagen del botón. Si no hay, el botón sale con el nombre. */
+  imagenUrl: string | null;
+  /** La única que mueve el cajón físico. Solo el efectivo. */
+  afectaEfectivo: boolean;
+  pideReferencia: boolean;
+  activa: boolean;
+  orden: number;
+  usos: number;
+};
+
 export type Bootstrap = {
   denominaciones: Denominacion[];
+  formasPago: FormaPagoConfig[];
   cajas: Caja[];
   permisos: string[];
   rol: string | null;
@@ -197,7 +213,14 @@ export type Bootstrap = {
   cambioMaximoCentimos: number;
 };
 
-/** Etiquetas en español. Se centralizan aquí para no repetirlas por pantalla. */
+/**
+ * Etiquetas de respaldo de las formas de pago.
+ *
+ * La fuente de verdad es el catálogo de la empresa (`cash_payment_methods`),
+ * que llega en el arranque. Esto solo se usa para poner nombre a un código que
+ * ya no está en el catálogo —una forma borrada a mano en base de datos— para
+ * que el histórico no acabe enseñando "BBVA_CARD" en crudo.
+ */
 export const ETIQUETA_FORMA_PAGO: Record<string, string> = {
   CASH: "Efectivo",
   BBVA_CARD: "TPV BBVA",
