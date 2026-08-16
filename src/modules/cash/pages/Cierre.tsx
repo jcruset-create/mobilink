@@ -8,7 +8,7 @@
  * importe.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
@@ -20,6 +20,7 @@ import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, inputCls } from "../compo
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import type { LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
+import { repartirIngreso, valorEnTubos } from "../utils/cierre";
 import * as api from "../services/api";
 
 export default function Cierre() {
@@ -28,7 +29,6 @@ export default function Cierre() {
   const [objetivoTexto, setObjetivoTexto] = useState("300,00");
   const [cambioFinal, setCambioFinal] = useState<CantidadesPorValor>({});
   const [cambioFinalTubos, setCambioFinalTubos] = useState<LineaDenominacion[]>([]);
-  const [ingreso, setIngreso] = useState<LineaDenominacion[]>([]);
   const [notas, setNotas] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -42,56 +42,44 @@ export default function Cierre() {
     setError("");
     try {
       const r = await api.proponerCierre(jornada.sesion.id, objetivo);
+      // El ingreso no se guarda: se deriva de lo contado menos lo que se
+      // queda, así que basta con fijar el cambio final.
       setCambioFinal(cantidadesDesde(r.cambioFinal));
       setCambioFinalTubos(r.cambioFinalCartuchos ?? []);
-      setIngreso(r.ingresoBancario);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido preparar el cierre");
     }
   }, [jornada, objetivo]);
 
-  /*
-   * El ingreso se recalcula en cuanto cambia el cambio final: siempre es "lo
-   * contado menos lo que se queda", nunca un número que el operador teclea.
-   *
-   * Se trabaja sobre las monedas SUELTAS. Los tubos precintados van por su
-   * cuenta y no se desglosan en la rejilla: un tubo entero se queda o se va, no
-   * se parte —y si se partiera dejaría de ser un tubo.
-   */
-  useEffect(() => {
-    if (!jornada) return;
-    const contado = new Map((jornada.stockSueltas ?? []).map((l) => [l.valor, l.cantidad]));
-    const restante: LineaDenominacion[] = [];
-    for (const [valor, disponible] of contado) {
-      const sequeda = cambioFinal[valor] ?? 0;
-      if (disponible - sequeda > 0) restante.push({ valor, cantidad: disponible - sequeda });
-    }
-    setIngreso(restante.sort((a, b) => b.valor - a.valor));
-  }, [cambioFinal, jornada]);
-
   if (!jornada) return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
 
   if (cerrada) return <Cerrada r={cerrada} />;
 
-  const totalIngreso = totalLineas(ingreso);
   const contadoTotal = jornada.totalStockCentimos;
-
-  // Valor de los tubos que se quedan y de los que se van al banco.
-  const piezasDe = (valor: number) =>
-    denominaciones.find((d) => d.valor === valor)?.piezasPorCartucho ?? 0;
-  const valorTubos = (ls: LineaDenominacion[]) =>
-    ls.reduce((a, l) => a + l.valor * l.cantidad * piezasDe(l.valor), 0);
-
   const tubosContados = jornada.stockCartuchos ?? [];
-  const tubosQueSeVan = tubosContados
-    .map((t) => ({
-      valor: t.valor,
-      cantidad: t.cantidad - (cambioFinalTubos.find((x) => x.valor === t.valor)?.cantidad ?? 0),
-    }))
-    .filter((t) => t.cantidad > 0);
 
-  const totalCambioConTubos = totalCambio + valorTubos(cambioFinalTubos);
-  const totalIngresoConTubos = totalIngreso + valorTubos(tubosQueSeVan);
+  /*
+   * El ingreso es siempre "lo contado menos lo que se queda", nunca un número
+   * que el operador teclea, y se recalcula en cuanto cambia el cambio final.
+   *
+   * Un solo reparto para lo que se enseña y para lo que se suma. Antes eran dos
+   * cuentas distintas y se separaron: el total contaba los cartuchos y la lista
+   * no los pintaba, así que la hoja del ingreso se dejaba 75 € por el camino.
+   *
+   * Las dos dimensiones van aparte: los tubos precintados no se desglosan en la
+   * rejilla porque un tubo entero se queda o se va, no se parte —y si se
+   * partiera dejaría de ser un tubo.
+   */
+  const ingreso = repartirIngreso({
+    sueltasContadas: jornada.stockSueltas ?? [],
+    tubosContados,
+    cambioFinalSueltas: cambioFinal,
+    cambioFinalTubos,
+    denominaciones,
+  });
+
+  const totalCambioConTubos = totalCambio + valorEnTubos(cambioFinalTubos, denominaciones);
+  const totalIngresoConTubos = ingreso.totalCentimos;
   const cuadra = totalCambioConTubos + totalIngresoConTubos === contadoTotal;
 
   async function cerrar() {
@@ -162,7 +150,7 @@ export default function Cierre() {
         <Card
           title="Ingreso bancario"
           value={euros(totalIngresoConTubos)}
-          hint={tubosQueSeVan.length > 0 ? `incluye ${tubosQueSeVan.reduce((a, t) => a + t.cantidad, 0)} cartucho(s)` : undefined}
+          hint={ingreso.tubos.length > 0 ? `incluye ${ingreso.tubos.reduce((a, t) => a + t.cantidad, 0)} cartucho(s)` : undefined}
           accent="text-sky-300"
         />
       </div>
@@ -241,12 +229,12 @@ export default function Cierre() {
             </button>
           </div>
           <div className="divide-y divide-slate-700/60">
-            {ingreso.length === 0 && (
+            {ingreso.sueltas.length === 0 && ingreso.tubos.length === 0 && (
               <p className="px-3 py-4 text-sm text-slate-500">
                 Todo el efectivo se queda en caja: no hay ingreso bancario.
               </p>
             )}
-            {ingreso.map((l) => {
+            {ingreso.sueltas.map((l) => {
               const d = denominaciones.find((x) => x.valor === l.valor);
               return (
                 <div key={l.valor} className="flex items-center gap-3 px-3 py-1.5">
@@ -256,6 +244,30 @@ export default function Cierre() {
                   <span className="text-lg font-black tabular-nums text-slate-100">×{l.cantidad}</span>
                   <span className="ml-auto text-sm tabular-nums text-slate-400">
                     {euros(l.valor * l.cantidad)}
+                  </span>
+                </div>
+              );
+            })}
+
+            {/* Los tubos que se van al banco, en su propia línea. Sin esto, el
+                total contaba 75 € de cartuchos que no aparecían por ninguna
+                parte y la hoja del ingreso no cuadraba con lo que se lleva. */}
+            {ingreso.tubos.map((t) => {
+              const d = denominaciones.find((x) => x.valor === t.valor);
+              const piezas = t.piezasPorCartucho;
+              return (
+                <div key={`tubo-${t.valor}`} className="flex items-center gap-3 px-3 py-1.5">
+                  <span className="w-16 text-sm font-bold tabular-nums text-slate-200">
+                    {d?.etiqueta ?? euros(t.valor)}
+                  </span>
+                  <span className="text-lg font-black tabular-nums text-slate-100">
+                    ×{t.cantidad}
+                  </span>
+                  <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-300">
+                    {t.cantidad === 1 ? "cartucho" : "cartuchos"} de {piezas}
+                  </span>
+                  <span className="ml-auto text-sm tabular-nums text-slate-400">
+                    {euros(t.importe)}
                   </span>
                 </div>
               );
