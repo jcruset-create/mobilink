@@ -26,6 +26,8 @@ import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
 import * as servicio from "./service.ts";
 import * as config from "./config.ts";
 import * as tesoreria from "./treasury.ts";
+import * as documentos from "./documents.ts";
+import { informeCierre } from "./report.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -37,6 +39,16 @@ import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 const subidaImagen = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 1024 * 1024, files: 1 },
+});
+
+/**
+ * Justificantes escaneados. El límite es mucho más alto que el de los iconos:
+ * un PDF de varias páginas de un escáner de mostrador ronda los pocos MB, y
+ * quedarse corto obligaría a rebajar la calidad del escaneo de una factura.
+ */
+const subidaDocumento = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
 });
 
 // ── Validación de entrada ──────────────────────────────────────────────────
@@ -362,6 +374,77 @@ export function createCashRouter(): Router {
         imagenUrl: data.publicUrl,
       });
       res.json({ forma });
+    })
+  );
+
+  // ── Justificantes escaneados ─────────────────────────────────────────────
+
+  r.get(
+    "/operations/:id/documents",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        documentos: await documentos.documentosDeOperacion(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
+    })
+  );
+
+  /**
+   * Adjunta el PDF del escáner a una operación ya registrada.
+   *
+   * Va en su propia petición, después de crear el cobro, y no dentro de la
+   * transacción: si el almacenamiento falla, el dinero ya está contado y solo
+   * queda volver a adjuntar. Al revés, un fallo de red dejaría sin registrar un
+   * cobro que ya ha ocurrido.
+   */
+  r.post(
+    "/operations/:id/documents",
+    exigirPermiso("cash.document.attach"),
+    subidaDocumento.single("documento"),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const documento = await documentos.adjuntarDocumento(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        req.file
+      );
+      res.status(201).json({ documento });
+    })
+  );
+
+  r.post(
+    "/documents/:id/void",
+    exigirPermiso("cash.document.void"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const documento = await documentos.anularDocumento(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        typeof b.motivo === "string" ? b.motivo : ""
+      );
+      res.json({ documento });
+    })
+  );
+
+  /** Informe de cierre: el papeleo del día en un solo PDF. */
+  r.get(
+    "/sessions/:id/report.pdf",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionId = enteroPositivo(req.params.id, "id");
+      const pdf = await informeCierre(req.authCtx!.empresaId, sessionId);
+      const sesion = await obtenerSesion(sessionId);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="cierre-caja-${sesion?.fecha ?? sessionId}.pdf"`
+      );
+      res.send(pdf);
     })
   );
 
