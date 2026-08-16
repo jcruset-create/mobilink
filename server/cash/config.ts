@@ -15,6 +15,7 @@
 import pool from "../db.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import type { Denominacion } from "./domain/denominations.ts";
+import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
 
 export type Contexto = { empresaId: string; userId: string | null; ip?: string };
@@ -224,4 +225,249 @@ export async function tienePiezasEnCajaAbierta(denominationId: number): Promise<
     [denominationId]
   );
   return rows.length > 0;
+}
+
+// ── Formas de pago ─────────────────────────────────────────────────────────
+
+export type FormaPagoConfig = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  imagenUrl: string | null;
+  afectaEfectivo: boolean;
+  pideReferencia: boolean;
+  activa: boolean;
+  orden: number;
+  /** Cobros y pagos ya registrados con esta forma. Solo informativo. */
+  usos: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aFormaPago(r: any): FormaPagoConfig {
+  return {
+    id: r.id,
+    codigo: r.codigo,
+    nombre: r.nombre,
+    imagenUrl: r.imagen_url,
+    afectaEfectivo: r.afecta_efectivo,
+    pideReferencia: r.pide_referencia,
+    activa: r.activa,
+    orden: r.orden,
+    usos: Number(r.usos ?? 0),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Siembra el catálogo de la empresa la primera vez que se le pregunta.
+ *
+ * No se puede sembrar al arrancar como las denominaciones porque las formas de
+ * pago son por empresa y al arrancar no sabemos cuáles hay. `ON CONFLICT DO
+ * NOTHING` para que dos peticiones a la vez no se pisen, y solo se siembra si
+ * la empresa no tiene NINGUNA forma: si alguien las borró todas a propósito,
+ * volver a meterlas sería deshacer su decisión.
+ */
+export async function asegurarFormasPago(empresaId: string): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM cash_payment_methods WHERE empresa_id = $1 LIMIT 1`,
+    [empresaId]
+  );
+  if (rows.length > 0) return;
+
+  const ahora = Date.now();
+  for (const f of FORMAS_PAGO_SEMILLA) {
+    await pool.query(
+      `INSERT INTO cash_payment_methods
+         (empresa_id, codigo, nombre, afecta_efectivo, pide_referencia, activa, orden,
+          created_at_ms, updated_at_ms)
+       VALUES ($1,$2,$3,$4,$5,true,$6,$7,$7)
+       ON CONFLICT (empresa_id, codigo) DO NOTHING`,
+      [empresaId, f.codigo, f.nombre, f.afectaEfectivo, f.pideReferencia, f.orden, ahora]
+    );
+  }
+}
+
+/** Catálogo completo de la empresa, incluidas las formas dadas de baja. */
+export async function listarFormasPago(empresaId: string): Promise<FormaPagoConfig[]> {
+  await asegurarFormasPago(empresaId);
+  const { rows } = await pool.query(
+    `SELECT m.*,
+            (SELECT COUNT(*) FROM cash_operation_payments p
+              JOIN cash_operations o ON o.id = p.operation_id
+             WHERE p.forma_pago = m.codigo AND o.empresa_id = m.empresa_id) AS usos
+       FROM cash_payment_methods m
+      WHERE m.empresa_id = $1
+      ORDER BY m.activa DESC, m.orden, m.nombre`,
+    [empresaId]
+  );
+  return rows.map(aFormaPago);
+}
+
+/** Solo las que deben salir como botón en cobros y pagos. */
+export async function formasPagoActivas(empresaId: string): Promise<FormaPagoConfig[]> {
+  return (await listarFormasPago(empresaId)).filter((f) => f.activa);
+}
+
+function normalizarCodigo(codigo: string): string {
+  return codigo
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+export async function crearFormaPago(
+  ctx: Contexto,
+  datos: { nombre: string; codigo?: string; pideReferencia?: boolean; orden?: number }
+): Promise<FormaPagoConfig> {
+  const nombre = String(datos.nombre ?? "").trim();
+  if (!nombre) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "La forma de pago necesita un nombre.", 400);
+  }
+
+  const codigo = normalizarCodigo(datos.codigo?.trim() || nombre);
+  if (!codigo) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      "Del nombre no sale ningún código válido. Indícalo a mano con letras y números.",
+      400
+    );
+  }
+
+  await asegurarFormasPago(ctx.empresaId);
+
+  const { rows: choque } = await pool.query(
+    `SELECT id, activa FROM cash_payment_methods WHERE empresa_id = $1 AND codigo = $2`,
+    [ctx.empresaId, codigo]
+  );
+  if (choque.length > 0) {
+    throw new ErrorCaja(
+      "FORMA_PAGO_DUPLICADA",
+      choque[0].activa
+        ? `Ya existe una forma de pago con el código ${codigo}.`
+        : `Ya existe una forma de pago con el código ${codigo}, dada de baja. Vuelve a activarla en vez de crear otra.`,
+      409
+    );
+  }
+
+  // El efectivo no se crea: es el que ya viene sembrado. Dos formas que muevan
+  // piezas harían ambiguo el desglose por denominación de cada operación.
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_payment_methods
+       (empresa_id, codigo, nombre, afecta_efectivo, pide_referencia, activa, orden,
+        created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,false,$4,true,$5,$6,$6)
+     RETURNING *`,
+    [ctx.empresaId, codigo, nombre, datos.pideReferencia ?? true, datos.orden ?? 100, ahora]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.payment_method.create",
+    entidad: "cash_payment_methods",
+    entidadId: String(rows[0].id),
+    detalle: { codigo, nombre },
+    ip: ctx.ip,
+  });
+
+  return aFormaPago(rows[0]);
+}
+
+/**
+ * Cambia una forma de pago.
+ *
+ * El CÓDIGO no se toca nunca, igual que el valor de una denominación: es lo que
+ * llevan escrito los cobros ya registrados. Renombrar la etiqueta sí, y eso
+ * arrastra al histórico a propósito —"TPV BBVA" pasa a llamarse como se llame
+ * el banco mañana— pero el código sigue apuntando a lo mismo.
+ */
+export async function actualizarFormaPago(
+  ctx: Contexto,
+  id: number,
+  cambios: {
+    nombre?: string;
+    activa?: boolean;
+    pideReferencia?: boolean;
+    orden?: number;
+    imagenUrl?: string | null;
+  }
+): Promise<FormaPagoConfig> {
+  const { rows: actual } = await pool.query(
+    `SELECT * FROM cash_payment_methods WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (actual.length === 0) {
+    throw new ErrorCaja("FORMA_PAGO_NO_ENCONTRADA", "La forma de pago no existe.", 404);
+  }
+  const antes = actual[0];
+
+  const nombre = cambios.nombre === undefined ? antes.nombre : String(cambios.nombre).trim();
+  if (!nombre) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "La forma de pago necesita un nombre.", 400);
+  }
+  const activa = cambios.activa === undefined ? antes.activa : cambios.activa;
+  const pideReferencia =
+    cambios.pideReferencia === undefined ? antes.pide_referencia : cambios.pideReferencia;
+  const orden = cambios.orden === undefined ? antes.orden : cambios.orden;
+  const imagenUrl = cambios.imagenUrl === undefined ? antes.imagen_url : cambios.imagenUrl;
+
+  // El efectivo no se da de baja. Todo el módulo existe para contar piezas: sin
+  // efectivo no quedaría ni arqueo, ni cambio, ni cierre que hacer.
+  if (!activa && antes.afecta_efectivo) {
+    throw new ErrorCaja(
+      "FORMA_PAGO_PROTEGIDA",
+      "El efectivo no se puede dar de baja: es la única forma que mueve el cajón, y sin ella no hay arqueo ni cierre.",
+      409
+    );
+  }
+
+  if (!activa && antes.activa) {
+    const { rows: quedan } = await pool.query(
+      `SELECT COUNT(*) AS n FROM cash_payment_methods
+        WHERE empresa_id = $1 AND activa AND id <> $2`,
+      [ctx.empresaId, id]
+    );
+    if (Number(quedan[0].n) === 0) {
+      throw new ErrorCaja(
+        "FORMA_PAGO_PROTEGIDA",
+        "Es la última forma de pago activa. Con el catálogo vacío no se podría cobrar nada.",
+        409
+      );
+    }
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE cash_payment_methods
+        SET nombre = $3, activa = $4, pide_referencia = $5, orden = $6, imagen_url = $7,
+            updated_at_ms = $8
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [id, ctx.empresaId, nombre, activa, pideReferencia, orden, imagenUrl, Date.now()]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.payment_method.update",
+    entidad: "cash_payment_methods",
+    entidadId: String(id),
+    detalle: {
+      codigo: antes.codigo,
+      antes: {
+        nombre: antes.nombre,
+        activa: antes.activa,
+        pideReferencia: antes.pide_referencia,
+        orden: antes.orden,
+        imagenUrl: antes.imagen_url,
+      },
+      despues: { nombre, activa, pideReferencia, orden, imagenUrl },
+    },
+    ip: ctx.ip,
+  });
+
+  return aFormaPago(rows[0]);
 }

@@ -12,9 +12,12 @@
  * mal.
  */
 
+import path from "node:path";
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
 import pool from "../db.ts";
 import { authenticate, requireModule } from "../core/auth.ts";
+import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
@@ -24,6 +27,16 @@ import * as servicio from "./service.ts";
 import * as config from "./config.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
+
+/**
+ * Subida de la imagen del botón. Instancia propia y no la de `server/index.ts`
+ * porque aquí el límite tiene que ser mucho más estrecho: son iconos de botón,
+ * no fotos de un parte. Un megabyte es de sobra para un PNG de 200 px.
+ */
+const subidaImagen = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024, files: 1 },
+});
 
 // ── Validación de entrada ──────────────────────────────────────────────────
 
@@ -117,8 +130,9 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const [denominaciones, cajas, erp] = await Promise.all([
+      const [denominaciones, formasPago, cajas, erp] = await Promise.all([
         cargarDenominaciones(pool, true),
+        config.listarFormasPago(empresaId),
         pool.query(
           `SELECT id, centro, nombre FROM cash_registers
             WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
@@ -129,6 +143,7 @@ export function createCashRouter(): Router {
 
       res.json({
         denominaciones,
+        formasPago,
         cajas: cajas.rows,
         permisos: req.cashPermisos,
         rol: req.cashRol,
@@ -209,6 +224,102 @@ export function createCashRouter(): Router {
         }
       );
       res.json({ denominacion });
+    })
+  );
+
+  // ── Catálogo de formas de pago ───────────────────────────────────────────
+
+  /** Todas, activas o no: Configuración necesita ver también las de baja. */
+  r.get(
+    "/payment-methods",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ formasPago: await config.listarFormasPago(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/payment-methods",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const forma = await config.crearFormaPago(contexto(req), {
+        nombre: typeof b.nombre === "string" ? b.nombre : "",
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
+        pideReferencia: typeof b.pideReferencia === "boolean" ? b.pideReferencia : undefined,
+        orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+      });
+      res.status(201).json({ forma });
+    })
+  );
+
+  r.patch(
+    "/payment-methods/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      // `null` borra la imagen y `undefined` la deja como está: son cosas
+      // distintas y el cliente necesita poder decir las dos.
+      const imagenUrl =
+        b.imagenUrl === undefined
+          ? undefined
+          : b.imagenUrl === null || b.imagenUrl === ""
+            ? null
+            : String(b.imagenUrl);
+
+      const forma = await config.actualizarFormaPago(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+          pideReferencia: typeof b.pideReferencia === "boolean" ? b.pideReferencia : undefined,
+          orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+          imagenUrl,
+        }
+      );
+      res.json({ forma });
+    })
+  );
+
+  /**
+   * Imagen del botón.
+   *
+   * Mismo camino que el avatar de técnicos: multer en memoria y el fichero a
+   * Supabase Storage, del que se guarda la URL pública. En disco local no,
+   * porque el contenedor de Render es efímero y la imagen se perdería en el
+   * siguiente despliegue.
+   */
+  r.post(
+    "/payment-methods/:id/image",
+    exigirPermiso("cash.configure"),
+    subidaImagen.single("imagen"),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      const fichero = req.file;
+      if (!fichero) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(fichero.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+
+      const extension = path.extname(fichero.originalname).toLowerCase() || ".png";
+      const ruta_ = `cash/payment-methods/${req.authCtx!.empresaId}/${id}_${Date.now()}${extension}`;
+
+      const { error } = await supabase.storage
+        .from(SUPABASE_STORAGE_BUCKET)
+        .upload(ruta_, fichero.buffer, { contentType: fichero.mimetype, upsert: true });
+      if (error) {
+        console.error("Mobilink Cash: error subiendo la imagen de la forma de pago:", error);
+        throw new ErrorCaja("SUBIDA_FALLIDA", "No se ha podido guardar la imagen.", 502);
+      }
+
+      const { data } = supabase.storage.from(SUPABASE_STORAGE_BUCKET).getPublicUrl(ruta_);
+      const forma = await config.actualizarFormaPago(contexto(req), id, {
+        imagenUrl: data.publicUrl,
+      });
+      res.json({ forma });
     })
   );
 

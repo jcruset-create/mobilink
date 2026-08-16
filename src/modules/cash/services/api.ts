@@ -14,6 +14,7 @@ import type {
   Caja,
   Denominacion,
   DocumentoExterno,
+  FormaPagoConfig,
   EstadoIntegracion,
   LineaDenominacion,
   Movimiento,
@@ -48,8 +49,11 @@ export class ErrorApiCaja extends Error {
 }
 
 async function pedir<T>(ruta: string, init?: RequestInit): Promise<T> {
+  // Con FormData la cabecera la pone el navegador, que es quien conoce el
+  // `boundary` del multipart. Ponerla a mano rompe la subida.
+  const esFormulario = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const cabeceras = await sessionHeaders(
-    init?.body ? { "Content-Type": "application/json" } : undefined
+    init?.body && !esFormulario ? { "Content-Type": "application/json" } : undefined
   );
 
   let res: Response;
@@ -113,6 +117,43 @@ export const actualizarDenominacion = (
     method: "PATCH",
     body: JSON.stringify(datos),
   });
+
+/** Catálogo de formas de pago, incluidas las dadas de baja. */
+export const listarFormasPago = () =>
+  pedir<{ formasPago: FormaPagoConfig[] }>("/payment-methods");
+
+export const crearFormaPago = (datos: {
+  nombre: string;
+  codigo?: string;
+  pideReferencia?: boolean;
+  orden?: number;
+}) => pedir<{ forma: FormaPagoConfig }>("/payment-methods", json(datos));
+
+export const actualizarFormaPago = (
+  id: number,
+  datos: {
+    nombre?: string;
+    activa?: boolean;
+    pideReferencia?: boolean;
+    orden?: number;
+    /** `null` quita la imagen; omitirlo la deja como está. */
+    imagenUrl?: string | null;
+  }
+) =>
+  pedir<{ forma: FormaPagoConfig }>(`/payment-methods/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(datos),
+  });
+
+/** Sube la imagen del botón y devuelve la forma ya con su URL. */
+export const subirImagenFormaPago = (id: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("imagen", fichero);
+  return pedir<{ forma: FormaPagoConfig }>(`/payment-methods/${id}/image`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
 
 // ── Jornada ────────────────────────────────────────────────────────────────
 

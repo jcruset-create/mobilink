@@ -697,6 +697,140 @@ describe.runIf(RUN)("configuración", () => {
   });
 });
 
+describe.runIf(RUN)("catálogo de formas de pago", () => {
+  it("se siembra solo la primera vez y trae el efectivo marcado", async () => {
+    const formas = await config.listarFormasPago(EMPRESA);
+    const efectivo = formas.filter((f) => f.afectaEfectivo);
+
+    expect(formas.length).toBeGreaterThanOrEqual(7);
+    expect(efectivo).toHaveLength(1);
+    expect(efectivo[0].codigo).toBe("CASH");
+    expect(efectivo[0].pideReferencia).toBe(false);
+
+    // Y no se duplica al volver a preguntar.
+    const otraVez = await config.listarFormasPago(EMPRESA);
+    expect(otraVez.length).toBe(formas.length);
+  });
+
+  it("una forma nueva sirve para cobrar en cuanto se da de alta", async () => {
+    const sufijo = String(process.hrtime.bigint()).slice(-6);
+    const forma = await config.crearFormaPago(ctx, { nombre: `Vale regalo ${sufijo}` });
+    expect(forma.activa).toBe(true);
+    expect(forma.afectaEfectivo).toBe(false);
+    expect(forma.codigo).toMatch(/^VALE_REGALO_/);
+
+    const caja = await crearCaja("formas-alta");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const r = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: forma.codigo, importe: 5000, referencia: "V-1" }],
+      concepto: "Cobro con forma nueva",
+    });
+
+    // No toca el cajón: no es efectivo.
+    expect(r.efectivoNetoCentimos).toBe(0);
+    expect(r.totalStockCentimos).toBe(30000);
+  });
+
+  it("una forma dada de baja deja de admitir cobros nuevos, pero el histórico se conserva", async () => {
+    const sufijo = String(process.hrtime.bigint()).slice(-6);
+    const forma = await config.crearFormaPago(ctx, { nombre: `Tarjeta local ${sufijo}` });
+
+    const caja = await crearCaja("formas-baja");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const antes = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2500,
+      formasPago: [{ forma: forma.codigo, importe: 2500, referencia: "T-1" }],
+      concepto: "Antes de la baja",
+    });
+
+    await config.actualizarFormaPago(ctx, forma.id, { activa: false });
+
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: forma.codigo, importe: 1000, referencia: "T-2" }],
+        concepto: "Después de la baja",
+      })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_INACTIVA" });
+
+    // El cobro anterior sigue ahí y con su forma: la baja no reescribe el pasado.
+    const previas = await repo.formasPagoDeOperacion(db, antes.operacionId);
+    expect(previas.map((f: { forma: string }) => f.forma)).toContain(forma.codigo);
+  });
+
+  it("sin referencia no se cobra por una forma que la exige", async () => {
+    const caja = await crearCaja("formas-referencia");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "BBVA_CARD", importe: 4000 }],
+        concepto: "Sin autorización del TPV",
+      })
+    ).rejects.toMatchObject({ codigo: "REFERENCIA_REQUERIDA" });
+
+    // Con referencia, el mismo cobro entra.
+    const r = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 4000,
+      formasPago: [{ forma: "BBVA_CARD", importe: 4000, referencia: "auth-1234" }],
+      concepto: "Con autorización del TPV",
+    });
+    expect(r.efectivoNetoCentimos).toBe(0);
+  });
+
+  it("una forma que no está en el catálogo se rechaza", async () => {
+    const caja = await crearCaja("formas-desconocida");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CRIPTO", importe: 1000, referencia: "x" }],
+        concepto: "Forma inventada",
+      })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_DESCONOCIDA" });
+  });
+
+  it("el efectivo no se puede dar de baja", async () => {
+    const formas = await config.listarFormasPago(EMPRESA);
+    const efectivo = formas.find((f) => f.afectaEfectivo)!;
+
+    await expect(
+      config.actualizarFormaPago(ctx, efectivo.id, { activa: false })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_PROTEGIDA" });
+  });
+
+  it("no se crean dos formas con el mismo código", async () => {
+    const sufijo = String(process.hrtime.bigint()).slice(-6);
+    const nombre = `Cheque ${sufijo}`;
+    await config.crearFormaPago(ctx, { nombre });
+    await expect(config.crearFormaPago(ctx, { nombre })).rejects.toMatchObject({
+      codigo: "FORMA_PAGO_DUPLICADA",
+    });
+  });
+
+  it("renombrar no cambia el código, así que el histórico no se rompe", async () => {
+    const sufijo = String(process.hrtime.bigint()).slice(-6);
+    const forma = await config.crearFormaPago(ctx, { nombre: `Bono ${sufijo}` });
+    const renombrada = await config.actualizarFormaPago(ctx, forma.id, {
+      nombre: "Bono regalo de empresa",
+      imagenUrl: "https://ejemplo.test/bono.png",
+    });
+
+    expect(renombrada.codigo).toBe(forma.codigo);
+    expect(renombrada.nombre).toBe("Bono regalo de empresa");
+    expect(renombrada.imagenUrl).toBe("https://ejemplo.test/bono.png");
+  });
+});
+
 describe.runIf(RUN)("cartuchos", () => {
   /** Cuántas monedas sueltas y cuántos tubos hay de una denominación. */
   async function stock(sessionId: number, valor: number) {

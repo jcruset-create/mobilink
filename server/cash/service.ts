@@ -44,6 +44,7 @@ import {
   type OrigenOperacion,
   type LineaMovimiento,
   type TipoOperacion,
+  CODIGOS_EFECTIVO_POR_DEFECTO,
   importeEnEfectivo,
   validarOperacion,
 } from "./domain/operations.ts";
@@ -61,6 +62,8 @@ import {
   bloquearSesion,
   bloquearSesionOperable,
   cargarDenominaciones,
+  cargarFormasPago,
+  codigosEfectivoDe,
   enTransaccion,
   formasPagoDeOperacion,
   insertarFormasPago,
@@ -352,6 +355,9 @@ export async function registrarOperacion(
   e: EntradaOperacion
 ): Promise<ResultadoOperacion> {
   const origen = e.origen ?? "MANUAL";
+  // Se rellena dentro de la transacción, con el catálogo que se haya usado para
+  // validar, y se reutiliza en la auditoría de después.
+  let codigosEfectivo: ReadonlySet<string> = CODIGOS_EFECTIVO_POR_DEFECTO;
 
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
@@ -393,7 +399,42 @@ export async function registrarOperacion(
       efectivoEntregado: [...(e.efectivoEntregado ?? []), ...aLineasTubo(e.cartuchosEntregados)],
     };
 
-    const validacion = validarOperacion(normalizada, stock);
+    /*
+     * El catálogo de formas de pago se comprueba aquí, con la jornada ya
+     * bloqueada, y no en el router: entre que la pantalla pintó los botones y
+     * llega el cobro, alguien ha podido dar de baja una forma desde
+     * Configuración. Es la misma razón por la que el stock se relee dentro de
+     * la transacción en vez de fiarse de lo que vio el navegador.
+     */
+    const catalogo = await cargarFormasPago(client, ctx.empresaId);
+    const porCodigo = new Map(catalogo.map((f) => [f.codigo, f]));
+    for (const linea of e.formasPago) {
+      const forma = porCodigo.get(linea.forma);
+      if (!forma) {
+        throw new ErrorCaja(
+          "FORMA_PAGO_DESCONOCIDA",
+          `La forma de pago ${linea.forma} no está en el catálogo de la empresa.`,
+          400
+        );
+      }
+      if (!forma.activa) {
+        throw new ErrorCaja(
+          "FORMA_PAGO_INACTIVA",
+          `La forma de pago "${forma.nombre}" está dada de baja y no se puede usar en operaciones nuevas.`,
+          409
+        );
+      }
+      if (forma.pideReferencia && !String(linea.referencia ?? "").trim()) {
+        throw new ErrorCaja(
+          "REFERENCIA_REQUERIDA",
+          `"${forma.nombre}" necesita referencia: es lo que luego permite cuadrar con el banco.`,
+          400
+        );
+      }
+    }
+
+    codigosEfectivo = codigosEfectivoDe(catalogo);
+    const validacion = validarOperacion(normalizada, stock, codigosEfectivo);
     if (esFallo(validacion)) {
       throw new ErrorCaja(validacion.codigo, validacion.mensaje, 400);
     }
@@ -521,7 +562,7 @@ export async function registrarOperacion(
       numero: resultado.numero,
       origen,
       importeCentimos: e.importeCentimos,
-      efectivoCentimos: importeEnEfectivo(e.formasPago),
+      efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
       formasPago: e.formasPago,
       recibido: e.efectivoRecibido ?? [],
       entregado: e.efectivoEntregado ?? [],
@@ -546,7 +587,11 @@ export type EntradaCobro = Omit<EntradaOperacion, "tipo" | "efectivoEntregado"> 
 };
 
 export async function registrarCobro(ctx: Contexto, e: EntradaCobro): Promise<ResultadoOperacion> {
-  const efectivo = importeEnEfectivo(e.formasPago);
+  // Qué parte del cobro es efectivo lo dice el catálogo, no el literal "CASH":
+  // el código del efectivo es de la empresa. Esto solo calcula el cambio a
+  // proponer; la validación de verdad vuelve a hacerse en la transacción.
+  const codigosEfectivo = codigosEfectivoDe(await cargarFormasPago(pool, ctx.empresaId));
+  const efectivo = importeEnEfectivo(e.formasPago, codigosEfectivo);
   const recibido = totalInventario(inventarioDesdeLineas(e.efectivoRecibido ?? []));
   const cambioRequerido = recibido - efectivo;
 

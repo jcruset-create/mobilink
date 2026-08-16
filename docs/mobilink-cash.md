@@ -134,6 +134,41 @@ Los cobros y pagos distinguen permiso ERP de permiso manual
 pedía el encargo: se puede dejar cobrar facturas de la ERP a quien no debe
 poder inventarse un cobro.
 
+## 7 bis. Formas de cobro
+
+`cash_payment_methods`, por empresa. Cada fila activa es un botón en Cobros y
+en Pagos, por su `orden`; si tiene `imagen_url` el botón enseña la imagen y si
+no, el nombre.
+
+`codigo` es lo que se guarda en `cash_operation_payments.forma_pago` desde el
+primer día, así que **la baja es lógica**: un cobro por AMEX de hace un año
+sigue diciendo AMEX aunque hoy ya no se acepte. El código no se puede cambiar
+—es la clave del histórico— pero el nombre sí, y ese cambio arrastra a las
+pantallas a propósito.
+
+Dos reglas que el backend impone dentro de la transacción, no en la pantalla:
+
+- **El efectivo no se da de baja ni se duplica.** Un índice único parcial
+  (`WHERE afecta_efectivo`) impide que haya dos formas que muevan el cajón: con
+  dos, el desglose por denominación de cada operación dejaría de ser
+  interpretable. Y sin ninguna no habría arqueo ni cierre que hacer.
+- **Una forma dada de baja no admite cobros nuevos**, ni aunque la pantalla la
+  tuviera pintada de antes. Es la misma razón por la que el stock se relee con
+  la jornada bloqueada.
+
+`pide_referencia` obliga a introducirla al cobrar. Viene activada en todo lo
+que no es efectivo, porque es lo que luego permite cuadrar con el banco.
+
+Esto obligó a **abrir `FormaPago` en el dominio**: era una unión cerrada y
+`afectaAlEfectivo()` comparaba con el literal `"CASH"`. Ahora es un código y las
+funciones del motor reciben el conjunto de códigos que son efectivo. El motor
+sigue sin saber nada de base de datos: quien consulta el catálogo es el
+servicio y se lo pasa hecho.
+
+La imagen del botón se sube a Supabase Storage y de ella se guarda la URL, igual
+que el avatar de técnicos. En disco local no: el contenedor de Render es
+efímero y la imagen se perdería en el siguiente despliegue.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:
@@ -150,8 +185,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**900 pruebas en verde** (`npm test`), de las cuales 90 son de Mobilink Cash y
-23 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**927 pruebas en verde** (`npm test`), de las cuales 117 son de Mobilink Cash y
+38 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

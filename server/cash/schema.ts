@@ -59,6 +59,36 @@ export async function initCash(): Promise<void> {
     CREATE INDEX IF NOT EXISTS cash_registers_empresa_idx ON cash_registers(empresa_id, activa);
   `);
 
+  // ── Catálogo de formas de pago ────────────────────────────────────────────
+  // Por empresa: cada una cobra por donde cobra. `codigo` es lo que se guarda
+  // en cash_operation_payments, así que una forma dada de baja no cambia la
+  // etiqueta de un cobro de hace un año — de ahí que la baja sea lógica.
+  //
+  // `afecta_efectivo` distingue la única forma que mueve el cajón físico. No es
+  // un CHECK sobre el código porque el nombre lo cambia quien quiera, pero sí
+  // hay un índice que impide que haya dos formas de efectivo en una empresa:
+  // con dos, el desglose por denominación dejaría de ser interpretable.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_payment_methods (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      imagen_url TEXT,
+      afecta_efectivo BOOLEAN NOT NULL DEFAULT false,
+      pide_referencia BOOLEAN NOT NULL DEFAULT false,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo)
+    );
+    CREATE INDEX IF NOT EXISTS cash_pay_methods_empresa_idx
+      ON cash_payment_methods(empresa_id, activa, orden);
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_pay_methods_un_efectivo_idx
+      ON cash_payment_methods(empresa_id) WHERE afecta_efectivo;
+  `);
+
   // ── Jornadas de caja ──────────────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cash_sessions (
