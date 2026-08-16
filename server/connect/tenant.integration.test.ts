@@ -154,10 +154,16 @@ describe.skipIf(!RUN)("Aislamiento entre centros de control", () => {
     const hasta = now + 86_400_000;
     const a = await api(`/billing/summary?from=${desde}&to=${hasta}`, centroA.email);
     expect(a.status).toBe(200);
-    // 331 es de alfa; 999 es de beta y no puede aparecer por ninguna parte
+    // 331 es de alfa; 999 es de beta y no puede aparecer por ninguna parte.
+    //
+    // El "999" se busca en el cuerpo SIN el rango de fechas que la API devuelve
+    // tal cual: son marcas de tiempo en milisegundos y tarde o temprano una
+    // lleva "999" dentro, con lo que la prueba fallaba por el reloj y no por
+    // una fuga de datos. Pasó de verdad un 16 de agosto.
+    const { from: _desde, to: _hasta, ...datos } = a.body;
     expect(Number(a.body.totals.amount)).toBe(331);
-    expect(JSON.stringify(a.body)).not.toContain("999");
-    expect(JSON.stringify(a.body)).not.toContain("Partner beta");
+    expect(JSON.stringify(datos)).not.toContain("999");
+    expect(JSON.stringify(datos)).not.toContain("Partner beta");
 
     const b = await api(`/billing/summary?from=${desde}&to=${hasta}`, centroB.email);
     expect(Number(b.body.totals.amount)).toBe(999);

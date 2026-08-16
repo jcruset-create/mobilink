@@ -20,6 +20,14 @@ import { esFallo } from "./domain/result.ts";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
 
+/*
+ * Los justificantes se guardan en disco durante las pruebas. La CI define un
+ * Supabase ficticio para que las suites carguen, y sin esto la subida saldría
+ * a buscar un host que no existe. Lo que se prueba aquí es la lógica del
+ * módulo, no el almacenamiento de Supabase.
+ */
+process.env.CASH_STORAGE_LOCAL = "1";
+
 let db: typeof import("../db.ts").default;
 let servicio: typeof import("./service.ts");
 let repo: typeof import("./repository.ts");
@@ -27,6 +35,8 @@ let outbox: typeof import("./erp/worker.ts");
 let registry: typeof import("./erp/registry.ts");
 let config: typeof import("./config.ts");
 let tesoreria: typeof import("./treasury.ts");
+let documentos: typeof import("./documents.ts");
+let informe: typeof import("./report.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
 let facturaDemo: typeof import("./erp/mock.ts").facturaDemo;
 
@@ -78,6 +88,8 @@ beforeAll(async () => {
   registry = await import("./erp/registry.ts");
   config = await import("./config.ts");
   tesoreria = await import("./treasury.ts");
+  documentos = await import("./documents.ts");
+  informe = await import("./report.ts");
   const mock = await import("./erp/mock.ts");
   MockCashErpConnector = mock.MockCashErpConnector;
   facturaDemo = mock.facturaDemo;
@@ -1042,6 +1054,145 @@ describe.runIf(RUN)("entregas de dinero a personas", () => {
     await expect(
       tesoreria.liquidarEntrega(ctx, entrega.id, { sessionId: sesion.id, gastoCentimos: 6000 })
     ).rejects.toMatchObject({ codigo: "GASTO_SUPERA_ENTREGA" });
+  });
+});
+
+describe.runIf(RUN)("justificantes e informe de cierre", () => {
+  /** Un PDF de una página, mínimo pero válido: hace de escaneo. */
+  async function pdfDePrueba(texto: string): Promise<Buffer> {
+    const { PDFDocument, StandardFonts } = await import("pdf-lib");
+    const doc = await PDFDocument.create();
+    const pagina = doc.addPage([595.28, 841.89]);
+    const fuente = await doc.embedFont(StandardFonts.Helvetica);
+    pagina.drawText(texto, { x: 60, y: 760, size: 14, font: fuente });
+    return Buffer.from(await doc.save());
+  }
+
+  it("se adjunta el PDF del escáner a un cobro y sale en el informe", async () => {
+    const caja = await crearCaja("documentos");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta con factura",
+    });
+
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "factura-1.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("FACTURA DE PRUEBA"),
+    });
+
+    expect(doc.anulado).toBe(false);
+    expect(doc.mime).toBe("application/pdf");
+    expect(doc.tamanoBytes).toBeGreaterThan(0);
+
+    const lista = await documentos.documentosDeOperacion(EMPRESA, cobro.operacionId);
+    expect(lista).toHaveLength(1);
+    expect(lista[0].nombre).toBe("factura-1.pdf");
+
+    // El informe se genera y lleva la página del escaneo detrás de la portada.
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+
+    const { PDFDocument } = await import("pdf-lib");
+    const leido = await PDFDocument.load(pdf);
+    expect(leido.getPageCount()).toBeGreaterThanOrEqual(2);
+  });
+
+  it("un justificante retirado deja de salir en el informe", async () => {
+    const caja = await crearCaja("documentos-anulados");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      concepto: "Venta con escaneo movido",
+    });
+
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "movido.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ESCANEO MOVIDO"),
+    });
+
+    const conDocumento = await informe.informeCierre(EMPRESA, sesion.id);
+    const { PDFDocument } = await import("pdf-lib");
+    const paginasAntes = (await PDFDocument.load(conDocumento)).getPageCount();
+
+    await documentos.anularDocumento(ctx, doc.id, "Escaneo movido, se repite");
+
+    expect(await documentos.documentosDeOperacion(EMPRESA, cobro.operacionId)).toHaveLength(0);
+    // Y sigue constando que existió.
+    const conAnulados = await documentos.documentosDeOperacion(EMPRESA, cobro.operacionId, true);
+    expect(conAnulados[0]).toMatchObject({ anulado: true, anuladoMotivo: "Escaneo movido, se repite" });
+
+    const sinDocumento = await informe.informeCierre(EMPRESA, sesion.id);
+    const paginasDespues = (await PDFDocument.load(sinDocumento)).getPageCount();
+    expect(paginasDespues).toBe(paginasAntes - 1);
+  });
+
+  it("rechaza lo que no es un justificante", async () => {
+    const caja = await crearCaja("documentos-formato");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      concepto: "Venta",
+    });
+
+    await expect(
+      documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+        originalname: "hoja.xlsx",
+        mimetype: "application/vnd.ms-excel",
+        buffer: Buffer.from("no soy un pdf"),
+      })
+    ).rejects.toMatchObject({ codigo: "FORMATO_NO_ADMITIDO" });
+  });
+
+  it("no se adjunta a una operación de otra empresa", async () => {
+    const caja = await crearCaja("documentos-ajenos");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      concepto: "Venta",
+    });
+
+    const otra = { empresaId: "00000000-0000-4000-a000-0000000000ff", userId: null };
+    await expect(
+      documentos.adjuntarDocumento(otra, cobro.operacionId, {
+        originalname: "factura.pdf",
+        mimetype: "application/pdf",
+        buffer: await pdfDePrueba("AJENA"),
+      })
+    ).rejects.toMatchObject({ codigo: "OPERACION_NO_ENCONTRADA" });
+  });
+
+  it("el informe se genera aunque la jornada no tenga ni un justificante", async () => {
+    const caja = await crearCaja("informe-vacio");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+    expect(pdf.length).toBeGreaterThan(1000);
+  });
+
+  it("el informe de otra empresa no se sirve", async () => {
+    const caja = await crearCaja("informe-ajeno");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(
+      informe.informeCierre("00000000-0000-4000-a000-0000000000ff", sesion.id)
+    ).rejects.toMatchObject({ codigo: "JORNADA_DE_OTRA_EMPRESA" });
   });
 });
 

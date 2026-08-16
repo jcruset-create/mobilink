@@ -14,6 +14,7 @@ import type {
   Caja,
   Denominacion,
   DocumentoExterno,
+  DocumentoOperacion,
   EntregaDinero,
   FormaPagoConfig,
   PedidoCambio,
@@ -162,6 +163,32 @@ export const subirImagenFormaPago = (id: number, fichero: File) => {
     body: cuerpo,
   });
 };
+
+// ── Justificantes escaneados ───────────────────────────────────────────────
+
+export const documentosDeOperacion = (operationId: number) =>
+  pedir<{ documentos: DocumentoOperacion[] }>(`/operations/${operationId}/documents`);
+
+/**
+ * Sube el PDF del escáner a una operación YA registrada.
+ *
+ * Va en su propia petición a propósito: si falla, el cobro sigue registrado y
+ * solo queda volver a adjuntar desde el histórico.
+ */
+export const adjuntarDocumento = (operationId: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  return pedir<{ documento: DocumentoOperacion }>(`/operations/${operationId}/documents`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
+export const anularDocumento = (id: number, motivo: string) =>
+  pedir<{ documento: DocumentoOperacion }>(`/documents/${id}/void`, json({ motivo }));
+
+/** Enlace del informe de cierre. Se abre en una pestaña, no se descarga por fetch. */
+export const urlInformeCierre = (sessionId: number) => `${BASE}/sessions/${sessionId}/report.pdf`;
 
 // ── Tesorería: cambio al banco y entregas de dinero ────────────────────────
 

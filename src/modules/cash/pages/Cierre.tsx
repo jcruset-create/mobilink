@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { Printer } from "lucide-react";
+import { FileDown, Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
   type CantidadesPorValor,
@@ -311,6 +311,16 @@ function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
         <Card title="Cambio que queda en caja" value={euros(r.totalCambioCentimos)} accent="text-emerald-400" />
         <Card title="Ingreso bancario" value={euros(r.totalIngresoCentimos)} accent="text-sky-300" />
       </div>
+
+      {/* El papeleo del día en un solo PDF: el cierre y los escaneos detrás. */}
+      <a
+        href={api.urlInformeCierre(r.sesion.id)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500"
+      >
+        <FileDown className="h-4 w-4" /> Informe de cierre con los justificantes
+      </a>
     </div>
   );
 }

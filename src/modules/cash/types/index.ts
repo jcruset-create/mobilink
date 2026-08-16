@@ -207,6 +207,21 @@ export type FormaPagoConfig = {
   usos: number;
 };
 
+/** Justificante escaneado colgado de un cobro o un pago. */
+export type DocumentoOperacion = {
+  id: number;
+  operationId: number;
+  sessionId: number;
+  nombre: string;
+  mime: string;
+  tamanoBytes: number;
+  anulado: boolean;
+  anuladoMotivo: string | null;
+  subidoAtMs: number;
+  /** Enlace temporal: caduca, así que no vale guardarlo en ningún sitio. */
+  url: string | null;
+};
+
 // ── Tesorería ──────────────────────────────────────────────────────────────
 
 export type LineaConCartuchos = LineaDenominacion & { cartuchos: number; motivo?: string | null };
