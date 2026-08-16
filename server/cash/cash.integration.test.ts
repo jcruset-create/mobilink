@@ -1449,6 +1449,56 @@ describe.runIf(RUN)("cartuchos", () => {
     ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
   });
 
+  it("los tubos que no se quedan van al ingreso bancario, precintados", async () => {
+    // El caso que falló en el mostrador: un tubo de 2 € y otro de 1 € que no
+    // caben en el cambio final y tienen que ir al banco enteros.
+    const caja = await crearCaja("cartucho-al-banco");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }], // 100 € en billetes
+      fondoCartuchos: [
+        { valor: 200, cantidad: 1 }, // 50 € en un tubo de 2 €
+        { valor: 100, cantidad: 1 }, // 25 € en un tubo de 1 €
+      ],
+    });
+    expect(sesion.fondoInicialCentimos).toBe(17500);
+
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [{ valor: 5000, cantidad: 2 }],
+      cartuchos: [
+        { valor: 200, cantidad: 1 },
+        { valor: 100, cantidad: 1 },
+      ],
+    });
+
+    // Se queda solo un billete: todo lo demás, tubos incluidos, al banco.
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 1 }],
+      cambioFinalCartuchos: [],
+    });
+
+    expect(cierre.totalCambioCentimos).toBe(5000);
+    // 50 € del billete que se va + 75 € de los dos tubos.
+    expect(cierre.totalIngresoCentimos).toBe(12500);
+    expect(cierre.ingresoBancarioCartuchos).toEqual([
+      { valor: 200, cantidad: 1 },
+      { valor: 100, cantidad: 1 },
+    ]);
+
+    // Cambio final + ingreso = lo contado, también contando los tubos.
+    expect(cierre.totalCambioCentimos + cierre.totalIngresoCentimos).toBe(17500);
+
+    // Y la jornada queda a cero: todo lo que entró ha salido.
+    const final = await servicio.stockDeJornada(sesion.id);
+    expect(final.totalCentimos).toBe(0);
+
+    // Mañana solo hereda el billete: los tubos se fueron.
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(5000);
+  });
+
   it("la propuesta de cierre deja los tubos en caja y manda el resto al banco", async () => {
     const caja = await crearCaja("cartucho-propuesta-cierre");
     const { sesion } = await servicio.abrirJornada(ctx, {
