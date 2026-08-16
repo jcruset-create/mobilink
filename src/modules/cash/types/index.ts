@@ -199,6 +199,10 @@ export type FormaPagoConfig = {
   afectaEfectivo: boolean;
   pideReferencia: boolean;
   activa: boolean;
+  /** Sale como botón al cobrar. */
+  enCobros: boolean;
+  /** Sale como botón al pagar. */
+  enPagos: boolean;
   orden: number;
   usos: number;
 };

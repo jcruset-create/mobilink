@@ -383,14 +383,15 @@ function FormasPago() {
             <th className={thCls}>Botón</th>
             <th className={thCls}>Nombre</th>
             <th className={`${thCls} text-right`}>Orden</th>
+            <th className={thCls}>Dónde sale</th>
             <th className={thCls}>Referencia</th>
-            <th className={`${thCls} text-right`}>Cobros</th>
+            <th className={`${thCls} text-right`}>Usos</th>
             <th className={thCls}>Estado</th>
             <th className={thCls} />
           </tr>
         </thead>
         <tbody>
-          {formas.length === 0 && <EmptyRow cols={7} text="No hay formas de cobro." />}
+          {formas.length === 0 && <EmptyRow cols={8} text="No hay formas de cobro." />}
           {formas.map((f) => {
             const enEdicion = editando === f.id;
             return (
@@ -465,6 +466,33 @@ function FormasPago() {
                   ) : (
                     <span className="text-slate-400">{f.orden}</span>
                   )}
+                </td>
+                <td className={tdCls}>
+                  {/* Dos casillas en vez de dos columnas: en el móvil del
+                      mostrador la tabla ya va justa de ancho. */}
+                  <div className="flex flex-col gap-0.5">
+                    {(
+                      [
+                        ["enCobros", "Cobros"],
+                        ["enPagos", "Pagos"],
+                      ] as const
+                    ).map(([campo, etiqueta]) => (
+                      <label key={campo} className="flex items-center gap-1.5 text-[11px]">
+                        <input
+                          type="checkbox"
+                          checked={f[campo]}
+                          disabled={!editable || ocupado || f.afectaEfectivo}
+                          onChange={() =>
+                            void accion(() => api.actualizarFormaPago(f.id, { [campo]: !f[campo] }))
+                          }
+                          className="h-3.5 w-3.5 accent-sky-500"
+                        />
+                        <span className={f[campo] ? "text-slate-300" : "text-slate-500"}>
+                          {etiqueta}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 </td>
                 <td className={tdCls}>
                   <button
@@ -555,10 +583,13 @@ function FormasPago() {
       </TableWrap>
 
       <p className="text-[11px] text-slate-500">
-        Cada forma activa es un botón en la pantalla de cobros, por orden. Si tiene imagen, el botón
-        la enseña; si no, sale el nombre. Dar de baja una forma no toca el histórico: los cobros ya
-        registrados con ella siguen ahí, solo deja de poder elegirse. El efectivo no se puede dar de
-        baja porque es el único que mueve el cajón.
+        Cada forma activa es un botón, por orden, en las pantallas que tenga marcadas. Se cobra por
+        muchas vías pero a un proveedor se le suele pagar del cajón, así que de salida solo el
+        efectivo sale en pagos; marca «Pagos» en las demás si alguna vez las necesitas. Si tiene
+        imagen, el botón la enseña; si no, sale el nombre. Dar de baja una forma no toca el
+        histórico: los cobros ya registrados con ella siguen ahí, solo deja de poder elegirse. El
+        efectivo no se puede dar de baja ni quitar de ninguna de las dos pantallas, porque es el
+        único que mueve el cajón.
       </p>
     </section>
   );

@@ -130,6 +130,8 @@ export const crearFormaPago = (datos: {
   nombre: string;
   codigo?: string;
   pideReferencia?: boolean;
+  enCobros?: boolean;
+  enPagos?: boolean;
   orden?: number;
 }) => pedir<{ forma: FormaPagoConfig }>("/payment-methods", json(datos));
 
@@ -139,6 +141,8 @@ export const actualizarFormaPago = (
     nombre?: string;
     activa?: boolean;
     pideReferencia?: boolean;
+    enCobros?: boolean;
+    enPagos?: boolean;
     orden?: number;
     /** `null` quita la imagen; omitirlo la deja como está. */
     imagenUrl?: string | null;

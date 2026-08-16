@@ -112,6 +112,8 @@ export type FormaPagoCatalogo = {
   afectaEfectivo: boolean;
   pideReferencia: boolean;
   activa: boolean;
+  enCobros: boolean;
+  enPagos: boolean;
 };
 
 /**
@@ -127,7 +129,7 @@ export async function cargarFormasPago(
   empresaId: string
 ): Promise<FormaPagoCatalogo[]> {
   const { rows } = await client.query(
-    `SELECT codigo, nombre, afecta_efectivo, pide_referencia, activa
+    `SELECT codigo, nombre, afecta_efectivo, pide_referencia, activa, en_cobros, en_pagos
        FROM cash_payment_methods
       WHERE empresa_id = $1
       ORDER BY orden, nombre`,
@@ -140,6 +142,8 @@ export async function cargarFormasPago(
       afectaEfectivo: f.afectaEfectivo,
       pideReferencia: f.pideReferencia,
       activa: true,
+      enCobros: f.enCobros,
+      enPagos: f.enPagos,
     }));
   }
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -149,6 +153,8 @@ export async function cargarFormasPago(
     afectaEfectivo: r.afecta_efectivo,
     pideReferencia: r.pide_referencia,
     activa: r.activa,
+    enCobros: r.en_cobros,
+    enPagos: r.en_pagos,
   }));
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }

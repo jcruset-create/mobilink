@@ -285,6 +285,8 @@ export function createCashRouter(): Router {
         nombre: typeof b.nombre === "string" ? b.nombre : "",
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
         pideReferencia: typeof b.pideReferencia === "boolean" ? b.pideReferencia : undefined,
+        enCobros: typeof b.enCobros === "boolean" ? b.enCobros : undefined,
+        enPagos: typeof b.enPagos === "boolean" ? b.enPagos : undefined,
         orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
       });
       res.status(201).json({ forma });
@@ -312,6 +314,8 @@ export function createCashRouter(): Router {
           nombre: typeof b.nombre === "string" ? b.nombre : undefined,
           activa: typeof b.activa === "boolean" ? b.activa : undefined,
           pideReferencia: typeof b.pideReferencia === "boolean" ? b.pideReferencia : undefined,
+          enCobros: typeof b.enCobros === "boolean" ? b.enCobros : undefined,
+          enPagos: typeof b.enPagos === "boolean" ? b.enPagos : undefined,
           orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
           imagenUrl,
         }

@@ -41,3 +41,16 @@ create index if not exists cash_pay_methods_empresa_idx
 -- denominación de cada operación dejaría de ser interpretable.
 create unique index if not exists cash_pay_methods_un_efectivo_idx
   on cash_payment_methods (empresa_id) where afecta_efectivo;
+
+-- ── Dónde sale cada botón (añadido después) ─────────────────────────────────
+-- Se cobra por muchas vías —tarjeta, Bizum, transferencia— pero a un proveedor
+-- se le paga del cajón. Llenar la pantalla de pagos de botones que nadie pulsa
+-- solo estorba al que tiene prisa, así que de salida solo el efectivo sale ahí
+-- y el resto se activa desde Configuración si hace falta.
+alter table cash_payment_methods
+  add column if not exists en_cobros boolean not null default true;
+alter table cash_payment_methods
+  add column if not exists en_pagos boolean not null default false;
+
+-- El efectivo siempre en las dos: es el único que mueve el cajón.
+update cash_payment_methods set en_pagos = true where afecta_efectivo and not en_pagos;
