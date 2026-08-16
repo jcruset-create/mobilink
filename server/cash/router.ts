@@ -27,6 +27,7 @@ import * as servicio from "./service.ts";
 import * as config from "./config.ts";
 import * as tesoreria from "./treasury.ts";
 import * as documentos from "./documents.ts";
+import * as ingresos from "./bankdeposits.ts";
 import { informeCierre } from "./report.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
@@ -445,6 +446,57 @@ export function createCashRouter(): Router {
         `inline; filename="cierre-caja-${sesion?.fecha ?? sessionId}.pdf"`
       );
       res.send(pdf);
+    })
+  );
+
+  // ── Ingresos bancarios ───────────────────────────────────────────────────
+
+  /** Pendientes, remanente e historial de la caja: la pantalla en una llamada. */
+  r.get(
+    "/registers/:id/bank-deposits",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const registerId = enteroPositivo(req.params.id, "id");
+      res.json(await ingresos.panelIngresos(req.authCtx!.empresaId, registerId));
+    })
+  );
+
+  r.post(
+    "/bank-deposits",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      if (!Array.isArray(b.sessionIds)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "sessionIds tiene que ser una lista.", 400);
+      }
+      const ingreso = await ingresos.crearIngreso(contexto(req), {
+        registerId: enteroPositivo(b.registerId, "registerId"),
+        sessionIds: b.sessionIds.map((v: unknown, i: number) =>
+          enteroPositivo(v, `sessionIds[${i}]`)
+        ),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        fechaIngreso:
+          typeof b.fechaIngreso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.fechaIngreso)
+            ? b.fechaIngreso
+            : undefined,
+        referencia: typeof b.referencia === "string" ? b.referencia : undefined,
+        observaciones: typeof b.observaciones === "string" ? b.observaciones : undefined,
+      });
+      res.status(201).json({ ingreso });
+    })
+  );
+
+  r.post(
+    "/bank-deposits/:id/void",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ingreso = await ingresos.anularIngreso(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        typeof b.motivo === "string" ? b.motivo : ""
+      );
+      res.json({ ingreso });
     })
   );
 

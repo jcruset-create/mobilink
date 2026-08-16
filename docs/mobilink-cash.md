@@ -267,6 +267,39 @@ Un justificante ilegible o que ya no esté **no rompe el informe**: sale una
 página diciéndolo, con su número de operación. Un cierre sin informe por una
 factura corrupta sería peor que un informe con un hueco señalado.
 
+## 7 quinquies. Ingresos bancarios
+
+El cierre de cada jornada aparta un importe "para el banco"
+(`ingreso_bancario_centimos`), pero al banco no se va cada día: se acumulan
+cierres y un solo ingreso los agrupa (`cash_bank_deposits` +
+`cash_bank_deposit_sessions`). El banco solo admite billetes, así que las
+monedas que no se consiguen convertir quedan en tienda como **remanente**, que
+arrastra al ingreso siguiente. Cuánto se ingresa de verdad lo decide el
+usuario: el sistema no puede saber cuántas monedas se convirtieron.
+
+La ecuación es un `CHECK` de la tabla, no una validación de código:
+
+    remanente_anterior + total_cierres − importe = remanente_nuevo
+
+Decisiones que sostienen el resto:
+
+- **El remanente no es una columna de saldo**: es el `remanente_nuevo` del
+  último ingreso confirmado. Derivado, como el stock teórico — no existe un
+  contador que pueda desincronizarse.
+- **Concurrencia en dos capas**: crear o anular bloquea la fila de la caja
+  (`FOR UPDATE`), que serializa la cadena de remanentes; y un índice único
+  parcial sobre los cierres vigentes impide a nivel de base de datos que el
+  mismo cierre entre en dos ingresos, incluso si el bloqueo fallara.
+- **Solo se anula el último** ingreso confirmado de cada caja: los siguientes
+  arrancaron de su remanente, y anular uno del medio dejaría la cadena
+  apuntando a un número que ya no existe. Se deshace en orden, y cada paso
+  restaura exactamente (cierres a pendientes, remanente anterior).
+- **Una jornada conciliada no se puede reabrir** sin anular antes su ingreso:
+  al recerrarla cambiaría el importe y el ingreso conciliaría un número que ya
+  no existe (`JORNADA_CONCILIADA` en `reabrirJornada`).
+- Aislamiento por caja en todas las consultas, numeración `MC-IB-YYYY-NNNNNN`,
+  anulación lógica con quién/cuándo/por qué, y auditoría en `app_auditoria`.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:
@@ -283,8 +316,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**967 pruebas en verde** (`npm test`), de las cuales 151 son de Mobilink Cash y
-60 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**975 pruebas en verde** (`npm test`), de las cuales 159 son de Mobilink Cash y
+68 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

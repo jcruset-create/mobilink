@@ -36,6 +36,7 @@ let registry: typeof import("./erp/registry.ts");
 let config: typeof import("./config.ts");
 let tesoreria: typeof import("./treasury.ts");
 let documentos: typeof import("./documents.ts");
+let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
 let facturaDemo: typeof import("./erp/mock.ts").facturaDemo;
@@ -89,6 +90,7 @@ beforeAll(async () => {
   config = await import("./config.ts");
   tesoreria = await import("./treasury.ts");
   documentos = await import("./documents.ts");
+  ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
   const mock = await import("./erp/mock.ts");
   MockCashErpConnector = mock.MockCashErpConnector;
@@ -1054,6 +1056,221 @@ describe.runIf(RUN)("entregas de dinero a personas", () => {
     await expect(
       tesoreria.liquidarEntrega(ctx, entrega.id, { sessionId: sesion.id, gastoCentimos: 6000 })
     ).rejects.toMatchObject({ codigo: "GASTO_SUPERA_ENTREGA" });
+  });
+});
+
+describe.runIf(RUN)("ingresos bancarios", () => {
+  /** Compone un importe con las denominaciones de la semilla, de mayor a menor. */
+  function componer(centimos: number) {
+    const VALORES = [50000, 20000, 10000, 5000, 2000, 1000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
+    const lineas: { valor: number; cantidad: number }[] = [];
+    let resto = centimos;
+    for (const v of VALORES) {
+      const n = Math.floor(resto / v);
+      if (n > 0) {
+        lineas.push({ valor: v, cantidad: n });
+        resto -= n * v;
+      }
+    }
+    if (resto !== 0) throw new Error(`no se pudo componer ${centimos}`);
+    return lineas;
+  }
+
+  /**
+   * Abre, arquea y cierra una jornada dejándolo TODO para el banco: el importe
+   * del cierre pendiente queda controlado al céntimo.
+   */
+  async function cerrarJornadaCon(caja: number, centimos: number): Promise<number> {
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: componer(centimos),
+    });
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+    const cierre = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+    expect(cierre.totalIngresoCentimos).toBe(centimos);
+    return sesion.id;
+  }
+
+  it("el criterio de aceptación del encargo, de punta a punta", async () => {
+    const caja = await crearCaja("ingresos-criterio");
+
+    // Tres cierres: 2.564,35 + 654,44 + 1.131,66 = 4.350,45 €.
+    const s16 = await cerrarJornadaCon(caja, 256435);
+    const s17 = await cerrarJornadaCon(caja, 65444);
+    const s18 = await cerrarJornadaCon(caja, 113166);
+
+    const antes = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(antes.pendientes).toHaveLength(3);
+    expect(antes.totalPendienteCentimos).toBe(435045);
+    expect(antes.remanenteCentimos).toBe(0);
+
+    // Se ingresan 4.350,00 € en billetes; 0,45 € quedan en tienda.
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [s16, s17, s18],
+      importeCentimos: 435000,
+      referencia: "ING-090",
+    });
+
+    expect(ingreso.numero).toMatch(/^MC-IB-\d{4}-\d{6}$/);
+    expect(ingreso.remanenteAnteriorCentimos).toBe(0);
+    expect(ingreso.totalCierresCentimos).toBe(435045);
+    expect(ingreso.importeCentimos).toBe(435000);
+    expect(ingreso.remanenteNuevoCentimos).toBe(45);
+    // La ecuación del encargo, literal.
+    expect(
+      ingreso.remanenteAnteriorCentimos + ingreso.totalCierresCentimos - ingreso.importeCentimos
+    ).toBe(ingreso.remanenteNuevoCentimos);
+
+    const despues = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(despues.pendientes).toHaveLength(0);
+    expect(despues.remanenteCentimos).toBe(45);
+    expect(despues.ingresos).toHaveLength(1);
+    expect(despues.ingresos[0].cierres.map((c) => c.sessionId).sort()).toEqual(
+      [s16, s17, s18].sort()
+    );
+  });
+
+  it("el remanente se arrastra al ingreso siguiente", async () => {
+    const caja = await crearCaja("ingresos-remanente");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    expect(await ingresos.remanenteActual(db, caja)).toBe(45);
+
+    // Nuevo cierre de 725,80 €: bajo control hay 0,45 + 725,80 = 726,25 €.
+    const s2 = await cerrarJornadaCon(caja, 72580);
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.totalPendienteCentimos + panel.remanenteCentimos).toBe(72625);
+
+    const segundo = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [s2],
+      importeCentimos: 72600,
+    });
+    expect(segundo.remanenteAnteriorCentimos).toBe(45);
+    expect(segundo.remanenteNuevoCentimos).toBe(25);
+    expect(await ingresos.remanenteActual(db, caja)).toBe(25);
+  });
+
+  it("no se puede ingresar más de lo que hay bajo control", async () => {
+    const caja = await crearCaja("ingresos-exceso");
+    const s1 = await cerrarJornadaCon(caja, 10000);
+
+    await expect(
+      ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 10001 })
+    ).rejects.toMatchObject({ codigo: "INGRESO_SUPERA_DISPONIBLE" });
+
+    // Ni importes que no son dinero de verdad.
+    for (const malo of [0, -500, 100.5]) {
+      await expect(
+        ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: malo })
+      ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+    }
+  });
+
+  it("un cierre conciliado no puede entrar en otro ingreso", async () => {
+    const caja = await crearCaja("ingresos-duplicado");
+    const s1 = await cerrarJornadaCon(caja, 20000);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 20000 });
+
+    await expect(
+      ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 10000 })
+    ).rejects.toMatchObject({ codigo: "CIERRE_YA_CONCILIADO" });
+  });
+
+  it("dos ingresos simultáneos no rompen la cadena ni comparten cierres", async () => {
+    const caja = await crearCaja("ingresos-concurrencia");
+    const s1 = await cerrarJornadaCon(caja, 30000);
+
+    // Los dos quieren el mismo cierre a la vez: exactamente uno gana.
+    const resultados = await Promise.allSettled([
+      ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 30000 }),
+      ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 29000 }),
+    ]);
+
+    const ok = resultados.filter((r) => r.status === "fulfilled");
+    const ko = resultados.filter((r) => r.status === "rejected");
+    expect(ok).toHaveLength(1);
+    expect(ko).toHaveLength(1);
+
+    // Y la cadena queda consistente: un solo ingreso vigente con el cierre.
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.ingresos.filter((i) => i.estado === "CONFIRMADO")).toHaveLength(1);
+    expect(panel.pendientes).toHaveLength(0);
+  });
+
+  it("anular restaura exactamente: cierres a pendientes y remanente anterior", async () => {
+    const caja = await crearCaja("ingresos-anulacion");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    const primero = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [s1],
+      importeCentimos: 435000,
+    });
+    const s2 = await cerrarJornadaCon(caja, 72580);
+    const segundo = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [s2],
+      importeCentimos: 72600,
+    });
+
+    // El primero no es el último: anularlo rompería la cadena y se rechaza.
+    await expect(
+      ingresos.anularIngreso(ctx, primero.id, "prueba")
+    ).rejects.toMatchObject({ codigo: "INGRESO_NO_ES_ULTIMO" });
+
+    // El último sí, y restaura el estado anterior al céntimo.
+    await ingresos.anularIngreso(ctx, segundo.id, "Referencia equivocada");
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.remanenteCentimos).toBe(45); // el que dejó el primero
+    expect(panel.pendientes.map((c) => c.sessionId)).toEqual([s2]);
+
+    // Sin motivo no hay anulación, y dos veces tampoco.
+    await ingresos.anularIngreso(ctx, primero.id, "Ahora sí es el último");
+    await expect(
+      ingresos.anularIngreso(ctx, primero.id, "otra vez")
+    ).rejects.toMatchObject({ codigo: "INGRESO_YA_ANULADO" });
+
+    // Todo devuelto: los dos cierres pendientes y remanente a cero.
+    const final = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(final.remanenteCentimos).toBe(0);
+    expect(final.pendientes.map((c) => c.sessionId).sort()).toEqual([s1, s2].sort());
+
+    // Y un cierre liberado puede entrar en un ingreso nuevo.
+    const otra = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [s1, s2],
+      importeCentimos: 507600,
+    });
+    expect(otra.remanenteNuevoCentimos).toBe(25); // 435045 + 72580 − 507600
+  });
+
+  it("una jornada conciliada no se puede reabrir sin anular antes el ingreso", async () => {
+    const caja = await crearCaja("ingresos-reabrir");
+    const s1 = await cerrarJornadaCon(caja, 15000);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 15000 });
+
+    await expect(
+      servicio.reabrirJornada(ctx, s1, "corrección")
+    ).rejects.toMatchObject({ codigo: "JORNADA_CONCILIADA" });
+  });
+
+  it("los céntimos cuadran también con importes incómodos", async () => {
+    const caja = await crearCaja("ingresos-centimos");
+    // 0,01 + 0,02 = 0,03 €: todo monedas, ingreso imposible en billetes salvo 0.
+    const s1 = await cerrarJornadaCon(caja, 1);
+    const s2 = await cerrarJornadaCon(caja, 2);
+
+    // Ingresar los 3 céntimos es legal (el banco de esta regla lo decide el
+    // usuario); lo que no puede es descuadrar.
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [s1, s2],
+      importeCentimos: 1,
+    });
+    expect(ingreso.totalCierresCentimos).toBe(3);
+    expect(ingreso.remanenteNuevoCentimos).toBe(2);
   });
 });
 
