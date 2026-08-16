@@ -448,6 +448,10 @@ export function createCashRouter(): Router {
         importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
         formasPago: formasPago(b.formasPago),
         efectivoEntregado: lineas(b.efectivoEntregado, "efectivoEntregado"),
+        // Vuelta del proveedor: se paga con un billete de 20 € un importe de
+        // 19,50 € y devuelve 0,50 €. Salen 20 € y entran 0,50 €, y el motor
+        // comprueba que la diferencia es exactamente el pago.
+        efectivoRecibido: lineas(b.efectivoRecibido, "efectivoRecibido"),
         partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
         concepto: typeof b.concepto === "string" ? b.concepto : "",
         referencia: typeof b.referencia === "string" ? b.referencia : null,

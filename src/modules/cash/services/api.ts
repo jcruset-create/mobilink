@@ -227,6 +227,8 @@ export const registrarPago = (datos: {
   importeCentimos: number;
   formasPago: { forma: string; importe: number; referencia?: string | null }[];
   efectivoEntregado?: LineaDenominacion[];
+  /** Vuelta que devuelve el proveedor cuando se paga con un billete de más. */
+  efectivoRecibido?: LineaDenominacion[];
   partyNombre?: string;
   concepto?: string;
   referencia?: string | null;

@@ -697,6 +697,64 @@ describe.runIf(RUN)("configuración", () => {
   });
 });
 
+describe.runIf(RUN)("pago con vuelta", () => {
+  it("se paga 19,50 € con un billete de 20 € y el proveedor devuelve 0,50 €", async () => {
+    const caja = await crearCaja("pago-vuelta");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 2000, cantidad: 2 },
+        { valor: 1000, cantidad: 1 },
+      ],
+    });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "PAYMENT",
+      importeCentimos: 1950,
+      formasPago: [{ forma: "CASH", importe: 1950 }],
+      efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+      efectivoRecibido: [{ valor: 50, cantidad: 1 }],
+      concepto: "Compra con vuelta",
+    });
+
+    // Sale un billete de 20 y entra una moneda de 0,50: el neto es el pago.
+    expect(r.efectivoNetoCentimos).toBe(-1950);
+    expect(r.totalStockCentimos).toBe(5000 - 1950);
+    expect(cantidad(r.stock, 2000)).toBe(1);
+    expect(cantidad(r.stock, 50)).toBe(1);
+
+    // Y el libro mayor guarda los DOS movimientos, no un neto de 19,50 €.
+    const movimientos = await repo.enTransaccion((c) =>
+      repo.movimientosDeOperacion(c, r.operacionId)
+    );
+    const salida = movimientos.find((m) => m.direccion === "OUT");
+    const entrada = movimientos.find((m) => m.direccion === "IN");
+    expect(salida!.lineas).toMatchObject([{ valor: 2000, cantidad: 1 }]);
+    expect(entrada!.lineas).toMatchObject([{ valor: 50, cantidad: 1 }]);
+  });
+
+  it("rechaza una vuelta que no cuadra con el importe", async () => {
+    const caja = await crearCaja("pago-vuelta-mala");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 2 }],
+    });
+
+    await expect(
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "PAYMENT",
+        importeCentimos: 1950,
+        formasPago: [{ forma: "CASH", importe: 1950 }],
+        efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+        efectivoRecibido: [{ valor: 100, cantidad: 1 }], // devuelve 1 €, no 0,50
+        concepto: "Vuelta que no cuadra",
+      })
+    ).rejects.toMatchObject({ codigo: "EFECTIVO_NO_CUADRA" });
+  });
+});
+
 describe.runIf(RUN)("catálogo de formas de pago", () => {
   it("se siembra solo la primera vez y trae el efectivo marcado", async () => {
     const formas = await config.listarFormasPago(EMPRESA);
