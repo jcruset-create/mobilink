@@ -28,8 +28,10 @@ type Valor = {
   denominaciones: Denominacion[];
   /** Catálogo completo, de baja incluidas: el histórico necesita las de baja. */
   formasPago: FormaPagoConfig[];
-  /** Las que salen como botón en cobros y pagos, por su orden. */
-  formasPagoActivas: FormaPagoConfig[];
+  /** Las que salen como botón al cobrar, por su orden. */
+  formasParaCobros: FormaPagoConfig[];
+  /** Las que salen como botón al pagar. Normalmente solo el efectivo. */
+  formasParaPagos: FormaPagoConfig[];
   cajas: Bootstrap["cajas"];
   permisos: string[];
   rol: string | null;
@@ -145,7 +147,8 @@ export function CashProvider({ children }: { children: ReactNode }) {
     error,
     denominaciones: boot?.denominaciones ?? [],
     formasPago: boot?.formasPago ?? [],
-    formasPagoActivas: (boot?.formasPago ?? []).filter((f) => f.activa),
+    formasParaCobros: (boot?.formasPago ?? []).filter((f) => f.activa && f.enCobros),
+    formasParaPagos: (boot?.formasPago ?? []).filter((f) => f.activa && f.enPagos),
     cajas: boot?.cajas ?? [],
     permisos,
     rol: boot?.rol ?? null,

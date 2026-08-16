@@ -1147,6 +1147,81 @@ describe.runIf(RUN)("catálogo de formas de pago", () => {
     ).rejects.toMatchObject({ codigo: "FORMA_PAGO_DESCONOCIDA" });
   });
 
+  it("de salida solo el efectivo sale en pagos", async () => {
+    const formas = await config.listarFormasPago(EMPRESA);
+    const efectivo = formas.find((f) => f.afectaEfectivo)!;
+    const tarjeta = formas.find((f) => f.codigo === "BBVA_CARD")!;
+
+    expect(efectivo.enCobros).toBe(true);
+    expect(efectivo.enPagos).toBe(true);
+    expect(tarjeta.enCobros).toBe(true);
+    expect(tarjeta.enPagos).toBe(false);
+  });
+
+  it("no se paga con una forma que no está habilitada para pagos", async () => {
+    const caja = await crearCaja("formas-solo-cobros");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "PAYMENT",
+        importeCentimos: 3000,
+        formasPago: [{ forma: "BBVA_CARD", importe: 3000, referencia: "auth-1" }],
+        concepto: "Pago con tarjeta no habilitada",
+      })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_NO_EN_PAGOS" });
+
+    // Y en cuanto se habilita desde Configuración, entra.
+    const formas = await config.listarFormasPago(EMPRESA);
+    const tarjeta = formas.find((f) => f.codigo === "BBVA_CARD")!;
+    await config.actualizarFormaPago(ctx, tarjeta.id, { enPagos: true });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "PAYMENT",
+      importeCentimos: 3000,
+      formasPago: [{ forma: "BBVA_CARD", importe: 3000, referencia: "auth-1" }],
+      concepto: "Pago con tarjeta ya habilitada",
+    });
+    expect(r.efectivoNetoCentimos).toBe(0);
+
+    // Se deja como estaba, que las pruebas comparten el catálogo de la empresa.
+    await config.actualizarFormaPago(ctx, tarjeta.id, { enPagos: false });
+  });
+
+  it("no se cobra con una forma quitada de cobros", async () => {
+    const formas = await config.listarFormasPago(EMPRESA);
+    const bizum = formas.find((f) => f.codigo === "BIZUM")!;
+    await config.actualizarFormaPago(ctx, bizum.id, { enCobros: false });
+
+    const caja = await crearCaja("formas-sin-cobros");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "BIZUM", importe: 1000, referencia: "b-1" }],
+        concepto: "Cobro por Bizum deshabilitado",
+      })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_NO_EN_COBROS" });
+
+    await config.actualizarFormaPago(ctx, bizum.id, { enCobros: true });
+  });
+
+  it("el efectivo no se puede quitar de ninguna de las dos pantallas", async () => {
+    const formas = await config.listarFormasPago(EMPRESA);
+    const efectivo = formas.find((f) => f.afectaEfectivo)!;
+
+    await expect(
+      config.actualizarFormaPago(ctx, efectivo.id, { enPagos: false })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_PROTEGIDA" });
+    await expect(
+      config.actualizarFormaPago(ctx, efectivo.id, { enCobros: false })
+    ).rejects.toMatchObject({ codigo: "FORMA_PAGO_PROTEGIDA" });
+  });
+
   it("el efectivo no se puede dar de baja", async () => {
     const formas = await config.listarFormasPago(EMPRESA);
     const efectivo = formas.find((f) => f.afectaEfectivo)!;

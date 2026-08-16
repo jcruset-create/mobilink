@@ -61,6 +61,10 @@ export type FormaPagoSemilla = {
   afectaEfectivo: boolean;
   /** Sin referencia no se puede cobrar: el número de autorización del TPV. */
   pideReferencia: boolean;
+  /** Sale como botón al cobrar. */
+  enCobros: boolean;
+  /** Sale como botón al pagar. De salida, solo el efectivo. */
+  enPagos: boolean;
   orden: number;
 };
 
@@ -69,15 +73,20 @@ export type FormaPagoSemilla = {
  * `cash_operation_payments.forma_pago`, así que el histórico conserva su
  * etiqueta. El efectivo no pide referencia; las demás sí, que es de lo que
  * luego se tira para cuadrar con el banco.
+ *
+ * En PAGOS solo sale el efectivo. Se cobra por muchas vías —tarjeta, Bizum,
+ * transferencia— pero a un proveedor se le paga del cajón, y llenar esa
+ * pantalla de botones que nadie pulsa solo estorba. Se activa desde
+ * Configuración el día que haga falta.
  */
 export const FORMAS_PAGO_SEMILLA: readonly FormaPagoSemilla[] = [
-  { codigo: "CASH", nombre: "Efectivo", afectaEfectivo: true, pideReferencia: false, orden: 10 },
-  { codigo: "BBVA_CARD", nombre: "TPV BBVA", afectaEfectivo: false, pideReferencia: true, orden: 20 },
-  { codigo: "CAIXABANK_CARD", nombre: "TPV CaixaBank", afectaEfectivo: false, pideReferencia: true, orden: 30 },
-  { codigo: "AMEX", nombre: "American Express", afectaEfectivo: false, pideReferencia: true, orden: 40 },
-  { codigo: "BANK_TRANSFER", nombre: "Transferencia", afectaEfectivo: false, pideReferencia: true, orden: 50 },
-  { codigo: "BIZUM", nombre: "Bizum", afectaEfectivo: false, pideReferencia: true, orden: 60 },
-  { codigo: "OTHER", nombre: "Otra", afectaEfectivo: false, pideReferencia: true, orden: 70 },
+  { codigo: "CASH", nombre: "Efectivo", afectaEfectivo: true, pideReferencia: false, enCobros: true, enPagos: true, orden: 10 },
+  { codigo: "BBVA_CARD", nombre: "TPV BBVA", afectaEfectivo: false, pideReferencia: true, enCobros: true, enPagos: false, orden: 20 },
+  { codigo: "CAIXABANK_CARD", nombre: "TPV CaixaBank", afectaEfectivo: false, pideReferencia: true, enCobros: true, enPagos: false, orden: 30 },
+  { codigo: "AMEX", nombre: "American Express", afectaEfectivo: false, pideReferencia: true, enCobros: true, enPagos: false, orden: 40 },
+  { codigo: "BANK_TRANSFER", nombre: "Transferencia", afectaEfectivo: false, pideReferencia: true, enCobros: true, enPagos: false, orden: 50 },
+  { codigo: "BIZUM", nombre: "Bizum", afectaEfectivo: false, pideReferencia: true, enCobros: true, enPagos: false, orden: 60 },
+  { codigo: "OTHER", nombre: "Otra", afectaEfectivo: false, pideReferencia: true, enCobros: true, enPagos: false, orden: 70 },
 ];
 
 export function afectaAlEfectivo(
