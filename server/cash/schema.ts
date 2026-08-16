@@ -576,6 +576,64 @@ export async function initCash(): Promise<void> {
       ON cash_advances(register_id, estado);
   `);
 
+  // ── Ingresos bancarios ────────────────────────────────────────────────────
+  // El cierre de cada jornada aparta un importe "para el banco", pero al banco
+  // no se va cada día: se acumulan varios cierres y se hace un ingreso que los
+  // agrupa. Y el banco solo admite billetes, así que las monedas que no se
+  // consiguen convertir se quedan en tienda como remanente, que arrastra al
+  // ingreso siguiente.
+  //
+  // La ecuación que lo gobierna todo va como CHECK, no como validación de
+  // código: remanente anterior + cierres − ingresado = remanente nuevo. Ningún
+  // error de programa puede escribir una fila que descuadre.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_bank_deposits (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      numero TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'CONFIRMADO' CHECK (estado IN ('CONFIRMADO','ANULADO')),
+
+      fecha_ingreso DATE,
+      referencia TEXT,
+      observaciones TEXT,
+
+      remanente_anterior_centimos BIGINT NOT NULL CHECK (remanente_anterior_centimos >= 0),
+      total_cierres_centimos BIGINT NOT NULL CHECK (total_cierres_centimos >= 0),
+      importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
+      remanente_nuevo_centimos BIGINT NOT NULL CHECK (remanente_nuevo_centimos >= 0),
+      CONSTRAINT cash_bank_deposits_ecuacion CHECK (
+        remanente_anterior_centimos + total_cierres_centimos - importe_centimos
+          = remanente_nuevo_centimos
+      ),
+
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      anulado_por UUID,
+      anulado_at_ms BIGINT,
+      anulado_motivo TEXT,
+      UNIQUE (empresa_id, numero)
+    );
+    CREATE INDEX IF NOT EXISTS cash_bank_deposits_caja_idx
+      ON cash_bank_deposits(register_id, estado, id DESC);
+
+    -- Qué cierres componen cada ingreso. \`vigente\` baja a false al anular el
+    -- ingreso, y el índice único parcial es lo que impide A NIVEL DE BASE DE
+    -- DATOS que el mismo cierre entre en dos ingresos a la vez: dos usuarios
+    -- simultáneos no pueden colarse ni queriendo.
+    CREATE TABLE IF NOT EXISTS cash_bank_deposit_sessions (
+      id SERIAL PRIMARY KEY,
+      deposit_id INTEGER NOT NULL REFERENCES cash_bank_deposits(id) ON DELETE RESTRICT,
+      session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      importe_centimos BIGINT NOT NULL CHECK (importe_centimos >= 0),
+      vigente BOOLEAN NOT NULL DEFAULT true
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_bank_dep_ses_unico_idx
+      ON cash_bank_deposit_sessions(session_id) WHERE vigente;
+    CREATE INDEX IF NOT EXISTS cash_bank_dep_ses_deposito_idx
+      ON cash_bank_deposit_sessions(deposit_id);
+  `);
+
   // ── Contador de numeración propia (MC-C-2026-000001) ──────────────────────
   await pool.query(`
   CREATE TABLE IF NOT EXISTS cash_document_counters (
