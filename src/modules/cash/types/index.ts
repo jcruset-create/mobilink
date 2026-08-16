@@ -203,6 +203,75 @@ export type FormaPagoConfig = {
   usos: number;
 };
 
+// ── Tesorería ──────────────────────────────────────────────────────────────
+
+export type LineaConCartuchos = LineaDenominacion & { cartuchos: number; motivo?: string | null };
+
+export type PedidoCambio = {
+  id: number;
+  numero: string;
+  estado: "PENDIENTE" | "RECIBIDO" | "CANCELADO";
+  registerId: number;
+  importeCentimos: number;
+  importeRecibidoCentimos: number | null;
+  diferenciaMotivo: string | null;
+  /** Lo que se le pide al banco. */
+  solicitado: LineaConCartuchos[];
+  /** Los billetes que salieron de la caja. */
+  enviado: LineaConCartuchos[];
+  /** Lo que el banco acabó dando. */
+  recibido: LineaConCartuchos[];
+  notas: string | null;
+  creadoAtMs: number;
+  cerradoAtMs: number | null;
+};
+
+export type EntregaDinero = {
+  id: number;
+  numero: string;
+  estado: "ABIERTA" | "LIQUIDADA" | "DEVUELTA" | "CANCELADA";
+  registerId: number;
+  persona: string;
+  motivo: string;
+  importeCentimos: number;
+  gastoCentimos: number | null;
+  devueltoCentimos: number | null;
+  diferenciaCentimos: number | null;
+  diferenciaMotivo: string | null;
+  facturaReferencia: string | null;
+  proveedor: string | null;
+  entregado: LineaDenominacion[];
+  notas: string | null;
+  creadoAtMs: number;
+  cerradoAtMs: number | null;
+};
+
+export type LineaPropuesta = {
+  valor: number;
+  piezas: number;
+  cartuchos: number;
+  importe: number;
+  /** Por qué se pide esta línea, en una frase. */
+  motivo: string;
+};
+
+export type PropuestaPedido = {
+  lineas: LineaPropuesta[];
+  totalCentimos: number;
+  sobranteCentimos: number;
+  aviso: string | null;
+  /** Billetes que saldrían de la caja para pagar el pedido. */
+  salida: LineaDenominacion[];
+  salidaPosible: boolean;
+};
+
+/** Dinero que ahora mismo no está en el cajón y se espera de vuelta. */
+export type Pendientes = {
+  pedidos: PedidoCambio[];
+  entregas: EntregaDinero[];
+  totalFueraCentimos: number;
+};
+
 export type Bootstrap = {
   denominaciones: Denominacion[];
   formasPago: FormaPagoConfig[];

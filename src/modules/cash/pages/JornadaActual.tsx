@@ -14,6 +14,7 @@ import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../compo
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox } from "../components/ui";
 import { euros, totalLineas } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
+import { AvisoPendientes } from "./CambioBanco";
 import * as api from "../services/api";
 
 export default function JornadaActual() {
@@ -75,6 +76,10 @@ export default function JornadaActual() {
           </BotonAccion>
         )}
       </div>
+
+      {/* Dinero que no está en el cajón y se espera de vuelta. Va arriba a
+          propósito: si falta y no se ve, el arqueo parece un descuadre. */}
+      <AvisoPendientes compacto />
 
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <Card title="Efectivo teórico" value={euros(jornada.totalStockCentimos)} hint={`${jornada.piezas} piezas`} accent="text-emerald-400" />

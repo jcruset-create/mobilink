@@ -26,6 +26,7 @@ let repo: typeof import("./repository.ts");
 let outbox: typeof import("./erp/worker.ts");
 let registry: typeof import("./erp/registry.ts");
 let config: typeof import("./config.ts");
+let tesoreria: typeof import("./treasury.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
 let facturaDemo: typeof import("./erp/mock.ts").facturaDemo;
 
@@ -76,6 +77,7 @@ beforeAll(async () => {
   outbox = await import("./erp/worker.ts");
   registry = await import("./erp/registry.ts");
   config = await import("./config.ts");
+  tesoreria = await import("./treasury.ts");
   const mock = await import("./erp/mock.ts");
   MockCashErpConnector = mock.MockCashErpConnector;
   facturaDemo = mock.facturaDemo;
@@ -752,6 +754,294 @@ describe.runIf(RUN)("pago con vuelta", () => {
         concepto: "Vuelta que no cuadra",
       })
     ).rejects.toMatchObject({ codigo: "EFECTIVO_NO_CUADRA" });
+  });
+});
+
+describe.runIf(RUN)("cambio al banco", () => {
+  it("el dinero sale al pedirlo y entra al recibirlo, cruzando jornadas", async () => {
+    const caja = await crearCaja("cambio-banco");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 6 }], // 300 € en billetes de 50
+    });
+
+    const pedido = await tesoreria.crearPedido(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 20000,
+      solicitado: [{ valor: 100, cantidad: 200, cartuchos: 8 }],
+    });
+
+    expect(pedido.numero).toMatch(/^MC-CB-\d{4}-\d{6}$/);
+    expect(pedido.estado).toBe("PENDIENTE");
+    // Los 200 € YA no están en la caja: el arqueo de la tarde tiene que cuadrar.
+    const tras = await servicio.stockDeJornada(sesion.id);
+    expect(tras.totalCentimos).toBe(10000);
+
+    // Y se ve como pendiente, para que el descuadre no sea un misterio.
+    const fuera = await tesoreria.pendientes(EMPRESA, caja);
+    expect(fuera.totalFueraCentimos).toBe(20000);
+    expect(fuera.pedidos).toHaveLength(1);
+
+    // Se cierra la jornada con el pedido vivo y se abre la del día siguiente.
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: tras.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: tras.lineas });
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+
+    // El banco trae 8 tubos de 1 €: 200 monedas.
+    const recibido = await tesoreria.recibirPedido(ctx, pedido.id, {
+      sessionId: manana.sesion.id,
+      recibido: [{ valor: 100, cantidad: 200, cartuchos: 8 }],
+    });
+
+    expect(recibido.estado).toBe("RECIBIDO");
+    expect(recibido.importeRecibidoCentimos).toBe(20000);
+
+    const stockManana = await servicio.stockDeJornada(manana.sesion.id);
+    expect(stockManana.totalCentimos).toBe(10000 + 20000);
+    expect(cantidad(stockManana.lineas, 100)).toBe(200);
+
+    // Ya no hay nada fuera de la caja.
+    expect((await tesoreria.pendientes(EMPRESA, caja)).totalFueraCentimos).toBe(0);
+  });
+
+  it("una diferencia con el banco necesita explicación", async () => {
+    const caja = await crearCaja("cambio-diferencia");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 4 }],
+    });
+    const pedido = await tesoreria.crearPedido(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      solicitado: [{ valor: 100, cantidad: 100, cartuchos: 4 }],
+    });
+
+    // El banco da 95 € en vez de 100: sin motivo no se valida.
+    await expect(
+      tesoreria.recibirPedido(ctx, pedido.id, {
+        sessionId: sesion.id,
+        recibido: [{ valor: 500, cantidad: 19 }],
+      })
+    ).rejects.toMatchObject({ codigo: "DIFERENCIA_SIN_MOTIVO" });
+
+    const r = await tesoreria.recibirPedido(ctx, pedido.id, {
+      sessionId: sesion.id,
+      recibido: [{ valor: 500, cantidad: 19 }],
+      diferenciaMotivo: "El banco no tenía suelto suficiente",
+    });
+    expect(r.importeRecibidoCentimos).toBe(9500);
+    expect(r.diferenciaMotivo).toMatch(/suelto/);
+  });
+
+  it("cancelar devuelve el dinero tal y como salió", async () => {
+    const caja = await crearCaja("cambio-cancelado");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 4 }],
+    });
+    const pedido = await tesoreria.crearPedido(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      solicitado: [{ valor: 100, cantidad: 50, cartuchos: 2 }],
+    });
+
+    const cancelado = await tesoreria.cancelarPedido(ctx, pedido.id, sesion.id, "El banco estaba cerrado");
+    expect(cancelado.estado).toBe("CANCELADO");
+
+    const stock = await servicio.stockDeJornada(sesion.id);
+    expect(stock.totalCentimos).toBe(20000);
+    expect(cantidad(stock.lineas, 5000)).toBe(4);
+  });
+
+  it("no se puede recibir dos veces el mismo pedido", async () => {
+    const caja = await crearCaja("cambio-doble");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    const pedido = await tesoreria.crearPedido(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      solicitado: [{ valor: 100, cantidad: 50, cartuchos: 2 }],
+    });
+    await tesoreria.recibirPedido(ctx, pedido.id, {
+      sessionId: sesion.id,
+      recibido: [{ valor: 100, cantidad: 50, cartuchos: 2 }],
+    });
+
+    await expect(
+      tesoreria.recibirPedido(ctx, pedido.id, {
+        sessionId: sesion.id,
+        recibido: [{ valor: 100, cantidad: 50, cartuchos: 2 }],
+      })
+    ).rejects.toMatchObject({ codigo: "PEDIDO_YA_CERRADO" });
+  });
+});
+
+describe.runIf(RUN)("entregas de dinero a personas", () => {
+  it("el caso del encargo: 50 € para comprar agua, factura de 40 € y 10 € de vuelta", async () => {
+    const caja = await crearCaja("entrega-agua");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 5 },
+      ],
+    });
+
+    const entrega = await tesoreria.entregarDinero(ctx, {
+      sessionId: sesion.id,
+      persona: "Juan",
+      motivo: "Comprar agua",
+      importeCentimos: 5000,
+      entregado: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    expect(entrega.numero).toMatch(/^MC-EN-\d{4}-\d{6}$/);
+    expect(entrega.estado).toBe("ABIERTA");
+
+    // El billete de 50 € ya no está en el cajón.
+    const conJuan = await servicio.stockDeJornada(sesion.id);
+    expect(conJuan.totalCentimos).toBe(15000 - 5000);
+    expect(cantidad(conJuan.lineas, 5000)).toBe(1);
+
+    // Y la caja sabe quién lo tiene.
+    const fuera = await tesoreria.pendientes(EMPRESA, caja);
+    expect(fuera.entregas[0]).toMatchObject({ persona: "Juan", importeCentimos: 5000 });
+
+    // Vuelve con la factura de 40 € y un billete de 10 €.
+    const liquidada = await tesoreria.liquidarEntrega(ctx, entrega.id, {
+      sessionId: sesion.id,
+      gastoCentimos: 4000,
+      devuelto: [{ valor: 1000, cantidad: 1 }],
+      proveedor: "Supermercado",
+      facturaReferencia: "F-2026-77",
+    });
+
+    expect(liquidada.estado).toBe("LIQUIDADA");
+    expect(liquidada.diferenciaCentimos).toBe(0);
+
+    // La caja ha bajado exactamente 40 €, que es el pago real.
+    const final = await servicio.stockDeJornada(sesion.id);
+    expect(final.totalCentimos).toBe(15000 - 4000);
+    expect(cantidad(final.lineas, 1000)).toBe(6); // los 5 de antes más el que vuelve
+
+    // En el listado de operaciones hay UN pago, y es de 40 €.
+    const detalle = await servicio.detalleJornada(sesion.id);
+    const pagos = detalle.operaciones.filter((o) => o.tipo === "PAYMENT");
+    expect(pagos).toHaveLength(1);
+    expect(pagos[0].importeCentimos).toBe(4000);
+
+    // Y ese pago NO vuelve a mover piezas: ya salieron con la entrega.
+    const movs = await repo.enTransaccion((c) => repo.movimientosDeOperacion(c, pagos[0].id));
+    expect(movs).toEqual([]);
+
+    expect((await tesoreria.pendientes(EMPRESA, caja)).totalFueraCentimos).toBe(0);
+  });
+
+  it("si no compra nada y lo devuelve todo, no hay pago", async () => {
+    const caja = await crearCaja("entrega-devuelta");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    const entrega = await tesoreria.entregarDinero(ctx, {
+      sessionId: sesion.id,
+      persona: "Marta",
+      motivo: "Comprar agua",
+      importeCentimos: 5000,
+      entregado: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    const r = await tesoreria.liquidarEntrega(ctx, entrega.id, {
+      sessionId: sesion.id,
+      gastoCentimos: 0,
+      devuelto: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    expect(r.estado).toBe("DEVUELTA");
+    const stock = await servicio.stockDeJornada(sesion.id);
+    expect(stock.totalCentimos).toBe(10000);
+
+    const detalle = await servicio.detalleJornada(sesion.id);
+    expect(detalle.operaciones.filter((o) => o.tipo === "PAYMENT")).toHaveLength(0);
+  });
+
+  it("si falta dinero hay que explicarlo, y queda con el nombre de quien lo tenía", async () => {
+    const caja = await crearCaja("entrega-descuadre");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    const entrega = await tesoreria.entregarDinero(ctx, {
+      sessionId: sesion.id,
+      persona: "Juan",
+      motivo: "Comprar agua",
+      importeCentimos: 5000,
+      entregado: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    // Factura de 40 € pero solo devuelve 8 €: faltan 2 €.
+    await expect(
+      tesoreria.liquidarEntrega(ctx, entrega.id, {
+        sessionId: sesion.id,
+        gastoCentimos: 4000,
+        devuelto: [{ valor: 500, cantidad: 1 }, { valor: 200, cantidad: 1 }, { valor: 100, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "DIFERENCIA_SIN_MOTIVO" });
+
+    const r = await tesoreria.liquidarEntrega(ctx, entrega.id, {
+      sessionId: sesion.id,
+      gastoCentimos: 4000,
+      devuelto: [{ valor: 500, cantidad: 1 }, { valor: 200, cantidad: 1 }, { valor: 100, cantidad: 1 }],
+      diferenciaMotivo: "Dice que perdió 2 €",
+    });
+
+    expect(r.estado).toBe("LIQUIDADA");
+    expect(r.diferenciaCentimos).toBe(200);
+    expect(r.persona).toBe("Juan");
+  });
+
+  it("una entrega ya liquidada no se liquida otra vez", async () => {
+    const caja = await crearCaja("entrega-doble");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    const entrega = await tesoreria.entregarDinero(ctx, {
+      sessionId: sesion.id,
+      persona: "Juan",
+      motivo: "Comprar agua",
+      importeCentimos: 5000,
+      entregado: [{ valor: 5000, cantidad: 1 }],
+    });
+    await tesoreria.liquidarEntrega(ctx, entrega.id, {
+      sessionId: sesion.id,
+      gastoCentimos: 5000,
+    });
+
+    await expect(
+      tesoreria.liquidarEntrega(ctx, entrega.id, { sessionId: sesion.id, gastoCentimos: 0 })
+    ).rejects.toMatchObject({ codigo: "ENTREGA_YA_CERRADA" });
+  });
+
+  it("no se puede gastar más de lo entregado", async () => {
+    const caja = await crearCaja("entrega-pasada");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    const entrega = await tesoreria.entregarDinero(ctx, {
+      sessionId: sesion.id,
+      persona: "Juan",
+      motivo: "Comprar agua",
+      importeCentimos: 5000,
+      entregado: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    await expect(
+      tesoreria.liquidarEntrega(ctx, entrega.id, { sessionId: sesion.id, gastoCentimos: 6000 })
+    ).rejects.toMatchObject({ codigo: "GASTO_SUPERA_ENTREGA" });
   });
 });
 

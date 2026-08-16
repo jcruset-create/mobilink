@@ -25,6 +25,7 @@ import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
 import * as servicio from "./service.ts";
 import * as config from "./config.ts";
+import * as tesoreria from "./treasury.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -75,6 +76,43 @@ function lineas(v: unknown, campo: string): LineaDenominacion[] {
     }
     return { valor, cantidad };
   }).filter((l) => l.cantidad > 0);
+}
+
+/**
+ * Líneas que además llevan tubos y una explicación: lo que se le pide al banco
+ * y lo que el banco acaba dando. `cantidad` son SIEMPRE piezas; `cartuchos`,
+ * cuántos tubos precintados son esas piezas.
+ */
+function lineasConCartuchos(
+  v: unknown,
+  campo: string
+): { valor: number; cantidad: number; cartuchos: number; motivo?: string }[] {
+  if (v == null) return [];
+  if (!Array.isArray(v)) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo} tiene que ser una lista de denominaciones.`, 400);
+  }
+  return v
+    .map((l, i) => {
+      if (!l || typeof l !== "object") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}] no es una línea válida.`, 400);
+      }
+      const o = l as Record<string, unknown>;
+      const cantidad = entero(o.cantidad, `${campo}[${i}].cantidad`);
+      if (cantidad < 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}].cantidad no puede ser negativa.`, 400);
+      }
+      const cartuchos = o.cartuchos == null ? 0 : entero(o.cartuchos, `${campo}[${i}].cartuchos`);
+      if (cartuchos < 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}].cartuchos no puede ser negativo.`, 400);
+      }
+      return {
+        valor: enteroPositivo(o.valor, `${campo}[${i}].valor`),
+        cantidad,
+        cartuchos,
+        motivo: typeof o.motivo === "string" ? o.motivo : undefined,
+      };
+    })
+    .filter((l) => l.cantidad > 0);
 }
 
 function formasPago(v: unknown): { forma: never; importe: number; referencia?: string | null }[] {
@@ -320,6 +358,138 @@ export function createCashRouter(): Router {
         imagenUrl: data.publicUrl,
       });
       res.json({ forma });
+    })
+  );
+
+  // ── Tesorería: cambio al banco y entregas de dinero ──────────────────────
+
+  r.get(
+    "/registers/:id/treasury",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const registerId = enteroPositivo(req.params.id, "id");
+      const empresaId = req.authCtx!.empresaId;
+      const [pedidos, entregas] = await Promise.all([
+        tesoreria.listarPedidos(empresaId, registerId),
+        tesoreria.listarEntregas(empresaId, registerId),
+      ]);
+      res.json({ pedidos, entregas });
+    })
+  );
+
+  /** Lo que está fuera de la caja ahora: para los avisos de jornada y cierre. */
+  r.get(
+    "/registers/:id/treasury/pending",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json(
+        await tesoreria.pendientes(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
+  /** Qué conviene pedirle al banco. Es una consulta: no mueve nada. */
+  r.get(
+    "/sessions/:id/change-order/proposal",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const sessionId = enteroPositivo(req.params.id, "id");
+      const sesion = await obtenerSesion(sessionId);
+      if (!sesion || sesion.empresaId !== req.authCtx!.empresaId) {
+        throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
+      }
+      const importe = enteroPositivo(req.query.importe, "importe");
+      res.json(await tesoreria.proponerPedido(sessionId, sesion.registerId, importe));
+    })
+  );
+
+  r.post(
+    "/change-orders",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const pedido = await tesoreria.crearPedido(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        solicitado: lineasConCartuchos(b.solicitado, "solicitado"),
+        salida: lineas(b.salida, "salida"),
+        notas: typeof b.notas === "string" ? b.notas : undefined,
+      });
+      res.status(201).json({ pedido });
+    })
+  );
+
+  r.post(
+    "/change-orders/:id/receive",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const pedido = await tesoreria.recibirPedido(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          recibido: lineasConCartuchos(b.recibido, "recibido"),
+          diferenciaMotivo: typeof b.diferenciaMotivo === "string" ? b.diferenciaMotivo : undefined,
+        }
+      );
+      res.json({ pedido });
+    })
+  );
+
+  r.post(
+    "/change-orders/:id/cancel",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const pedido = await tesoreria.cancelarPedido(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        enteroPositivo(b.sessionId, "sessionId"),
+        typeof b.motivo === "string" ? b.motivo : ""
+      );
+      res.json({ pedido });
+    })
+  );
+
+  r.post(
+    "/advances",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const entrega = await tesoreria.entregarDinero(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        persona: typeof b.persona === "string" ? b.persona : "",
+        motivo: typeof b.motivo === "string" ? b.motivo : "",
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        entregado: lineas(b.entregado, "entregado"),
+        notas: typeof b.notas === "string" ? b.notas : undefined,
+      });
+      res.status(201).json({ entrega });
+    })
+  );
+
+  r.post(
+    "/advances/:id/settle",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const entrega = await tesoreria.liquidarEntrega(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          // Cero es válido: es el caso de "no compró nada y lo devuelve todo".
+          gastoCentimos: entero(b.gastoCentimos ?? 0, "gastoCentimos"),
+          devuelto: lineas(b.devuelto, "devuelto"),
+          proveedor: typeof b.proveedor === "string" ? b.proveedor : undefined,
+          facturaReferencia:
+            typeof b.facturaReferencia === "string" ? b.facturaReferencia : undefined,
+          concepto: typeof b.concepto === "string" ? b.concepto : undefined,
+          diferenciaMotivo: typeof b.diferenciaMotivo === "string" ? b.diferenciaMotivo : undefined,
+        }
+      );
+      res.json({ entrega });
     })
   );
 

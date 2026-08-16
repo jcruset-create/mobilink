@@ -322,6 +322,11 @@ export type EntradaOperacion = {
   cartuchosRecibidos?: LineaDenominacion[];
   /** Tubos precintados que SALEN sin abrirse (al banco, por ejemplo). */
   cartuchosEntregados?: LineaDenominacion[];
+  /**
+   * Liquidación de una entrega de dinero: el efectivo ya salió cuando se le dio
+   * el dinero a la persona, así que esta operación no mueve piezas.
+   */
+  liquidaEntregaId?: number;
   partyNombre?: string;
   concepto?: string;
   referencia?: string | null;
@@ -352,14 +357,21 @@ export type ResultadoOperacion = {
  */
 export async function registrarOperacion(
   ctx: Contexto,
-  e: EntradaOperacion
+  e: EntradaOperacion,
+  /**
+   * Cliente de una transacción YA abierta. Lo usan los pedidos de cambio y las
+   * entregas de dinero, que tienen que asentar su operación y su documento a la
+   * vez: si la operación cuajara y el documento no, saldría dinero de la caja
+   * sin nada que diga quién lo tiene.
+   */
+  clienteExterno?: PoolClient
 ): Promise<ResultadoOperacion> {
   const origen = e.origen ?? "MANUAL";
   // Se rellena dentro de la transacción, con el catálogo que se haya usado para
   // validar, y se reutiliza en la auditoría de después.
   let codigosEfectivo: ReadonlySet<string> = CODIGOS_EFECTIVO_POR_DEFECTO;
 
-  const resultado = await enTransaccion(async (client) => {
+  const trabajo = async (client: PoolClient) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
     if (sesion.empresaId !== ctx.empresaId) {
       throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
@@ -397,6 +409,7 @@ export async function registrarOperacion(
       formasPago: e.formasPago,
       efectivoRecibido: [...(e.efectivoRecibido ?? []), ...aLineasTubo(e.cartuchosRecibidos)],
       efectivoEntregado: [...(e.efectivoEntregado ?? []), ...aLineasTubo(e.cartuchosEntregados)],
+      liquidaEntregaId: e.liquidaEntregaId,
     };
 
     /*
@@ -550,7 +563,11 @@ export async function registrarOperacion(
       erpSyncStatus,
       aperturas,
     };
-  });
+  };
+
+  const resultado = clienteExterno
+    ? await trabajo(clienteExterno)
+    : await enTransaccion(trabajo);
 
   await registrarAuditoria({
     empresaId: ctx.empresaId,
