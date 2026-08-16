@@ -17,6 +17,8 @@ import type {
   DocumentoOperacion,
   EntregaDinero,
   FormaPagoConfig,
+  IngresoBancario,
+  PanelIngresos,
   PedidoCambio,
   Pendientes,
   PropuestaPedido,
@@ -189,6 +191,23 @@ export const anularDocumento = (id: number, motivo: string) =>
 
 /** Enlace del informe de cierre. Se abre en una pestaña, no se descarga por fetch. */
 export const urlInformeCierre = (sessionId: number) => `${BASE}/sessions/${sessionId}/report.pdf`;
+
+// ── Ingresos bancarios ─────────────────────────────────────────────────────
+
+export const panelIngresos = (registerId: number) =>
+  pedir<PanelIngresos>(`/registers/${registerId}/bank-deposits`);
+
+export const crearIngresoBancario = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  importeCentimos: number;
+  fechaIngreso?: string;
+  referencia?: string;
+  observaciones?: string;
+}) => pedir<{ ingreso: IngresoBancario }>("/bank-deposits", json(datos));
+
+export const anularIngresoBancario = (id: number, motivo: string) =>
+  pedir<{ ingreso: IngresoBancario }>(`/bank-deposits/${id}/void`, json({ motivo }));
 
 // ── Tesorería: cambio al banco y entregas de dinero ────────────────────────
 

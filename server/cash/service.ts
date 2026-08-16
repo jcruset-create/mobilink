@@ -1223,6 +1223,27 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
       );
     }
 
+    /*
+     * Una jornada cuyo importe "para el banco" ya forma parte de un ingreso
+     * bancario confirmado no se puede reabrir: al volver a cerrarla, su
+     * importe cambiaría y el ingreso quedaría conciliando un número que ya no
+     * existe. Primero se anula el ingreso, luego se reabre.
+     */
+    const { rows: conciliada } = await client.query(
+      `SELECT d.numero
+         FROM cash_bank_deposit_sessions l
+         JOIN cash_bank_deposits d ON d.id = l.deposit_id
+        WHERE l.session_id = $1 AND l.vigente`,
+      [sessionId]
+    );
+    if (conciliada.length > 0) {
+      throw new ErrorCaja(
+        "JORNADA_CONCILIADA",
+        `Esta jornada forma parte del ingreso bancario ${conciliada[0].numero}. Anula el ingreso antes de reabrirla.`,
+        409
+      );
+    }
+
     await client.query(
       `UPDATE cash_sessions SET estado = 'REOPENED', updated_at_ms = $2 WHERE id = $1`,
       [sessionId, Date.now()]
