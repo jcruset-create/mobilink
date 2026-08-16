@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { FileDown } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
@@ -31,6 +32,7 @@ import {
   type EstadoSesion,
   type Operacion,
 } from "../types";
+import Justificantes from "../components/Justificantes";
 import * as api from "../services/api";
 
 type FilaSesion = {
@@ -205,6 +207,7 @@ function DetalleJornada({
   onCerrar: () => void;
   puedeAnular: boolean;
 }) {
+  const { puede } = useCash();
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.detalleJornada>> | null>(null);
   const [error, setError] = useState("");
   const [anulando, setAnulando] = useState<Operacion | null>(null);
@@ -249,7 +252,20 @@ function DetalleJornada({
           </div>
 
           <div>
-            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">Operaciones</div>
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                Operaciones
+              </span>
+              {/* Todo el papeleo del día en un PDF, con los escaneos dentro. */}
+              <a
+                href={api.urlInformeCierre(sessionId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
+              >
+                <FileDown className="h-3.5 w-3.5" /> Informe de cierre
+              </a>
+            </div>
             <TableWrap>
               <thead>
                 <tr>
@@ -258,12 +274,13 @@ function DetalleJornada({
                   <th className={thCls}>Origen</th>
                   <th className={thCls}>Documento</th>
                   <th className={thCls}>Concepto</th>
+                  <th className={thCls}>Justificante</th>
                   <th className={`${thCls} text-right`}>Importe</th>
                   <th className={thCls}></th>
                 </tr>
               </thead>
               <tbody>
-                {datos.operaciones.length === 0 && <EmptyRow cols={7} text="Sin operaciones." />}
+                {datos.operaciones.length === 0 && <EmptyRow cols={8} text="Sin operaciones." />}
                 {datos.operaciones.map((o) => (
                   <tr key={o.id} className={`border-t border-slate-700 ${o.estado === "REVERSED" ? "opacity-50" : ""}`}>
                     <td className={`${tdCls} font-mono text-[11px]`}>{o.numero}</td>
@@ -280,6 +297,16 @@ function DetalleJornada({
                     <td className={tdCls}>
                       {o.concepto}
                       {o.partyNombre && <div className="text-[11px] text-slate-500">{o.partyNombre}</div>}
+                    </td>
+                    {/* Adjuntar más tarde: la factura del proveedor muchas
+                        veces aparece después del pago. */}
+                    <td className={tdCls}>
+                      <Justificantes
+                        operationId={o.id}
+                        puedeAdjuntar={puede("cash.document.attach")}
+                        puedeAnular={puede("cash.document.void")}
+                        compacto
+                      />
                     </td>
                     <td className={`${tdCls} text-right font-bold tabular-nums`}>{euros(o.importeCentimos)}</td>
                     <td className={tdCls}>

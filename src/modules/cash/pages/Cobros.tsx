@@ -35,6 +35,7 @@ import {
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
+import Justificantes from "../components/Justificantes";
 import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
@@ -60,7 +61,12 @@ export default function Cobros() {
   const [avisoCambio, setAvisoCambio] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
-  const [ultimo, setUltimo] = useState<{ numero: string; cambio: number; aperturas: AperturaCartucho[] } | null>(null);
+  const [ultimo, setUltimo] = useState<{
+    operacionId: number;
+    numero: string;
+    cambio: number;
+    aperturas: AperturaCartucho[];
+  } | null>(null);
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
 
   const importe = aCentimos(importeTexto) ?? 0;
@@ -223,7 +229,12 @@ export default function Cobros() {
         externalDocumentId: documento?.external_id ?? null,
         externalDocumentReference: documento?.external_reference ?? null,
       });
-      setUltimo({ numero: r.numero, cambio: cambioRequerido, aperturas: r.aperturas ?? [] });
+      setUltimo({
+        operacionId: r.operacionId,
+        numero: r.numero,
+        cambio: cambioRequerido,
+        aperturas: r.aperturas ?? [],
+      });
       limpiar();
       await refrescar();
     } catch (e) {
@@ -244,6 +255,17 @@ export default function Cobros() {
             {ultimo.cambio > 0 && <> Cambio entregado: <strong>{euros(ultimo.cambio)}</strong>.</>}
           </Aviso>
           <AvisoCartuchos aperturas={ultimo.aperturas} />
+          {/* El escaneo se cuelga del cobro ya registrado: si la subida falla,
+              el dinero sigue contado y solo hay que reintentar. */}
+          <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+              Justificante de {ultimo.numero}
+            </div>
+            <Justificantes
+              operationId={ultimo.operacionId}
+              puedeAdjuntar={puede("cash.document.attach")}
+            />
+          </div>
         </>
       )}
       {error && <ErrorBox>{error}</ErrorBox>}

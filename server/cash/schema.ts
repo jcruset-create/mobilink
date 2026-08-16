@@ -442,6 +442,42 @@ export async function initCash(): Promise<void> {
       ON cash_erp_logs(empresa_id, created_at_ms DESC);
   `);
 
+  // ── Documentos escaneados de una operación ────────────────────────────────
+  // La factura o el ticket que respalda un cobro o un pago. El fichero vive en
+  // el almacenamiento (bucket privado); aquí solo la referencia y sus datos.
+  //
+  // Se anula, no se borra, como todo en este módulo: un justificante retirado
+  // deja de salir en el informe pero se sabe que existió y quién lo quitó.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_operation_documents (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      operation_id INTEGER NOT NULL REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      -- Repetido a propósito: el informe de cierre pide todos los documentos de
+      -- una jornada, y sin esto habría que pasar por las operaciones cada vez.
+      session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+
+      nombre TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes INTEGER NOT NULL,
+      /* Ruta dentro del bucket. La URL no se guarda: se firma al pedirla, para
+         que un enlace copiado hace un mes ya no abra la factura de un cliente. */
+      ruta TEXT NOT NULL,
+
+      anulado BOOLEAN NOT NULL DEFAULT false,
+      anulado_por UUID,
+      anulado_at_ms BIGINT,
+      anulado_motivo TEXT,
+
+      subido_por UUID,
+      subido_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_op_docs_operacion_idx
+      ON cash_operation_documents(operation_id) WHERE NOT anulado;
+    CREATE INDEX IF NOT EXISTS cash_op_docs_sesion_idx
+      ON cash_operation_documents(session_id) WHERE NOT anulado;
+  `);
+
   // ── Pedidos de cambio al banco ────────────────────────────────────────────
   // Se acumulan billetes y se va al banco a por calderilla. Entre que el dinero
   // sale y vuelve pasan horas o días, y ese hueco TIENE que verse: si no, el

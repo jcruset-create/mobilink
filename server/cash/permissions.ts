@@ -56,6 +56,14 @@ export const PERMISOS = [
    * banco, que es como se quedan los pendientes abiertos para siempre.
    */
   "cash.treasury.manage",
+  /** Colgar el PDF del escáner de un cobro o un pago. */
+  "cash.document.attach",
+  /**
+   * Retirar un justificante. Va aparte de adjuntar y es de responsable: quitar
+   * la factura que respalda una salida de caja es justo lo que no debe poder
+   * hacer quien la registró sin que quede rastro.
+   */
+  "cash.document.void",
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
@@ -83,6 +91,7 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.payment.create",
     "cash.movement.create",
     "cash.count.create",
+    "cash.document.attach",
   ],
   responsable: [
     "cash.view",
@@ -103,6 +112,8 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     // denominaciones, que es de toda la instalación.
     "cash.configure",
     "cash.treasury.manage",
+    "cash.document.attach",
+    "cash.document.void",
   ],
   admin: PERMISOS,
 };
