@@ -41,6 +41,7 @@ import {
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import type { EntregaDinero } from "../types";
+import Justificantes from "../components/Justificantes";
 import * as api from "../services/api";
 
 export default function Entregas() {
@@ -132,11 +133,12 @@ export default function Entregas() {
               <th className={`${thCls} text-right`}>Entregado</th>
               <th className={`${thCls} text-right`}>Gastado</th>
               <th className={`${thCls} text-right`}>Devuelto</th>
+              <th className={thCls}>Factura</th>
               <th className={thCls}>Estado</th>
             </tr>
           </thead>
           <tbody>
-            {cerradas.length === 0 && <EmptyRow cols={7} text="Todavía no hay entregas cerradas." />}
+            {cerradas.length === 0 && <EmptyRow cols={8} text="Todavía no hay entregas cerradas." />}
             {cerradas.map((e) => (
               <tr key={e.id}>
                 <td className={`${tdCls} font-mono text-[11px] text-slate-300`}>{e.numero}</td>
@@ -148,6 +150,21 @@ export default function Entregas() {
                 </td>
                 <td className={`${tdCls} text-right tabular-nums`}>
                   {e.devueltoCentimos == null ? "—" : euros(e.devueltoCentimos)}
+                </td>
+                {/* La factura que trae el empleado se cuelga del pago que
+                    generó la liquidación, que es donde luego la busca el
+                    informe de cierre. */}
+                <td className={tdCls}>
+                  {e.operationPagoId ? (
+                    <Justificantes
+                      operationId={e.operationPagoId}
+                      puedeAdjuntar={puede("cash.document.attach")}
+                      puedeAnular={puede("cash.document.void")}
+                      compacto
+                    />
+                  ) : (
+                    <span className="text-[11px] text-slate-600">—</span>
+                  )}
                 </td>
                 <td className={tdCls}>
                   {e.diferenciaCentimos ? (

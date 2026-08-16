@@ -126,7 +126,7 @@ paralelo que mantener.
 | Rol | Puede |
 |---|---|
 | `consulta` | ver |
-| `cajero` | cobrar, pagar, mover efectivo, arquear |
+| `cajero` | cobrar, pagar, mover efectivo, arquear, adjuntar justificantes |
 | `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
 | `admin` | además configurar la integración y el catálogo de denominaciones |
 
@@ -233,6 +233,40 @@ no se corrige: se ignora.
 Los billetes que salen a pagar el pedido se componen con los **más grandes**
 que haya, que es lo contrario de dar un cambio: son justo los que sobran.
 
+## 7 quater. Justificantes e informe de cierre
+
+El escáner del mostrador saca un PDF y ese PDF se cuelga del cobro o del pago
+(`cash_operation_documents`). Al cerrar, un solo fichero reúne el papeleo del
+día: portada con el cierre y el arqueo, listado de operaciones, y **los
+escaneados detrás**.
+
+- **El fichero no va en la base de datos**: vive en un bucket de Supabase
+  Storage y aquí solo queda la ruta. La URL tampoco se guarda: se firma al
+  pedirla y caduca a los 15 minutos.
+- **El bucket es privado**, a diferencia del que el proyecto usa para avatares
+  y logotipos. Un logo puede verlo cualquiera; estas son las facturas de los
+  clientes. Con un bucket público, una URL reenviada abriría la facturación del
+  día a quien la reciba, sin sesión y para siempre. El bucket se crea solo la
+  primera vez que se adjunta algo.
+- **El documento se sube DESPUÉS de registrar la operación**, en otra petición.
+  Si el almacenamiento falla, el dinero ya está contado y solo queda volver a
+  adjuntar. Al revés —subir dentro de la transacción— un fallo de red dejaría
+  sin registrar un cobro que ya ha ocurrido, y eso sí se paga dos veces.
+- **No se borra: se anula**, con motivo y auditoría. Deja de salir en el
+  informe pero consta que existió. Retirar es permiso de responsable, adjuntar
+  lo tiene el cajero: quitar la factura que respalda una salida de caja no debe
+  poder hacerlo quien la registró.
+
+El informe usa **dos herramientas**: pdfkit para la portada y los listados, que
+es lo que ya usa el proyecto en los partes de taller; y **pdf-lib** para el
+montaje, porque pdfkit sabe dibujar pero no sabe incrustar las páginas de otro
+PDF, y los justificantes vienen del escáner en PDF. Es la única dependencia
+nueva del módulo y entra por eso.
+
+Un justificante ilegible o que ya no esté **no rompe el informe**: sale una
+página diciéndolo, con su número de operación. Un cierre sin informe por una
+factura corrupta sería peor que un informe con un hueco señalado.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:
@@ -249,8 +283,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**954 pruebas en verde** (`npm test`), de las cuales 144 son de Mobilink Cash y
-53 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**967 pruebas en verde** (`npm test`), de las cuales 151 son de Mobilink Cash y
+60 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

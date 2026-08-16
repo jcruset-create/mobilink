@@ -96,6 +96,8 @@ export type EntregaDinero = {
   diferenciaMotivo: string | null;
   facturaReferencia: string | null;
   proveedor: string | null;
+  /** Pago que generó la liquidación: es donde se cuelga la factura escaneada. */
+  operationPagoId: number | null;
   entregado: LineaDenominacion[];
   notas: string | null;
   creadoAtMs: number;
@@ -148,6 +150,7 @@ function aEntrega(r: any, entregado: LineaDenominacion[] = []): EntregaDinero {
     diferenciaMotivo: r.diferencia_motivo,
     facturaReferencia: r.factura_referencia,
     proveedor: r.proveedor,
+    operationPagoId: r.operation_pago_id ?? null,
     entregado,
     notas: r.notas,
     creadoAtMs: Number(r.creado_at_ms),

@@ -28,6 +28,7 @@ import { BuscadorDocumentos } from "./Cobros";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker from "../components/PaymentMethodPicker";
+import Justificantes from "../components/Justificantes";
 import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
@@ -48,7 +49,7 @@ export default function Pagos() {
   const [avisoComposicion, setAvisoComposicion] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
-  const [ultimo, setUltimo] = useState<string | null>(null);
+  const [ultimo, setUltimo] = useState<{ operacionId: number; numero: string } | null>(null);
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
 
   const importe = aCentimos(importeTexto) ?? 0;
@@ -158,7 +159,7 @@ export default function Pagos() {
         externalSystem: documento?.external_system ?? null,
         externalDocumentId: documento?.external_id ?? null,
       });
-      setUltimo(r.numero);
+      setUltimo({ operacionId: r.operacionId, numero: r.numero });
       limpiar();
       await refrescar();
     } catch (e) {
@@ -172,7 +173,23 @@ export default function Pagos() {
     <div className="space-y-3">
       <Cabecera titulo="Pagos" descripcion="Facturas de proveedor de la ERP y pagos manuales." />
 
-      {ultimo && <Aviso tono="bien">Pago <strong>{ultimo}</strong> registrado.</Aviso>}
+      {ultimo && (
+        <>
+          <Aviso tono="bien">
+            Pago <strong>{ultimo.numero}</strong> registrado.
+          </Aviso>
+          {/* La factura del proveedor se escanea y se cuelga aquí mismo. */}
+          <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+              Justificante de {ultimo.numero}
+            </div>
+            <Justificantes
+              operationId={ultimo.operacionId}
+              puedeAdjuntar={puede("cash.document.attach")}
+            />
+          </div>
+        </>
+      )}
       {error && <ErrorBox>{error}</ErrorBox>}
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
