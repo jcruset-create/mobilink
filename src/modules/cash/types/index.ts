@@ -259,6 +259,8 @@ export type EntregaDinero = {
   diferenciaMotivo: string | null;
   facturaReferencia: string | null;
   proveedor: string | null;
+  /** Pago generado al liquidar: donde se cuelga la factura del empleado. */
+  operationPagoId: number | null;
   entregado: LineaDenominacion[];
   notas: string | null;
   creadoAtMs: number;
