@@ -222,6 +222,46 @@ export type DocumentoOperacion = {
   url: string | null;
 };
 
+// ── Ingresos bancarios ─────────────────────────────────────────────────────
+
+/** Cierre de jornada cuyo importe "para el banco" aún no se ha ingresado. */
+export type CierrePendiente = {
+  sessionId: number;
+  fecha: string;
+  importeCentimos: number;
+  cerradaPor: string | null;
+  cerradaPorNombre: string | null;
+  dias: number;
+};
+
+export type IngresoBancario = {
+  id: number;
+  numero: string;
+  estado: "CONFIRMADO" | "ANULADO";
+  registerId: number;
+  fechaIngreso: string | null;
+  referencia: string | null;
+  observaciones: string | null;
+  remanenteAnteriorCentimos: number;
+  totalCierresCentimos: number;
+  importeCentimos: number;
+  remanenteNuevoCentimos: number;
+  cierres: { sessionId: number; fecha: string; importeCentimos: number }[];
+  creadoPor: string | null;
+  creadoAtMs: number;
+  anuladoAtMs: number | null;
+  anuladoMotivo: string | null;
+  /** Solo el último confirmado se puede anular: el remanente es una cadena. */
+  esUltimo: boolean;
+};
+
+export type PanelIngresos = {
+  pendientes: CierrePendiente[];
+  remanenteCentimos: number;
+  totalPendienteCentimos: number;
+  ingresos: IngresoBancario[];
+};
+
 // ── Tesorería ──────────────────────────────────────────────────────────────
 
 export type LineaConCartuchos = LineaDenominacion & { cartuchos: number; motivo?: string | null };
