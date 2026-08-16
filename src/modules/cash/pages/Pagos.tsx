@@ -32,7 +32,7 @@ import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
 export default function Pagos() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasPagoActivas } = useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaPagos } = useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -54,21 +54,21 @@ export default function Pagos() {
   const importe = aCentimos(importeTexto) ?? 0;
 
   const formaEfectivo = useMemo(
-    () => formasPagoActivas.find((f) => f.afectaEfectivo) ?? null,
-    [formasPagoActivas]
+    () => formasParaPagos.find((f) => f.afectaEfectivo) ?? null,
+    [formasParaPagos]
   );
 
   // Los pagos a proveedor de este mostrador son en efectivo, así que se
   // preselecciona. Las demás formas siguen disponibles: un pago por
   // transferencia se registra igual, solo que sin tocar el cajón.
   useEffect(() => {
-    if (forma || formasPagoActivas.length === 0) return;
-    setForma(formaEfectivo?.codigo ?? formasPagoActivas[0].codigo);
-  }, [forma, formaEfectivo, formasPagoActivas]);
+    if (forma || formasParaPagos.length === 0) return;
+    setForma(formaEfectivo?.codigo ?? formasParaPagos[0].codigo);
+  }, [forma, formaEfectivo, formasParaPagos]);
 
   const formaElegida = useMemo(
-    () => formasPagoActivas.find((f) => f.codigo === forma) ?? null,
-    [formasPagoActivas, forma]
+    () => formasParaPagos.find((f) => f.codigo === forma) ?? null,
+    [formasParaPagos, forma]
   );
   const esEfectivo = Boolean(formaElegida?.afectaEfectivo);
   const faltaReferencia = Boolean(formaElegida?.pideReferencia) && !referencia.trim();
@@ -216,7 +216,7 @@ export default function Pagos() {
               <div className="sm:col-span-2">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Forma de pago</span>
                 <PaymentMethodPicker
-                  formas={formasPagoActivas}
+                  formas={formasParaPagos}
                   valor={forma}
                   onChange={(v) => {
                     setForma(v);
