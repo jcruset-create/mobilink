@@ -12,9 +12,12 @@
  * mal.
  */
 
+import path from "node:path";
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
 import pool from "../db.ts";
 import { authenticate, requireModule } from "../core/auth.ts";
+import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
@@ -22,8 +25,19 @@ import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
 import * as servicio from "./service.ts";
 import * as config from "./config.ts";
+import * as tesoreria from "./treasury.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
+
+/**
+ * Subida de la imagen del botón. Instancia propia y no la de `server/index.ts`
+ * porque aquí el límite tiene que ser mucho más estrecho: son iconos de botón,
+ * no fotos de un parte. Un megabyte es de sobra para un PNG de 200 px.
+ */
+const subidaImagen = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024, files: 1 },
+});
 
 // ── Validación de entrada ──────────────────────────────────────────────────
 
@@ -62,6 +76,43 @@ function lineas(v: unknown, campo: string): LineaDenominacion[] {
     }
     return { valor, cantidad };
   }).filter((l) => l.cantidad > 0);
+}
+
+/**
+ * Líneas que además llevan tubos y una explicación: lo que se le pide al banco
+ * y lo que el banco acaba dando. `cantidad` son SIEMPRE piezas; `cartuchos`,
+ * cuántos tubos precintados son esas piezas.
+ */
+function lineasConCartuchos(
+  v: unknown,
+  campo: string
+): { valor: number; cantidad: number; cartuchos: number; motivo?: string }[] {
+  if (v == null) return [];
+  if (!Array.isArray(v)) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo} tiene que ser una lista de denominaciones.`, 400);
+  }
+  return v
+    .map((l, i) => {
+      if (!l || typeof l !== "object") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}] no es una línea válida.`, 400);
+      }
+      const o = l as Record<string, unknown>;
+      const cantidad = entero(o.cantidad, `${campo}[${i}].cantidad`);
+      if (cantidad < 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}].cantidad no puede ser negativa.`, 400);
+      }
+      const cartuchos = o.cartuchos == null ? 0 : entero(o.cartuchos, `${campo}[${i}].cartuchos`);
+      if (cartuchos < 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}].cartuchos no puede ser negativo.`, 400);
+      }
+      return {
+        valor: enteroPositivo(o.valor, `${campo}[${i}].valor`),
+        cantidad,
+        cartuchos,
+        motivo: typeof o.motivo === "string" ? o.motivo : undefined,
+      };
+    })
+    .filter((l) => l.cantidad > 0);
 }
 
 function formasPago(v: unknown): { forma: never; importe: number; referencia?: string | null }[] {
@@ -117,8 +168,9 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const [denominaciones, cajas, erp] = await Promise.all([
+      const [denominaciones, formasPago, cajas, erp] = await Promise.all([
         cargarDenominaciones(pool, true),
+        config.listarFormasPago(empresaId),
         pool.query(
           `SELECT id, centro, nombre FROM cash_registers
             WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
@@ -129,6 +181,7 @@ export function createCashRouter(): Router {
 
       res.json({
         denominaciones,
+        formasPago,
         cajas: cajas.rows,
         permisos: req.cashPermisos,
         rol: req.cashRol,
@@ -209,6 +262,234 @@ export function createCashRouter(): Router {
         }
       );
       res.json({ denominacion });
+    })
+  );
+
+  // ── Catálogo de formas de pago ───────────────────────────────────────────
+
+  /** Todas, activas o no: Configuración necesita ver también las de baja. */
+  r.get(
+    "/payment-methods",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ formasPago: await config.listarFormasPago(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/payment-methods",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const forma = await config.crearFormaPago(contexto(req), {
+        nombre: typeof b.nombre === "string" ? b.nombre : "",
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
+        pideReferencia: typeof b.pideReferencia === "boolean" ? b.pideReferencia : undefined,
+        orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+      });
+      res.status(201).json({ forma });
+    })
+  );
+
+  r.patch(
+    "/payment-methods/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      // `null` borra la imagen y `undefined` la deja como está: son cosas
+      // distintas y el cliente necesita poder decir las dos.
+      const imagenUrl =
+        b.imagenUrl === undefined
+          ? undefined
+          : b.imagenUrl === null || b.imagenUrl === ""
+            ? null
+            : String(b.imagenUrl);
+
+      const forma = await config.actualizarFormaPago(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+          pideReferencia: typeof b.pideReferencia === "boolean" ? b.pideReferencia : undefined,
+          orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+          imagenUrl,
+        }
+      );
+      res.json({ forma });
+    })
+  );
+
+  /**
+   * Imagen del botón.
+   *
+   * Mismo camino que el avatar de técnicos: multer en memoria y el fichero a
+   * Supabase Storage, del que se guarda la URL pública. En disco local no,
+   * porque el contenedor de Render es efímero y la imagen se perdería en el
+   * siguiente despliegue.
+   */
+  r.post(
+    "/payment-methods/:id/image",
+    exigirPermiso("cash.configure"),
+    subidaImagen.single("imagen"),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      const fichero = req.file;
+      if (!fichero) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(fichero.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+
+      const extension = path.extname(fichero.originalname).toLowerCase() || ".png";
+      const ruta_ = `cash/payment-methods/${req.authCtx!.empresaId}/${id}_${Date.now()}${extension}`;
+
+      const { error } = await supabase.storage
+        .from(SUPABASE_STORAGE_BUCKET)
+        .upload(ruta_, fichero.buffer, { contentType: fichero.mimetype, upsert: true });
+      if (error) {
+        console.error("Mobilink Cash: error subiendo la imagen de la forma de pago:", error);
+        throw new ErrorCaja("SUBIDA_FALLIDA", "No se ha podido guardar la imagen.", 502);
+      }
+
+      const { data } = supabase.storage.from(SUPABASE_STORAGE_BUCKET).getPublicUrl(ruta_);
+      const forma = await config.actualizarFormaPago(contexto(req), id, {
+        imagenUrl: data.publicUrl,
+      });
+      res.json({ forma });
+    })
+  );
+
+  // ── Tesorería: cambio al banco y entregas de dinero ──────────────────────
+
+  r.get(
+    "/registers/:id/treasury",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const registerId = enteroPositivo(req.params.id, "id");
+      const empresaId = req.authCtx!.empresaId;
+      const [pedidos, entregas] = await Promise.all([
+        tesoreria.listarPedidos(empresaId, registerId),
+        tesoreria.listarEntregas(empresaId, registerId),
+      ]);
+      res.json({ pedidos, entregas });
+    })
+  );
+
+  /** Lo que está fuera de la caja ahora: para los avisos de jornada y cierre. */
+  r.get(
+    "/registers/:id/treasury/pending",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json(
+        await tesoreria.pendientes(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
+  /** Qué conviene pedirle al banco. Es una consulta: no mueve nada. */
+  r.get(
+    "/sessions/:id/change-order/proposal",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const sessionId = enteroPositivo(req.params.id, "id");
+      const sesion = await obtenerSesion(sessionId);
+      if (!sesion || sesion.empresaId !== req.authCtx!.empresaId) {
+        throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
+      }
+      const importe = enteroPositivo(req.query.importe, "importe");
+      res.json(await tesoreria.proponerPedido(sessionId, sesion.registerId, importe));
+    })
+  );
+
+  r.post(
+    "/change-orders",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const pedido = await tesoreria.crearPedido(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        solicitado: lineasConCartuchos(b.solicitado, "solicitado"),
+        salida: lineas(b.salida, "salida"),
+        notas: typeof b.notas === "string" ? b.notas : undefined,
+      });
+      res.status(201).json({ pedido });
+    })
+  );
+
+  r.post(
+    "/change-orders/:id/receive",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const pedido = await tesoreria.recibirPedido(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          recibido: lineasConCartuchos(b.recibido, "recibido"),
+          diferenciaMotivo: typeof b.diferenciaMotivo === "string" ? b.diferenciaMotivo : undefined,
+        }
+      );
+      res.json({ pedido });
+    })
+  );
+
+  r.post(
+    "/change-orders/:id/cancel",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const pedido = await tesoreria.cancelarPedido(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        enteroPositivo(b.sessionId, "sessionId"),
+        typeof b.motivo === "string" ? b.motivo : ""
+      );
+      res.json({ pedido });
+    })
+  );
+
+  r.post(
+    "/advances",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const entrega = await tesoreria.entregarDinero(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        persona: typeof b.persona === "string" ? b.persona : "",
+        motivo: typeof b.motivo === "string" ? b.motivo : "",
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        entregado: lineas(b.entregado, "entregado"),
+        notas: typeof b.notas === "string" ? b.notas : undefined,
+      });
+      res.status(201).json({ entrega });
+    })
+  );
+
+  r.post(
+    "/advances/:id/settle",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const entrega = await tesoreria.liquidarEntrega(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          // Cero es válido: es el caso de "no compró nada y lo devuelve todo".
+          gastoCentimos: entero(b.gastoCentimos ?? 0, "gastoCentimos"),
+          devuelto: lineas(b.devuelto, "devuelto"),
+          proveedor: typeof b.proveedor === "string" ? b.proveedor : undefined,
+          facturaReferencia:
+            typeof b.facturaReferencia === "string" ? b.facturaReferencia : undefined,
+          concepto: typeof b.concepto === "string" ? b.concepto : undefined,
+          diferenciaMotivo: typeof b.diferenciaMotivo === "string" ? b.diferenciaMotivo : undefined,
+        }
+      );
+      res.json({ entrega });
     })
   );
 
@@ -337,6 +618,10 @@ export function createCashRouter(): Router {
         importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
         formasPago: formasPago(b.formasPago),
         efectivoEntregado: lineas(b.efectivoEntregado, "efectivoEntregado"),
+        // Vuelta del proveedor: se paga con un billete de 20 € un importe de
+        // 19,50 € y devuelve 0,50 €. Salen 20 € y entran 0,50 €, y el motor
+        // comprueba que la diferencia es exactamente el pago.
+        efectivoRecibido: lineas(b.efectivoRecibido, "efectivoRecibido"),
         partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
         concepto: typeof b.concepto === "string" ? b.concepto : "",
         referencia: typeof b.referencia === "string" ? b.referencia : null,

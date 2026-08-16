@@ -20,12 +20,16 @@ import {
   type ReactNode,
 } from "react";
 import * as api from "../services/api";
-import type { Bootstrap, Denominacion, ResumenJornada } from "../types";
+import type { Bootstrap, Denominacion, FormaPagoConfig, ResumenJornada } from "../types";
 
 type Valor = {
   cargando: boolean;
   error: string;
   denominaciones: Denominacion[];
+  /** Catálogo completo, de baja incluidas: el histórico necesita las de baja. */
+  formasPago: FormaPagoConfig[];
+  /** Las que salen como botón en cobros y pagos, por su orden. */
+  formasPagoActivas: FormaPagoConfig[];
   cajas: Bootstrap["cajas"];
   permisos: string[];
   rol: string | null;
@@ -37,7 +41,7 @@ type Valor = {
 
   jornada: ResumenJornada | null;
   refrescar: () => Promise<void>;
-  /** Vuelve a leer el arranque: cajas, denominaciones y permisos. */
+  /** Vuelve a leer el arranque: cajas, denominaciones, formas de pago y permisos. */
   recargarConfiguracion: () => Promise<void>;
   /** Existencias por valor, para limitar lo que se puede sacar. */
   disponible: Record<number, number>;
@@ -140,6 +144,8 @@ export function CashProvider({ children }: { children: ReactNode }) {
     cargando,
     error,
     denominaciones: boot?.denominaciones ?? [],
+    formasPago: boot?.formasPago ?? [],
+    formasPagoActivas: (boot?.formasPago ?? []).filter((f) => f.activa),
     cajas: boot?.cajas ?? [],
     permisos,
     rol: boot?.rol ?? null,

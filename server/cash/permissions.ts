@@ -46,6 +46,16 @@ export const PERMISOS = [
    * tiene que reflejar el alcance real de la tabla.
    */
   "cash.denominations.configure",
+  /**
+   * Tesorería: pedir cambio al banco y entregar dinero a una persona.
+   *
+   * Un solo permiso para las cuatro acciones (pedir, recibir, entregar,
+   * liquidar) porque son la misma responsabilidad vista dos veces: sacar
+   * dinero de la caja que vuelve más tarde. Partirlo dejaría que alguien
+   * pudiera sacar los 200 € y no pudiera cerrar el pedido cuando vuelve del
+   * banco, que es como se quedan los pendientes abiertos para siempre.
+   */
+  "cash.treasury.manage",
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
@@ -92,6 +102,7 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     // Puede dar de alta una caja de su empresa, pero no tocar el catálogo de
     // denominaciones, que es de toda la instalación.
     "cash.configure",
+    "cash.treasury.manage",
   ],
   admin: PERMISOS,
 };
