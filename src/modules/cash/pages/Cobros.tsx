@@ -34,19 +34,12 @@ import {
 } from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
-import {
-  ETIQUETA_FORMA_PAGO,
-  type AperturaCartucho,
-  type DocumentoExterno,
-  type FormaPago,
-} from "../types";
+import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
+import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
-/** Formas de pago que se ofrecen al cobrar. */
-const FORMAS: FormaPago[] = ["CASH", "BBVA_CARD", "CAIXABANK_CARD", "AMEX", "BANK_TRANSFER", "BIZUM"];
-
 export default function Cobros() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede } = useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasPagoActivas } = useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -54,7 +47,12 @@ export default function Cobros() {
   const [cliente, setCliente] = useState("");
   const [referencia, setReferencia] = useState("");
 
-  const [reparto, setReparto] = useState<Record<string, string>>({ CASH: "" });
+  // Qué botón está pulsado: el código de una forma, o MIXTO. Arranca en
+  // efectivo, que es el 90 % de los cobros del mostrador.
+  const [modo, setModo] = useState<string>("");
+  const [reparto, setReparto] = useState<Record<string, string>>({});
+  /** Referencia por forma, para las que la exigen (autorización del TPV…). */
+  const [referenciasReparto, setReferenciasReparto] = useState<Record<string, string>>({});
   const [recibido, setRecibido] = useState<CantidadesPorValor>({});
   const [cambioManual, setCambioManual] = useState<CantidadesPorValor | null>(null);
 
@@ -67,20 +65,67 @@ export default function Cobros() {
 
   const importe = aCentimos(importeTexto) ?? 0;
 
-  // Reparto por forma de pago. Si solo hay efectivo, se rellena solo con el
-  // importe del documento: es el caso del 90 % de los cobros y no tiene sentido
-  // obligar a teclearlo dos veces.
+  const formaEfectivo = useMemo(
+    () => formasPagoActivas.find((f) => f.afectaEfectivo) ?? null,
+    [formasPagoActivas]
+  );
+
+  // El modo por defecto es el efectivo. Si la empresa lo tuviera desactivado
+  // —hoy no se puede, pero el catálogo es suyo— se cae a la primera forma.
+  useEffect(() => {
+    if (modo || formasPagoActivas.length === 0) return;
+    setModo(formaEfectivo?.codigo ?? formasPagoActivas[0].codigo);
+  }, [modo, formaEfectivo, formasPagoActivas]);
+
+  const esMixto = modo === MIXTO;
+  const formaElegida = useMemo(
+    () => formasPagoActivas.find((f) => f.codigo === modo) ?? null,
+    [formasPagoActivas, modo]
+  );
+
+  // Reparto del cobro mixto: solo las líneas con importe.
   const formasUsadas = useMemo(
     () =>
       Object.entries(reparto)
-        .map(([forma, texto]) => ({ forma: forma as FormaPago, importe: aCentimos(texto) ?? 0 }))
+        .map(([forma, texto]) => ({ forma, importe: aCentimos(texto) ?? 0 }))
         .filter((f) => f.importe > 0),
     [reparto]
   );
 
-  const soloEfectivo = formasUsadas.length === 0 || (formasUsadas.length === 1 && formasUsadas[0].forma === "CASH");
-  const efectivo = soloEfectivo ? importe : formasUsadas.filter((f) => f.forma === "CASH").reduce((a, f) => a + f.importe, 0);
-  const totalRepartido = soloEfectivo ? importe : formasUsadas.reduce((a, f) => a + f.importe, 0);
+  /**
+   * Cuánto del cobro es efectivo, que es lo que decide si hay que contar
+   * piezas. En modo simple es todo o nada según el botón pulsado; en mixto, la
+   * suma de las líneas de la forma que mueve el cajón.
+   */
+  const efectivo = esMixto
+    ? formasUsadas
+        .filter((f) => f.forma === formaEfectivo?.codigo)
+        .reduce((a, f) => a + f.importe, 0)
+    : formaElegida?.afectaEfectivo
+      ? importe
+      : 0;
+
+  const totalRepartido = esMixto ? formasUsadas.reduce((a, f) => a + f.importe, 0) : importe;
+
+  /** Las líneas que se mandan al servidor, con la referencia de cada forma. */
+  const lineasFormasPago = () =>
+    esMixto
+      ? formasUsadas.map((f) => ({
+          forma: f.forma,
+          importe: f.importe,
+          referencia: referenciasReparto[f.forma]?.trim() || null,
+        }))
+      : [{ forma: modo, importe, referencia: referencia.trim() || null }];
+
+  /** Formas del reparto a las que les falta la referencia que exigen. */
+  const referenciasQueFaltan = esMixto
+    ? formasUsadas
+        .map((f) => formasPagoActivas.find((x) => x.codigo === f.forma))
+        .filter((f) => f?.pideReferencia && !referenciasReparto[f.codigo]?.trim())
+        .map((f) => f!.nombre)
+    : formaElegida?.pideReferencia && !referencia.trim()
+      ? [formaElegida.nombre]
+      : [];
 
   const totalRecibido = totalLineas(lineasDesde(recibido));
   const cambioRequerido = Math.max(0, totalRecibido - efectivo);
@@ -133,7 +178,8 @@ export default function Cobros() {
     setConcepto("");
     setCliente("");
     setReferencia("");
-    setReparto({ CASH: "" });
+    setReparto({});
+    setReferenciasReparto({});
     setRecibido({});
     setCambioManual(null);
     setCambioPropuesto({});
@@ -150,7 +196,9 @@ export default function Cobros() {
 
   const puedeConfirmar =
     importe > 0 &&
+    Boolean(modo) &&
     totalRepartido === importe &&
+    referenciasQueFaltan.length === 0 &&
     (efectivo === 0 || totalRecibido >= efectivo) &&
     (cambioRequerido === 0 || totalCambio === cambioRequerido) &&
     !guardando;
@@ -162,9 +210,7 @@ export default function Cobros() {
       const r = await api.registrarCobro({
         sessionId: jornada!.sesion.id,
         importeCentimos: importe,
-        formasPago: soloEfectivo
-          ? [{ forma: "CASH", importe }]
-          : formasUsadas.map((f) => ({ forma: f.forma, importe: f.importe })),
+        formasPago: lineasFormasPago(),
         efectivoRecibido: efectivo > 0 ? lineasDesde(recibido) : [],
         // Se manda siempre la composición que el operador tiene delante, sea la
         // propuesta o la que ha retocado: es la que ha contado con la mano.
@@ -251,28 +297,67 @@ export default function Cobros() {
               </label>
             </div>
 
-            {/* Reparto por forma de pago: solo se despliega si hace falta. */}
-            <details className="mt-2 rounded-lg bg-slate-900/40 p-2" open={!soloEfectivo}>
-              <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wide text-slate-400">
-                Cobro mixto (varias formas de pago)
-              </summary>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {FORMAS.map((f) => (
-                  <label key={f} className="block">
-                    <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
-                      {ETIQUETA_FORMA_PAGO[f]}
-                    </span>
-                    <input
-                      value={reparto[f] ?? ""}
-                      onChange={(e) => setReparto({ ...reparto, [f]: e.target.value })}
-                      inputMode="decimal"
-                      placeholder="0,00"
-                      className={`${inputCls} tabular-nums`}
-                    />
-                  </label>
-                ))}
-              </div>
-              {!soloEfectivo && (
+            {/* Cómo paga el cliente. Es lo que decide qué se abre debajo. */}
+            <div className="mt-3">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                Forma de cobro
+              </span>
+              <PaymentMethodPicker
+                formas={formasPagoActivas}
+                valor={modo}
+                onChange={(v) => {
+                  setModo(v);
+                  // Cambiar de forma vacía lo que se hubiera contado o repartido
+                  // del modo anterior: dejarlo colgando sería lo que acabaría en
+                  // un cobro con piezas de una tarjeta.
+                  setReparto({});
+                  setReferenciasReparto({});
+                  setRecibido({});
+                  setCambioManual(null);
+                  setCambioPropuesto({});
+                }}
+                deshabilitado={guardando}
+              />
+            </div>
+
+            {esMixto && (
+              <div className="mt-2 rounded-lg bg-slate-900/40 p-2">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                  Reparto entre formas
+                </span>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {formasPagoActivas.map((f) => (
+                    <div key={f.codigo} className="space-y-1">
+                      <label className="block">
+                        <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                          {f.nombre}
+                        </span>
+                        <input
+                          value={reparto[f.codigo] ?? ""}
+                          onChange={(e) => setReparto({ ...reparto, [f.codigo]: e.target.value })}
+                          inputMode="decimal"
+                          placeholder="0,00"
+                          className={`${inputCls} tabular-nums`}
+                        />
+                      </label>
+                      {/* La referencia solo aparece cuando esa forma se usa: sin
+                          importe, pedirla sería ruido. */}
+                      {f.pideReferencia && (aCentimos(reparto[f.codigo] ?? "") ?? 0) > 0 && (
+                        <input
+                          value={referenciasReparto[f.codigo] ?? ""}
+                          onChange={(e) =>
+                            setReferenciasReparto({
+                              ...referenciasReparto,
+                              [f.codigo]: e.target.value,
+                            })
+                          }
+                          placeholder={`Referencia de ${f.nombre}`}
+                          className={inputCls}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
                 <div
                   className={`mt-2 text-[12px] ${
                     totalRepartido === importe ? "text-emerald-300" : "text-amber-300"
@@ -281,8 +366,15 @@ export default function Cobros() {
                   Repartido {euros(totalRepartido)} de {euros(importe)}
                   {efectivo > 0 && <> · en efectivo {euros(efectivo)}</>}
                 </div>
-              )}
-            </details>
+              </div>
+            )}
+
+            {referenciasQueFaltan.length > 0 && (
+              <p className="mt-2 text-[12px] text-amber-300">
+                Falta la referencia de {referenciasQueFaltan.join(", ")}: es lo que luego permite
+                cuadrar con el banco.
+              </p>
+            )}
           </div>
         </div>
 

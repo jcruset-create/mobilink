@@ -68,14 +68,21 @@ hay saldo acumulado que se pueda desincronizar.
 - `change.ts` — cambio con **stock limitado**: programación dinámica exacta,
   minimiza piezas, `NO_SOLUTION` explícito cuando no hay combinación.
 - `operations.ts` — invariantes de la operación (recibido − cambio = cobrado,
-  mixtos, parciales).
+  mixtos, parciales). En un pago el cuadre es el mismo del revés, y por eso
+  admite **vuelta**: pagar 19,50 € con un billete de 20 € y recibir 0,50 € son
+  dos movimientos —sale el billete, entra la moneda— y el pago es la
+  diferencia. Registrarlo como "salen 19,50 €" sería mentir sobre las piezas.
 - `arqueo.ts` — teórico vs contado por denominación, doble cuadre, reparto
   cambio final / ingreso bancario.
 - `cartridges.ts` — cartuchos de monedas. Un tubo **se abre y no se vuelve a
-  cerrar**, y **solo se abre si hace falta**: si hay sueltas suficientes de esa
-  denominación, el precinto no se toca, ni siquiera cuando abriéndolo se
-  devolvería con menos piezas. El stock distingue sueltas de encartuchadas y
-  abrir un tubo deja su propio par de asientos (`CARTRIDGE_OPENED`).
+  cerrar**. La regla que manda es **dar siempre las piezas de mayor valor**: si
+  la moneda que toca está encartuchada, el tubo se abre. El precinto solo se
+  respeta DENTRO de cada denominación — si de esa misma moneda hay sueltas
+  suficientes, se gastan las sueltas. Lo que no se hace es esquivar la apertura
+  a base de piezas más pequeñas: devolver 19,50 € con nueve monedas de 0,50 €
+  teniendo un tubo de 2 € deja la caja sin calderilla, que es justo lo que hay
+  que conservar. El stock distingue sueltas de encartuchadas y abrir un tubo
+  deja su propio par de asientos (`CARTRIDGE_OPENED`).
 
   Los tubos **entran y salen precintados** —la aportación de cambio del banco
   llega en tubos y se le devuelve igual— y solo se abren cuando un cobro o un
@@ -120,7 +127,7 @@ paralelo que mantener.
 |---|---|
 | `consulta` | ver |
 | `cajero` | cobrar, pagar, mover efectivo, arquear |
-| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas |
+| `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
 | `admin` | además configurar la integración y el catálogo de denominaciones |
 
 `cash.configure` (cajas) y `cash.denominations.configure` (catálogo) van
@@ -133,6 +140,91 @@ Los cobros y pagos distinguen permiso ERP de permiso manual
 (`cash.collection.create` vs `cash.collection.create_manual`), que era lo que
 pedía el encargo: se puede dejar cobrar facturas de la ERP a quien no debe
 poder inventarse un cobro.
+
+## 7 bis. Formas de cobro
+
+`cash_payment_methods`, por empresa. Cada fila activa es un botón en Cobros y
+en Pagos, por su `orden`; si tiene `imagen_url` el botón enseña la imagen y si
+no, el nombre.
+
+`codigo` es lo que se guarda en `cash_operation_payments.forma_pago` desde el
+primer día, así que **la baja es lógica**: un cobro por AMEX de hace un año
+sigue diciendo AMEX aunque hoy ya no se acepte. El código no se puede cambiar
+—es la clave del histórico— pero el nombre sí, y ese cambio arrastra a las
+pantallas a propósito.
+
+Dos reglas que el backend impone dentro de la transacción, no en la pantalla:
+
+- **El efectivo no se da de baja ni se duplica.** Un índice único parcial
+  (`WHERE afecta_efectivo`) impide que haya dos formas que muevan el cajón: con
+  dos, el desglose por denominación de cada operación dejaría de ser
+  interpretable. Y sin ninguna no habría arqueo ni cierre que hacer.
+- **Una forma dada de baja no admite cobros nuevos**, ni aunque la pantalla la
+  tuviera pintada de antes. Es la misma razón por la que el stock se relee con
+  la jornada bloqueada.
+
+`pide_referencia` obliga a introducirla al cobrar. Viene activada en todo lo
+que no es efectivo, porque es lo que luego permite cuadrar con el banco.
+
+Esto obligó a **abrir `FormaPago` en el dominio**: era una unión cerrada y
+`afectaAlEfectivo()` comparaba con el literal `"CASH"`. Ahora es un código y las
+funciones del motor reciben el conjunto de códigos que son efectivo. El motor
+sigue sin saber nada de base de datos: quien consulta el catálogo es el
+servicio y se lo pasa hecho.
+
+La imagen del botón se sube a Supabase Storage y de ella se guarda la URL, igual
+que el avatar de técnicos. En disco local no: el contenedor de Render es
+efímero y la imagen se perdería en el siguiente despliegue.
+
+## 7 ter. Tesorería: cambio del banco y entregas de dinero
+
+Dos documentos para el mismo problema: **dinero que sale hoy de la caja y
+vuelve más tarde**. Ese hueco era lo que el módulo no sabía representar, y es
+lo que hace que un arqueo descuadre 200 € sin que nadie recuerde por qué.
+
+`cash_change_orders` — se va al banco con billetes y se vuelve con calderilla.
+`cash_advances` — se le dan 50 € a alguien para que compre algo.
+
+Tres decisiones sostienen lo demás:
+
+- **Los asientos se hacen cuando el dinero se mueve**, no cuando se planea. Al
+  crear el pedido salen los billetes; al recibirlo entra la calderilla. En
+  medio, el stock teórico ya no cuenta ese dinero, así que el arqueo de la
+  tarde cuadra sin trucos, y las pantallas de jornada y cierre dicen cuánto hay
+  fuera y de quién.
+- **Cruzan jornadas.** El banco no contesta el mismo día y el empleado vuelve
+  en el turno siguiente. Cada asiento pertenece a la jornada en la que ocurrió.
+  Era el encargo: que un billete de 50 € no desaparezca en un cambio de turno.
+- **La liquidación de una entrega registra el pago REAL y no vuelve a mover
+  piezas.** Si se entregan 50 €, la factura es de 40 € y devuelve 10 €, en el
+  listado hay un pago de 40 € y en el libro mayor dos asientos: sale un billete
+  de 50 y entra uno de 10. Volver a asentar las piezas del pago sacaría 90 € de
+  una caja de la que solo salieron 50. Es la única excepción a "todo efectivo
+  lleva su detalle de piezas" (`liquidaEntregaId` en el dominio), y no la
+  rompe: las piezas existen y están asentadas, solo que en la entrega.
+
+Si las cuentas no cuadran —factura de 40 € y solo devuelve 8— no se bloquea: el
+dinero ya no está y negarse a registrarlo solo esconde el problema. Se exige un
+motivo y queda auditado con el nombre de quien lo tenía. Lo mismo con el banco
+cuando da algo distinto de lo pedido.
+
+### Qué pedirle al banco
+
+`domain/restock.ts`, y **sin ningún modelo de lenguaje**, a propósito: el libro
+mayor registra cada moneda que ha salido al dar cambio, así que el consumo es
+un dato y no una estimación. Una fórmula da siempre la misma respuesta, se
+prueba y se audita; un modelo daría respuestas distintas para el mismo caso, y
+en dinero eso es un defecto.
+
+Consumo medio diario por denominación de las últimas jornadas → objetivo por
+días de colchón → resta de lo que hay → redondeo a cartucho (al banco las
+monedas se piden en tubos) → ajuste al importe que se cambia, priorizando lo
+que antes se va a agotar. Cada línea sale con su porqué —"gastas unas 40
+monedas de 1 € al día y te quedan 20"— porque una propuesta que no se entiende
+no se corrige: se ignora.
+
+Los billetes que salen a pagar el pedido se componen con los **más grandes**
+que haya, que es lo contrario de dar un cambio: son justo los que sobran.
 
 ## 8. Estado de la entrega
 
@@ -150,8 +242,8 @@ Implementado y probado:
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
 
-**900 pruebas en verde** (`npm test`), de las cuales 90 son de Mobilink Cash y
-23 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
+**950 pruebas en verde** (`npm test`), de las cuales 140 son de Mobilink Cash y
+49 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
 encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
 idempotente.
 

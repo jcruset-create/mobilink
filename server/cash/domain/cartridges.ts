@@ -78,32 +78,30 @@ export function inventarioConTodoAbierto(
 /**
  * Cambio teniendo en cuenta los cartuchos.
  *
- * Dos pasadas, y el orden es la regla de negocio:
+ * La regla es una sola, y va por delante del precinto: **se devuelve siempre
+ * con las piezas de mayor valor que haya**. Si la moneda que toca está dentro
+ * de un tubo, el tubo se abre.
  *
- *  1. Se intenta con las **sueltas solas**. Si sale, no se abre ningún tubo,
- *     aunque abriendo uno se pudiera devolver con menos piezas. Es lo que pide
- *     la caja: mientras haya suelto, el precinto no se rompe.
- *  2. Si no sale, se resuelve con todo el pool (tubos incluidos) y se calcula
- *     cuántos hay que abrir de cada denominación.
+ * El precinto solo se respeta DENTRO de cada denominación: si de esa moneda hay
+ * sueltas suficientes, se gastan las sueltas y el tubo no se toca. Lo que no se
+ * hace es esquivar la apertura a base de piezas más pequeñas — devolver 4,50 €
+ * con nueve monedas de 0,50 € teniendo un tubo de 2 € vacía la caja de calderilla,
+ * que es justo lo que la caja necesita conservar.
  *
- * Limitación consciente: la segunda pasada minimiza PIEZAS y luego deduce los
- * tubos que esa combinación necesita. No busca la combinación que abra menos
- * tubos, que sería otro óptimo y otro algoritmo. En una caja con tubos de una o
- * dos denominaciones —lo normal— coinciden; si algún día no basta, el sitio
- * donde tocarlo es éste y las pruebas lo fijan.
+ * Se resuelve, por tanto, contra TODO el dinero disponible (sueltas más el
+ * contenido de los tubos) minimizando piezas, y después se deduce cuántos tubos
+ * hay que abrir de cada denominación.
+ *
+ * Limitación consciente: minimiza PIEZAS y luego deduce los tubos que esa
+ * combinación necesita. No busca la combinación que abra menos tubos, que sería
+ * otro óptimo y otro algoritmo. Con el sistema de monedas del euro, minimizar
+ * piezas es exactamente dar las de mayor valor, que es lo que se pide.
  */
 export function calcularCambioConCartuchos(
   importe: Centimos,
   stock: StockConCartuchos,
   porCartucho: PiezasPorCartucho
 ): ResultadoCambioCartuchos {
-  // 1. ¿Basta con lo suelto?
-  const soloSueltas = calcularCambio(importe, stock.sueltas);
-  if (esExito(soloSueltas)) {
-    return { ok: true, lineas: soloSueltas.lineas, piezas: soloSueltas.piezas, aperturas: [] };
-  }
-
-  // 2. Hay que abrir. Se resuelve con todo el pool disponible.
   const todo = inventarioConTodoAbierto(stock, porCartucho);
   const conTubos = calcularCambio(importe, todo);
   if (esFallo(conTubos)) return conTubos;

@@ -19,6 +19,7 @@ import DenominationGrid, {
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, inputCls } from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import type { LineaDenominacion } from "../types";
+import { AvisoPendientes } from "./CambioBanco";
 import * as api from "../services/api";
 
 export default function Cierre() {
@@ -117,6 +118,10 @@ export default function Cierre() {
         titulo="Cierre de jornada"
         descripcion="Decide qué se queda en caja para mañana; el resto va al ingreso bancario."
       />
+
+      {/* Se puede cerrar con dinero fuera —el banco no contesta el mismo día y
+          el empleado vuelve mañana—, pero quien cierra tiene que verlo. */}
+      <AvisoPendientes />
 
       {error && <ErrorBox>{error}</ErrorBox>}
 

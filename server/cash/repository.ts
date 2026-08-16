@@ -34,6 +34,7 @@ import type {
   OrigenOperacion,
   TipoOperacion,
 } from "./domain/operations.ts";
+import { CODIGOS_EFECTIVO_POR_DEFECTO, FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 
 // ── Transacciones ──────────────────────────────────────────────────────────
 
@@ -103,6 +104,59 @@ export async function cargarDenominaciones(
     activa: r.activa,
     orden: r.orden,
   }));
+}
+
+export type FormaPagoCatalogo = {
+  codigo: string;
+  nombre: string;
+  afectaEfectivo: boolean;
+  pideReferencia: boolean;
+  activa: boolean;
+};
+
+/**
+ * Catálogo de formas de pago de la empresa.
+ *
+ * Si la empresa todavía no lo tiene sembrado —caja recién estrenada, nadie ha
+ * entrado aún en Configuración— se responde con la semilla en vez de con una
+ * lista vacía. Un catálogo vacío haría que no se pudiera cobrar nada, que es
+ * mucho peor que asumir las siete formas de siempre.
+ */
+export async function cargarFormasPago(
+  client: PoolClient | typeof pool,
+  empresaId: string
+): Promise<FormaPagoCatalogo[]> {
+  const { rows } = await client.query(
+    `SELECT codigo, nombre, afecta_efectivo, pide_referencia, activa
+       FROM cash_payment_methods
+      WHERE empresa_id = $1
+      ORDER BY orden, nombre`,
+    [empresaId]
+  );
+  if (rows.length === 0) {
+    return FORMAS_PAGO_SEMILLA.map((f) => ({
+      codigo: f.codigo,
+      nombre: f.nombre,
+      afectaEfectivo: f.afectaEfectivo,
+      pideReferencia: f.pideReferencia,
+      activa: true,
+    }));
+  }
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({
+    codigo: r.codigo,
+    nombre: r.nombre,
+    afectaEfectivo: r.afecta_efectivo,
+    pideReferencia: r.pide_referencia,
+    activa: r.activa,
+  }));
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
+/** Los códigos que mueven el cajón físico. En la práctica, solo `CASH`. */
+export function codigosEfectivoDe(catalogo: readonly FormaPagoCatalogo[]): ReadonlySet<string> {
+  const codigos = catalogo.filter((f) => f.afectaEfectivo).map((f) => f.codigo);
+  return codigos.length > 0 ? new Set(codigos) : CODIGOS_EFECTIVO_POR_DEFECTO;
 }
 
 /**
@@ -403,7 +457,18 @@ export async function siguienteNumero(
   tipo: TipoOperacion,
   anio: number
 ): Promise<string> {
-  const prefijo = PREFIJO_POR_TIPO[tipo] ?? "X";
+  return siguienteNumeroDe(client, PREFIJO_POR_TIPO[tipo] ?? "X", anio);
+}
+
+/**
+ * El mismo contador para documentos que no son operaciones: los pedidos de
+ * cambio al banco (`CB`) y las entregas de dinero a personas (`EN`).
+ */
+export async function siguienteNumeroDe(
+  client: PoolClient,
+  prefijo: string,
+  anio: number
+): Promise<string> {
   const clave = `${prefijo}:${anio}`;
   const { rows } = await client.query<{ last_seq: number }>(
     `INSERT INTO cash_document_counters (clave, last_seq)
