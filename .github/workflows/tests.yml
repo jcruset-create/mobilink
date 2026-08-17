@@ -76,6 +76,13 @@ jobs:
       - name: Typecheck del servidor (Central Pro y Lite)
         run: npx tsc -p tsconfig.server.json
 
+      # Los typechecks de arriba NO compilan el bundle, y Render sí: la entrega
+      # #55 pasó la CI en verde y su deploy murió compilando, dejando en
+      # producción el código de la anterior sin que nadie se enterara. Compilar
+      # aquí lo mismo que compila Render cierra ese agujero.
+      - name: Compilar el bundle (lo mismo que hace Render)
+        run: npx vite build
+
       # Una sola pasada: el informe JSON sirve para la comprobación siguiente.
       - name: Pruebas (unitarias + integración contra PostgreSQL)
         run: npm test -- --reporter=verbose --reporter=json --outputFile.json=/tmp/tests.json

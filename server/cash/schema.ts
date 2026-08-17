@@ -642,6 +642,25 @@ export async function initCash(): Promise<void> {
     );
   `);
 
+  /*
+   * Ajustes sueltos del módulo, por empresa.
+   *
+   * El primero es la imagen del botón «Mixto». Mixto NO es una forma de pago
+   * —es un reparto entre varias— y por eso no puede tener una fila en
+   * `cash_payment_methods`: si la tuviera, alguien podría registrar un cobro
+   * «en Mixto», que no significa nada, y el importe entraría en caja sin decir
+   * por qué vía llegó. Una tabla de clave/valor lo deja donde toca.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_settings (
+      empresa_id UUID NOT NULL,
+      clave TEXT NOT NULL,
+      valor TEXT,
+      updated_at_ms BIGINT NOT NULL,
+      PRIMARY KEY (empresa_id, clave)
+    );
+  `);
+
   await sembrarDenominaciones();
 
   console.log("Mobilink Cash: esquema inicializado correctamente");

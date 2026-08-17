@@ -25,6 +25,8 @@ type Props = {
   onChange: (valor: string) => void;
   /** En pagos no se ofrece: se paga por una sola vía. */
   permitirMixto?: boolean;
+  /** Imagen del botón «Mixto». Sin ella, el icono y el texto de siempre. */
+  imagenMixto?: string | null;
   deshabilitado?: boolean;
 };
 
@@ -79,6 +81,7 @@ export default function PaymentMethodPicker({
   valor,
   onChange,
   permitirMixto = true,
+  imagenMixto = null,
   deshabilitado = false,
 }: Props) {
   const mostrarMixto = permitirMixto && formas.length > 1;
@@ -133,10 +136,23 @@ export default function PaymentMethodPicker({
           onClick={() => onChange(MIXTO)}
           disabled={deshabilitado}
           aria-pressed={valor === MIXTO}
-          className={`${BASE} ${RELLENO} ${marco(valor === MIXTO)}`}
+          title="Mixto"
+          className={`${BASE} ${imagenMixto ? "" : RELLENO} ${marco(valor === MIXTO)}`}
         >
-          <Layers className="h-5 w-5" />
-          <span className="leading-tight">Mixto</span>
+          {imagenMixto ? (
+            // Mismo tratamiento a sangre que las formas de cobro: si no, el
+            // botón de Mixto desentonaría en medio de una fila de logotipos.
+            <img
+              src={imagenMixto}
+              alt="Mixto"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <>
+              <Layers className="h-5 w-5" />
+              <span className="leading-tight">Mixto</span>
+            </>
+          )}
         </button>
       )}
     </div>

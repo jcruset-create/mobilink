@@ -532,3 +532,70 @@ export async function actualizarFormaPago(
 
   return aFormaPago(rows[0]);
 }
+
+// ── Ajustes sueltos del módulo ─────────────────────────────────────────────
+
+/**
+ * Claves admitidas en `cash_settings`.
+ *
+ * Lista blanca a propósito: la clave llega del cliente y sin acotarla la tabla
+ * acabaría siendo un cajón donde cualquiera guarda cualquier cosa.
+ */
+export const AJUSTES = {
+  /** Imagen del botón «Mixto» de cobros. */
+  MIXTO_IMAGEN: "mixto_imagen_url",
+} as const;
+
+export type ClaveAjuste = (typeof AJUSTES)[keyof typeof AJUSTES];
+
+const CLAVES_VALIDAS: string[] = Object.values(AJUSTES);
+
+export type Ajustes = { mixtoImagenUrl: string | null };
+
+/** Todos los ajustes de la empresa, ya con la forma que espera el frontend. */
+export async function ajustes(empresaId: string): Promise<Ajustes> {
+  const { rows } = await pool.query<{ clave: string; valor: string | null }>(
+    `SELECT clave, valor FROM cash_settings WHERE empresa_id = $1`,
+    [empresaId]
+  );
+  const mapa = new Map(rows.map((r) => [r.clave, r.valor]));
+  return { mixtoImagenUrl: mapa.get(AJUSTES.MIXTO_IMAGEN) ?? null };
+}
+
+/** Fija un ajuste. `null` lo borra. */
+export async function fijarAjuste(
+  ctx: Contexto,
+  clave: ClaveAjuste,
+  valor: string | null
+): Promise<Ajustes> {
+  if (!CLAVES_VALIDAS.includes(clave)) {
+    throw new ErrorCaja("AJUSTE_DESCONOCIDO", `El ajuste «${clave}» no existe.`, 400);
+  }
+
+  if (valor === null) {
+    await pool.query(`DELETE FROM cash_settings WHERE empresa_id = $1 AND clave = $2`, [
+      ctx.empresaId,
+      clave,
+    ]);
+  } else {
+    await pool.query(
+      `INSERT INTO cash_settings (empresa_id, clave, valor, updated_at_ms)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (empresa_id, clave) DO UPDATE
+         SET valor = EXCLUDED.valor, updated_at_ms = EXCLUDED.updated_at_ms`,
+      [ctx.empresaId, clave, valor, Date.now()]
+    );
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.setting.update",
+    entidad: "cash_settings",
+    entidadId: clave,
+    detalle: { clave, valor },
+    ip: ctx.ip,
+  });
+
+  return ajustes(ctx.empresaId);
+}

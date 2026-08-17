@@ -40,7 +40,8 @@ import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
 export default function Cobros() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros } = useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros, ajustes } =
+    useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -338,6 +339,7 @@ export default function Cobros() {
                   setCambioManual(null);
                   setCambioPropuesto({});
                 }}
+                imagenMixto={ajustes.mixtoImagenUrl}
                 deshabilitado={guardando}
               />
             </div>

@@ -333,9 +333,20 @@ export type Pendientes = {
   totalFueraCentimos: number;
 };
 
+/**
+ * Ajustes sueltos del módulo, por empresa.
+ *
+ * La imagen de «Mixto» vive aquí y no en el catálogo de formas de pago porque
+ * Mixto no es una forma de pago: es un reparto entre varias.
+ */
+export type Ajustes = {
+  mixtoImagenUrl: string | null;
+};
+
 export type Bootstrap = {
   denominaciones: Denominacion[];
   formasPago: FormaPagoConfig[];
+  ajustes: Ajustes;
   cajas: Caja[];
   permisos: string[];
   rol: string | null;
