@@ -274,6 +274,10 @@ export const abrirJornada = (datos: {
   /** Tubos precintados del fondo: `cantidad` son tubos, no monedas. */
   fondoCartuchos?: LineaDenominacion[];
   motivoFondoManual?: string;
+  /** Fecha contable `YYYY-MM-DD`. Omitida, hoy. Sirve para meter días pasados. */
+  fecha?: string;
+  /** Confirmación explícita si esa caja ya tiene una jornada ese día. */
+  permitirFechaRepetida?: boolean;
   notas?: string;
 }) => pedir<{ sesion: Sesion; stock: LineaDenominacion[] }>("/sessions", json(datos));
 
