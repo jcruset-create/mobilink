@@ -17295,11 +17295,38 @@ function startAutoEnCaminoWatcher() {
   console.log(`Auto en-camino: vigilancia activa (radio ${AUTO_EN_CAMINO_RADIO_M} m, cada 60 s)`);
 }
 
+/**
+ * Prepara el esquema de un módulo sin poder tumbar el arranque.
+ *
+ * Antes, cualquier fallo aquí hacía `process.exit(1)` y el servicio no llegaba
+ * a abrir el puerto. Eso convertía un tropiezo pasajero de la base —una
+ * sentencia que se pasa del `statement_timeout`, un cerrojo que tarda— en una
+ * caída de TODO el SaaS: ni Connect, ni Licencias, ni Cash, ni el panel. Y como
+ * el proceso moría sin soltar sus conexiones, el reintento se encontraba el
+ * mismo cerrojo pillado y volvía a morir; el servicio no salía solo del bucle.
+ *
+ * Las migraciones son idempotentes y la base ya tiene el esquema puesto desde
+ * hace meses: servir con un esquema que quizá no se ha podido repasar es mucho
+ * mejor que no servir nada. El fallo se registra bien visible para que se vea
+ * en los logs del despliegue.
+ */
+async function prepararEsquema(nombre: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    console.error(
+      `[ARRANQUE] No se ha podido preparar el esquema de ${nombre}. ` +
+        "El servidor arranca igualmente; revisa este error cuanto antes.",
+      error
+    );
+  }
+}
+
 initDb()
-  .then(() => initIntegrationHub())
-  .then(() => initLicenses())
-  .then(() => initConnect())
-  .then(() => initCash())
+  .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
+  .then(() => prepararEsquema("Licencias", initLicenses))
+  .then(() => prepararEsquema("Connect Pro", initConnect))
+  .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -17319,6 +17346,9 @@ initDb()
     });
   })
   .catch((error) => {
-    console.error("Error inicializando base de datos:", error);
+    // Solo llega aquí si falla `initDb`, que es la conexión con la base del
+    // núcleo: sin ella no hay nada que servir. Los esquemas de los módulos ya
+    // no pueden caer por aquí, van envueltos en `prepararEsquema`.
+    console.error("Error conectando con la base de datos del núcleo:", error);
     process.exit(1);
   });
