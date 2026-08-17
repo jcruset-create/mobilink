@@ -7,15 +7,15 @@
  * cargue lenta. Se reduce aquí, en el servidor, y se guarda ya en tamaño de
  * botón: el usuario no tiene que saber nada de píxeles.
  *
- * 160 px de alto son cinco veces el tamaño de pintado: nítido en cualquier
- * pantalla retina, y un fichero de unas decenas de KB haga lo que haga el
- * usuario con la cámara.
+ * 240 px de alto son más del triple del alto del botón (72 px): nítido en una
+ * pantalla retina, donde ese botón son 144 px reales, y aun así un fichero de
+ * unas decenas de KB haga lo que haga el usuario con la cámara.
  */
 
 import sharp from "sharp";
 import { ErrorCaja } from "./errors.ts";
 
-const ALTO_MAXIMO = 160;
+const ALTO_MAXIMO = 240;
 
 export async function miniaturaBoton(original: Buffer): Promise<Buffer> {
   try {
