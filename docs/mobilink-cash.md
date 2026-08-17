@@ -183,6 +183,18 @@ La imagen del botón se sube a Supabase Storage y de ella se guarda la URL, igua
 que el avatar de técnicos. En disco local no: el contenedor de Render es
 efímero y la imagen se perdería en el siguiente despliegue.
 
+Lo que se guarda no es el fichero que sube el usuario, sino una miniatura de
+160 px de alto que hace `server/cash/images.ts` con `sharp`. El botón la pinta
+a 32 px, así que guardar una foto de móvil de 4000 px solo serviría para que la
+pantalla de cobros tarde en cargar. El usuario sube lo que tenga a mano y no
+tiene que saber nada de píxeles.
+
+Los errores de multer —el fichero pasa del límite, el campo no es el esperado—
+se disparan **antes** que el manejador `ruta()`, así que sin envolverlos acaban
+en el 500 genérico de `server/index.ts` ("Error interno del servidor"), que no
+dice nada. `subida()` los traduce a un 400 con un mensaje que se entiende. Si
+aparece otra ruta con `multer` en este módulo, tiene que pasar por ahí.
+
 ## 7 ter. Tesorería: cambio del banco y entregas de dinero
 
 Dos documentos para el mismo problema: **dinero que sale hoy de la caja y
