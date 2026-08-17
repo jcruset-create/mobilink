@@ -103,6 +103,8 @@ export type Operacion = {
    * sus importes es el importe de la operación.
    */
   formas: { forma: string; importe: number; referencia: string | null }[];
+  sectionId: number | null;
+  seccionNombre: string | null;
 };
 
 export type Movimiento = {
@@ -141,6 +143,15 @@ export type ResumenJornada = {
   entregasCentimos: number;
   operaciones: number;
   pendientesErp: number;
+  /** Reparto por sección. Informativo: el cajón y su arqueo son uno solo. */
+  porSeccion: {
+    sectionId: number | null;
+    nombre: string;
+    cobrosCentimos: number;
+    pagosCentimos: number;
+    efectivoNetoCentimos: number;
+    operaciones: number;
+  }[];
 };
 
 export type ResultadoCambio =
@@ -348,9 +359,26 @@ export type Ajustes = {
   mixtoImagenUrl: string | null;
 };
 
+/**
+ * Sección de negocio dentro de una misma caja: taller, gasolinera…
+ *
+ * El cajón y su arqueo siguen siendo uno solo; lo que se parte por sección es
+ * la liquidación, no el inventario.
+ */
+export type SeccionConfig = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  activa: boolean;
+  porDefecto: boolean;
+  orden: number;
+  usos: number;
+};
+
 export type Bootstrap = {
   denominaciones: Denominacion[];
   formasPago: FormaPagoConfig[];
+  secciones: SeccionConfig[];
   ajustes: Ajustes;
   cajas: Caja[];
   permisos: string[];

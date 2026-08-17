@@ -599,3 +599,197 @@ export async function fijarAjuste(
 
   return ajustes(ctx.empresaId);
 }
+
+// ── Secciones de negocio ───────────────────────────────────────────────────
+
+/**
+ * Semilla de secciones.
+ *
+ * Taller y gasolinera porque es lo que hay hoy, y taller por defecto porque es
+ * el negocio principal y el que se lleva los pagos. No es una lista cerrada:
+ * el catálogo es de la empresa y se puede añadir una tercera —tienda, lavadero—
+ * sin tocar código.
+ */
+const SECCIONES_SEMILLA = [
+  { codigo: "TALLER", nombre: "Taller", porDefecto: true, orden: 1 },
+  { codigo: "GASOLINERA", nombre: "Gasolinera", porDefecto: false, orden: 2 },
+];
+
+export type SeccionConfig = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  activa: boolean;
+  porDefecto: boolean;
+  orden: number;
+  /** Cuántas operaciones la usan. Una sección con usos no se borra. */
+  usos: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aSeccion(r: any): SeccionConfig {
+  return {
+    id: r.id,
+    codigo: r.codigo,
+    nombre: r.nombre,
+    activa: r.activa,
+    porDefecto: r.por_defecto,
+    orden: r.orden,
+    usos: Number(r.usos ?? 0),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** Siembra las secciones la primera vez que se consultan. */
+async function asegurarSecciones(empresaId: string): Promise<void> {
+  const ahora = Date.now();
+  for (const s of SECCIONES_SEMILLA) {
+    await pool.query(
+      `INSERT INTO cash_sections
+         (empresa_id, codigo, nombre, activa, por_defecto, orden, created_at_ms, updated_at_ms)
+       VALUES ($1,$2,$3,true,$4,$5,$6,$6)
+       ON CONFLICT (empresa_id, codigo) DO NOTHING`,
+      [empresaId, s.codigo, s.nombre, s.porDefecto, s.orden, ahora]
+    );
+  }
+}
+
+/** Catálogo completo, incluidas las secciones dadas de baja. */
+export async function listarSecciones(empresaId: string): Promise<SeccionConfig[]> {
+  await asegurarSecciones(empresaId);
+  const { rows } = await pool.query(
+    `SELECT s.*, (SELECT COUNT(*) FROM cash_operations o WHERE o.section_id = s.id) AS usos
+       FROM cash_sections s
+      WHERE s.empresa_id = $1
+      ORDER BY s.activa DESC, s.orden, s.nombre`,
+    [empresaId]
+  );
+  return rows.map(aSeccion);
+}
+
+export async function crearSeccion(
+  ctx: Contexto,
+  datos: { nombre: string; codigo?: string; orden?: number }
+): Promise<SeccionConfig> {
+  const nombre = datos.nombre?.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La sección necesita un nombre.", 400);
+
+  // El código se deriva del nombre y no cambia nunca: es lo que queda escrito
+  // en las operaciones, igual que en las formas de cobro.
+  const codigo =
+    datos.codigo?.trim().toUpperCase() ||
+    nombre
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 30);
+  if (!codigo) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El nombre no da un código válido.", 400);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_sections
+       (empresa_id, codigo, nombre, activa, por_defecto, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,true,false,$4,$5,$5)
+     ON CONFLICT (empresa_id, codigo) DO NOTHING
+     RETURNING *`,
+    [ctx.empresaId, codigo, nombre, datos.orden ?? 99, ahora]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("SECCION_DUPLICADA", `Ya existe una sección con el código ${codigo}.`, 409);
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.section.create",
+    entidad: "cash_sections",
+    entidadId: String(rows[0].id),
+    detalle: { codigo, nombre },
+    ip: ctx.ip,
+  });
+
+  return aSeccion(rows[0]);
+}
+
+export async function actualizarSeccion(
+  ctx: Contexto,
+  id: number,
+  datos: { nombre?: string; activa?: boolean; porDefecto?: boolean; orden?: number }
+): Promise<SeccionConfig> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_sections WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("SECCION_NO_ENCONTRADA", "La sección no existe.", 404);
+
+  const activa = datos.activa ?? antes.activa;
+  const porDefecto = datos.porDefecto ?? antes.por_defecto;
+
+  /*
+   * La sección por defecto no se puede dar de baja: es la que rellena los
+   * pagos y la que se propone al cobrar. Sin ella, un pago no sabría a qué
+   * negocio imputarse.
+   */
+  if (!activa && porDefecto) {
+    throw new ErrorCaja(
+      "SECCION_POR_DEFECTO",
+      "La sección por defecto no se puede dar de baja. Marca antes otra como predeterminada.",
+      409
+    );
+  }
+
+  // Marcar una quita la marca de la anterior; si no, el índice único parcial
+  // rechazaría el UPDATE y el usuario vería un error de base de datos.
+  if (porDefecto && !antes.por_defecto) {
+    await pool.query(
+      `UPDATE cash_sections SET por_defecto = false, updated_at_ms = $2
+        WHERE empresa_id = $1 AND por_defecto`,
+      [ctx.empresaId, Date.now()]
+    );
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE cash_sections
+        SET nombre = $3, activa = $4, por_defecto = $5, orden = $6, updated_at_ms = $7
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [
+      id,
+      ctx.empresaId,
+      datos.nombre?.trim() || antes.nombre,
+      activa,
+      porDefecto,
+      datos.orden ?? antes.orden,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.section.update",
+    entidad: "cash_sections",
+    entidadId: String(id),
+    detalle: {
+      codigo: antes.codigo,
+      antes: { nombre: antes.nombre, activa: antes.activa, porDefecto: antes.por_defecto, orden: antes.orden },
+      despues: { nombre: rows[0].nombre, activa, porDefecto, orden: rows[0].orden },
+    },
+    ip: ctx.ip,
+  });
+
+  return aSeccion(rows[0]);
+}
+
+/** La sección por defecto de la empresa, o `null` si no hay ninguna activa. */
+export async function seccionPorDefecto(empresaId: string): Promise<number | null> {
+  await asegurarSecciones(empresaId);
+  const { rows } = await pool.query<{ id: number }>(
+    `SELECT id FROM cash_sections WHERE empresa_id = $1 AND por_defecto AND activa LIMIT 1`,
+    [empresaId]
+  );
+  return rows[0]?.id ?? null;
+}

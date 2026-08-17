@@ -40,9 +40,12 @@ import JustificantePrevio from "../components/JustificantePrevio";
 import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
+/** Dónde se recuerda la última sección usada en este navegador. */
+const MEMORIA_SECCION = "cash.ultima-seccion";
+
 export default function Cobros() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros, ajustes } =
-    useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros, ajustes,
+    seccionesActivas } = useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -72,6 +75,12 @@ export default function Cobros() {
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
   /** PDF elegido antes de confirmar; se sube en cuanto el cobro existe. */
   const [justificante, setJustificante] = useState<File | null>(null);
+  /*
+   * Sección del cobro. Se recuerda la última usada en el navegador: al meter
+   * cien tickets de gasolinera seguidos, elegirla cien veces sobra. NO se
+   * limpia al confirmar, justo por eso.
+   */
+  const [seccionId, setSeccionId] = useState<number | null>(null);
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -86,6 +95,13 @@ export default function Cobros() {
     if (modo || formasParaCobros.length === 0) return;
     setModo(formaEfectivo?.codigo ?? formasParaCobros[0].codigo);
   }, [modo, formaEfectivo, formasParaCobros]);
+
+  useEffect(() => {
+    if (seccionId != null || seccionesActivas.length === 0) return;
+    const recordada = Number(localStorage.getItem(MEMORIA_SECCION) || 0);
+    const valida = seccionesActivas.find((s) => s.id === recordada);
+    setSeccionId(valida?.id ?? seccionesActivas.find((s) => s.porDefecto)?.id ?? seccionesActivas[0].id);
+  }, [seccionId, seccionesActivas]);
 
   const esMixto = modo === MIXTO;
   const formaElegida = useMemo(
@@ -233,6 +249,7 @@ export default function Cobros() {
         externalSystem: documento?.external_system ?? null,
         externalDocumentId: documento?.external_id ?? null,
         externalDocumentReference: documento?.external_reference ?? null,
+        sectionId: seccionId,
       });
       setUltimo({
         operacionId: r.operacionId,
@@ -315,6 +332,40 @@ export default function Cobros() {
                 <button onClick={limpiar} className="mt-1 text-[11px] text-sky-400 hover:underline">
                   Quitar la factura y cobrar a mano
                 </button>
+              </div>
+            )}
+
+            {/*
+              La sección va primero porque es lo que menos cambia: se pone una
+              vez y se queda. Solo aparece si la empresa tiene más de una; con
+              una sola caja de un solo negocio sería un adorno que estorba.
+            */}
+            {seccionesActivas.length > 1 && (
+              <div className="mb-2">
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Sección
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {seccionesActivas.map((sec) => (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      onClick={() => {
+                        setSeccionId(sec.id);
+                        localStorage.setItem(MEMORIA_SECCION, String(sec.id));
+                      }}
+                      disabled={guardando}
+                      aria-pressed={seccionId === sec.id}
+                      className={`rounded-lg border px-3 py-1.5 text-[12px] font-bold transition disabled:opacity-50 ${
+                        seccionId === sec.id
+                          ? "border-sky-400 bg-sky-500/20 text-sky-100"
+                          : "border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500"
+                      }`}
+                    >
+                      {sec.nombre}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 

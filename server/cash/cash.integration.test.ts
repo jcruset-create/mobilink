@@ -2114,3 +2114,137 @@ describe.runIf(RUN)("operaciones con sus formas de pago", () => {
     for (const o of ops) expect(Array.isArray(o.formas)).toBe(true);
   });
 });
+
+/*
+ * Secciones de negocio: taller y gasolinera en un solo cajón.
+ *
+ * Lo que se parte es la LIQUIDACIÓN, no el inventario. El cajón sigue siendo
+ * uno, el arqueo sigue siendo uno, y el reparto por sección es un dato
+ * informativo. Si algún día alguien intenta convertirlo en dos arqueos, estos
+ * tests son los que tienen que estorbar.
+ */
+describe.runIf(RUN)("secciones de negocio", () => {
+  async function seccion(codigo: string): Promise<number> {
+    const secciones = await config.listarSecciones(EMPRESA);
+    const s = secciones.find((x) => x.codigo === codigo);
+    if (!s) throw new Error(`No se ha sembrado la sección ${codigo}`);
+    return s.id;
+  }
+
+  it("se siembran taller y gasolinera, y taller es la de por defecto", async () => {
+    const secciones = await config.listarSecciones(EMPRESA);
+    const taller = secciones.find((s) => s.codigo === "TALLER");
+    const gasolinera = secciones.find((s) => s.codigo === "GASOLINERA");
+
+    expect(taller?.porDefecto).toBe(true);
+    expect(gasolinera?.porDefecto).toBe(false);
+    expect(gasolinera?.activa).toBe(true);
+  });
+
+  it("reparte los cobros por sección sin tocar el arqueo, que sigue siendo uno", async () => {
+    const caja = await crearCaja("secciones");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    const taller = await seccion("TALLER");
+    const gasolinera = await seccion("GASOLINERA");
+
+    // 100 € de taller y 50 € de gasolinera, los dos en efectivo justo.
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 10000, cantidad: 1 }],
+      sectionId: taller,
+      partyNombre: "Cliente del taller",
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      sectionId: gasolinera,
+      partyNombre: "Cliente de la gasolinera",
+    });
+
+    const r = await servicio.resumenJornada(sesion.id);
+
+    const porNombre = new Map(r.porSeccion.map((s) => [s.nombre, s]));
+    expect(porNombre.get("Taller")?.cobrosCentimos).toBe(10000);
+    expect(porNombre.get("Gasolinera")?.cobrosCentimos).toBe(5000);
+
+    // Lo que importa: el cajón es UNO. 300 € de fondo + 150 € cobrados.
+    expect(r.totalStockCentimos).toBe(45000);
+    // Y la suma de las secciones no puede inventarse dinero.
+    const sumaSecciones = r.porSeccion.reduce((a, s) => a + s.efectivoNetoCentimos, 0);
+    expect(sumaSecciones).toBe(15000);
+  });
+
+  it("un pago sin sección indicada se guarda con la de por defecto", async () => {
+    const porDefecto = await config.seccionPorDefecto(EMPRESA);
+    expect(porDefecto).toBe(await seccion("TALLER"));
+  });
+
+  it("no se cobra a una sección dada de baja", async () => {
+    const caja = await crearCaja("seccion-de-baja");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    const nueva = await config.crearSeccion(ctx, { nombre: `Lavadero ${Date.now()}` });
+    await config.actualizarSeccion(ctx, nueva.id, { activa: false });
+
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+        sectionId: nueva.id,
+      })
+    ).rejects.toMatchObject({ codigo: "SECCION_DE_BAJA" });
+  });
+
+  it("la sección por defecto no se puede dar de baja", async () => {
+    const taller = await seccion("TALLER");
+    await expect(
+      config.actualizarSeccion(ctx, taller, { activa: false })
+    ).rejects.toMatchObject({ codigo: "SECCION_POR_DEFECTO" });
+  });
+
+  it("marcar otra por defecto quita la marca de la anterior", async () => {
+    const gasolinera = await seccion("GASOLINERA");
+    await config.actualizarSeccion(ctx, gasolinera, { porDefecto: true });
+
+    const despues = await config.listarSecciones(EMPRESA);
+    expect(despues.filter((s) => s.porDefecto)).toHaveLength(1);
+    expect(despues.find((s) => s.porDefecto)?.codigo).toBe("GASOLINERA");
+
+    // Se deja como estaba, que las demás pruebas cuentan con taller.
+    await config.actualizarSeccion(ctx, await seccion("TALLER"), { porDefecto: true });
+  });
+
+  it("lo registrado antes de las secciones sale como «Sin sección», no repartido a ojo", async () => {
+    const caja = await crearCaja("sin-seccion");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+      // Sin sectionId: exactamente el caso de los cobros ya registrados.
+    });
+
+    const r = await servicio.resumenJornada(sesion.id);
+    const sin = r.porSeccion.find((s) => s.sectionId === null);
+    expect(sin?.nombre).toBe("Sin sección");
+    expect(sin?.cobrosCentimos).toBe(2000);
+  });
+});

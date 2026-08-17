@@ -109,6 +109,41 @@ export default function JornadaActual() {
           <p className="mt-2 text-[11px] text-slate-500">
             Solo el efectivo mueve el inventario físico; las tarjetas se registran económicamente.
           </p>
+
+          {/*
+            Reparto por sección. Va aquí debajo y no como una tarjeta más
+            arriba porque es del mismo tipo de dato: un desglose de lo que ya
+            está contado, no una cifra nueva.
+          */}
+          {jornada.porSeccion.length > 1 && (
+            <div className="mt-3 border-t border-slate-700 pt-2">
+              <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                Por sección
+              </div>
+              <div className="flex flex-col gap-1">
+                {jornada.porSeccion.map((sec) => (
+                  <div
+                    key={sec.sectionId ?? "sin"}
+                    className="flex items-center justify-between rounded-lg bg-slate-900/60 px-3 py-1.5"
+                  >
+                    <span className="text-sm text-slate-300">
+                      {sec.nombre}{" "}
+                      <span className="text-[10px] text-slate-500">
+                        ({sec.operaciones} oper.)
+                      </span>
+                    </span>
+                    <span className="text-sm font-bold tabular-nums text-slate-100">
+                      {euros(sec.cobrosCentimos)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Es un desglose informativo: el cajón es uno solo y el arqueo también. Este dinero
+                no está separado físicamente.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
@@ -259,6 +294,11 @@ function ListaOperaciones({
                       <span>·</span>
                       <span className="truncate">{o.referencia}</span>
                     </>
+                  )}
+                  {o.seccionNombre && (
+                    <span className="rounded bg-slate-700/60 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                      {o.seccionNombre}
+                    </span>
                   )}
                 </div>
 
