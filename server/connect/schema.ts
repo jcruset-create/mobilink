@@ -38,11 +38,47 @@ const CERROJO_ESQUEMA = 815_243_119;
 export async function initConnect(): Promise<void> {
   const cliente = await db.connect();
   try {
-    await cliente.query(`SELECT pg_advisory_lock($1)`, [CERROJO_ESQUEMA]);
+    if (!(await esperarCerrojo(cliente))) {
+      /*
+       * No se ha podido coger el cerrojo. Lo tiene otro proceso, que está
+       * aplicando exactamente estas mismas migraciones idempotentes, así que
+       * no hay nada que hacer salvo dejarle acabar. Antes esto no existía y se
+       * esperaba indefinidamente con `pg_advisory_lock`; cuando el cerrojo se
+       * quedaba pillado, la espera chocaba con el `statement_timeout` de la
+       * base y el arranque moría. Y como moría sin soltar la conexión, el
+       * siguiente arranque encontraba el cerrojo igual de pillado: un bucle
+       * del que el servicio no salía solo.
+       */
+      console.warn(
+        "Connect Pro: el esquema lo está aplicando otro proceso; se continúa sin repetirlo."
+      );
+      return;
+    }
     await crearEsquemaConnect();
   } finally {
     await cliente.query(`SELECT pg_advisory_unlock($1)`, [CERROJO_ESQUEMA]).catch(() => {});
     cliente.release();
+  }
+}
+
+/**
+ * Intenta coger el cerrojo durante un rato, sin bloquearse.
+ *
+ * `pg_try_advisory_lock` vuelve en el acto diciendo si lo ha conseguido, así
+ * que la espera la controlamos nosotros y nunca la corta la base de datos a
+ * mitad. Un minuto da de sobra para que otra instancia termine de migrar, y si
+ * no lo consigue devuelve `false` en vez de tumbar el arranque.
+ */
+async function esperarCerrojo(
+  cliente: { query: (q: string, v?: unknown[]) => Promise<{ rows: { ok: boolean }[] }> },
+  esperaMaximaMs = 60_000
+): Promise<boolean> {
+  const limite = Date.now() + esperaMaximaMs;
+  for (;;) {
+    const { rows } = await cliente.query(`SELECT pg_try_advisory_lock($1) AS ok`, [CERROJO_ESQUEMA]);
+    if (rows[0]?.ok) return true;
+    if (Date.now() >= limite) return false;
+    await new Promise((r) => setTimeout(r, 1_000));
   }
 }
 
