@@ -135,13 +135,25 @@ export default function JornadaActual() {
 
 // ── Apertura ───────────────────────────────────────────────────────────────
 
+/** Hoy en `YYYY-MM-DD` y en hora local: `toISOString` daría el día de ayer de madrugada. */
+function hoyLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function Apertura({ cajaId }: { cajaId: number }) {
   const { denominaciones, refrescar, puede } = useCash();
   const [cantidades, setCantidades] = useState<CantidadesPorValor>({});
   const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
   const [notas, setNotas] = useState("");
+  const [fecha, setFecha] = useState(hoyLocal());
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+  /** Guarda el "abrir igualmente" cuando el día ya tiene jornada. */
+  const [repetirFecha, setRepetirFecha] = useState(false);
+
+  const hoy = hoyLocal();
+  const atrasada = fecha !== "" && fecha < hoy;
 
   const lineas = lineasDesde(cantidades);
   const lineasCartuchos = lineasDesde(cartuchos);
@@ -170,10 +182,17 @@ function Apertura({ cajaId }: { cajaId: number }) {
         registerId: cajaId,
         fondoManual: heredar ? [] : lineas,
         fondoCartuchos: heredar ? [] : lineasCartuchos,
+        fecha: fecha || undefined,
+        permitirFechaRepetida: repetirFecha || undefined,
         notas: notas || undefined,
       });
       await refrescar();
     } catch (e) {
+      // Un día que ya tiene jornada no es un error de teclado: se ofrece
+      // confirmarlo en vez de dejar al usuario adivinando.
+      if (e instanceof api.ErrorApiCaja && e.codigo === "FECHA_YA_TIENE_JORNADA") {
+        setRepetirFecha(true);
+      }
       setError(e instanceof Error ? e.message : "No se ha podido abrir la caja");
     } finally {
       setGuardando(false);
@@ -194,6 +213,41 @@ function Apertura({ cajaId }: { cajaId: number }) {
         composición exacta. Indica las piezas a mano solo si es la primera jornada o si hay que
         corregir el fondo: esa corrección queda auditada.
       </Aviso>
+
+      <label className="block max-w-xs">
+        <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+          Fecha de la jornada
+        </span>
+        <input
+          type="date"
+          value={fecha}
+          max={hoy}
+          onChange={(e) => {
+            setFecha(e.target.value);
+            // Otra fecha, otra decisión: la confirmación no se arrastra.
+            setRepetirFecha(false);
+            setError("");
+          }}
+          disabled={guardando}
+          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
+        />
+      </label>
+
+      {atrasada && (
+        <Aviso tono="aviso">
+          Vas a abrir una jornada del <strong>{fecha.split("-").reverse().join("/")}</strong>, no de
+          hoy. Los cobros y pagos que metas contarán como de ese día. Mete los días atrasados en
+          orden, de más antiguo a más reciente, para que el cambio pase de uno al siguiente igual
+          que pasó en el mostrador.
+        </Aviso>
+      )}
+
+      {repetirFecha && (
+        <Aviso tono="aviso">
+          Esa caja ya tiene una jornada ese día. Comprueba que no la metiste ya; si de verdad
+          quieres una segunda, vuelve a pulsar el botón de abrir y se creará.
+        </Aviso>
+      )}
 
       <div className="flex flex-wrap gap-2">
         <BotonAccion tono="cierre" icono={<PlayCircle className="h-5 w-5" />} onClick={() => void abrir(true)} disabled={guardando}>
