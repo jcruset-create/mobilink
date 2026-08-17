@@ -21,9 +21,9 @@ describe("miniaturaBoton", () => {
   it("reduce una foto grande a la altura del botón", async () => {
     const grande = await imagenDe(3000, 2000);
     const meta = await sharp(await miniaturaBoton(grande)).metadata();
-    expect(meta.height).toBe(160);
-    // Mantiene la proporción: 3000×2000 → 240×160.
-    expect(meta.width).toBe(240);
+    expect(meta.height).toBe(240);
+    // Mantiene la proporción: 3000×2000 → 360×240.
+    expect(meta.width).toBe(360);
   });
 
   it("no agranda una imagen que ya es pequeña", async () => {

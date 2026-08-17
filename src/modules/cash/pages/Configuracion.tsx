@@ -409,10 +409,13 @@ function FormasPago() {
                 <td className={tdCls}>
                   <div className="flex items-center gap-2">
                     {f.imagenUrl ? (
+                      // `object-cover` y la misma proporción que el botón: la
+                      // vista previa tiene que enseñar lo que se va a ver al
+                      // cobrar, recorte incluido.
                       <img
                         src={f.imagenUrl}
                         alt=""
-                        className="h-8 w-12 rounded border border-slate-700 bg-slate-900 object-contain"
+                        className="h-8 w-12 rounded border border-slate-700 bg-slate-900 object-cover"
                       />
                     ) : (
                       <span className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-500">
