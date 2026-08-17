@@ -36,12 +36,16 @@ import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
+import JustificantePrevio from "../components/JustificantePrevio";
 import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
+/** Dónde se recuerda la última sección usada en este navegador. */
+const MEMORIA_SECCION = "cash.ultima-seccion";
+
 export default function Cobros() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros, ajustes } =
-    useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros, ajustes,
+    seccionesActivas } = useCash();
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -69,6 +73,14 @@ export default function Cobros() {
     aperturas: AperturaCartucho[];
   } | null>(null);
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
+  /** PDF elegido antes de confirmar; se sube en cuanto el cobro existe. */
+  const [justificante, setJustificante] = useState<File | null>(null);
+  /*
+   * Sección del cobro. Se recuerda la última usada en el navegador: al meter
+   * cien tickets de gasolinera seguidos, elegirla cien veces sobra. NO se
+   * limpia al confirmar, justo por eso.
+   */
+  const [seccionId, setSeccionId] = useState<number | null>(null);
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -83,6 +95,13 @@ export default function Cobros() {
     if (modo || formasParaCobros.length === 0) return;
     setModo(formaEfectivo?.codigo ?? formasParaCobros[0].codigo);
   }, [modo, formaEfectivo, formasParaCobros]);
+
+  useEffect(() => {
+    if (seccionId != null || seccionesActivas.length === 0) return;
+    const recordada = Number(localStorage.getItem(MEMORIA_SECCION) || 0);
+    const valida = seccionesActivas.find((s) => s.id === recordada);
+    setSeccionId(valida?.id ?? seccionesActivas.find((s) => s.porDefecto)?.id ?? seccionesActivas[0].id);
+  }, [seccionId, seccionesActivas]);
 
   const esMixto = modo === MIXTO;
   const formaElegida = useMemo(
@@ -191,6 +210,7 @@ export default function Cobros() {
     setCambioManual(null);
     setCambioPropuesto({});
     setAvisoCambio("");
+    setJustificante(null);
   }
 
   function elegirDocumento(d: DocumentoExterno) {
@@ -229,6 +249,7 @@ export default function Cobros() {
         externalSystem: documento?.external_system ?? null,
         externalDocumentId: documento?.external_id ?? null,
         externalDocumentReference: documento?.external_reference ?? null,
+        sectionId: seccionId,
       });
       setUltimo({
         operacionId: r.operacionId,
@@ -236,6 +257,25 @@ export default function Cobros() {
         cambio: cambioRequerido,
         aperturas: r.aperturas ?? [],
       });
+
+      /*
+       * El justificante va DESPUÉS y en su propia petición. Si falla, el cobro
+       * sigue registrado —el cliente ya ha pagado— y lo que hay que decir es
+       * exactamente eso, no "no se ha podido registrar el cobro", que sería
+       * mentira y llevaría a cobrarle dos veces. El panel de abajo queda con el
+       * número de la operación para volver a intentarlo sin buscar nada.
+       */
+      if (justificante) {
+        try {
+          await api.adjuntarDocumento(r.operacionId, justificante);
+        } catch (e) {
+          setError(
+            `El cobro ${r.numero} ha quedado registrado, pero el justificante no se ha podido subir` +
+              `${e instanceof Error ? `: ${e.message}` : "."} Vuelve a adjuntarlo aquí abajo.`
+          );
+        }
+      }
+
       limpiar();
       await refrescar();
     } catch (e) {
@@ -295,7 +335,58 @@ export default function Cobros() {
               </div>
             )}
 
+            {/*
+              La sección va primero porque es lo que menos cambia: se pone una
+              vez y se queda. Solo aparece si la empresa tiene más de una; con
+              una sola caja de un solo negocio sería un adorno que estorba.
+            */}
+            {seccionesActivas.length > 1 && (
+              <div className="mb-2">
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Sección
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {seccionesActivas.map((sec) => (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      onClick={() => {
+                        setSeccionId(sec.id);
+                        localStorage.setItem(MEMORIA_SECCION, String(sec.id));
+                      }}
+                      disabled={guardando}
+                      aria-pressed={seccionId === sec.id}
+                      className={`rounded-lg border px-3 py-1.5 text-[12px] font-bold transition disabled:opacity-50 ${
+                        seccionId === sec.id
+                          ? "border-sky-400 bg-sky-500/20 text-sky-100"
+                          : "border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500"
+                      }`}
+                    >
+                      {sec.nombre}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/*
+              El orden es el del mostrador: primero el papel que tienes en la
+              mano —la factura— y su importe; el cliente y el concepto son de
+              relleno y van debajo, marcados como opcionales para que nadie se
+              pare a rellenarlos con cola delante.
+            */}
             <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Factura / Referencia
+                </span>
+                <input
+                  value={referencia}
+                  onChange={(e) => setReferencia(e.target.value)}
+                  className={inputCls}
+                  placeholder="T-1234"
+                />
+              </label>
               <label className="block">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Importe a cobrar</span>
                 <input
@@ -307,16 +398,16 @@ export default function Cobros() {
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Cliente</span>
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Cliente <span className="font-normal normal-case text-slate-500">(opcional)</span>
+                </span>
                 <input value={cliente} onChange={(e) => setCliente(e.target.value)} className={inputCls} placeholder="Nombre o texto libre" />
               </label>
               <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Concepto</span>
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Concepto <span className="font-normal normal-case text-slate-500">(opcional)</span>
+                </span>
                 <input value={concepto} onChange={(e) => setConcepto(e.target.value)} className={inputCls} placeholder="Venta mostrador" />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Referencia</span>
-                <input value={referencia} onChange={(e) => setReferencia(e.target.value)} className={inputCls} placeholder="T-1234" />
               </label>
             </div>
 
@@ -343,6 +434,17 @@ export default function Cobros() {
                 deshabilitado={guardando}
               />
             </div>
+
+            {/* El escaneo se elige aquí y se sube solo al confirmar: en el
+                mostrador es un gesto seguido —escanear, cobrar— sin tener que
+                buscar el cobro después. */}
+            <JustificantePrevio
+              fichero={justificante}
+              onChange={setJustificante}
+              puedeAdjuntar={puede("cash.document.attach")}
+              deshabilitado={guardando}
+              onError={setError}
+            />
 
             {esMixto && (
               <div className="mt-2 rounded-lg bg-slate-900/40 p-2">

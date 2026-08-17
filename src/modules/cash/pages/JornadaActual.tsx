@@ -6,7 +6,7 @@
  * lo que va todo el módulo.
  */
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { HandCoins, Banknote, ArrowLeftRight, ClipboardCheck, Lock, PlayCircle } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
@@ -14,6 +14,7 @@ import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../compo
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox } from "../components/ui";
 import { euros, totalLineas } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
+import type { FormaPagoConfig, Operacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
 import * as api from "../services/api";
 
@@ -108,6 +109,41 @@ export default function JornadaActual() {
           <p className="mt-2 text-[11px] text-slate-500">
             Solo el efectivo mueve el inventario físico; las tarjetas se registran económicamente.
           </p>
+
+          {/*
+            Reparto por sección. Va aquí debajo y no como una tarjeta más
+            arriba porque es del mismo tipo de dato: un desglose de lo que ya
+            está contado, no una cifra nueva.
+          */}
+          {jornada.porSeccion.length > 1 && (
+            <div className="mt-3 border-t border-slate-700 pt-2">
+              <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                Por sección
+              </div>
+              <div className="flex flex-col gap-1">
+                {jornada.porSeccion.map((sec) => (
+                  <div
+                    key={sec.sectionId ?? "sin"}
+                    className="flex items-center justify-between rounded-lg bg-slate-900/60 px-3 py-1.5"
+                  >
+                    <span className="text-sm text-slate-300">
+                      {sec.nombre}{" "}
+                      <span className="text-[10px] text-slate-500">
+                        ({sec.operaciones} oper.)
+                      </span>
+                    </span>
+                    <span className="text-sm font-bold tabular-nums text-slate-100">
+                      {euros(sec.cobrosCentimos)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Es un desglose informativo: el cajón es uno solo y el arqueo también. Este dinero
+                no está separado físicamente.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
@@ -129,8 +165,204 @@ export default function JornadaActual() {
           </div>
         </div>
       </div>
+
+      <DetalleDelDia sessionId={s.id} />
     </div>
   );
+}
+
+// ── Detalle del día ────────────────────────────────────────────────────────
+
+/**
+ * Lo cobrado y lo pagado del día, en dos listas enfrentadas.
+ *
+ * Las tarjetas de arriba dan totales, y un total no sirve para repasar el día:
+ * cuando el arqueo no cuadra, o cuando hay que buscar una factura concreta,
+ * hace falta ver operación por operación con qué se cobró. Eso es esto.
+ *
+ * Se piden aparte y no en el arranque porque son datos de una jornada
+ * concreta, no de la configuración: si cambia la jornada, cambia la lista.
+ */
+function DetalleDelDia({ sessionId }: { sessionId: number }) {
+  const { formasPago } = useCash();
+  const [operaciones, setOperaciones] = useState<Operacion[]>([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    setError("");
+    try {
+      const r = await api.detalleJornada(sessionId);
+      setOperaciones(r.operaciones);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cargar el detalle del día");
+    } finally {
+      setCargando(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  /*
+   * Por orden de entrada, del primero al último. La consulta los devuelve al
+   * revés —el histórico enseña lo último arriba— pero repasar un día se hace
+   * como pasó, de la mañana a la tarde.
+   */
+  const enOrden = [...operaciones].filter((o) => o.estado !== "CANCELLED").sort((a, b) => a.id - b.id);
+  const cobros = enOrden.filter((o) => o.tipo === "COLLECTION");
+  const pagos = enOrden.filter((o) => o.tipo === "PAYMENT" || o.tipo === "MANUAL_OUT");
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <ListaOperaciones
+        titulo="Cobros del día"
+        vacio="Todavía no hay ningún cobro registrado."
+        operaciones={cobros}
+        formasPago={formasPago}
+        cargando={cargando}
+        onActualizar={() => void cargar()}
+      />
+      <ListaOperaciones
+        titulo="Pagos y salidas"
+        vacio="Todavía no hay ningún pago ni salida."
+        operaciones={pagos}
+        formasPago={formasPago}
+        cargando={cargando}
+        onActualizar={() => void cargar()}
+        tonoImporte="text-amber-300"
+      />
+    </div>
+  );
+}
+
+function ListaOperaciones({
+  titulo,
+  vacio,
+  operaciones,
+  formasPago,
+  cargando,
+  onActualizar,
+  tonoImporte = "text-slate-100",
+}: {
+  titulo: string;
+  vacio: string;
+  operaciones: Operacion[];
+  formasPago: FormaPagoConfig[];
+  cargando: boolean;
+  onActualizar: () => void;
+  tonoImporte?: string;
+}) {
+  const total = operaciones.reduce((a, o) => a + o.importeCentimos, 0);
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800">
+      <div className="flex items-center justify-between border-b border-slate-700 px-3 py-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          {titulo} <span className="text-slate-500">({operaciones.length})</span>
+        </span>
+        <div className="flex items-center gap-3">
+          <span className={`text-sm font-bold tabular-nums ${tonoImporte}`}>{euros(total)}</span>
+          <button onClick={onActualizar} className="text-[11px] text-slate-400 hover:text-white">
+            ↺
+          </button>
+        </div>
+      </div>
+
+      {cargando && operaciones.length === 0 ? (
+        <p className="px-3 py-4 text-sm text-slate-500">Cargando…</p>
+      ) : operaciones.length === 0 ? (
+        <p className="px-3 py-4 text-sm text-slate-500">{vacio}</p>
+      ) : (
+        <div className="divide-y divide-slate-700/60">
+          {operaciones.map((o) => (
+            <div key={o.id} className="flex items-start gap-2 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm text-slate-200">
+                  {o.partyNombre || o.concepto || "Sin cliente"}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                  <span className="tabular-nums">{hora(o.createdAtMs)}</span>
+                  <span>·</span>
+                  <span className="tabular-nums">{o.numero}</span>
+                  {o.referencia && (
+                    <>
+                      <span>·</span>
+                      <span className="truncate">{o.referencia}</span>
+                    </>
+                  )}
+                  {o.seccionNombre && (
+                    <span className="rounded bg-slate-700/60 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                      {o.seccionNombre}
+                    </span>
+                  )}
+                </div>
+
+                {/* Con qué se cobró. Un mixto trae varias, y verlas es justo el
+                    motivo de esta lista: el total de arriba no lo cuenta. */}
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  {o.formas.map((f, i) => (
+                    <Etiqueta
+                      key={`${f.forma}-${i}`}
+                      codigo={f.forma}
+                      importe={o.formas.length > 1 ? f.importe : null}
+                      formasPago={formasPago}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <span className={`shrink-0 text-sm font-bold tabular-nums ${tonoImporte}`}>
+                {euros(o.importeCentimos)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * La forma de pago, con su imagen si la tiene.
+ *
+ * Misma imagen que el botón con el que se cobró: reconocer «CaixaBank» de un
+ * vistazo en una lista de treinta líneas es más rápido leyendo el logotipo que
+ * el texto, que es la razón de haberlas subido.
+ */
+function Etiqueta({
+  codigo,
+  importe,
+  formasPago,
+}: {
+  codigo: string;
+  importe: number | null;
+  formasPago: FormaPagoConfig[];
+}) {
+  const forma = formasPago.find((f) => f.codigo === codigo);
+  const nombre = forma?.nombre ?? ETIQUETA_FORMA_PAGO[codigo] ?? codigo;
+
+  return (
+    <span
+      title={nombre}
+      className="inline-flex items-center gap-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-[10px] text-slate-300"
+    >
+      {forma?.imagenUrl ? (
+        <img src={forma.imagenUrl} alt={nombre} className="h-4 w-6 rounded-[2px] object-cover" />
+      ) : null}
+      <span>{nombre}</span>
+      {importe != null && <span className="tabular-nums text-slate-400">{euros(importe)}</span>}
+    </span>
+  );
+}
+
+/** La hora del reloj, que es como se busca una operación al repasar el día. */
+function hora(ms: number): string {
+  return new Date(ms).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
 }
 
 // ── Apertura ───────────────────────────────────────────────────────────────
