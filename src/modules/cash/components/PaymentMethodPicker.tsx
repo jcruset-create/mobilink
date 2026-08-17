@@ -28,6 +28,22 @@ type Props = {
   deshabilitado?: boolean;
 };
 
+/**
+ * Proporción del botón, fija y documentada: **3:2 apaisado**.
+ *
+ * Es fija a propósito. Con los botones estirándose para llenar la fila, su
+ * proporción cambiaba según cuántos hubiera, y entonces no existe ninguna
+ * medida de imagen que cuadre siempre: la misma foto se recortaba distinto en
+ * cobros y en pagos. Clavándola en 3:2, una imagen 3:2 encaja exacta y sin
+ * recorte, mida lo que mida la pantalla.
+ *
+ * Si algún día se cambia, hay que cambiar también lo que dice la pantalla de
+ * Configuración y `ALTO_MAXIMO` en `server/cash/images.ts`.
+ */
+export const PROPORCION_BOTON = "3:2";
+/** Medida recomendada al usuario, en la proporción de arriba. */
+export const MEDIDA_RECOMENDADA = "480 × 320 px";
+
 /*
  * El botón mide igual lleve imagen o texto: en un mostrador con prisa se pulsa
  * por posición y por tamaño, y una fila de botones desiguales se lee peor.
@@ -35,8 +51,16 @@ type Props = {
  * añade solo en los de texto, porque la imagen no lo quiere.
  */
 const BASE =
-  "relative flex min-h-[72px] min-w-[112px] flex-1 flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border text-[13px] font-bold transition disabled:opacity-50";
-const RELLENO = "px-3 py-2";
+  "relative flex aspect-[3/2] w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border text-[13px] font-bold transition disabled:opacity-50";
+const RELLENO = "px-2 py-2";
+
+/*
+ * Cuatro por fila, siempre. Con `flex-wrap` la última fila estiraba los
+ * botones que quedaran sueltos y ninguno medía igual que otro; con cuatro
+ * columnas fijas y proporción 3:2, todos miden exactamente lo mismo y quedan
+ * alineados en cuadrícula. El quinto botón abre fila nueva, el noveno otra.
+ */
+const REJILLA = "grid grid-cols-4 gap-2";
 
 /**
  * Marco del botón según esté pulsado o no.
@@ -60,7 +84,7 @@ export default function PaymentMethodPicker({
   const mostrarMixto = permitirMixto && formas.length > 1;
 
   return (
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Forma de cobro">
+    <div className={REJILLA} role="group" aria-label="Forma de cobro">
       {formas.map((f) => {
         const activo = valor === f.codigo;
         return (
@@ -89,7 +113,15 @@ export default function PaymentMethodPicker({
                 className="absolute inset-0 h-full w-full object-cover"
               />
             ) : (
-              <span className="text-center leading-tight">{f.nombre}</span>
+              /*
+               * Con el botón de ancho fijo, un nombre largo —«Cobro por
+               * transferencia»— se salía por los lados. `break-words` lo mete
+               * dentro, y 11 px hacen que las palabras largas quepan enteras
+               * en vez de partirse a la mitad («transferen / cia»).
+               */
+              <span className="w-full break-words text-center text-[11px] leading-tight">
+                {f.nombre}
+              </span>
             )}
           </button>
         );
