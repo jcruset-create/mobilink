@@ -481,3 +481,10 @@ export const actualizarSeccion = (
     method: "PATCH",
     body: JSON.stringify(datos),
   });
+
+/** Reclasifica una operación: le cambia la sección. `null` la deja sin ninguna. */
+export const cambiarSeccionOperacion = (operationId: number, sectionId: number | null) =>
+  pedir<{ operacionId: number; sectionId: number | null; seccionNombre: string | null }>(
+    `/operations/${operationId}/section`,
+    { method: "PATCH", body: JSON.stringify({ sectionId }) }
+  );
