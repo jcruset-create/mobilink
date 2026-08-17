@@ -24,6 +24,22 @@ export class ApiError extends Error {
  * lleva cabeceras, así que devolvería un 401. Se pide con fetch, se convierte
  * en blob y se dispara la descarga desde el propio navegador.
  */
+/**
+ * Añade el centro de control a la ruta.
+ *
+ * Va siempre en la query, también en los POST y los PUT: el backend lo acepta
+ * en los dos sitios y tener una sola forma de mandarlo evita el fallo de
+ * ponerlo en el cuerpo de una ruta que lo lee de la query.
+ *
+ * Con `centro` nulo la ruta sale intacta, que es lo que tiene que pasar para
+ * cualquiera que no sea superadministrador: su centro lo pone el backend a
+ * partir de su usuario y el que llegue por aquí se ignora.
+ */
+export function conCentro(path: string, centro?: number | null): string {
+  if (centro == null) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}controlCenterId=${centro}`;
+}
+
 export async function boDownload(path: string, nombrePorDefecto: string): Promise<void> {
   const headers: Record<string, string> = {};
   try {
@@ -51,7 +67,11 @@ export async function boDownload(path: string, nombrePorDefecto: string): Promis
   URL.revokeObjectURL(url);
 }
 
-export async function boFetch<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T> {
+export async function boFetch<T>(
+  path: string,
+  options?: { method?: string; body?: unknown; centro?: number | null },
+): Promise<T> {
+  path = conCentro(path, options?.centro);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   try {
     const { data } = await supabase.auth.getSession();

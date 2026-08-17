@@ -39,7 +39,7 @@ const ESTADOS: Record<string, { texto: string; clase: string }> = {
 const fecha = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleDateString("es-ES"));
 const hoy = () => new Date().toISOString().slice(0, 10);
 
-export default function Contratos({ planes }: { planes: Plan[] }) {
+export default function Contratos({ planes, centro }: { planes: Plan[]; centro: number | null }) {
   const [contratos, setContratos] = useState<Contrato[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
@@ -48,9 +48,10 @@ export default function Contratos({ planes }: { planes: Plan[] }) {
   const [busy, setBusy] = useState(false);
 
   const cargar = useCallback(() => {
-    boFetch<{ data: Contrato[] }>("/contracts")
+    if (centro == null) { setContratos([]); return; }
+    boFetch<{ data: Contrato[] }>("/contracts", { centro })
       .then((r) => setContratos(r.data)).catch((e) => setError(e.message));
-  }, []);
+  }, [centro]);
   useEffect(cargar, [cargar]);
 
   useEffect(() => {
@@ -63,7 +64,7 @@ export default function Contratos({ planes }: { planes: Plan[] }) {
     setBusy(true); setError(null);
     try {
       await boFetch("/contracts", {
-        method: "PUT",
+        method: "PUT", centro,
         body: {
           ...editando,
           validFromMs: new Date(`${editando.desde ?? hoy()}T00:00:00`).getTime(),
@@ -80,7 +81,7 @@ export default function Contratos({ planes }: { planes: Plan[] }) {
       `No se borra: las asistencias que se tarificaron con él tienen que poder seguir ` +
       `explicándose.\n\n¿Seguro?`)) return;
     try {
-      await boFetch(`/contracts/${c.id}`, { method: "DELETE" });
+      await boFetch(`/contracts/${c.id}`, { method: "DELETE", centro });
       cargar();
     } catch (e: any) { setError(e.message); }
   };

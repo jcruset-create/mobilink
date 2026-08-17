@@ -47,8 +47,8 @@ function importeODescartar(v: string): string | null {
   return Number.isFinite(n) && n > 0 ? String(n) : null;
 }
 
-export default function CatalogoNeumaticos({ versionId, editable }: {
-  versionId: number; editable: boolean;
+export default function CatalogoNeumaticos({ versionId, editable, centro }: {
+  versionId: number; editable: boolean; centro: number | null;
 }) {
   const [pestana, setPestana] = useState<(typeof PESTANAS)[number]>("Precios");
   const [precios, setPrecios] = useState<Precio[]>([]);
@@ -60,14 +60,15 @@ export default function CatalogoNeumaticos({ versionId, editable }: {
   const [aviso, setAviso] = useState<string | null>(null);
 
   const cargar = useCallback(() => {
-    boFetch<{ data: Precio[] }>(`/pricing/catalog/versions/${versionId}/tire-prices`)
+    if (centro == null) return;
+    boFetch<{ data: Precio[] }>(`/pricing/catalog/versions/${versionId}/tire-prices`, { centro })
       .then((r) => setPrecios(r.data)).catch((e) => setError(e.message));
-    boFetch<{ data: Grupo[] }>(`/pricing/catalog/versions/${versionId}/groups`)
+    boFetch<{ data: Grupo[] }>(`/pricing/catalog/versions/${versionId}/groups`, { centro })
       .then((r) => setGrupos(r.data)).catch(() => {});
-    boFetch<{ data: Marca[] }>("/pricing/catalog/brands").then((r) => setMarcas(r.data)).catch(() => {});
-    boFetch<{ data: Medida[] }>("/pricing/catalog/sizes").then((r) => setMedidas(r.data)).catch(() => {});
-    boFetch<{ data: Baremo[] }>("/pricing/catalog/price-lists").then((r) => setBaremos(r.data)).catch(() => {});
-  }, [versionId]);
+    boFetch<{ data: Marca[] }>("/pricing/catalog/brands", { centro }).then((r) => setMarcas(r.data)).catch(() => {});
+    boFetch<{ data: Medida[] }>("/pricing/catalog/sizes", { centro }).then((r) => setMedidas(r.data)).catch(() => {});
+    boFetch<{ data: Baremo[] }>("/pricing/catalog/price-lists", { centro }).then((r) => setBaremos(r.data)).catch(() => {});
+  }, [versionId, centro]);
   useEffect(cargar, [cargar]);
 
   return (
@@ -92,18 +93,18 @@ export default function CatalogoNeumaticos({ versionId, editable }: {
       {pestana === "Precios" && (
         <Precios
           versionId={versionId} editable={editable} precios={precios} grupos={grupos}
-          onCambio={cargar} onError={setError} onAviso={setAviso}
+          centro={centro} onCambio={cargar} onError={setError} onAviso={setAviso}
         />
       )}
       {pestana === "Grupos de marcas" && (
         <Grupos versionId={versionId} editable={editable} grupos={grupos}
-                onCambio={cargar} onError={setError} />
+                centro={centro} onCambio={cargar} onError={setError} />
       )}
       {pestana === "Baremos" && (
-        <Baremos baremos={baremos} onCambio={cargar} onError={setError} onAviso={setAviso} />
+        <Baremos baremos={baremos} centro={centro} onCambio={cargar} onError={setError} onAviso={setAviso} />
       )}
       {pestana === "Medidas y marcas" && (
-        <MedidasYMarcas medidas={medidas} marcas={marcas} onCambio={cargar} onError={setError} />
+        <MedidasYMarcas medidas={medidas} marcas={marcas} centro={centro} onCambio={cargar} onError={setError} />
       )}
     </div>
   );
@@ -111,15 +112,15 @@ export default function CatalogoNeumaticos({ versionId, editable }: {
 
 // ── Precios ─────────────────────────────────────────────────────────────────
 
-function Precios({ versionId, editable, precios, grupos, onCambio, onError, onAviso }: {
-  versionId: number; editable: boolean; precios: Precio[]; grupos: Grupo[];
+function Precios({ versionId, editable, precios, grupos, centro, onCambio, onError, onAviso }: {
+  versionId: number; editable: boolean; precios: Precio[]; grupos: Grupo[]; centro: number | null;
   onCambio: () => void; onError: (m: string) => void; onAviso: (m: string) => void;
 }) {
   const [pegando, setPegando] = useState(false);
 
   const desactivar = async (p: Precio) => {
     try {
-      await boFetch(`/pricing/catalog/tire-prices/${p.id}`, { method: "DELETE" });
+      await boFetch(`/pricing/catalog/tire-prices/${p.id}`, { method: "DELETE", centro });
       onCambio();
     } catch (e: any) { onError(e.message); }
   };
@@ -136,7 +137,7 @@ function Precios({ versionId, editable, precios, grupos, onCambio, onError, onAv
 
       {pegando && (
         <PegarPrecios
-          versionId={versionId} grupos={grupos}
+          versionId={versionId} grupos={grupos} centro={centro}
           onHecho={(msg) => { setPegando(false); onAviso(msg); onCambio(); }}
           onError={onError}
         />
@@ -199,8 +200,8 @@ function Precios({ versionId, editable, precios, grupos, onCambio, onError, onAv
  * otra de posición y una columna por marca o grupo. Se pega con la cabecera
  * incluida, que es de donde se saca a qué marca pertenece cada columna.
  */
-function PegarPrecios({ versionId, grupos, onHecho, onError }: {
-  versionId: number; grupos: Grupo[];
+function PegarPrecios({ versionId, grupos, centro, onHecho, onError }: {
+  versionId: number; grupos: Grupo[]; centro: number | null;
   onHecho: (msg: string) => void; onError: (m: string) => void;
 }) {
   const [texto, setTexto] = useState("");
@@ -257,7 +258,7 @@ function PegarPrecios({ versionId, grupos, onHecho, onError }: {
     setBusy(true);
     try {
       const r = await boFetch<any>(`/pricing/catalog/versions/${versionId}/tire-prices/bulk`, {
-        method: "POST", body: { filas: previa.filas, reemplazar },
+        method: "POST", centro, body: { filas: previa.filas, reemplazar },
       });
       if (r.errores?.length) {
         onError(`No se ha cargado nada. ${r.errores.length} fila(s) con problemas: ` +
@@ -338,8 +339,8 @@ function PegarPrecios({ versionId, grupos, onHecho, onError }: {
 
 // ── Grupos ──────────────────────────────────────────────────────────────────
 
-function Grupos({ versionId, editable, grupos, onCambio, onError }: {
-  versionId: number; editable: boolean; grupos: Grupo[];
+function Grupos({ versionId, editable, grupos, centro, onCambio, onError }: {
+  versionId: number; editable: boolean; grupos: Grupo[]; centro: number | null;
   onCambio: () => void; onError: (m: string) => void;
 }) {
   const [editando, setEditando] = useState<{ code: string; name: string; marcas: string } | null>(null);
@@ -350,7 +351,7 @@ function Grupos({ versionId, editable, grupos, onCambio, onError }: {
     setBusy(true);
     try {
       await boFetch(`/pricing/catalog/versions/${versionId}/groups`, {
-        method: "POST",
+        method: "POST", centro,
         body: {
           code: editando.code, name: editando.name,
           marcas: editando.marcas.split(",").map((s) => s.trim()).filter(Boolean),
@@ -443,8 +444,8 @@ function Grupos({ versionId, editable, grupos, onCambio, onError }: {
 
 // ── Baremos ─────────────────────────────────────────────────────────────────
 
-function Baremos({ baremos, onCambio, onError, onAviso }: {
-  baremos: Baremo[]; onCambio: () => void;
+function Baremos({ baremos, centro, onCambio, onError, onAviso }: {
+  baremos: Baremo[]; centro: number | null; onCambio: () => void;
   onError: (m: string) => void; onAviso: (m: string) => void;
 }) {
   const [nuevo, setNuevo] = useState<{ marca: string; nombre: string; desde: string } | null>(null);
@@ -457,7 +458,7 @@ function Baremos({ baremos, onCambio, onError, onAviso }: {
     setBusy(true);
     try {
       await boFetch("/pricing/catalog/price-lists", {
-        method: "POST",
+        method: "POST", centro,
         body: {
           marca: nuevo.marca, nombre: nuevo.nombre,
           vigenteDesdeMs: new Date(`${nuevo.desde}T00:00:00`).getTime(),
@@ -480,7 +481,7 @@ function Baremos({ baremos, onCambio, onError, onAviso }: {
     setBusy(true);
     try {
       const r = await boFetch<any>(`/pricing/catalog/price-lists/${cargandoEn}/lines`, {
-        method: "POST", body: { lineas: filas },
+        method: "POST", centro, body: { lineas: filas },
       });
       onAviso(`${r.escritas} línea(s) cargadas en el baremo.`);
       setCargandoEn(null); setLineas("");
@@ -584,15 +585,16 @@ function Baremos({ baremos, onCambio, onError, onAviso }: {
 
 // ── Medidas y marcas ────────────────────────────────────────────────────────
 
-function MedidasYMarcas({ medidas, marcas, onCambio, onError }: {
-  medidas: Medida[]; marcas: Marca[]; onCambio: () => void; onError: (m: string) => void;
+function MedidasYMarcas({ medidas, marcas, centro, onCambio, onError }: {
+  medidas: Medida[]; marcas: Marca[]; centro: number | null;
+  onCambio: () => void; onError: (m: string) => void;
 }) {
   const [medida, setMedida] = useState("");
   const [marca, setMarca] = useState("");
 
   const anadir = async (ruta: string, cuerpo: Record<string, string>, limpiar: () => void) => {
     try {
-      await boFetch(`/pricing/catalog/${ruta}`, { method: "POST", body: cuerpo });
+      await boFetch(`/pricing/catalog/${ruta}`, { method: "POST", centro, body: cuerpo });
       limpiar();
       onCambio();
     } catch (e: any) { onError(e.message); }

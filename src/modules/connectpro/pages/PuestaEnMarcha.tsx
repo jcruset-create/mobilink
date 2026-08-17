@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Badge, Input, Select, Button, ErrorBanner } from "../components/ui";
+import { useCentroDeTrabajo, SelectorCentro, AvisoElegirCentro } from "../components/CentroDeTrabajo";
 
 type Paso = {
   clave: string; titulo: string; porQue: string;
@@ -43,9 +44,13 @@ export default function PuestaEnMarcha() {
   const [error, setError] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
 
+  const ctxCentro = useCentroDeTrabajo();
+  const { centro } = ctxCentro;
+
   const cargar = useCallback(() => {
-    boFetch<Estado>("/setup/status").then(setEstado).catch((e) => setError(e.message));
-  }, []);
+    if (centro == null) { setEstado(null); return; }
+    boFetch<Estado>("/setup/status", { centro }).then(setEstado).catch((e) => setError(e.message));
+  }, [centro]);
   useEffect(cargar, [cargar]);
 
   useEffect(() => {
@@ -58,7 +63,7 @@ export default function PuestaEnMarcha() {
     setBusy(true); setError(null); setAviso(null);
     try {
       const r = await boFetch<any>("/setup/apply-template", {
-        method: "POST",
+        method: "POST", centro,
         body: { plantilla: elegida, code, nombre, anio: Number(anio) },
       });
       setAviso(
@@ -79,7 +84,9 @@ export default function PuestaEnMarcha() {
         title="Puesta en marcha"
         subtitle="Lo que le falta a esta central para poder facturar, en orden."
       />
+      <SelectorCentro ctx={ctxCentro} />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+      {ctxCentro.faltaElegir && <AvisoElegirCentro />}
       {aviso && (
         <div className="mb-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[13px] text-emerald-300">
           {aviso}
@@ -132,6 +139,7 @@ export default function PuestaEnMarcha() {
       </div>
 
       {/* ── Plantillas ── */}
+      {centro != null && <>
 
       <h2 className="mb-2 text-sm font-semibold text-slate-300">Empezar desde una plantilla</h2>
       <p className="mb-3 text-[13px] text-slate-400">
@@ -206,6 +214,8 @@ export default function PuestaEnMarcha() {
           </p>
         </Card>
       )}
+
+      </>}
     </div>
   );
 }
