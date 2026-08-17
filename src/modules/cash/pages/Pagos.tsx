@@ -29,6 +29,7 @@ import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
+import JustificantePrevio from "../components/JustificantePrevio";
 import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
@@ -50,6 +51,8 @@ export default function Pagos() {
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [ultimo, setUltimo] = useState<{ operacionId: number; numero: string } | null>(null);
+  /** PDF elegido antes de confirmar; se sube en cuanto el pago existe. */
+  const [justificante, setJustificante] = useState<File | null>(null);
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
 
   const importe = aCentimos(importeTexto) ?? 0;
@@ -124,6 +127,7 @@ export default function Pagos() {
     setVuelta({});
     setTocadoAMano(false);
     setAvisoComposicion("");
+    setJustificante(null);
   }
 
   function elegirDocumento(d: DocumentoExterno) {
@@ -160,6 +164,20 @@ export default function Pagos() {
         externalDocumentId: documento?.external_id ?? null,
       });
       setUltimo({ operacionId: r.operacionId, numero: r.numero });
+
+      // Después y aparte: si el almacenamiento falla, el pago ya está hecho y
+      // el dinero ha salido del cajón. Decir otra cosa sería mentira.
+      if (justificante) {
+        try {
+          await api.adjuntarDocumento(r.operacionId, justificante);
+        } catch (e) {
+          setError(
+            `El pago ${r.numero} ha quedado registrado, pero el justificante no se ha podido subir` +
+              `${e instanceof Error ? `: ${e.message}` : "."} Vuelve a adjuntarlo aquí abajo.`
+          );
+        }
+      }
+
       limpiar();
       await refrescar();
     } catch (e) {
@@ -258,6 +276,15 @@ export default function Pagos() {
                 <input value={concepto} onChange={(e) => setConcepto(e.target.value)} className={inputCls} placeholder="Compra urgente de material" />
               </label>
             </div>
+
+            {/* La factura del proveedor, escaneada en el momento del pago. */}
+            <JustificantePrevio
+              fichero={justificante}
+              onChange={setJustificante}
+              puedeAdjuntar={puede("cash.document.attach")}
+              deshabilitado={guardando}
+              onError={setError}
+            />
           </div>
         </div>
 
