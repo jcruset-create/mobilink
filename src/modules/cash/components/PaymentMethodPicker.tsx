@@ -28,8 +28,27 @@ type Props = {
   deshabilitado?: boolean;
 };
 
+/*
+ * El botón mide igual lleve imagen o texto: en un mostrador con prisa se pulsa
+ * por posición y por tamaño, y una fila de botones desiguales se lee peor.
+ * `relative` + `overflow-hidden` son para la imagen a sangre; el relleno se
+ * añade solo en los de texto, porque la imagen no lo quiere.
+ */
 const BASE =
-  "flex min-h-[64px] min-w-[104px] flex-1 flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 text-[13px] font-bold transition disabled:opacity-50";
+  "relative flex min-h-[72px] min-w-[112px] flex-1 flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border text-[13px] font-bold transition disabled:opacity-50";
+const RELLENO = "px-3 py-2";
+
+/**
+ * Marco del botón según esté pulsado o no.
+ *
+ * Con la imagen tapando el botón entero, el fondo azul del estado activo no se
+ * vería: el aro va por fuera del borde, que es lo único que queda a la vista.
+ */
+function marco(activo: boolean): string {
+  return activo
+    ? "border-sky-400 bg-sky-500/20 text-sky-100 ring-2 ring-sky-400"
+    : "border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500";
+}
 
 export default function PaymentMethodPicker({
   formas,
@@ -52,16 +71,23 @@ export default function PaymentMethodPicker({
             disabled={deshabilitado}
             aria-pressed={activo}
             title={f.nombre}
-            className={`${BASE} ${
-              activo
-                ? "border-sky-400 bg-sky-500/20 text-sky-100"
-                : "border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500"
-            }`}
+            className={`${BASE} ${f.imagenUrl ? "" : RELLENO} ${marco(activo)}`}
           >
             {f.imagenUrl ? (
-              // El nombre viaja en el `title` y en el alt: sin texto visible, un
-              // lector de pantalla se quedaría sin saber qué botón es.
-              <img src={f.imagenUrl} alt={f.nombre} className="h-8 max-w-[88px] object-contain" />
+              /*
+               * A sangre: la imagen ES el botón. `object-cover` recorta lo que
+               * sobre por el lado largo antes que dejar franjas de fondo, que
+               * es lo que hacía que el logotipo se viera diminuto en medio de
+               * un botón vacío.
+               *
+               * El nombre viaja en el `title` y en el `alt`: sin texto visible,
+               * un lector de pantalla se quedaría sin saber qué botón es.
+               */
+              <img
+                src={f.imagenUrl}
+                alt={f.nombre}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
             ) : (
               <span className="text-center leading-tight">{f.nombre}</span>
             )}
@@ -75,11 +101,7 @@ export default function PaymentMethodPicker({
           onClick={() => onChange(MIXTO)}
           disabled={deshabilitado}
           aria-pressed={valor === MIXTO}
-          className={`${BASE} ${
-            valor === MIXTO
-              ? "border-sky-400 bg-sky-500/20 text-sky-100"
-              : "border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500"
-          }`}
+          className={`${BASE} ${RELLENO} ${marco(valor === MIXTO)}`}
         >
           <Layers className="h-5 w-5" />
           <span className="leading-tight">Mixto</span>
