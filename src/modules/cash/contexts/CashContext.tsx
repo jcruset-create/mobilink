@@ -35,6 +35,10 @@ type Valor = {
   cajas: Bootstrap["cajas"];
   /** Ajustes del módulo. De momento, la imagen del botón «Mixto». */
   ajustes: Bootstrap["ajustes"];
+  /** Catálogo de secciones, de baja incluidas: el histórico las necesita. */
+  secciones: Bootstrap["secciones"];
+  /** Las que se pueden elegir al cobrar, por su orden. */
+  seccionesActivas: Bootstrap["secciones"];
   permisos: string[];
   rol: string | null;
   erp: Bootstrap["erp"] | null;
@@ -152,6 +156,8 @@ export function CashProvider({ children }: { children: ReactNode }) {
     formasParaCobros: (boot?.formasPago ?? []).filter((f) => f.activa && f.enCobros),
     formasParaPagos: (boot?.formasPago ?? []).filter((f) => f.activa && f.enPagos),
     ajustes: boot?.ajustes ?? { mixtoImagenUrl: null },
+    secciones: boot?.secciones ?? [],
+    seccionesActivas: (boot?.secciones ?? []).filter((s) => s.activa),
     cajas: boot?.cajas ?? [],
     permisos,
     rol: boot?.rol ?? null,
