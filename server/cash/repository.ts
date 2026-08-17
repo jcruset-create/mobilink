@@ -516,6 +516,9 @@ export type OperacionGuardada = {
    * costaría un agregado por fila.
    */
   formas: { forma: string; importe: Centimos; referencia: string | null }[];
+  sectionId: number | null;
+  /** Nombre de la sección, para no tener que cruzarlo en cada pantalla. */
+  seccionNombre: string | null;
 };
 
 export async function insertarOperacion(
@@ -538,6 +541,8 @@ export async function insertarOperacion(
     erpSyncStatus: string;
     reversaDeId?: number | null;
     motivoReversa?: string | null;
+    /** Sección de negocio. `null` en las operaciones anteriores al catálogo. */
+    sectionId?: number | null;
     userId: string | null;
     ahora: number;
   }
@@ -547,8 +552,8 @@ export async function insertarOperacion(
        (empresa_id, session_id, numero, tipo, origen, external_system, external_document_id,
         external_document_reference, documento_id, party_nombre, concepto, referencia,
         importe_centimos, efectivo_neto_centimos, estado, reversa_de_id, motivo_reversa,
-        erp_sync_status, created_by, created_at_ms, confirmed_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'CONFIRMED',$15,$16,$17,$18,$19,$19,$19)
+        erp_sync_status, section_id, created_by, created_at_ms, confirmed_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'CONFIRMED',$15,$16,$17,$18,$19,$20,$20,$20)
      RETURNING id`,
     [
       o.empresaId,
@@ -568,6 +573,7 @@ export async function insertarOperacion(
       o.reversaDeId ?? null,
       o.motivoReversa ?? null,
       o.erpSyncStatus,
+      o.sectionId ?? null,
       o.userId,
       o.ahora,
     ]
@@ -608,6 +614,8 @@ export function aOperacion(r: any): OperacionGuardada {
     externalDocumentId: r.external_document_id,
     externalDocumentReference: r.external_document_reference,
     createdAtMs: Number(r.created_at_ms),
+    sectionId: r.section_id ?? null,
+    seccionNombre: r.seccion_nombre ?? null,
     formas: Array.isArray(r.formas)
       ? r.formas.map((f: any) => ({
           forma: String(f.forma),
@@ -644,7 +652,8 @@ export async function operacionesDeSesion(
                      )
                 FROM cash_operation_payments p
                WHERE p.operation_id = o.id
-            ), '[]'::json) AS formas
+            ), '[]'::json) AS formas,
+            (SELECT sec.nombre FROM cash_sections sec WHERE sec.id = o.section_id) AS seccion_nombre
        FROM cash_operations o
       WHERE o.session_id = $1
       ORDER BY o.id DESC`,

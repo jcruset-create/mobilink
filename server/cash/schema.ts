@@ -643,6 +643,67 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Secciones de negocio dentro de una misma caja.
+   *
+   * El modelo estándar del módulo es «una caja = un cajón = una liquidación».
+   * Este taller tiene DOS negocios —taller y gasolinera— que liquidan por
+   * separado pero comparten un único cajón. Partirlo en dos cajas rompería el
+   * arqueo, porque no se puede contar dos veces el mismo billete; dejarlo en
+   * una sola perdería la liquidación separada, que es justo lo que hace falta.
+   *
+   * La salida es esta: **el cajón y su arqueo siguen siendo uno solo** —el
+   * dinero real se cuenta una vez— y lo que se parte es la liquidación,
+   * etiquetando cada operación con su sección.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_sections (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      -- La que se propone sola al cobrar y con la que se rellenan los pagos.
+      por_defecto BOOLEAN NOT NULL DEFAULT false,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo)
+    );
+    CREATE INDEX IF NOT EXISTS cash_sections_empresa_idx
+      ON cash_sections(empresa_id, activa, orden);
+  `);
+
+  /*
+   * Una sola sección por defecto por empresa. Índice único parcial y no una
+   * comprobación en el código: con dos marcadas, «la de por defecto» dejaría
+   * de significar nada y la elegida dependería del orden de la consulta.
+   */
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_sections_una_por_defecto_idx
+      ON cash_sections(empresa_id) WHERE por_defecto;
+  `);
+
+  /*
+   * La sección de cada operación.
+   *
+   * NULL a propósito y sin valor por defecto: las operaciones registradas
+   * antes de que existieran las secciones no pertenecen a ninguna, y
+   * inventarles una sería peor que dejarlo en blanco. Se reasignan a mano
+   * desde el histórico si hace falta.
+   *
+   * Los pagos y salidas llevan el campo aunque la pantalla no lo pregunte y lo
+   * rellene siempre con la sección por defecto: tenerlo desde el primer día
+   * ahorra una migración con datos reales dentro el día que se quiera imputar
+   * el gasto a cada negocio.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS section_id INTEGER REFERENCES cash_sections(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS cash_operations_section_idx
+      ON cash_operations(session_id, section_id);
+  `);
+
+  /*
    * Ajustes sueltos del módulo, por empresa.
    *
    * El primero es la imagen del botón «Mixto». Mixto NO es una forma de pago

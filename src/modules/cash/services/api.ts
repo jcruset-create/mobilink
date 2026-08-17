@@ -30,6 +30,7 @@ import type {
   ResultadoArqueo,
   ResultadoCambio,
   ResumenJornada,
+  SeccionConfig,
   Sesion,
 } from "../types";
 
@@ -333,6 +334,8 @@ export const registrarCobro = (datos: {
   externalSystem?: string | null;
   externalDocumentId?: string | null;
   externalDocumentReference?: string | null;
+  /** Sección de negocio del cobro (taller, gasolinera…). */
+  sectionId?: number | null;
 }) => pedir<RespuestaOperacion>("/collections", json(datos));
 
 export const registrarPago = (datos: {
@@ -462,3 +465,19 @@ export const subirImagenMixto = (fichero: File) => {
 
 export const quitarImagenMixto = () =>
   pedir<{ ajustes: Ajustes }>("/settings/mixed-image", { method: "DELETE" });
+
+// ── Secciones de negocio ───────────────────────────────────────────────────
+
+export const listarSecciones = () => pedir<{ secciones: SeccionConfig[] }>("/sections");
+
+export const crearSeccion = (datos: { nombre: string; orden?: number }) =>
+  pedir<{ seccion: SeccionConfig }>("/sections", json(datos));
+
+export const actualizarSeccion = (
+  id: number,
+  datos: { nombre?: string; activa?: boolean; porDefecto?: boolean; orden?: number }
+) =>
+  pedir<{ seccion: SeccionConfig }>(`/sections/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(datos),
+  });

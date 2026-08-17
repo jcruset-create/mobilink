@@ -31,7 +31,7 @@ import {
 } from "../components/ui";
 import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
 import { euros } from "../utils/money";
-import type { Denominacion, FormaPagoConfig } from "../types";
+import type { Denominacion, FormaPagoConfig, SeccionConfig } from "../types";
 import * as api from "../services/api";
 
 type CajaConfig = {
@@ -50,12 +50,182 @@ export default function Configuracion() {
     <div className="space-y-4">
       <Cabecera
         titulo="Configuración"
-        descripcion="Cajas físicas, formas de cobro y catálogo de denominaciones y cartuchos."
+        descripcion="Cajas físicas, secciones de negocio, formas de cobro y catálogo de denominaciones."
       />
       <Cajas />
+      <Secciones />
       <FormasPago />
       {puede("cash.denominations.configure") ? <Denominaciones /> : <DenominacionesSoloLectura />}
     </div>
+  );
+}
+
+// ── Secciones de negocio ───────────────────────────────────────────────────
+
+/**
+ * Secciones de negocio dentro de la misma caja.
+ *
+ * Existen porque este taller lleva dos negocios —taller y gasolinera— con **un
+ * solo cajón**. Partirlo en dos cajas rompería el arqueo, porque no se puede
+ * contar dos veces el mismo billete. Lo que se parte es la liquidación: cada
+ * cobro se etiqueta con su sección y el desglose sale en la jornada y en el
+ * cierre. El dinero sigue siendo uno.
+ */
+function Secciones() {
+  const { recargarConfiguracion, puede } = useCash();
+  const [secciones, setSecciones] = useState<SeccionConfig[]>([]);
+  const [nombre, setNombre] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const r = await api.listarSecciones();
+      setSecciones(r.secciones);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las secciones");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+      // El selector de la pantalla de cobros sale del arranque.
+      await recargarConfiguracion();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Secciones de negocio
+      </h2>
+
+      <p className="text-[11px] text-slate-400">
+        Para repartir la liquidación entre varios negocios que comparten el mismo cajón. El arqueo
+        y el cierre siguen siendo <strong className="text-slate-300">uno solo</strong>: el dinero
+        no se separa, solo se sabe cuánto ha aportado cada uno.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Nueva sección
+            </span>
+            <input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && nombre.trim()) {
+                  void accion(async () => {
+                    await api.crearSeccion({ nombre: nombre.trim() });
+                    setNombre("");
+                  });
+                }
+              }}
+              className={inputCls}
+              placeholder="Lavadero"
+            />
+          </label>
+          <button
+            onClick={() =>
+              void accion(async () => {
+                await api.crearSeccion({ nombre: nombre.trim() });
+                setNombre("");
+              })
+            }
+            disabled={ocupado || !nombre.trim()}
+            className="flex h-[38px] items-center gap-1 rounded-lg bg-sky-600 px-3 text-[12px] font-bold text-white hover:bg-sky-500 disabled:opacity-40"
+          >
+            <Plus className="h-4 w-4" /> Añadir
+          </button>
+        </div>
+      )}
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Sección</th>
+            <th className={`${thCls} text-right`}>Operaciones</th>
+            <th className={thCls}>Estado</th>
+            <th className={`${thCls} text-right`}>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {secciones.length === 0 && <EmptyRow cols={4} text="Todavía no hay secciones." />}
+          {secciones.map((sec) => (
+            <tr key={sec.id} className={sec.activa ? "" : "opacity-60"}>
+              <td className={tdCls}>
+                <div className="font-medium text-slate-100">{sec.nombre}</div>
+                <div className="text-[10px] text-slate-500">{sec.codigo}</div>
+              </td>
+              <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{sec.usos}</td>
+              <td className={tdCls}>
+                {sec.porDefecto ? (
+                  <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold text-sky-300">
+                    Por defecto
+                  </span>
+                ) : sec.activa ? (
+                  <span className="text-[11px] text-slate-400">Activa</span>
+                ) : (
+                  <span className="text-[11px] text-slate-500">De baja</span>
+                )}
+              </td>
+              <td className={tdCls}>
+                <div className="flex justify-end gap-1">
+                  {!sec.porDefecto && sec.activa && (
+                    <button
+                      onClick={() => void accion(() => api.actualizarSeccion(sec.id, { porDefecto: true }))}
+                      disabled={!editable || ocupado}
+                      className={btnMini}
+                      title="Marcarla como predeterminada: es la que se propone al cobrar y con la que se guardan los pagos"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void accion(() => api.actualizarSeccion(sec.id, { activa: !sec.activa }))}
+                    disabled={!editable || ocupado || sec.porDefecto}
+                    className={btnMini}
+                    title={
+                      sec.porDefecto
+                        ? "La sección por defecto no se puede dar de baja: marca antes otra"
+                        : sec.activa
+                          ? "Dar de baja"
+                          : "Reactivar"
+                    }
+                  >
+                    <Power className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+
+      <p className="text-[11px] text-slate-500">
+        Dar de baja una sección no toca el histórico: los cobros ya registrados con ella siguen
+        ahí, solo deja de poder elegirse. Los pagos y salidas no preguntan la sección y se guardan
+        con la predeterminada.
+      </p>
+    </section>
   );
 }
 

@@ -405,6 +405,12 @@ export type EntradaOperacion = {
   externalSystem?: string | null;
   externalDocumentId?: string | null;
   externalDocumentReference?: string | null;
+  /**
+   * Sección de negocio (taller, gasolinera…). Se omite en las operaciones que
+   * no son de mostrador —fondo inicial, cierre, ingreso bancario— porque son
+   * del cajón entero y no de un negocio.
+   */
+  sectionId?: number | null;
 };
 
 export type ResultadoOperacion = {
@@ -536,6 +542,29 @@ export async function registrarOperacion(
       }
     }
 
+    /*
+     * La sección se comprueba aquí dentro, con la jornada ya bloqueada, y no
+     * en el router: una sección dada de baja entre que se pintó la pantalla y
+     * se pulsó confirmar tiene que rechazarse, no colarse por ser el id de
+     * algo que existía hace un minuto.
+     */
+    if (e.sectionId != null) {
+      const { rows: secc } = await client.query<{ id: number; activa: boolean; nombre: string }>(
+        `SELECT id, activa, nombre FROM cash_sections WHERE id = $1 AND empresa_id = $2`,
+        [e.sectionId, ctx.empresaId]
+      );
+      if (secc.length === 0) {
+        throw new ErrorCaja("SECCION_NO_ENCONTRADA", "La sección indicada no existe.", 404);
+      }
+      if (!secc[0].activa) {
+        throw new ErrorCaja(
+          "SECCION_DE_BAJA",
+          `La sección "${secc[0].nombre}" está dada de baja y no admite operaciones nuevas.`,
+          409
+        );
+      }
+    }
+
     codigosEfectivo = codigosEfectivoDe(catalogo);
     const validacion = validarOperacion(normalizada, stock, codigosEfectivo);
     if (esFallo(validacion)) {
@@ -572,6 +601,7 @@ export async function registrarOperacion(
       importeCentimos: e.importeCentimos,
       efectivoNetoCentimos: validacion.efectivoNeto,
       erpSyncStatus,
+      sectionId: e.sectionId ?? null,
       userId: ctx.userId,
       ahora,
     });
@@ -1528,6 +1558,20 @@ export type ResumenJornada = {
   entregasCentimos: Centimos;
   operaciones: number;
   pendientesErp: number;
+  /**
+   * Reparto por sección de negocio. **Dato informativo, no un segundo arqueo**:
+   * el cajón es uno solo y este dinero no está separado físicamente. Sirve para
+   * saber cuánto ha aportado cada negocio, no para cuadrarlos por separado.
+   */
+  porSeccion: {
+    sectionId: number | null;
+    nombre: string;
+    cobrosCentimos: Centimos;
+    pagosCentimos: Centimos;
+    /** Efectivo neto: lo que de verdad ha movido el cajón esa sección. */
+    efectivoNetoCentimos: Centimos;
+    operaciones: number;
+  }[];
 };
 
 export async function resumenJornada(sessionId: number): Promise<ResumenJornada> {
@@ -1565,6 +1609,27 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
       .filter((r: { tipo: string; origen: string }) => r.tipo === tipo && (!origen || r.origen === origen))
       .reduce((a: number, r: { importe: string }) => a + Number(r.importe), 0);
 
+  /*
+   * Reparto por sección. Las operaciones anteriores al catálogo no tienen
+   * ninguna y salen agrupadas como «Sin sección» en vez de repartirse a ojo
+   * entre las que hay: un número inventado es peor que un hueco declarado.
+   */
+  const { rows: secciones } = await pool.query(
+    `SELECT o.section_id,
+            COALESCE(sec.nombre, 'Sin sección') AS nombre,
+            SUM(CASE WHEN o.tipo = 'COLLECTION' THEN o.importe_centimos ELSE 0 END) AS cobros,
+            SUM(CASE WHEN o.tipo IN ('PAYMENT','MANUAL_OUT') THEN o.importe_centimos ELSE 0 END) AS pagos,
+            SUM(o.efectivo_neto_centimos) AS efectivo,
+            COUNT(*) AS n
+       FROM cash_operations o
+       LEFT JOIN cash_sections sec ON sec.id = o.section_id
+      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
+        AND o.tipo IN ('COLLECTION','PAYMENT','MANUAL_OUT')
+      GROUP BY o.section_id, sec.nombre, sec.orden
+      ORDER BY sec.orden NULLS LAST, sec.nombre`,
+    [sessionId]
+  );
+
   const { rows: pendientes } = await pool.query(
     `SELECT COUNT(*) AS n FROM cash_operations
       WHERE session_id = $1 AND erp_sync_status IN ('PENDING','ERROR','RETRY_PENDING')`,
@@ -1601,6 +1666,16 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     entregasCentimos: suma("CASH_DELIVERY"),
     operaciones: Number(totalOps[0].n),
     pendientesErp: Number(pendientes[0].n),
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    porSeccion: secciones.map((r: any) => ({
+      sectionId: r.section_id ?? null,
+      nombre: r.nombre,
+      cobrosCentimos: Number(r.cobros),
+      pagosCentimos: Number(r.pagos),
+      efectivoNetoCentimos: Number(r.efectivo),
+      operaciones: Number(r.n),
+    })),
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   };
 }
 
