@@ -616,7 +616,105 @@ function FormasPago() {
         efectivo no se puede dar de baja ni quitar de ninguna de las dos pantallas, porque es el
         único que mueve el cajón.
       </p>
+
+      <BotonMixto editable={editable} />
     </section>
+  );
+}
+
+/**
+ * Imagen del botón «Mixto».
+ *
+ * Va en su propio bloque y no como una fila más de la tabla porque Mixto no es
+ * una forma de cobro: es un reparto entre varias. No se puede dar de baja, ni
+ * reordenar, ni exigirle referencia —no significan nada para él—, y meterlo en
+ * la tabla obligaría a apagar media fila de controles. Lo único suyo que se
+ * configura es la imagen.
+ */
+function BotonMixto({ editable }: { editable: boolean }) {
+  const { ajustes, recargarConfiguracion } = useCash();
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+
+  const MAXIMO = 8 * 1024 * 1024;
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await recargarConfiguracion();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+      <h3 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Botón «Mixto»
+      </h3>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        {ajustes.mixtoImagenUrl ? (
+          <img
+            src={ajustes.mixtoImagenUrl}
+            alt=""
+            className="h-8 w-12 rounded border border-slate-700 bg-slate-900 object-cover"
+          />
+        ) : (
+          <span className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-500">
+            icono
+          </span>
+        )}
+
+        <p className="min-w-0 flex-1 text-[11px] text-slate-400">
+          Es el botón que reparte un cobro entre varias formas. Sin imagen sale con su icono y el
+          texto «Mixto»; con imagen se ve igual que los demás botones, así que conviene subirla en{" "}
+          <strong className="text-slate-300">{PROPORCION_BOTON}</strong> ({MEDIDA_RECOMENDADA}).
+        </p>
+
+        {editable && (
+          <div className="flex shrink-0 gap-1">
+            <label className={`${btnMini} cursor-pointer`} title="Subir la imagen del botón Mixto">
+              <ImagePlus className="h-3.5 w-3.5" />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={ocupado}
+                onChange={(e) => {
+                  const fichero = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!fichero) return;
+                  if (fichero.size > MAXIMO) {
+                    setError(
+                      `La imagen pesa ${(fichero.size / 1024 / 1024).toFixed(1)} MB y el máximo son 8 MB.`
+                    );
+                    return;
+                  }
+                  void accion(() => api.subirImagenMixto(fichero));
+                }}
+              />
+            </label>
+            {ajustes.mixtoImagenUrl && (
+              <button
+                onClick={() => void accion(() => api.quitarImagenMixto())}
+                disabled={ocupado}
+                className={btnMini}
+                title="Quitar la imagen y dejar el icono"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

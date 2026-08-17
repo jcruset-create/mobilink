@@ -76,6 +76,18 @@ export default function CashLayout() {
             </span>
           )}
 
+          {/*
+            La versión del build que está sirviendo el navegador. Sin ella, un
+            "sigue sin funcionar" puede ser un fallo de verdad o una caché
+            vieja, y no hay forma de distinguirlo sin mirar el bundle.
+          */}
+          <span
+            title="Versión de la aplicación que tienes cargada"
+            className="hidden text-[10px] tabular-nums text-slate-600 sm:inline"
+          >
+            v{__APP_VERSION__}
+          </span>
+
           <button
             onClick={() => navigate("/inicio")}
             title="Volver al inicio"

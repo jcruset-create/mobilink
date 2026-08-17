@@ -33,6 +33,8 @@ type Valor = {
   /** Las que salen como botón al pagar. Normalmente solo el efectivo. */
   formasParaPagos: FormaPagoConfig[];
   cajas: Bootstrap["cajas"];
+  /** Ajustes del módulo. De momento, la imagen del botón «Mixto». */
+  ajustes: Bootstrap["ajustes"];
   permisos: string[];
   rol: string | null;
   erp: Bootstrap["erp"] | null;
@@ -149,6 +151,7 @@ export function CashProvider({ children }: { children: ReactNode }) {
     formasPago: boot?.formasPago ?? [],
     formasParaCobros: (boot?.formasPago ?? []).filter((f) => f.activa && f.enCobros),
     formasParaPagos: (boot?.formasPago ?? []).filter((f) => f.activa && f.enPagos),
+    ajustes: boot?.ajustes ?? { mixtoImagenUrl: null },
     cajas: boot?.cajas ?? [],
     permisos,
     rol: boot?.rol ?? null,
