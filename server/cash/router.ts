@@ -241,7 +241,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const [denominaciones, formasPago, cajas, erp, ajustes] = await Promise.all([
+      const [denominaciones, formasPago, cajas, erp, ajustes, secciones] = await Promise.all([
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
@@ -251,11 +251,13 @@ export function createCashRouter(): Router {
         ),
         estadoIntegracion(empresaId),
         config.ajustes(empresaId),
+        config.listarSecciones(empresaId),
       ]);
 
       res.json({
         denominaciones,
         formasPago,
+        secciones,
         ajustes,
         cajas: cajas.rows,
         permisos: req.cashPermisos,
@@ -826,6 +828,7 @@ export function createCashRouter(): Router {
         externalDocumentId: typeof b.externalDocumentId === "string" ? b.externalDocumentId : null,
         externalDocumentReference:
           typeof b.externalDocumentReference === "string" ? b.externalDocumentReference : null,
+        sectionId: b.sectionId ? enteroPositivo(b.sectionId, "sectionId") : null,
       });
       res.status(201).json(salida);
     })
@@ -861,8 +864,60 @@ export function createCashRouter(): Router {
         externalDocumentId: typeof b.externalDocumentId === "string" ? b.externalDocumentId : null,
         externalDocumentReference:
           typeof b.externalDocumentReference === "string" ? b.externalDocumentReference : null,
+        /*
+         * Los pagos no preguntan la sección: van todos al negocio principal.
+         * El campo se guarda igual, relleno con la sección por defecto, para
+         * que el día que se quiera imputar el gasto a cada negocio no haya que
+         * migrar datos reales. Si el cliente la manda, se respeta.
+         */
+        sectionId: b.sectionId
+          ? enteroPositivo(b.sectionId, "sectionId")
+          : await config.seccionPorDefecto(req.authCtx!.empresaId),
       });
       res.status(201).json(salida);
+    })
+  );
+
+  // ── Secciones de negocio ─────────────────────────────────────────────────
+
+  r.get(
+    "/sections",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ secciones: await config.listarSecciones(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/sections",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const seccion = await config.crearSeccion(contexto(req), {
+        nombre: typeof b.nombre === "string" ? b.nombre : "",
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
+        orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+      });
+      res.status(201).json({ seccion });
+    })
+  );
+
+  r.patch(
+    "/sections/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const seccion = await config.actualizarSeccion(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+          porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }
+      );
+      res.json({ seccion });
     })
   );
 

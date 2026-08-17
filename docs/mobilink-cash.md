@@ -345,6 +345,47 @@ El orden recomendado al meter atrasados es de más antiguo a más reciente, para
 que el cambio final de cada día sea el fondo inicial del siguiente, igual que
 pasó en el mostrador.
 
+## 7 septies. Secciones de negocio (taller y gasolinera, un solo cajón)
+
+Este taller lleva **dos negocios que liquidan por separado pero comparten un
+único cajón**. Las dos salidas evidentes son malas:
+
+- **Dos cajas** → cada una con su jornada y su arqueo. Pero solo hay un montón
+  de billetes: no se puede arquear dos veces el mismo dinero, y el arqueo
+  dejaría de significar nada.
+- **Una sola caja** → el arqueo cuadra, pero se pierde la liquidación separada,
+  que es justo lo que hacía falta.
+
+La salida es partir **la liquidación, no el inventario**:
+
+- **El cajón, la jornada, el arqueo y el cierre siguen siendo uno solo.** Esto
+  no es negociable: es lo que garantiza que el módulo cuadra.
+- Cada operación lleva su sección (`cash_operations.section_id`), y el resumen
+  de la jornada trae `porSeccion` con cobros, pagos y efectivo neto de cada una.
+  Es un **dato informativo**: ese dinero no está separado físicamente.
+
+Decisiones que conviene no reabrir sin pensarlas:
+
+- **Una operación pertenece a una sola sección.** Un cliente que reposta y deja
+  el coche se registra como dos operaciones, no como una repartida. Repartir
+  una operación entre secciones obligaría a repartir también sus piezas de
+  efectivo, y ahí se acaba la trazabilidad.
+- **Los pagos no preguntan la sección**: van todos al negocio principal. Pero
+  **el campo se guarda igual**, relleno con la sección por defecto. Tenerlo
+  desde el primer día ahorra una migración con datos reales dentro el día que
+  se quiera imputar el gasto a cada negocio. Consecuencia conocida: el efectivo
+  neto por sección sirve para saber **lo que ha entrado** por cada una, no para
+  calcular un margen.
+- **Lo anterior al catálogo sale como «Sin sección»**, agrupado aparte y no
+  repartido a ojo entre las que hay: un número inventado es peor que un hueco
+  declarado.
+- **Una sola sección por defecto**, garantizado con un índice único parcial y
+  no con una comprobación en el código. Y no se puede dar de baja: es la que
+  rellena los pagos.
+- El catálogo es **por empresa y configurable** (`cash_sections`), como las
+  formas de cobro: mañana puede haber una tercera —tienda, lavadero— sin tocar
+  código.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:
