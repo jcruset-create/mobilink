@@ -14,7 +14,7 @@ import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../compo
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox } from "../components/ui";
 import { euros, totalLineas } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
-import type { FormaPagoConfig, Operacion } from "../types";
+import type { FormaPagoConfig, Operacion, SeccionConfig } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
 import * as api from "../services/api";
 
@@ -184,7 +184,7 @@ export default function JornadaActual() {
  * concreta, no de la configuración: si cambia la jornada, cambia la lista.
  */
 function DetalleDelDia({ sessionId }: { sessionId: number }) {
-  const { formasPago } = useCash();
+  const { formasPago, secciones, puede, refrescar } = useCash();
   const [operaciones, setOperaciones] = useState<Operacion[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -215,6 +215,31 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
   const cobros = enOrden.filter((o) => o.tipo === "COLLECTION");
   const pagos = enOrden.filter((o) => o.tipo === "PAYMENT" || o.tipo === "MANUAL_OUT");
 
+  /**
+   * Cambia la sección de una operación.
+   *
+   * Se pinta el cambio en el acto y luego se recarga: en el mostrador, un
+   * desplegable que tarda medio segundo en reflejar lo elegido se vuelve a
+   * pulsar, y acabas con dos peticiones.
+   */
+  async function cambiarSeccion(operationId: number, sectionId: number | null) {
+    setOperaciones((prev) =>
+      prev.map((o) =>
+        o.id === operationId
+          ? { ...o, sectionId, seccionNombre: secciones.find((s) => s.id === sectionId)?.nombre ?? null }
+          : o
+      )
+    );
+    try {
+      await api.cambiarSeccionOperacion(operationId, sectionId);
+      // El reparto por sección de las tarjetas de arriba sale del resumen.
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cambiar la sección");
+      await cargar();
+    }
+  }
+
   if (error) return <ErrorBox>{error}</ErrorBox>;
 
   return (
@@ -224,6 +249,9 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
         vacio="Todavía no hay ningún cobro registrado."
         operaciones={cobros}
         formasPago={formasPago}
+        secciones={secciones}
+        puedeReclasificar={puede("cash.configure")}
+        onSeccion={cambiarSeccion}
         cargando={cargando}
         onActualizar={() => void cargar()}
       />
@@ -232,6 +260,9 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
         vacio="Todavía no hay ningún pago ni salida."
         operaciones={pagos}
         formasPago={formasPago}
+        secciones={secciones}
+        puedeReclasificar={puede("cash.configure")}
+        onSeccion={cambiarSeccion}
         cargando={cargando}
         onActualizar={() => void cargar()}
         tonoImporte="text-amber-300"
@@ -245,6 +276,9 @@ function ListaOperaciones({
   vacio,
   operaciones,
   formasPago,
+  secciones,
+  puedeReclasificar,
+  onSeccion,
   cargando,
   onActualizar,
   tonoImporte = "text-slate-100",
@@ -253,6 +287,9 @@ function ListaOperaciones({
   vacio: string;
   operaciones: Operacion[];
   formasPago: FormaPagoConfig[];
+  secciones: SeccionConfig[];
+  puedeReclasificar: boolean;
+  onSeccion: (operationId: number, sectionId: number | null) => void;
   cargando: boolean;
   onActualizar: () => void;
   tonoImporte?: string;
@@ -302,10 +339,40 @@ function ListaOperaciones({
                       <span className="truncate">{o.partyNombre}</span>
                     </>
                   )}
-                  {o.seccionNombre && (
-                    <span className="rounded bg-slate-700/60 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-slate-300">
-                      {o.seccionNombre}
-                    </span>
+                  {/*
+                    La sección, editable en el sitio. Reclasificar es corregir
+                    un despiste de mostrador —se cobró gasolinera con el taller
+                    puesto— y obligar a irse a otra pantalla para eso garantiza
+                    que no se corrija nunca. No mueve dinero, solo a qué
+                    negocio se imputa, y queda auditado.
+                  */}
+                  {puedeReclasificar && secciones.length > 0 ? (
+                    <select
+                      value={o.sectionId ?? ""}
+                      onChange={(e) =>
+                        onSeccion(o.id, e.target.value === "" ? null : Number(e.target.value))
+                      }
+                      aria-label={`Sección de ${o.numero}`}
+                      title="Cambiar la sección"
+                      className={`rounded border-0 px-1 py-px text-[9px] font-bold uppercase tracking-wide outline-none focus:ring-1 focus:ring-sky-500 ${
+                        o.sectionId == null
+                          ? "bg-amber-500/20 text-amber-300"
+                          : "bg-slate-700/60 text-slate-300"
+                      }`}
+                    >
+                      <option value="">Sin sección</option>
+                      {secciones.map((sec) => (
+                        <option key={sec.id} value={sec.id}>
+                          {sec.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    o.seccionNombre && (
+                      <span className="rounded bg-slate-700/60 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                        {o.seccionNombre}
+                      </span>
+                    )
                   )}
                 </div>
 
