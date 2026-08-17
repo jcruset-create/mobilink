@@ -878,6 +878,26 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Reclasificar una operación: cambiarle la sección.
+   *
+   * `cash.configure` y no un permiso de cobro: no mueve dinero, pero cambia
+   * un número que alguien mira para decidir, así que es cosa de responsable.
+   */
+  r.patch(
+    "/operations/:id/section",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const salida = await servicio.cambiarSeccion(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        b.sectionId == null ? null : enteroPositivo(b.sectionId, "sectionId")
+      );
+      res.json(salida);
+    })
+  );
+
   // ── Secciones de negocio ─────────────────────────────────────────────────
 
   r.get(

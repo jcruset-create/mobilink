@@ -1784,3 +1784,88 @@ async function abrirCartuchosSiHaceFalta(
 
   return r.aperturas;
 }
+
+/**
+ * Cambia la sección de una operación ya registrada.
+ *
+ * Es una **reclasificación, no un movimiento de dinero**: no toca ni un
+ * céntimo ni una pieza, solo a qué negocio se imputa. Por eso se permite
+ * aunque la jornada esté cerrada —el error se ve al día siguiente, al mirar el
+ * reparto— y por eso no hace falta bloquear la jornada: no hay nada que dos
+ * peticiones simultáneas puedan descuadrar.
+ *
+ * Lo que sí hace es quedar auditado con el antes y el después, porque cambia
+ * un número que alguien va a mirar para decidir.
+ */
+export async function cambiarSeccion(
+  ctx: Contexto,
+  operationId: number,
+  sectionId: number | null
+): Promise<{ operacionId: number; sectionId: number | null; seccionNombre: string | null }> {
+  const { rows: previas } = await pool.query(
+    `SELECT o.id, o.tipo, o.estado, o.section_id,
+            (SELECT nombre FROM cash_sections s WHERE s.id = o.section_id) AS seccion_nombre
+       FROM cash_operations o
+      WHERE o.id = $1 AND o.empresa_id = $2`,
+    [operationId, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) {
+    throw new ErrorCaja("OPERACION_NO_ENCONTRADA", "La operación no existe.", 404);
+  }
+  if (antes.estado === "CANCELLED" || antes.estado === "REVERSED") {
+    throw new ErrorCaja(
+      "OPERACION_ANULADA",
+      "Una operación anulada no se reclasifica: el histórico tiene que quedar como pasó.",
+      409
+    );
+  }
+
+  /*
+   * Solo lo que pertenece a un negocio. El fondo inicial, el cierre y el
+   * ingreso bancario son del cajón entero y darles sección ensuciaría el
+   * reparto con dinero que no ha generado nadie.
+   */
+  if (!["COLLECTION", "PAYMENT", "MANUAL_OUT", "MANUAL_IN"].includes(antes.tipo)) {
+    throw new ErrorCaja(
+      "OPERACION_SIN_SECCION",
+      "Esa operación es del cajón entero (fondo, cierre o ingreso), no de una sección.",
+      409
+    );
+  }
+
+  let nombre: string | null = null;
+  if (sectionId != null) {
+    const { rows } = await pool.query<{ nombre: string; activa: boolean }>(
+      `SELECT nombre, activa FROM cash_sections WHERE id = $1 AND empresa_id = $2`,
+      [sectionId, ctx.empresaId]
+    );
+    if (rows.length === 0) {
+      throw new ErrorCaja("SECCION_NO_ENCONTRADA", "La sección indicada no existe.", 404);
+    }
+    // Aquí sí se admite una sección de baja: reclasificar hacia atrás puede
+    // necesitar una sección que ya no se usa para cobros nuevos.
+    nombre = rows[0].nombre;
+  }
+
+  await pool.query(
+    `UPDATE cash_operations SET section_id = $3, updated_at_ms = $4
+      WHERE id = $1 AND empresa_id = $2`,
+    [operationId, ctx.empresaId, sectionId, Date.now()]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.operation.section",
+    entidad: "cash_operations",
+    entidadId: String(operationId),
+    detalle: {
+      antes: { sectionId: antes.section_id ?? null, nombre: antes.seccion_nombre ?? null },
+      despues: { sectionId, nombre },
+    },
+    ip: ctx.ip,
+  });
+
+  return { operacionId: operationId, sectionId, seccionNombre: nombre };
+}
