@@ -231,14 +231,14 @@ type Props = {
   jobPlate?: string;
   onAssistanceUpdated?: () => void;
   /**
-   * Se llama cuando la captura termina (cerrada y con el análisis resuelto)
-   * habiéndola visto en marcha desde aquí. El padre la repliega y deja solo la
-   * tarjeta de la asistencia; se vuelve a ver con el botón «Captura WhatsApp».
+   * Cierra el panel y deja solo la tarjeta de la asistencia. Lo decide el
+   * usuario con el botón «Cerrar», cuando ya ha aplicado los datos que quería;
+   * se vuelve a abrir con el botón «Captura WhatsApp».
    */
-  onFinished?: () => void;
+  onClose?: () => void;
 };
 
-export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUpdated, onFinished }: Props) {
+export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUpdated, onClose }: Props) {
   const [session, setSession] = useState<WhatsAppCaptureSessionWithMessages | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -256,12 +256,6 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   const [showAiModal, setShowAiModal] = useState(false);
   const [applyingAll, setApplyingAll] = useState(false);
   const autoOpenedSessionRef = useRef<number | null>(null);
-  // ¿Se ha visto la captura en marcha (activa o analizando) desde que se abrió
-  // esta sección? Solo entonces se repliega sola al terminar. Sin esta marca,
-  // abrirla con el botón para consultar una captura ya cerrada la cerraría de
-  // inmediato y el botón parecería roto.
-  const vistaEnMarchaRef = useRef(false);
-  const finalizadaAvisadaRef = useRef(false);
 
   const fetchSession = useCallback(async () => {
     try {
@@ -449,21 +443,6 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     }
   }, [suggestions, session]);
 
-  // Al terminar la captura, replegarse y dejar solo la tarjeta de la asistencia.
-  // Se espera a que el modal de la IA esté cerrado: si no, el usuario perdería
-  // las sugerencias de vista al desmontarse esta sección con él abierto.
-  useEffect(() => {
-    if (!session) return;
-    if (session.status === "ACTIVE" || session.ai_status === "pending") {
-      vistaEnMarchaRef.current = true;
-      return;
-    }
-    if (!vistaEnMarchaRef.current || finalizadaAvisadaRef.current) return;
-    if (showAiModal) return;
-    finalizadaAvisadaRef.current = true;
-    onFinished?.();
-  }, [session, showAiModal, onFinished]);
-
   // Cerrar el modal con Escape
   useEffect(() => {
     if (!showAiModal) return;
@@ -562,6 +541,18 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
           )}
           {!session && (
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white/60">Sin sesión</span>
+          )}
+          {/* Cierra el panel, no la sesión de captura: eso lo hace «Finalizar
+              captura». Aquí solo se recoge la vista cuando ya no hace falta. */}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Cerrar el panel (la captura no se toca)"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/25 px-3 py-1 text-xs font-bold text-white/80 hover:bg-white/10"
+            >
+              ✕ Cerrar
+            </button>
           )}
         </div>
       </div>
