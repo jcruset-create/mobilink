@@ -2054,3 +2054,63 @@ describe.runIf(RUN)("jornadas fechadas en días pasados", () => {
     expect(tarde.sesion.fondoInicialCentimos).toBe(30000);
   });
 });
+
+/*
+ * Las formas de pago viajan con la operación.
+ *
+ * La pantalla de la jornada enseña, cobro a cobro, por qué vía entró el
+ * dinero. Ese dato vive en `cash_operation_payments` y se agrega en la misma
+ * consulta que las operaciones: si algún día se separan, la lista se quedaría
+ * muda justo en lo que la hace útil.
+ */
+describe.runIf(RUN)("operaciones con sus formas de pago", () => {
+  it("un cobro mixto devuelve sus dos formas, y suman el importe", async () => {
+    const caja = await crearCaja("formas-en-lista");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    // 300 €: 200 € con tarjeta y 100 € en efectivo, entregando 100 € justos.
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 30000,
+      formasPago: [
+        { forma: "BBVA_CARD", importe: 20000, referencia: "TPV-77" },
+        { forma: "CASH", importe: 10000 },
+      ],
+      efectivoRecibido: [{ valor: 10000, cantidad: 1 }],
+      partyNombre: "Cliente mixto",
+    });
+
+    const [op] = await repo.operacionesDeSesion(sesion.id);
+    expect(op.formas).toHaveLength(2);
+    expect(op.formas.reduce((a, f) => a + f.importe, 0)).toBe(op.importeCentimos);
+
+    const tarjeta = op.formas.find((f) => f.forma === "BBVA_CARD");
+    expect(tarjeta?.importe).toBe(20000);
+    expect(tarjeta?.referencia).toBe("TPV-77");
+    expect(op.formas.find((f) => f.forma === "CASH")?.importe).toBe(10000);
+  });
+
+  it("una salida manual, que no tiene forma de pago, devuelve la lista vacía", async () => {
+    const caja = await crearCaja("salida-sin-formas");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_OUT",
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoEntregado: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Compra de sellos",
+    });
+
+    const ops = await repo.operacionesDeSesion(sesion.id);
+    expect(ops).toHaveLength(2); // el fondo inicial y la salida
+    for (const o of ops) expect(Array.isArray(o.formas)).toBe(true);
+  });
+});

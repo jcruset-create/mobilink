@@ -510,6 +510,12 @@ export type OperacionGuardada = {
   externalDocumentId: string | null;
   externalDocumentReference: string | null;
   createdAtMs: number;
+  /**
+   * Con qué se cobró o se pagó. Solo la rellena `operacionesDeSesion`; en el
+   * resto de consultas viene vacía, porque nadie más la necesita y traerla
+   * costaría un agregado por fila.
+   */
+  formas: { forma: string; importe: Centimos; referencia: string | null }[];
 };
 
 export async function insertarOperacion(
@@ -602,16 +608,46 @@ export function aOperacion(r: any): OperacionGuardada {
     externalDocumentId: r.external_document_id,
     externalDocumentReference: r.external_document_reference,
     createdAtMs: Number(r.created_at_ms),
+    formas: Array.isArray(r.formas)
+      ? r.formas.map((f: any) => ({
+          forma: String(f.forma),
+          importe: Number(f.importe),
+          referencia: f.referencia ?? null,
+        }))
+      : [],
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+/**
+ * Operaciones de una jornada, cada una con las formas de pago con las que se
+ * cobró o se pagó.
+ *
+ * Las formas van en la misma consulta, agregadas en la base, y no con una
+ * consulta por operación: la pantalla de la jornada las pide todas de golpe y
+ * un día de mostrador son decenas de cobros. Con una consulta por fila serían
+ * decenas de idas y venidas para pintar una lista.
+ */
 export async function operacionesDeSesion(
   sessionId: number,
   client: PoolClient | typeof pool = pool
 ): Promise<OperacionGuardada[]> {
   const { rows } = await client.query(
-    `SELECT * FROM cash_operations WHERE session_id = $1 ORDER BY id DESC`,
+    `SELECT o.*,
+            COALESCE((
+              SELECT json_agg(
+                       json_build_object(
+                         'forma', p.forma_pago,
+                         'importe', p.importe_centimos,
+                         'referencia', p.referencia
+                       ) ORDER BY p.id
+                     )
+                FROM cash_operation_payments p
+               WHERE p.operation_id = o.id
+            ), '[]'::json) AS formas
+       FROM cash_operations o
+      WHERE o.session_id = $1
+      ORDER BY o.id DESC`,
     [sessionId]
   );
   return rows.map(aOperacion);

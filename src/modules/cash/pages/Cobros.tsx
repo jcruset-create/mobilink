@@ -295,7 +295,24 @@ export default function Cobros() {
               </div>
             )}
 
+            {/*
+              El orden es el del mostrador: primero el papel que tienes en la
+              mano —la factura— y su importe; el cliente y el concepto son de
+              relleno y van debajo, marcados como opcionales para que nadie se
+              pare a rellenarlos con cola delante.
+            */}
             <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Factura / Referencia
+                </span>
+                <input
+                  value={referencia}
+                  onChange={(e) => setReferencia(e.target.value)}
+                  className={inputCls}
+                  placeholder="T-1234"
+                />
+              </label>
               <label className="block">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Importe a cobrar</span>
                 <input
@@ -307,16 +324,16 @@ export default function Cobros() {
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Cliente</span>
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Cliente <span className="font-normal normal-case text-slate-500">(opcional)</span>
+                </span>
                 <input value={cliente} onChange={(e) => setCliente(e.target.value)} className={inputCls} placeholder="Nombre o texto libre" />
               </label>
               <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Concepto</span>
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  Concepto <span className="font-normal normal-case text-slate-500">(opcional)</span>
+                </span>
                 <input value={concepto} onChange={(e) => setConcepto(e.target.value)} className={inputCls} placeholder="Venta mostrador" />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Referencia</span>
-                <input value={referencia} onChange={(e) => setReferencia(e.target.value)} className={inputCls} placeholder="T-1234" />
               </label>
             </div>
 
