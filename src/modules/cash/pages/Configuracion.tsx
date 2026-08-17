@@ -29,6 +29,7 @@ import {
   btnPrimary,
   btnMini,
 } from "../components/ui";
+import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
 import { euros } from "../utils/money";
 import type { Denominacion, FormaPagoConfig } from "../types";
 import * as api from "../services/api";
@@ -349,6 +350,16 @@ function FormasPago() {
         Formas de cobro
       </h2>
 
+      {editable && (
+        <p className="text-[11px] text-slate-400">
+          La imagen ocupa el botón entero. Súbela apaisada en proporción{" "}
+          <strong className="text-slate-300">{PROPORCION_BOTON}</strong> —lo ideal,{" "}
+          <strong className="text-slate-300">{MEDIDA_RECOMENDADA}</strong>— y encajará sin
+          recortarse. Con otra proporción se recorta por el lado que sobre, y la miniatura de
+          aquí al lado te enseña exactamente cómo quedará.
+        </p>
+      )}
+
       {error && <ErrorBox>{error}</ErrorBox>}
 
       {editable && (
@@ -409,9 +420,10 @@ function FormasPago() {
                 <td className={tdCls}>
                   <div className="flex items-center gap-2">
                     {f.imagenUrl ? (
-                      // `object-cover` y la misma proporción que el botón: la
-                      // vista previa tiene que enseñar lo que se va a ver al
-                      // cobrar, recorte incluido.
+                      // 48×32 es 3:2, la proporción exacta del botón, y
+                      // `object-cover` recorta igual que él: la vista previa
+                      // tiene que enseñar lo que se verá al cobrar, recorte
+                      // incluido.
                       <img
                         src={f.imagenUrl}
                         alt=""
@@ -426,7 +438,7 @@ function FormasPago() {
                       <>
                         <label
                           className={`${btnMini} cursor-pointer`}
-                          title="Subir la imagen del botón"
+                          title={`Subir la imagen del botón (${PROPORCION_BOTON}, ${MEDIDA_RECOMENDADA})`}
                         >
                           <ImagePlus className="h-3.5 w-3.5" />
                           <input
