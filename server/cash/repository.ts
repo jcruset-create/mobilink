@@ -23,6 +23,7 @@
 
 import type { PoolClient } from "pg";
 import pool from "../db.ts";
+import { ErrorCaja } from "./errors.ts";
 import type { Denominacion } from "./domain/denominations.ts";
 import type { Centimos } from "./domain/money.ts";
 import { type Inventario, type LineaDenominacion } from "./domain/inventory.ts";
@@ -60,18 +61,12 @@ export async function enTransaccion<T>(fn: (client: PoolClient) => Promise<T>): 
 
 // ── Errores de negocio ─────────────────────────────────────────────────────
 
-/** Error que la API traduce a un 4xx con código; el resto son 500. */
-export class ErrorCaja extends Error {
-  constructor(
-    readonly codigo: string,
-    message: string,
-    readonly estado = 400,
-    readonly detalle?: unknown
-  ) {
-    super(message);
-    this.name = "ErrorCaja";
-  }
-}
+/**
+ * `ErrorCaja` vive en `./errors.ts` para que los ayudantes puros puedan
+ * lanzarlo sin arrastrar el pool. Se reexporta aquí porque medio módulo lo
+ * importa de este fichero desde el primer día.
+ */
+export { ErrorCaja };
 
 // ── Denominaciones ─────────────────────────────────────────────────────────
 

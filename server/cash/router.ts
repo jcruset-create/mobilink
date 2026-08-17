@@ -12,14 +12,14 @@
  * mal.
  */
 
-import path from "node:path";
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type RequestHandler, type Response } from "express";
 import multer from "multer";
 import pool from "../db.ts";
 import { authenticate, requireModule } from "../core/auth.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
+import { miniaturaBoton } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
@@ -34,12 +34,15 @@ import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
 /**
  * Subida de la imagen del botón. Instancia propia y no la de `server/index.ts`
- * porque aquí el límite tiene que ser mucho más estrecho: son iconos de botón,
- * no fotos de un parte. Un megabyte es de sobra para un PNG de 200 px.
+ * porque el tratamiento es distinto: aquí la imagen se reduce a tamaño de botón
+ * antes de guardarla.
  */
 const subidaImagen = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 1024 * 1024, files: 1 },
+  // El límite es de entrada, no de almacenamiento: la imagen se reduce en el
+  // servidor a tamaño de botón antes de guardarla, así que aceptar la foto de
+  // un móvil no cuesta nada.
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 });
 
 /**
@@ -51,6 +54,34 @@ const subidaDocumento = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 1 },
 });
+
+/**
+ * Envuelve un middleware de multer para que sus errores hablen claro.
+ *
+ * Sin esto, un fichero que pasa del límite lanza un MulterError que se salta
+ * el manejador del router —multer corre ANTES que `ruta()`— y acaba en el 500
+ * genérico de la aplicación: "Error interno del servidor", sin pista ninguna.
+ * Pasó de verdad con la imagen de un botón de cobro.
+ */
+function subida(mw: RequestHandler, limiteMb: number): RequestHandler {
+  return (req, res, next) => {
+    mw(req, res, (err?: unknown) => {
+      if (!err) return next();
+      const codigo = (err as { code?: string })?.code;
+      if (codigo === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          error: `El fichero pasa de ${limiteMb} MB. Redúcelo o escanéalo con menos resolución.`,
+          code: "FICHERO_DEMASIADO_GRANDE",
+        });
+      }
+      console.error("[Mobilink Cash] error de subida:", err);
+      res.status(400).json({
+        error: "No se ha podido leer el fichero adjunto. Vuelve a intentarlo.",
+        code: "SUBIDA_NO_VALIDA",
+      });
+    });
+  };
+}
 
 // ── Validación de entrada ──────────────────────────────────────────────────
 
@@ -348,7 +379,7 @@ export function createCashRouter(): Router {
   r.post(
     "/payment-methods/:id/image",
     exigirPermiso("cash.configure"),
-    subidaImagen.single("imagen"),
+    subida(subidaImagen.single("imagen"), 8),
     ruta(async (req, res) => {
       const id = enteroPositivo(req.params.id, "id");
       const fichero = req.file;
@@ -359,12 +390,19 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
 
-      const extension = path.extname(fichero.originalname).toLowerCase() || ".png";
-      const ruta_ = `cash/payment-methods/${req.authCtx!.empresaId}/${id}_${Date.now()}${extension}`;
+      // Se guarda la miniatura, no el original: el botón la pinta a 32 px y
+      // una foto de móvil solo haría lenta la pantalla de cobros.
+      const miniatura = await miniaturaBoton(fichero.buffer);
+      const ruta_ = `cash/payment-methods/${req.authCtx!.empresaId}/${id}_${Date.now()}.png`;
 
-      const { error } = await supabase.storage
-        .from(SUPABASE_STORAGE_BUCKET)
-        .upload(ruta_, fichero.buffer, { contentType: fichero.mimetype, upsert: true });
+      let error: { message?: string } | null = null;
+      try {
+        ({ error } = await supabase.storage
+          .from(SUPABASE_STORAGE_BUCKET)
+          .upload(ruta_, miniatura, { contentType: "image/png", upsert: true }));
+      } catch (e) {
+        error = e as { message?: string };
+      }
       if (error) {
         console.error("Mobilink Cash: error subiendo la imagen de la forma de pago:", error);
         throw new ErrorCaja("SUBIDA_FALLIDA", "No se ha podido guardar la imagen.", 502);
@@ -404,7 +442,7 @@ export function createCashRouter(): Router {
   r.post(
     "/operations/:id/documents",
     exigirPermiso("cash.document.attach"),
-    subidaDocumento.single("documento"),
+    subida(subidaDocumento.single("documento"), 15),
     ruta(async (req, res) => {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
