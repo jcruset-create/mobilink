@@ -1899,3 +1899,158 @@ describe.runIf(RUN)("cartuchos", () => {
     expect(teorico.totalCentimos).toBe(16000);
   });
 });
+
+/*
+ * Días atrasados.
+ *
+ * Al arrancar el módulo hay días que ya se llevaron a mano en papel y hay que
+ * meterlos. La fecha del cobro tiene que ser la del día en que se cobró, no la
+ * del día en que se teclea, y el cambio tiene que ir pasando de un día al
+ * siguiente igual que pasó en el mostrador.
+ */
+describe.runIf(RUN)("jornadas fechadas en días pasados", () => {
+  /** Días de hace `n` en formato `YYYY-MM-DD`. */
+  function haceDias(n: number): string {
+    return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+  }
+
+  it("la fecha de la jornada manda sobre el reloj, y el fondo encadena por fecha", async () => {
+    const caja = await crearCaja("atrasadas");
+    const dia13 = haceDias(4);
+    const dia14 = haceDias(3);
+
+    // Día 13: se abre con 300 € contados a mano y se cobran 50 € en efectivo.
+    const a13 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: dia13,
+      fondoManual: FONDO_300,
+    });
+    expect(a13.sesion.fecha).toBe(dia13);
+
+    await servicio.registrarCobro(ctx, {
+      sessionId: a13.sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      partyNombre: "Cliente del 13",
+    });
+
+    // El cobro cuelga de la jornada del 13, aunque se teclee hoy.
+    const det13 = await servicio.detalleJornada(a13.sesion.id);
+    expect(det13.sesion.fecha).toBe(dia13);
+
+    // Se cierra dejando los 350 € íntegros como cambio del día siguiente.
+    const teorico13 = await servicio.stockDeJornada(a13.sesion.id);
+    expect(teorico13.totalCentimos).toBe(35000);
+    await servicio.guardarArqueo(ctx, { sessionId: a13.sesion.id, contado: teorico13.lineas });
+    const c13 = await servicio.cerrarJornada(ctx, {
+      sessionId: a13.sesion.id,
+      cambioFinal: teorico13.lineas,
+    });
+    expect(c13.totalCambioCentimos).toBe(35000);
+
+    // Día 14: hereda la composición exacta con la que se cerró el 13.
+    const a14 = await servicio.abrirJornada(ctx, { registerId: caja, fecha: dia14 });
+    expect(a14.sesion.fecha).toBe(dia14);
+    expect(a14.sesion.fondoInicialHeredado).toBe(true);
+    expect(a14.sesion.fondoInicialCentimos).toBe(35000);
+    expect(a14.stock).toEqual(c13.cambioFinal);
+  });
+
+  it("una jornada atrasada hereda del día anterior a ella, no de la última cerrada", async () => {
+    const caja = await crearCaja("fuera-de-orden");
+    const dia20 = haceDias(20);
+    const dia10 = haceDias(10);
+
+    // Primero se mete —fuera de orden— un día reciente con 500 €.
+    const reciente = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: dia10,
+      fondoManual: [{ valor: 5000, cantidad: 10 }],
+    });
+    const tRec = await servicio.stockDeJornada(reciente.sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: reciente.sesion.id, contado: tRec.lineas });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: reciente.sesion.id,
+      cambioFinal: tRec.lineas,
+    });
+
+    /*
+     * Ahora se mete un día MUY anterior. Si heredara de "la última cerrada" a
+     * secas, se traería los 500 € de un día que para él está en el futuro.
+     * Tiene que salir sin herencia y pedir el fondo a mano.
+     */
+    const antiguo = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: dia20,
+      fondoManual: FONDO_300,
+    });
+    expect(antiguo.sesion.fondoInicialHeredado).toBe(false);
+    expect(antiguo.sesion.fondoInicialCentimos).toBe(30000);
+  });
+
+  it("no se abre caja con fecha futura ni con una fecha que no existe", async () => {
+    const caja = await crearCaja("fecha-mala");
+    const manana = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+
+    await expect(
+      servicio.abrirJornada(ctx, { registerId: caja, fecha: manana, fondoManual: FONDO_300 })
+    ).rejects.toMatchObject({ codigo: "FECHA_EN_FUTURO" });
+
+    await expect(
+      servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-02-31", fondoManual: FONDO_300 })
+    ).rejects.toMatchObject({ codigo: "FECHA_NO_VALIDA" });
+
+    await expect(
+      servicio.abrirJornada(ctx, { registerId: caja, fecha: "14/08/2026", fondoManual: FONDO_300 })
+    ).rejects.toMatchObject({ codigo: "FECHA_NO_VALIDA" });
+  });
+
+  it("avisa si un día atrasado ya tiene jornada, y deja seguir si se confirma", async () => {
+    const caja = await crearCaja("dia-repetido");
+    const dia = haceDias(5);
+
+    const primera = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: dia,
+      fondoManual: FONDO_300,
+    });
+    const t = await servicio.stockDeJornada(primera.sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: primera.sesion.id, contado: t.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: primera.sesion.id, cambioFinal: [] });
+
+    // Segundo intento del mismo día: se para y se dice cuál es la que ya hay.
+    await expect(
+      servicio.abrirJornada(ctx, { registerId: caja, fecha: dia, fondoManual: FONDO_300 })
+    ).rejects.toMatchObject({
+      codigo: "FECHA_YA_TIENE_JORNADA",
+      detalle: { sessionId: primera.sesion.id, fecha: dia },
+    });
+
+    // Confirmado a propósito, se abre.
+    const segunda = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: dia,
+      fondoManual: FONDO_300,
+      permitirFechaRepetida: true,
+    });
+    expect(segunda.sesion.fecha).toBe(dia);
+    expect(segunda.sesion.id).not.toBe(primera.sesion.id);
+  });
+
+  it("abrir un segundo turno de HOY no pregunta nada", async () => {
+    const caja = await crearCaja("dos-turnos-hoy");
+
+    const manana = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const t = await servicio.stockDeJornada(manana.sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: manana.sesion.id, contado: t.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: manana.sesion.id, cambioFinal: t.lineas });
+
+    const tarde = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(tarde.sesion.fecha).toBe(manana.sesion.fecha);
+    expect(tarde.sesion.fondoInicialCentimos).toBe(30000);
+  });
+});

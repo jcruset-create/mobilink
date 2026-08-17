@@ -691,7 +691,8 @@ export function createCashRouter(): Router {
         fondoManual: lineas(b.fondoManual, "fondoManual"),
         fondoCartuchos: lineas(b.fondoCartuchos, "fondoCartuchos"),
         motivoFondoManual: typeof b.motivoFondoManual === "string" ? b.motivoFondoManual : undefined,
-        fecha: typeof b.fecha === "string" ? b.fecha : undefined,
+        fecha: typeof b.fecha === "string" && b.fecha !== "" ? b.fecha : undefined,
+        permitirFechaRepetida: b.permitirFechaRepetida === true,
         notas: typeof b.notas === "string" ? b.notas : undefined,
       });
       res.status(201).json(salida);

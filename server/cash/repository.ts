@@ -295,15 +295,26 @@ export async function obtenerSesion(
 }
 
 /** Última jornada cerrada de la caja: de aquí sale el fondo inicial heredado. */
+/**
+ * La jornada cerrada de la que hereda el fondo la siguiente.
+ *
+ * `hasta` acota por fecha contable, y no es un adorno: al arrancar el módulo se
+ * meten días atrasados, y si alguien introduce el 13 después de haber cerrado
+ * el 14, el 13 tiene que heredar del 12 —no del 14, que es su futuro—. Sin el
+ * tope, el fondo inicial del 13 saldría del cierre de un día que todavía no ha
+ * pasado. Abriendo el día de hoy, que es el caso normal, no cambia nada.
+ */
 export async function ultimaSesionCerrada(
   client: PoolClient,
-  registerId: number
+  registerId: number,
+  hasta?: string
 ): Promise<Sesion | null> {
   const { rows } = await client.query(
     `SELECT * FROM cash_sessions
       WHERE register_id = $1 AND estado = 'CLOSED'
+        AND ($2::date IS NULL OR fecha <= $2::date)
       ORDER BY fecha DESC, id DESC LIMIT 1`,
-    [registerId]
+    [registerId, hasta ?? null]
   );
   return rows[0] ? aSesion(rows[0]) : null;
 }

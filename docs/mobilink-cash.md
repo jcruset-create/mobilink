@@ -312,6 +312,39 @@ Decisiones que sostienen el resto:
 - Aislamiento por caja en todas las consultas, numeración `MC-IB-YYYY-NNNNNN`,
   anulación lógica con quién/cuándo/por qué, y auditoría en `app_auditoria`.
 
+## 7 sexies. Días atrasados (arranque del módulo)
+
+Al poner la caja en marcha hay días que ya se llevaron a mano en papel y que
+hay que meter en el sistema. La fecha del cobro tiene que ser **la del día en
+que se cobró**, no la del día en que se teclea.
+
+El modelo ya lo permitía sin tocar nada, y conviene saber por qué: las
+operaciones **no llevan fecha propia**. Cuelgan de una jornada
+(`cash_operations.session_id`) y la fecha contable es la de la jornada
+(`cash_sessions.fecha`). Hasta la numeración sale de ahí —el año de
+`MC-CO-2026-000001` es el de la jornada, no el del reloj—. `created_at_ms`
+sigue guardando cuándo se tecleó de verdad, que es información de auditoría y
+no debe confundirse con la fecha contable.
+
+Lo que se añadió es la fecha en la pantalla de apertura y tres reglas:
+
+- **Nunca al futuro** (`FECHA_EN_FUTURO`), y la fecha tiene que existir de
+  verdad: `2026-02-31` pasa el patrón `AAAA-MM-DD` y no es un día
+  (`FECHA_NO_VALIDA`). Una jornada fechada por delante rompería la herencia del
+  fondo hasta que alguien la encontrase.
+- **La herencia se acota por fecha.** `ultimaSesionCerrada(client, caja, hasta)`
+  busca la última cerrada **con fecha ≤ la de la nueva**. Si alguien mete el 13
+  después de haber cerrado el 14, el 13 tiene que heredar del 12, no del 14,
+  que para él está en el futuro. Abriendo el día de hoy no cambia nada.
+- **Repetir un día pasado avisa** (`FECHA_YA_TIENE_JORNADA`, con el `id` de la
+  que ya hay) y se puede confirmar con `permitirFechaRepetida`. Solo para
+  fechas pasadas: abrir un segundo turno HOY es operación normal y preguntar
+  ahí sería un estorbo diario a cambio de nada.
+
+El orden recomendado al meter atrasados es de más antiguo a más reciente, para
+que el cambio final de cada día sea el fondo inicial del siguiente, igual que
+pasó en el mostrador.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:

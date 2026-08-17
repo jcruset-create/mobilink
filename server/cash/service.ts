@@ -100,9 +100,48 @@ export type EntradaApertura = {
   /** Tubos precintados del fondo inicial: `cantidad` son tubos, no monedas. */
   fondoCartuchos?: LineaDenominacion[];
   motivoFondoManual?: string;
+  /**
+   * Fecha contable de la jornada, `YYYY-MM-DD`. Si se omite, hoy.
+   *
+   * Se puede fechar en un día pasado a propósito: al arrancar el módulo hay
+   * que meter los días que se llevaron a mano, y la fecha del cobro tiene que
+   * ser la del día en que se cobró, no la del día en que se teclea. Cuándo se
+   * tecleó queda igualmente en `created_at_ms` de cada operación.
+   */
   fecha?: string;
+  /** Abrir una segunda jornada para una fecha que ya tiene otra. */
+  permitirFechaRepetida?: boolean;
   notas?: string;
 };
+
+/**
+ * Valida la fecha contable de una apertura.
+ *
+ * Al futuro no se abre caja: si sale una fecha de mañana es un dedo, no una
+ * intención, y una jornada fechada por delante rompe la herencia del fondo
+ * (`ultimaSesionCerrada` ordena por fecha) hasta que alguien la encuentre.
+ */
+function fechaDeJornada(fecha: string | undefined, ahora: number): string {
+  const hoy = new Date(ahora).toISOString().slice(0, 10);
+  if (fecha === undefined) return hoy;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw new ErrorCaja("FECHA_NO_VALIDA", "La fecha de la jornada tiene que ser AAAA-MM-DD.", 400);
+  }
+  // `2026-02-31` pasa el patrón pero no es un día: se comprueba de verdad.
+  const d = new Date(`${fecha}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== fecha) {
+    throw new ErrorCaja("FECHA_NO_VALIDA", `La fecha ${fecha} no existe.`, 400);
+  }
+  if (fecha > hoy) {
+    throw new ErrorCaja(
+      "FECHA_EN_FUTURO",
+      `No se puede abrir una jornada con fecha ${fecha}: es posterior a hoy.`,
+      400
+    );
+  }
+  return fecha;
+}
 
 /**
  * Abre una jornada.
@@ -131,10 +170,41 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe o no está activa.", 404);
     }
 
-    const anterior = await ultimaSesionCerrada(client, e.registerId);
-    const denominaciones = await cargarDenominaciones(client);
     const ahora = Date.now();
-    const fecha = e.fecha ?? new Date(ahora).toISOString().slice(0, 10);
+    const fecha = fechaDeJornada(e.fecha, ahora);
+
+    /*
+     * Repetir un día ATRASADO casi siempre es un despiste de quien está
+     * metiendo los días que se llevaron a mano: se teclea el 14 dos veces y
+     * los cobros quedan repartidos entre dos jornadas que nadie cuadra. Se
+     * avisa y se deja seguir si se confirma.
+     *
+     * Solo para fechas pasadas: abrir una segunda jornada HOY es normal —el
+     * turno de tarde después de cerrar el de mañana— y preguntar ahí sería un
+     * estorbo diario a cambio de nada.
+     */
+    if (!e.permitirFechaRepetida && fecha < new Date(ahora).toISOString().slice(0, 10)) {
+      const { rows: mismas } = await client.query<{ id: number }>(
+        `SELECT id FROM cash_sessions
+          WHERE register_id = $1 AND fecha = $2 AND estado <> 'CANCELLED'
+          ORDER BY id LIMIT 1`,
+        [e.registerId, fecha]
+      );
+      if (mismas.length > 0) {
+        throw new ErrorCaja(
+          "FECHA_YA_TIENE_JORNADA",
+          `Esta caja ya tiene la jornada ${mismas[0].id} del ${fecha}. ` +
+            "Si de verdad quieres una segunda jornada ese día, confírmalo.",
+          409,
+          { sessionId: mismas[0].id, fecha }
+        );
+      }
+    }
+
+    // Acotado a la fecha: una jornada fechada atrás hereda del día anterior a
+    // ella, no de la última que se cerró en el reloj.
+    const anterior = await ultimaSesionCerrada(client, e.registerId, fecha);
+    const denominaciones = await cargarDenominaciones(client);
 
     // Composición heredada: las piezas que el cierre anterior dejó en caja.
     let composicion: LineaDenominacion[] = [];
