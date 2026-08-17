@@ -36,6 +36,7 @@ import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
+import JustificantePrevio from "../components/JustificantePrevio";
 import { type AperturaCartucho, type DocumentoExterno } from "../types";
 import * as api from "../services/api";
 
@@ -69,6 +70,8 @@ export default function Cobros() {
     aperturas: AperturaCartucho[];
   } | null>(null);
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
+  /** PDF elegido antes de confirmar; se sube en cuanto el cobro existe. */
+  const [justificante, setJustificante] = useState<File | null>(null);
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -191,6 +194,7 @@ export default function Cobros() {
     setCambioManual(null);
     setCambioPropuesto({});
     setAvisoCambio("");
+    setJustificante(null);
   }
 
   function elegirDocumento(d: DocumentoExterno) {
@@ -236,6 +240,25 @@ export default function Cobros() {
         cambio: cambioRequerido,
         aperturas: r.aperturas ?? [],
       });
+
+      /*
+       * El justificante va DESPUÉS y en su propia petición. Si falla, el cobro
+       * sigue registrado —el cliente ya ha pagado— y lo que hay que decir es
+       * exactamente eso, no "no se ha podido registrar el cobro", que sería
+       * mentira y llevaría a cobrarle dos veces. El panel de abajo queda con el
+       * número de la operación para volver a intentarlo sin buscar nada.
+       */
+      if (justificante) {
+        try {
+          await api.adjuntarDocumento(r.operacionId, justificante);
+        } catch (e) {
+          setError(
+            `El cobro ${r.numero} ha quedado registrado, pero el justificante no se ha podido subir` +
+              `${e instanceof Error ? `: ${e.message}` : "."} Vuelve a adjuntarlo aquí abajo.`
+          );
+        }
+      }
+
       limpiar();
       await refrescar();
     } catch (e) {
@@ -360,6 +383,17 @@ export default function Cobros() {
                 deshabilitado={guardando}
               />
             </div>
+
+            {/* El escaneo se elige aquí y se sube solo al confirmar: en el
+                mostrador es un gesto seguido —escanear, cobrar— sin tener que
+                buscar el cobro después. */}
+            <JustificantePrevio
+              fichero={justificante}
+              onChange={setJustificante}
+              puedeAdjuntar={puede("cash.document.attach")}
+              deshabilitado={guardando}
+              onError={setError}
+            />
 
             {esMixto && (
               <div className="mt-2 rounded-lg bg-slate-900/40 p-2">
