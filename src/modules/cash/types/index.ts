@@ -98,6 +98,11 @@ export type Operacion = {
   externalDocumentId: string | null;
   externalDocumentReference: string | null;
   createdAtMs: number;
+  /**
+   * Con qué se cobró o se pagó. Un cobro mixto trae varias líneas; la suma de
+   * sus importes es el importe de la operación.
+   */
+  formas: { forma: string; importe: number; referencia: string | null }[];
 };
 
 export type Movimiento = {
