@@ -9,6 +9,7 @@
 
 import { sessionHeaders } from "../../sessionHeaders";
 import type {
+  Ajustes,
   AperturaCartucho,
   Bootstrap,
   Caja,
@@ -449,3 +450,15 @@ export const guardarConfigErp = (datos: {
   centro?: string;
   permiteCobroParcial?: boolean;
 }) => pedir<{ config: Record<string, unknown> }>("/erp/config", { method: "PUT", body: JSON.stringify(datos) });
+
+// ── Ajustes del módulo ─────────────────────────────────────────────────────
+
+/** Sube la imagen del botón «Mixto» y devuelve los ajustes ya actualizados. */
+export const subirImagenMixto = (fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("imagen", fichero);
+  return pedir<{ ajustes: Ajustes }>("/settings/mixed-image", { method: "POST", body: cuerpo });
+};
+
+export const quitarImagenMixto = () =>
+  pedir<{ ajustes: Ajustes }>("/settings/mixed-image", { method: "DELETE" });
