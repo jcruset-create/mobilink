@@ -2248,3 +2248,104 @@ describe.runIf(RUN)("secciones de negocio", () => {
     expect(sin?.cobrosCentimos).toBe(2000);
   });
 });
+
+/*
+ * Reclasificar: cambiarle la sección a una operación ya registrada.
+ *
+ * Es corregir un despiste de mostrador, no mover dinero. Lo que estos tests
+ * fijan es justo eso: que no toque ni un céntimo, que quede acotado a las
+ * operaciones que pertenecen a un negocio, y que no se pueda reescribir el
+ * histórico de una anulada.
+ */
+describe.runIf(RUN)("reclasificar la sección de una operación", () => {
+  it("cambia la sección sin tocar el dinero", async () => {
+    const caja = await crearCaja("reclasificar");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    const secciones = await config.listarSecciones(EMPRESA);
+    const taller = secciones.find((s) => s.codigo === "TALLER")!.id;
+    const gasolinera = secciones.find((s) => s.codigo === "GASOLINERA")!.id;
+
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      sectionId: taller,
+    });
+
+    const stockAntes = await servicio.stockDeJornada(sesion.id);
+
+    const r = await servicio.cambiarSeccion(ctx, cobro.operacionId, gasolinera);
+    expect(r.sectionId).toBe(gasolinera);
+    expect(r.seccionNombre).toBe("Gasolinera");
+
+    // Lo importante: el dinero no se ha movido ni un céntimo.
+    const stockDespues = await servicio.stockDeJornada(sesion.id);
+    expect(stockDespues.totalCentimos).toBe(stockAntes.totalCentimos);
+
+    const resumen = await servicio.resumenJornada(sesion.id);
+    const porNombre = new Map(resumen.porSeccion.map((s) => [s.nombre, s]));
+    expect(porNombre.get("Gasolinera")?.cobrosCentimos).toBe(5000);
+    expect(porNombre.get("Taller")).toBeUndefined();
+  });
+
+  it("se puede dejar sin sección, que es como estaba lo anterior al catálogo", async () => {
+    const caja = await crearCaja("reclasificar-a-nulo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const taller = (await config.listarSecciones(EMPRESA)).find((s) => s.codigo === "TALLER")!.id;
+
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      sectionId: taller,
+    });
+
+    const r = await servicio.cambiarSeccion(ctx, cobro.operacionId, null);
+    expect(r.sectionId).toBeNull();
+    expect(r.seccionNombre).toBeNull();
+  });
+
+  it("el fondo inicial no se reclasifica: es del cajón entero, no de un negocio", async () => {
+    const caja = await crearCaja("fondo-sin-seccion");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    const ops = await repo.operacionesDeSesion(sesion.id);
+    const fondo = ops.find((o) => o.tipo === "OPENING_FLOAT")!;
+    const taller = (await config.listarSecciones(EMPRESA)).find((s) => s.codigo === "TALLER")!.id;
+
+    await expect(servicio.cambiarSeccion(ctx, fondo.id, taller)).rejects.toMatchObject({
+      codigo: "OPERACION_SIN_SECCION",
+    });
+  });
+
+  it("una operación de otra empresa no se toca", async () => {
+    const caja = await crearCaja("otra-empresa");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+    });
+
+    const ajeno = { empresaId: "00000000-0000-4000-a000-00000000dead", userId: null };
+    await expect(servicio.cambiarSeccion(ajeno, cobro.operacionId, null)).rejects.toMatchObject({
+      codigo: "OPERACION_NO_ENCONTRADA",
+    });
+  });
+});

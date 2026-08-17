@@ -52,12 +52,17 @@ const MEMORIA_SECCION = "cash.ultima-seccion";
  * que hace falta cuando hay cola.
  *
  * Va por código y no por posición en la lista: si mañana se reordenan las
- * secciones, la gasolinera tiene que seguir siendo verde. Una sección nueva cae
+ * secciones, la gasolinera tiene que seguir siendo roja. Una sección nueva cae
  * en el reparto de abajo, que es estable porque depende de su código.
+ *
+ * El rojo es a propósito el más agresivo de la paleta: la gasolinera es la
+ * excepción y el taller el caso normal, así que quien se equivoca lo hace
+ * teniendo el taller puesto sin darse cuenta. Lo que tiene que gritar es la
+ * excepción, no lo habitual.
  */
 const COLOR_SECCION: Record<string, string> = {
   TALLER: "border-slate-700 bg-slate-800",
-  GASOLINERA: "border-emerald-700 bg-emerald-950/60",
+  GASOLINERA: "border-rose-600 bg-rose-950/70",
 };
 
 /** Para secciones que se den de alta más adelante. Estable por código. */
@@ -66,7 +71,7 @@ const PALETA = [
   "border-emerald-700 bg-emerald-950/60",
   "border-amber-700 bg-amber-950/50",
   "border-violet-700 bg-violet-950/50",
-  "border-rose-700 bg-rose-950/50",
+  "border-sky-700 bg-sky-950/50",
 ];
 
 function colorDeSeccion(codigo: string | undefined): string {
