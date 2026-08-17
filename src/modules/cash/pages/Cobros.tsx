@@ -43,6 +43,40 @@ import * as api from "../services/api";
 /** Dónde se recuerda la última sección usada en este navegador. */
 const MEMORIA_SECCION = "cash.ultima-seccion";
 
+/**
+ * Color de fondo del formulario según la sección.
+ *
+ * No es decoración: con dos negocios en la misma pantalla, el error caro es
+ * teclear un cobro de gasolinera con el taller puesto. Un botón marcado se mira
+ * si se busca; el panel entero cambiando de color se ve sin mirar, que es lo
+ * que hace falta cuando hay cola.
+ *
+ * Va por código y no por posición en la lista: si mañana se reordenan las
+ * secciones, la gasolinera tiene que seguir siendo verde. Una sección nueva cae
+ * en el reparto de abajo, que es estable porque depende de su código.
+ */
+const COLOR_SECCION: Record<string, string> = {
+  TALLER: "border-slate-700 bg-slate-800",
+  GASOLINERA: "border-emerald-700 bg-emerald-950/60",
+};
+
+/** Para secciones que se den de alta más adelante. Estable por código. */
+const PALETA = [
+  "border-slate-700 bg-slate-800",
+  "border-emerald-700 bg-emerald-950/60",
+  "border-amber-700 bg-amber-950/50",
+  "border-violet-700 bg-violet-950/50",
+  "border-rose-700 bg-rose-950/50",
+];
+
+function colorDeSeccion(codigo: string | undefined): string {
+  if (!codigo) return PALETA[0];
+  if (COLOR_SECCION[codigo]) return COLOR_SECCION[codigo];
+  // Suma de los caracteres: el mismo código da siempre el mismo color.
+  const n = [...codigo].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return PALETA[n % PALETA.length];
+}
+
 export default function Cobros() {
   const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaCobros, ajustes,
     seccionesActivas } = useCash();
@@ -315,7 +349,13 @@ export default function Cobros() {
         <div className="space-y-3">
           <BuscadorDocumentos tipo="RECEIVABLE" onElegir={elegirDocumento} erpActiva={erp?.estado === "CONECTADA"} />
 
-          <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <div
+            className={`rounded-lg border p-3 transition-colors ${
+              seccionesActivas.length > 1
+                ? colorDeSeccion(seccionesActivas.find((x) => x.id === seccionId)?.codigo)
+                : "border-slate-700 bg-slate-800"
+            }`}
+          >
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
                 {documento ? "Cobro de factura" : "Cobro manual"}

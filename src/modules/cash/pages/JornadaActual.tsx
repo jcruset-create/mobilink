@@ -282,17 +282,24 @@ function ListaOperaciones({
           {operaciones.map((o) => (
             <div key={o.id} className="flex items-start gap-2 px-3 py-2">
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-slate-200">
-                  {o.partyNombre || o.concepto || "Sin cliente"}
+                {/*
+                  Arriba y grande, LA FACTURA. Es el dato con el que se busca:
+                  el cliente muchas veces no se rellena —con cola delante nadie
+                  teclea un nombre— y una lista de «Sin cliente» repetido no
+                  sirve para encontrar nada. El nombre baja a la segunda línea,
+                  donde suma cuando está y no estorba cuando falta.
+                */}
+                <div className="truncate text-sm font-medium tabular-nums text-slate-200">
+                  {o.referencia || o.concepto || "Sin factura"}
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
                   <span className="tabular-nums">{hora(o.createdAtMs)}</span>
                   <span>·</span>
                   <span className="tabular-nums">{o.numero}</span>
-                  {o.referencia && (
+                  {o.partyNombre && (
                     <>
                       <span>·</span>
-                      <span className="truncate">{o.referencia}</span>
+                      <span className="truncate">{o.partyNombre}</span>
                     </>
                   )}
                   {o.seccionNombre && (
