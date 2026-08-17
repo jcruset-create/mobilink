@@ -328,8 +328,18 @@ function FormasPago() {
     }
   }
 
+  /** El servidor corta en 8 MB; avisar aquí ahorra subir la foto para nada. */
+  const MAXIMO_IMAGEN = 8 * 1024 * 1024;
+
   async function subirImagen(id: number, fichero: File | undefined) {
     if (!fichero) return;
+    if (fichero.size > MAXIMO_IMAGEN) {
+      setError(
+        `La imagen pesa ${(fichero.size / 1024 / 1024).toFixed(1)} MB y el máximo son 8 MB. ` +
+          "Hazle una captura o redúcela antes de subirla."
+      );
+      return;
+    }
     await accion(() => api.subirImagenFormaPago(id, fichero));
   }
 
