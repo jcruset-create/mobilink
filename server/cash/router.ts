@@ -63,6 +63,35 @@ const subidaDocumento = multer({
  * genérico de la aplicación: "Error interno del servidor", sin pista ninguna.
  * Pasó de verdad con la imagen de un botón de cobro.
  */
+/**
+ * Reduce la imagen a tamaño de botón y la sube a Storage. Devuelve su URL.
+ *
+ * Lo comparten la imagen de una forma de cobro y la del botón «Mixto»: las dos
+ * se pintan en el mismo sitio y con el mismo recorte, así que tienen que pasar
+ * por el mismo tratamiento o una acabaría viéndose distinta de la otra.
+ */
+async function guardarImagenBoton(
+  fichero: { buffer: Buffer },
+  ruta_: string
+): Promise<string> {
+  const miniatura = await miniaturaBoton(fichero.buffer);
+
+  let error: { message?: string } | null = null;
+  try {
+    ({ error } = await supabase.storage
+      .from(SUPABASE_STORAGE_BUCKET)
+      .upload(ruta_, miniatura, { contentType: "image/png", upsert: true }));
+  } catch (e) {
+    error = e as { message?: string };
+  }
+  if (error) {
+    console.error("Mobilink Cash: error subiendo la imagen del botón:", error);
+    throw new ErrorCaja("SUBIDA_FALLIDA", "No se ha podido guardar la imagen.", 502);
+  }
+
+  return supabase.storage.from(SUPABASE_STORAGE_BUCKET).getPublicUrl(ruta_).data.publicUrl;
+}
+
 function subida(mw: RequestHandler, limiteMb: number): RequestHandler {
   return (req, res, next) => {
     mw(req, res, (err?: unknown) => {
@@ -212,7 +241,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const [denominaciones, formasPago, cajas, erp] = await Promise.all([
+      const [denominaciones, formasPago, cajas, erp, ajustes] = await Promise.all([
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
@@ -221,11 +250,13 @@ export function createCashRouter(): Router {
           [empresaId]
         ),
         estadoIntegracion(empresaId),
+        config.ajustes(empresaId),
       ]);
 
       res.json({
         denominaciones,
         formasPago,
+        ajustes,
         cajas: cajas.rows,
         permisos: req.cashPermisos,
         rol: req.cashRol,
@@ -390,29 +421,51 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
 
-      // Se guarda la miniatura, no el original: el botón la pinta a 32 px y
-      // una foto de móvil solo haría lenta la pantalla de cobros.
-      const miniatura = await miniaturaBoton(fichero.buffer);
-      const ruta_ = `cash/payment-methods/${req.authCtx!.empresaId}/${id}_${Date.now()}.png`;
-
-      let error: { message?: string } | null = null;
-      try {
-        ({ error } = await supabase.storage
-          .from(SUPABASE_STORAGE_BUCKET)
-          .upload(ruta_, miniatura, { contentType: "image/png", upsert: true }));
-      } catch (e) {
-        error = e as { message?: string };
-      }
-      if (error) {
-        console.error("Mobilink Cash: error subiendo la imagen de la forma de pago:", error);
-        throw new ErrorCaja("SUBIDA_FALLIDA", "No se ha podido guardar la imagen.", 502);
-      }
-
-      const { data } = supabase.storage.from(SUPABASE_STORAGE_BUCKET).getPublicUrl(ruta_);
-      const forma = await config.actualizarFormaPago(contexto(req), id, {
-        imagenUrl: data.publicUrl,
-      });
+      const url = await guardarImagenBoton(
+        fichero,
+        `cash/payment-methods/${req.authCtx!.empresaId}/${id}_${Date.now()}.png`
+      );
+      const forma = await config.actualizarFormaPago(contexto(req), id, { imagenUrl: url });
       res.json({ forma });
+    })
+  );
+
+  // ── Ajustes del módulo ───────────────────────────────────────────────────
+
+  /**
+   * Imagen del botón «Mixto».
+   *
+   * Va por ajustes y no por el catálogo de formas de pago porque Mixto no es
+   * una forma de pago: es un reparto entre varias. Darle fila en el catálogo
+   * permitiría registrar un cobro «en Mixto», que no dice por dónde entró el
+   * dinero.
+   */
+  r.post(
+    "/settings/mixed-image",
+    exigirPermiso("cash.configure"),
+    subida(subidaImagen.single("imagen"), 8),
+    ruta(async (req, res) => {
+      const fichero = req.file;
+      if (!fichero) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(fichero.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+
+      const url = await guardarImagenBoton(
+        fichero,
+        `cash/settings/${req.authCtx!.empresaId}/mixto_${Date.now()}.png`
+      );
+      res.json({ ajustes: await config.fijarAjuste(contexto(req), config.AJUSTES.MIXTO_IMAGEN, url) });
+    })
+  );
+
+  r.delete(
+    "/settings/mixed-image",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      res.json({ ajustes: await config.fijarAjuste(contexto(req), config.AJUSTES.MIXTO_IMAGEN, null) });
     })
   );
 

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { FileDown, Printer } from "lucide-react";
+import { FileDown, Minus, Plus, Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
   type CantidadesPorValor,
@@ -36,6 +36,21 @@ export default function Cierre() {
 
   const objetivo = aCentimos(objetivoTexto) ?? 0;
   const totalCambio = totalLineas(lineasDesde(cambioFinal));
+
+  /**
+   * Fija cuántos tubos de una denominación se quedan en caja.
+   *
+   * Un solo sitio donde se toca `cambioFinalTubos`: lo tocaban los botones y la
+   * cajita por separado, y el tope —no puedes quedarte más tubos de los que has
+   * contado— tenía que repetirse en cada uno.
+   */
+  function fijarTubos(valor: number, cantidad: number, contados: number) {
+    const n = Math.max(0, Math.min(contados, cantidad));
+    setCambioFinalTubos((prev) => [
+      ...prev.filter((x) => x.valor !== valor),
+      ...(n > 0 ? [{ valor, cantidad: n }] : []),
+    ]);
+  }
 
   const pedirPropuesta = useCallback(async () => {
     if (!jornada || objetivo <= 0) return;
@@ -78,7 +93,10 @@ export default function Cierre() {
     denominaciones,
   });
 
-  const totalCambioConTubos = totalCambio + valorEnTubos(cambioFinalTubos, denominaciones);
+  const valorTubosCambio = valorEnTubos(cambioFinalTubos, denominaciones);
+  const totalCambioConTubos = totalCambio + valorTubosCambio;
+  /** Lo que falta (o sobra) para el cambio pedido, contando ya los cartuchos. */
+  const desvioObjetivo = objetivo > 0 ? totalCambioConTubos - objetivo : 0;
   const totalIngresoConTubos = ingreso.totalCentimos;
   const cuadra = totalCambioConTubos + totalIngresoConTubos === contadoTotal;
 
@@ -161,6 +179,22 @@ export default function Cierre() {
         </Aviso>
       )}
 
+      {/*
+        El desvío contra el objetivo, dicho en euros y contando los cartuchos.
+        No es un error —se puede cerrar dejando lo que se quiera— pero si pides
+        338,59 € y has compuesto 336,09 €, saberlo evita el cierre a medias.
+      */}
+      {cuadra && desvioObjetivo !== 0 && (
+        <Aviso tono="aviso">
+          {desvioObjetivo < 0
+            ? `Faltan ${euros(-desvioObjetivo)} para el cambio que has pedido (${euros(objetivo)}).`
+            : `Sobran ${euros(desvioObjetivo)} sobre el cambio que has pedido (${euros(objetivo)}).`}{" "}
+          {tubosContados.length > 0 &&
+            "Si el hueco es de un cartucho entero, ajústalo en «Cartuchos precintados». "}
+          Puedes cerrar así igualmente: el resto va al ingreso bancario.
+        </Aviso>
+      )}
+
       <div className="grid gap-3 lg:grid-cols-2">
         <DenominationGrid
           titulo="Cambio final (se queda en caja)"
@@ -169,7 +203,13 @@ export default function Cierre() {
           onChange={setCambioFinal}
           disponible={Object.fromEntries((jornada.stockSueltas ?? []).map((l) => [l.valor, l.cantidad]))}
           mostrarDisponible
-          objetivoCentimos={objetivo > 0 ? objetivo : null}
+          /*
+           * El objetivo de la rejilla es el que queda DESPUÉS de los cartuchos:
+           * la rejilla solo cuenta monedas sueltas, así que con un tubo de 2,50 €
+           * apartado marcaba en ámbar «336,09 de 338,59» cuando el reparto era
+           * exacto. Descontarlos la deja en verde cuando de verdad cuadra.
+           */
+          objetivoCentimos={objetivo > 0 ? objetivo - valorTubosCambio : null}
           deshabilitado={guardando}
         />
 
@@ -183,27 +223,56 @@ export default function Cierre() {
               {tubosContados.map((t) => {
                 const d = denominaciones.find((x) => x.valor === t.valor);
                 const sequedan = cambioFinalTubos.find((x) => x.valor === t.valor)?.cantidad ?? 0;
+                const valorTubo = t.valor * (d?.piezasPorCartucho ?? 0);
                 return (
-                  <div key={t.valor} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                    <span className="w-14 font-bold tabular-nums text-slate-200">{d?.etiqueta}</span>
-                    <span className="text-slate-400">{t.cantidad} contados</span>
-                    <div className="ml-auto flex items-center gap-1">
-                      <span className="text-[11px] text-slate-500">se quedan</span>
+                  <div key={t.valor} className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <div className="font-bold tabular-nums text-slate-200">{d?.etiqueta}</div>
+                      {/* Cuánto mueve cada tubo: sin esto no se sabe qué cambia al pulsar. */}
+                      <div className="text-[10px] tabular-nums text-slate-500">
+                        {t.cantidad} contado{t.cantidad === 1 ? "" : "s"} · {euros(valorTubo)} cada uno
+                      </div>
+                    </div>
+
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                      <span className="mr-1 text-[11px] text-slate-500">se quedan</span>
+                      {/*
+                        Mismos botones −/+ de 44 px que la rejilla de monedas. Antes
+                        aquí solo había una cajita de texto: no parecía tocable, y
+                        quedarse un cartucho —lo normal— no se veía posible.
+                      */}
+                      <button
+                        type="button"
+                        aria-label={`Quitar un cartucho de ${d?.etiqueta} del cambio final`}
+                        onClick={() => fijarTubos(t.valor, sequedan - 1, t.cantidad)}
+                        disabled={guardando || sequedan === 0}
+                        className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
+                      >
+                        <Minus className="h-4 w-4" />
+                      </button>
                       <input
                         type="text"
                         inputMode="numeric"
+                        pattern="[0-9]*"
                         aria-label={`Cartuchos de ${d?.etiqueta} que se quedan en caja`}
                         value={sequedan === 0 ? "" : String(sequedan)}
                         placeholder="0"
-                        onChange={(e) => {
-                          const n = Math.min(t.cantidad, Number(e.target.value.replace(/\D/g, "") || 0));
-                          setCambioFinalTubos((prev) => [
-                            ...prev.filter((x) => x.valor !== t.valor),
-                            ...(n > 0 ? [{ valor: t.valor, cantidad: n }] : []),
-                          ]);
-                        }}
-                        className="h-9 w-14 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
+                        onChange={(e) =>
+                          fijarTubos(t.valor, Number(e.target.value.replace(/\D/g, "") || 0), t.cantidad)
+                        }
+                        onFocus={(e) => e.target.select()}
+                        disabled={guardando}
+                        className="h-11 w-12 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
                       />
+                      <button
+                        type="button"
+                        aria-label={`Añadir un cartucho de ${d?.etiqueta} al cambio final`}
+                        onClick={() => fijarTubos(t.valor, sequedan + 1, t.cantidad)}
+                        disabled={guardando || sequedan >= t.cantidad}
+                        className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
                     </div>
                   </div>
                 );
