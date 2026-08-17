@@ -17,6 +17,7 @@ import { boFetch } from "../services/api";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
 import Contratos from "../components/Contratos";
 import CatalogoNeumaticos from "../components/CatalogoNeumaticos";
+import { useCentroDeTrabajo, SelectorCentro, AvisoElegirCentro } from "../components/CentroDeTrabajo";
 
 
 type Plan = {
@@ -90,27 +91,32 @@ export default function Tarifas() {
   const [aviso, setAviso] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const ctxCentro = useCentroDeTrabajo();
+  const { centro } = ctxCentro;
+
   useEffect(() => {
-    boFetch<{ data: Plan[] }>("/tariffs")
-      .then((r) => { setPlanes(r.data); if (r.data[0]) setPlanId(r.data[0].id); })
+    if (centro == null) { setPlanes([]); setPlanId(null); return; }
+    boFetch<{ data: Plan[] }>("/tariffs", { centro })
+      .then((r) => { setPlanes(r.data); setPlanId(r.data[0]?.id ?? null); })
       .catch((e) => setError(e.message));
-  }, []);
+  }, [centro]);
 
   const cargarVersiones = useCallback(() => {
-    if (planId == null) return;
-    boFetch<{ data: Version[] }>(`/tariffs/${planId}/versions`)
+    if (planId == null) { setVersiones([]); setVersionId(null); return; }
+    boFetch<{ data: Version[] }>(`/tariffs/${planId}/versions`, { centro })
       .then((r) => {
         setVersiones(r.data);
         setVersionId((actual) => (r.data.some((v) => v.id === actual) ? actual : r.data[0]?.id ?? null));
       })
       .catch((e) => setError(e.message));
-  }, [planId]);
+  }, [planId, centro]);
   useEffect(cargarVersiones, [cargarVersiones]);
 
   const cargarDetalle = useCallback(() => {
     if (versionId == null) { setDetalle(null); return; }
-    boFetch<Detalle>(`/tariffs/versions/${versionId}`).then(setDetalle).catch((e) => setError(e.message));
-  }, [versionId]);
+    boFetch<Detalle>(`/tariffs/versions/${versionId}`, { centro })
+      .then(setDetalle).catch((e) => setError(e.message));
+  }, [versionId, centro]);
   useEffect(cargarDetalle, [cargarDetalle]);
 
   const refrescar = () => { cargarVersiones(); cargarDetalle(); };
@@ -127,7 +133,7 @@ export default function Tarifas() {
     setBusy(true); setError(null); setAviso(null);
     try {
       const r = await boFetch<any>(`/tariffs/versions/${detalle.version.id}/duplicate`, {
-        method: "POST", body: { version, validFromMs: aMs(desde) },
+        method: "POST", centro, body: { version, validFromMs: aMs(desde) },
       });
       setAviso(`Copiada como borrador "${version}": ${r.copiado.reglas} reglas, ` +
         `${r.copiado.extras} suplementos y ${r.copiado.neumaticos} precios de neumático.`);
@@ -150,7 +156,7 @@ export default function Tarifas() {
 
     setBusy(true); setError(null);
     try {
-      await boFetch(`/tariffs/versions/${detalle.version.id}/publish`, { method: "POST", body: {} });
+      await boFetch(`/tariffs/versions/${detalle.version.id}/publish`, { method: "POST", centro, body: {} });
       setAviso("Publicada. A partir de ahora factura.");
       refrescar();
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
@@ -181,10 +187,13 @@ export default function Tarifas() {
         }
       />
 
+      <SelectorCentro ctx={ctxCentro} />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
       {aviso && <p className="mb-3 text-[13px] text-emerald-300">{aviso}</p>}
 
-      {planes.length === 0 ? (
+      {centro == null ? (
+        <AvisoElegirCentro />
+      ) : planes.length === 0 ? (
         <EmptyState message="Este centro de control todavía no tiene ningún tarifario cargado." />
       ) : !detalle ? (
         <p className="text-sm text-slate-500">Cargando…</p>
@@ -246,18 +255,18 @@ export default function Tarifas() {
           </div>
 
           {seccion === "Reglas" && (
-            <Reglas detalle={detalle} onCambio={refrescar} onError={setError} />
+            <Reglas detalle={detalle} centro={centro} onCambio={refrescar} onError={setError} />
           )}
           {seccion === "Suplementos" && (
-            <Suplementos detalle={detalle} onCambio={refrescar} onError={setError} />
+            <Suplementos detalle={detalle} centro={centro} onCambio={refrescar} onError={setError} />
           )}
           {seccion === "Franjas" && (
-            <Franjas detalle={detalle} onCambio={refrescar} onError={setError} />
+            <Franjas detalle={detalle} centro={centro} onCambio={refrescar} onError={setError} />
           )}
           {seccion === "Neumáticos" && (
-            <CatalogoNeumaticos versionId={detalle.version.id} editable={detalle.editable} />
+            <CatalogoNeumaticos versionId={detalle.version.id} editable={detalle.editable} centro={centro} />
           )}
-          {seccion === "Contratos" && <Contratos planes={planes} />}
+          {seccion === "Contratos" && <Contratos planes={planes} centro={centro} />}
           {seccion === "Zonas" && <Zonas detalle={detalle} />}
           {seccion === "Calendario" && <Calendario detalle={detalle} />}
         </>
@@ -268,7 +277,8 @@ export default function Tarifas() {
 
 // ── Reglas ──────────────────────────────────────────────────────────────────
 
-function Reglas({ detalle, onCambio, onError }: {
+function Reglas({ detalle, centro, onCambio, onError }: {
+  centro: number | null;
   detalle: Detalle; onCambio: () => void; onError: (m: string) => void;
 }) {
   const [editando, setEditando] = useState<Partial<Regla> | null>(null);
@@ -296,7 +306,7 @@ function Reglas({ detalle, onCambio, onError }: {
   const borrar = async (r: Regla) => {
     if (!window.confirm(`¿Borrar la regla ${r.code}?`)) return;
     try {
-      await boFetch(`/tariffs/versions/${detalle.version.id}/rules/${r.id}`, { method: "DELETE" });
+      await boFetch(`/tariffs/versions/${detalle.version.id}/rules/${r.id}`, { method: "DELETE", centro });
       onCambio();
     } catch (e: any) { onError(e.message); }
   };
@@ -472,7 +482,8 @@ const CALCULOS = [
   ["PER_MINUTE", "Por minuto"], ["PER_HOUR", "Por hora"], ["PERCENTAGE", "Porcentaje"],
 ] as const;
 
-function Suplementos({ detalle, onCambio, onError }: {
+function Suplementos({ detalle, centro, onCambio, onError }: {
+  centro: number | null;
   detalle: Detalle; onCambio: () => void; onError: (m: string) => void;
 }) {
   const [editando, setEditando] = useState<Partial<Extra> | null>(null);
@@ -482,7 +493,7 @@ function Suplementos({ detalle, onCambio, onError }: {
     if (!editando) return;
     setBusy(true);
     try {
-      await boFetch(`/tariffs/versions/${detalle.version.id}/extras`, { method: "PUT", body: editando });
+      await boFetch(`/tariffs/versions/${detalle.version.id}/extras`, { method: "PUT", centro, body: editando });
       setEditando(null);
       onCambio();
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }
@@ -577,7 +588,8 @@ function Suplementos({ detalle, onCambio, onError }: {
 
 // ── Franjas ─────────────────────────────────────────────────────────────────
 
-function Franjas({ detalle, onCambio, onError }: {
+function Franjas({ detalle, centro, onCambio, onError }: {
+  centro: number | null;
   detalle: Detalle; onCambio: () => void; onError: (m: string) => void;
 }) {
   const [editando, setEditando] = useState<Partial<Franja> | null>(null);
@@ -587,7 +599,7 @@ function Franjas({ detalle, onCambio, onError }: {
     if (!editando) return;
     setBusy(true);
     try {
-      await boFetch("/tariffs/time-bands", { method: "PUT", body: editando });
+      await boFetch("/tariffs/time-bands", { method: "PUT", centro, body: editando });
       setEditando(null);
       onCambio();
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }

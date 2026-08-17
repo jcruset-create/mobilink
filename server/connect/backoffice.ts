@@ -61,6 +61,29 @@ function centroDe(req: { connectUser?: { role: string; controlCenterId: number |
 }
 
 /**
+ * El centro sobre el que se está operando, para las rutas que necesitan uno
+ * concreto: configurar un tarifario, aplicar una plantilla, marcar facturado.
+ *
+ * `centroDe` devuelve null para el superadministrador a propósito, porque en
+ * los LISTADOS eso significa «los ve todos». Pero configurar no es listar: no
+ * existe «publicar la tarifa de todas las centrales a la vez». Así que aquí el
+ * superadministrador tiene que decir en cuál está, y lo dice con
+ * `controlCenterId`.
+ *
+ * Se acepta tanto en la query como en el cuerpo porque las rutas de
+ * administración son mitad GET y mitad POST/PUT, y obligar a cada pantalla a
+ * recordar cuál toca es una fuente de fallos sin ninguna ventaja.
+ */
+function centroPedido(req: Request): number | null {
+  const propio = centroDe(req);
+  if (propio != null) return propio;
+  const pedido = req.query?.controlCenterId ?? req.body?.controlCenterId;
+  if (pedido == null || pedido === "") return null;
+  const n = Number(pedido);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
  * Resultado del motor listo para JSON.
  *
  * Los importes salen como TEXTO con dos decimales. Convertirlos a `number`
@@ -2067,6 +2090,26 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     }
   }
 
+  /**
+   * Las centrales entre las que elegir.
+   *
+   * Existe para el superadministrador, que no tiene centro propio y por tanto
+   * tiene que decir en cuál está antes de configurar nada. Cualquier otro rol
+   * recibe la suya y solo la suya: así el selector se puede pintar igual para
+   * todos y con un único elemento simplemente no se enseña.
+   */
+  router.get("/setup/control-centers", ...requireConnectRole("analyst"), async (req, res) => {
+    const propio = centroDe(req);
+    const r = await db.query(
+      `SELECT id, name FROM connect_control_centers
+        WHERE "deletedAtMs" IS NULL AND status = 'active'
+          AND ($1::int IS NULL OR id = $1)
+        ORDER BY name`,
+      [propio],
+    );
+    res.json({ data: r.rows.map((x: any) => ({ id: Number(x.id), name: String(x.name) })) });
+  });
+
   /** Las plantillas disponibles. Son datos: añadir una es añadir un fichero. */
   router.get("/setup/templates", ...requireConnectRole("cc_admin"), async (_req, res) => {
     const { catalogoPlantillas } = await import("./pricing/plantillas/index.ts");
@@ -2075,7 +2118,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   /** Qué le falta a esta central para poder facturar, en orden y con el porqué. */
   router.get("/setup/status", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroDe(req) ?? (req.query.controlCenterId != null ? Number(req.query.controlCenterId) : null);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { estadoPuestaEnMarcha } = await puesta();
     res.json(await estadoPuestaEnMarcha(centro));
@@ -2087,7 +2130,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
    * alguien publica con prisa y acaba en una factura.
    */
   router.post("/setup/apply-template", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroDe(req) ?? (req.body?.controlCenterId != null ? Number(req.body.controlCenterId) : null);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { aplicarPlantilla } = await puesta();
     await conPuesta(res, async () => {
@@ -2130,14 +2173,14 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
    * pasa nada porque nadie ha dicho qué cliente usa cuál.
    */
   router.get("/contracts", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarContratos } = await puesta();
     res.json({ data: await listarContratos(centro) });
   });
 
   router.put("/contracts", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { guardarContrato } = await puesta();
     await conPuesta(res, async () => {
@@ -2149,7 +2192,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.delete("/contracts/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { borrarContrato } = await puesta();
     const ok = await borrarContrato(centro, Number(req.params.id));
@@ -2167,7 +2210,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
    * desde la ficha, que es como funciona hoy.
    */
   router.get("/pricing/auto-close", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { leerAjustesCierre, simularCierre } = await import("./pricing/cierreAutomatico.ts");
 
@@ -2182,7 +2225,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
    * sin cerrar es una sorpresa que conviene ahorrarse.
    */
   router.get("/pricing/auto-close/preview", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { simularCierre, ESPERA_POR_DEFECTO_MIN } = await import("./pricing/cierreAutomatico.ts");
     const espera = Number(req.query.esperaMin);
@@ -2190,7 +2233,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.put("/pricing/auto-close", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { guardarAjustesCierre, simularCierre } = await import("./pricing/cierreAutomatico.ts");
 
@@ -2212,7 +2255,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   const wcal = () => import("./workshopCalendar.ts");
 
   router.get("/workshop-holidays", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarFestivos } = await wcal();
     res.json({ data: await listarFestivos(centro, {
@@ -2224,7 +2267,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   /** Cobertura por comunidad: dónde faltan festivos por cargar. */
   router.get("/workshop-holidays/coverage", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { coberturaPorRegion } = await wcal();
     res.json({ data: await coberturaPorRegion(centro, Number(req.query.anio) || new Date().getFullYear()) });
@@ -2232,7 +2275,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   /** Alta en lote: los autonómicos llegan doce de golpe y los locales de dos en dos. */
   router.post("/workshop-holidays", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { guardarFestivos } = await wcal();
     const entradas = Array.isArray(req.body?.festivos) ? req.body.festivos : [];
@@ -2243,7 +2286,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.delete("/workshop-holidays/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { borrarFestivo } = await wcal();
     res.json({ ok: await borrarFestivo(centro, Number(req.params.id)) });
@@ -2251,7 +2294,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   /** Rellena la comunidad autónoma de los talleres a partir de su provincia. */
   router.post("/workshop-holidays/resolve-regions", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroAdmin(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { resolverRegiones } = await wcal();
     const r = await resolverRegiones(centro);
@@ -2288,18 +2331,10 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     }
   }
 
-  /** El centro sobre el que administrar. El superadministrador tiene que decir cuál. */
-  function centroAdmin(req: Request): number | null {
-    const propio = centroDe(req);
-    if (propio != null) return propio;
-    const pedido = req.query?.controlCenterId ?? req.body?.controlCenterId;
-    return pedido != null ? Number(pedido) : null;
-  }
-
   /** Envuelve una ruta de administración resolviendo el centro una sola vez. */
   function rutaAdmin(fn: (centro: number, req: Request) => Promise<unknown>) {
     return async (req: Request, res: Response) => {
-      const centro = centroAdmin(req);
+      const centro = centroPedido(req);
       if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
       await conTarifario(res, () => fn(centro, req));
     };
@@ -2462,51 +2497,43 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     }
   }
 
-  /** El centro sobre el que administrar. El superadministrador tiene que decir cuál. */
-  function centroCatalogo(req: Request): number | null {
-    const propio = centroDe(req);
-    if (propio != null) return propio;
-    const pedido = req.query?.controlCenterId ?? req.body?.controlCenterId;
-    return pedido != null ? Number(pedido) : null;
-  }
-
   router.get("/pricing/catalog/sizes", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarMedidas } = await catalogo();
     res.json({ data: await listarMedidas(centro, String(req.query?.q ?? "")) });
   });
 
   router.post("/pricing/catalog/sizes", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { crearMedida } = await catalogo();
     await conCatalogo(res, () => crearMedida(centro, String(req.body?.medida ?? "")));
   });
 
   router.get("/pricing/catalog/brands", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarMarcas } = await catalogo();
     res.json({ data: await listarMarcas(centro) });
   });
 
   router.post("/pricing/catalog/brands", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { crearMarca } = await catalogo();
     await conCatalogo(res, () => crearMarca(centro, String(req.body?.marca ?? ""), req.body?.code ?? null));
   });
 
   router.get("/pricing/catalog/versions/:versionId/groups", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarGrupos } = await catalogo();
     res.json({ data: await listarGrupos(centro, Number(req.params.versionId)) });
   });
 
   router.post("/pricing/catalog/versions/:versionId/groups", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { guardarGrupo } = await catalogo();
     await conCatalogo(res, async () => {
@@ -2521,14 +2548,14 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.get("/pricing/catalog/versions/:versionId/tire-prices", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarPrecios } = await catalogo();
     res.json({ data: await listarPrecios(centro, Number(req.params.versionId)) });
   });
 
   router.post("/pricing/catalog/versions/:versionId/tire-prices", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { crearPrecio } = await catalogo();
     await conCatalogo(res, async () => {
@@ -2557,7 +2584,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
    * devuelve qué fila y por qué sin haber tocado la base.
    */
   router.post("/pricing/catalog/versions/:versionId/tire-prices/bulk", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { crearPreciosEnLote } = await catalogo();
     const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
@@ -2574,7 +2601,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.delete("/pricing/catalog/tire-prices/:priceId", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { desactivarPrecio } = await catalogo();
     await conCatalogo(res, async () => {
@@ -2588,14 +2615,14 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.get("/pricing/catalog/price-lists", ...requireConnectRole("analyst"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { listarBaremos } = await catalogo();
     res.json({ data: await listarBaremos(centro) });
   });
 
   router.post("/pricing/catalog/price-lists", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { crearBaremo } = await catalogo();
     await conCatalogo(res, () => crearBaremo(centro, {
@@ -2608,7 +2635,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.post("/pricing/catalog/price-lists/:listId/lines", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroCatalogo(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { cargarLineasBaremo } = await catalogo();
     const lineas = Array.isArray(req.body?.lineas) ? req.body.lineas : [];
@@ -3474,7 +3501,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
    * impide mandar dos veces la misma factura.
    */
   router.post("/billing/mark-exported", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroDe(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
 
     const { agruparEnDocumentos } = await import("./pricing/billing.ts");
@@ -3513,7 +3540,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   /** Deshacer: el ERP la rechazó o se emitió por error. */
   router.delete("/billing/mark-exported/:assistanceId", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const centro = centroDe(req);
+    const centro = centroPedido(req);
     if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
     const { desmarcarExportada } = await import("./pricing/billingRepo.ts");
     const lado = ladoDe(req);

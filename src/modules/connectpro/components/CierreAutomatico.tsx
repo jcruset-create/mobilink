@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { boFetch } from "../services/api";
+import { useCentroDeTrabajo, SelectorCentro, AvisoElegirCentro } from "./CentroDeTrabajo";
 import { Card, Select, Button, ErrorBanner, Badge } from "./ui";
 
 type Estado = {
@@ -34,6 +35,8 @@ const ESPERAS: [number, string][] = [
 ];
 
 export default function CierreAutomatico({ canEdit }: { canEdit: boolean }) {
+  const ctxCentro = useCentroDeTrabajo();
+  const { centro } = ctxCentro;
   const [estado, setEstado] = useState<Estado | null>(null);
   const [espera, setEspera] = useState(24 * 60);
   const [previa, setPrevia] = useState<number | null>(null);
@@ -42,18 +45,19 @@ export default function CierreAutomatico({ canEdit }: { canEdit: boolean }) {
   const [busy, setBusy] = useState(false);
 
   const cargar = useCallback(() => {
-    boFetch<Estado>("/pricing/auto-close")
+    if (centro == null) { setEstado(null); return; }
+    boFetch<Estado>("/pricing/auto-close", { centro })
       .then((r) => { setEstado(r); setEspera(r.esperaMin); setPrevia(r.cerrariaAhora); })
       .catch((e) => setError(e.message));
-  }, []);
+  }, [centro]);
   useEffect(cargar, [cargar]);
 
   // Al cambiar la espera se recalcula cuántos entrarían, sin tocar nada
   useEffect(() => {
     if (!estado) return;
-    boFetch<{ cerrariaAhora: number }>(`/pricing/auto-close/preview?esperaMin=${espera}`)
+    boFetch<{ cerrariaAhora: number }>(`/pricing/auto-close/preview?esperaMin=${espera}`, { centro })
       .then((r) => setPrevia(r.cerrariaAhora)).catch(() => {});
-  }, [espera, estado]);
+  }, [espera, estado, centro]);
 
   const guardar = async (activo: boolean) => {
     if (activo && previa && previa > 0) {
@@ -65,7 +69,7 @@ export default function CierreAutomatico({ canEdit }: { canEdit: boolean }) {
     setBusy(true); setError(null); setAviso(null);
     try {
       const r = await boFetch<Estado>("/pricing/auto-close", {
-        method: "PUT", body: { activo, esperaMin: espera },
+        method: "PUT", centro, body: { activo, esperaMin: espera },
       });
       setEstado(r);
       setAviso(activo
@@ -74,10 +78,20 @@ export default function CierreAutomatico({ canEdit }: { canEdit: boolean }) {
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
+  if (ctxCentro.faltaElegir) {
+    return (
+      <Card className="mb-6 p-4">
+        <h2 className="mb-2 text-sm font-semibold text-slate-300">Cierre automático de tarifas</h2>
+        <SelectorCentro ctx={ctxCentro} />
+        <AvisoElegirCentro />
+      </Card>
+    );
+  }
   if (!estado) return null;
 
   return (
     <Card className="mb-6 p-4">
+      <SelectorCentro ctx={ctxCentro} />
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <h2 className="text-sm font-semibold text-slate-300">Cierre automático de tarifas</h2>
         <Badge className={estado.activo

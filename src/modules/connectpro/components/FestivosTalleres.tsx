@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { boFetch } from "../services/api";
+import { useCentroDeTrabajo, SelectorCentro, AvisoElegirCentro } from "./CentroDeTrabajo";
 import { Card, Th, Td, Badge, Select, Button, ErrorBanner, EmptyState } from "./ui";
 
 type Cobertura = {
@@ -35,6 +36,8 @@ type Region = { code: string; name: string };
 type Taller = { id: number; name: string; city: string | null; province: string | null };
 
 export default function FestivosTalleres() {
+  const ctxCentro = useCentroDeTrabajo();
+  const { centro } = ctxCentro;
   const [anio, setAnio] = useState(String(new Date().getFullYear()));
   const [cobertura, setCobertura] = useState<Cobertura[]>([]);
   const [festivos, setFestivos] = useState<Festivo[]>([]);
@@ -46,22 +49,25 @@ export default function FestivosTalleres() {
   const [cargando, setCargando] = useState<"regional" | "local" | null>(null);
 
   const cargar = useCallback(() => {
-    boFetch<{ data: Cobertura[] }>(`/workshop-holidays/coverage?anio=${anio}`)
+    if (centro == null) { setCobertura([]); setFestivos([]); return; }
+    boFetch<{ data: Cobertura[] }>(`/workshop-holidays/coverage?anio=${anio}`, { centro })
       .then((r) => setCobertura(r.data)).catch((e) => setError(e.message));
-    boFetch<{ data: Festivo[] }>(`/workshop-holidays?desde=${anio}-01-01&hasta=${anio}-12-31`)
+    boFetch<{ data: Festivo[] }>(`/workshop-holidays?desde=${anio}-01-01&hasta=${anio}-12-31`, { centro })
       .then((r) => setFestivos(r.data)).catch(() => {});
-  }, [anio]);
+  }, [anio, centro]);
   useEffect(cargar, [cargar]);
 
   useEffect(() => {
     boFetch<{ data: Region[] }>("/workshop-holidays/regions").then((r) => setRegiones(r.data)).catch(() => {});
+    // Los talleres no están segmentados por central: son de la red, y una misma
+    // central puede avisar a cualquiera. Por eso aquí no va el centro.
     boFetch<{ data: Taller[] }>("/workshops").then((r) => setTalleres(r.data)).catch(() => {});
   }, []);
 
   const resolverRegiones = async () => {
     setBusy(true); setError(null); setAviso(null);
     try {
-      const r = await boFetch<any>("/workshop-holidays/resolve-regions", { method: "POST", body: {} });
+      const r = await boFetch<any>("/workshop-holidays/resolve-regions", { method: "POST", centro, body: {} });
       setAviso(
         `${r.actualizados} taller(es) asignados a su comunidad.` +
         (r.sinReconocer.length
@@ -74,7 +80,7 @@ export default function FestivosTalleres() {
 
   const borrar = async (f: Festivo) => {
     try {
-      await boFetch(`/workshop-holidays/${f.id}`, { method: "DELETE" });
+      await boFetch(`/workshop-holidays/${f.id}`, { method: "DELETE", centro });
       cargar();
     } catch (e: any) { setError(e.message); }
   };
@@ -83,8 +89,10 @@ export default function FestivosTalleres() {
 
   return (
     <div className="flex flex-col gap-4">
+      <SelectorCentro ctx={ctxCentro} />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
       {aviso && <p className="text-[13px] text-emerald-300">{aviso}</p>}
+      {ctxCentro.faltaElegir && <AvisoElegirCentro />}
 
       <div className="flex flex-wrap items-center gap-2">
         <Select value={anio} onChange={(e) => setAnio(e.target.value)}>
@@ -121,7 +129,7 @@ export default function FestivosTalleres() {
 
       {cargando && (
         <Cargar
-          modo={cargando} regiones={regiones} talleres={talleres} anio={anio}
+          modo={cargando} regiones={regiones} talleres={talleres} anio={anio} centro={centro}
           onHecho={(msg) => { setCargando(null); setAviso(msg); cargar(); }}
           onCancelar={() => setCargando(null)}
           onError={setError}
@@ -207,9 +215,9 @@ export default function FestivosTalleres() {
  * los locales de un taller son dos. De uno en uno no los mete nadie, así que se
  * pegan las fechas y ya está.
  */
-function Cargar({ modo, regiones, talleres, anio, onHecho, onCancelar, onError }: {
+function Cargar({ modo, regiones, talleres, anio, centro, onHecho, onCancelar, onError }: {
   modo: "regional" | "local";
-  regiones: Region[]; talleres: Taller[]; anio: string;
+  regiones: Region[]; talleres: Taller[]; anio: string; centro: number | null;
   onHecho: (msg: string) => void; onCancelar: () => void; onError: (m: string) => void;
 }) {
   const [regionCode, setRegionCode] = useState("");
@@ -237,7 +245,7 @@ function Cargar({ modo, regiones, talleres, anio, onHecho, onCancelar, onError }
 
     setBusy(true);
     try {
-      const r = await boFetch<any>("/workshop-holidays", { method: "POST", body: { festivos } });
+      const r = await boFetch<any>("/workshop-holidays", { method: "POST", centro, body: { festivos } });
       onHecho(`${r.escritos} festivo(s) cargados.`);
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }
   };
