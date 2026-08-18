@@ -141,6 +141,13 @@ export const subirImagenDenominacion = (id: number, fichero: File) => {
   });
 };
 
+/** Recorta el fondo de las fotos ya subidas, sin tener que volver a subirlas. */
+export const recortarImagenesDenominaciones = () =>
+  pedir<{ recortadas: number; fallos: string[]; denominaciones: Denominacion[] }>(
+    "/denominations/images/rebuild",
+    { method: "POST" }
+  );
+
 export const quitarImagenDenominacion = (id: number) =>
   pedir<{ denominacion: Denominacion }>(`/denominations/${id}/image`, { method: "DELETE" });
 

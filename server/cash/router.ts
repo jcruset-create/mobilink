@@ -19,7 +19,7 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
-import { miniaturaBoton } from "./images.ts";
+import { miniaturaBoton, miniaturaFicha } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
@@ -64,17 +64,23 @@ const subidaDocumento = multer({
  * Pasó de verdad con la imagen de un botón de cobro.
  */
 /**
- * Reduce la imagen a tamaño de botón y la sube a Storage. Devuelve su URL.
+ * Reduce la imagen y la sube a Storage. Devuelve su URL.
  *
- * Lo comparten la imagen de una forma de cobro y la del botón «Mixto»: las dos
- * se pintan en el mismo sitio y con el mismo recorte, así que tienen que pasar
- * por el mismo tratamiento o una acabaría viéndose distinta de la otra.
+ * El tratamiento no es el mismo para todo. El logotipo de un banco llena su
+ * botón y su fondo forma parte del logotipo —el azul del BBVA es el BBVA— así
+ * que se deja tal cual. Un billete o una moneda es una ficha suelta que se
+ * pinta sobre lo que sea, y la foto que uno encuentra viene en JPG sobre fondo
+ * blanco: ahí el fondo se recorta.
  */
 async function guardarImagenBoton(
   fichero: { buffer: Buffer },
-  ruta_: string
+  ruta_: string,
+  tratamiento: "boton" | "ficha" = "boton"
 ): Promise<string> {
-  const miniatura = await miniaturaBoton(fichero.buffer);
+  const miniatura =
+    tratamiento === "ficha"
+      ? await miniaturaFicha(fichero.buffer)
+      : await miniaturaBoton(fichero.buffer);
 
   let error: { message?: string } | null = null;
   try {
@@ -389,11 +395,63 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
 
-      const url = await guardarImagenBoton(fichero, `cash/denominations/${id}_${Date.now()}.png`);
+      const url = await guardarImagenBoton(
+        fichero,
+        `cash/denominations/${id}_${Date.now()}.png`,
+        "ficha"
+      );
       const denominacion = await config.actualizarDenominacion(contexto(req), id, {
         imagenUrl: url,
       });
       res.json({ denominacion });
+    })
+  );
+
+  /**
+   * Recorta el fondo de las fotos que ya estaban subidas.
+   *
+   * Las primeras se guardaron tal cual venían, con su fondo blanco de JPG
+   * dentro. Volver a subir quince fotos a mano para arreglarlo es trabajo
+   * tonto: el recorte funciona igual sobre lo que ya está guardado, así que se
+   * hace desde aquí.
+   *
+   * La foto nueva se sube a otra ruta y la fila apunta a ella. Machacar la
+   * anterior dejaría la pantalla enseñando la vieja durante horas, porque las
+   * imágenes públicas de Storage se quedan en la caché del navegador.
+   */
+  r.post(
+    "/denominations/images/rebuild",
+    exigirPermiso("cash.denominations.configure"),
+    ruta(async (req, res) => {
+      const denominaciones = await cargarDenominaciones(pool, false);
+      let recortadas = 0;
+      const fallos: string[] = [];
+
+      for (const d of denominaciones) {
+        if (!d.imagenUrl) continue;
+        try {
+          const respuesta = await fetch(d.imagenUrl);
+          if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
+          const buffer = Buffer.from(await respuesta.arrayBuffer());
+          const url = await guardarImagenBoton(
+            { buffer },
+            `cash/denominations/${d.id}_${Date.now()}.png`,
+            "ficha"
+          );
+          await config.actualizarDenominacion(contexto(req), d.id, { imagenUrl: url });
+          recortadas++;
+        } catch (e) {
+          // Una foto que falle no puede llevarse por delante las demás.
+          console.error(`Mobilink Cash: no se ha podido recortar ${d.etiqueta}:`, e);
+          fallos.push(d.etiqueta);
+        }
+      }
+
+      res.json({
+        recortadas,
+        fallos,
+        denominaciones: await cargarDenominaciones(pool, false),
+      });
     })
   );
 
