@@ -356,6 +356,11 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "solicitanteTelefono" TEXT;
 
+    -- Nº de autorización o de cita que da quien solicita: lo pide después la
+    -- aseguradora o el gestor de flota para pagar el servicio.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
+
     -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
     ALTER TABLE roadside_vehicles
     ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
@@ -984,7 +989,7 @@ export async function initDb() {
   // aplica en el arranque para no depender de ejecutarlo a mano en el SQL
   // Editor. Es idempotente y sólo actúa si las tablas SaaS existen.
   const MODULOS_LICENCIABLES =
-    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner'";
+    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner','cash'";
   const EMPRESA_SEMILLA = "00000000-0000-4000-a000-000000000001";
 
   await pool

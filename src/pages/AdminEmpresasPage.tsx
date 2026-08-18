@@ -39,6 +39,7 @@ const MODULOS = [
   "toolcontrol",
   "safety",
   "presencia",
+  "cash",
 ];
 
 const ESTADO_COLOR: Record<string, string> = {

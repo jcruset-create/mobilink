@@ -10,7 +10,7 @@ export type RolApp = { value: string; label: string };
 export type PantallaApp = { key: string; label: string };
 
 export type ModuloApp = {
-  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia" | "workplanner";
+  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia" | "workplanner" | "cash";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
@@ -42,6 +42,27 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "informes", label: "Informes" },
       { key: "estado-ots", label: "Estado de OTs" },
       { key: "usuarios", label: "Usuarios" },
+    ],
+  },
+  {
+    key: "cash",
+    label: "Mobilink Cash",
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "responsable", label: "Responsable de caja" },
+      { value: "cajero", label: "Cajero" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "jornada", label: "Jornada actual" },
+      { key: "cobros", label: "Cobros" },
+      { key: "pagos", label: "Pagos" },
+      { key: "movimientos", label: "Movimientos" },
+      { key: "stock", label: "Stock de caja" },
+      { key: "arqueo", label: "Arqueo" },
+      { key: "cierre", label: "Cierre" },
+      { key: "historico", label: "Histórico" },
+      { key: "erp", label: "Integración ERP" },
     ],
   },
   {

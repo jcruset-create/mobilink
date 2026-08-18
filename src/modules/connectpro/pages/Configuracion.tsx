@@ -5,6 +5,7 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Button, ErrorBanner } from "../components/ui";
 import type { ServiceType, RejectionReason, VehicleType } from "../types";
+import CierreAutomatico from "../components/CierreAutomatico";
 
 type CatalogKind = "service-types" | "rejection-reasons" | "vehicle-types";
 
@@ -81,8 +82,10 @@ export default function Configuracion() {
 
   return (
     <div>
-      <PageTitle title="Configuración" subtitle="Catálogos del centro de control. Los elementos usados en el histórico no se pueden eliminar, solo desactivar." />
+      <PageTitle title="Configuración" subtitle="Ajustes y catálogos del centro de control. Los elementos usados en el histórico no se pueden eliminar, solo desactivar." />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+      <CierreAutomatico canEdit={canEdit} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="overflow-x-auto">

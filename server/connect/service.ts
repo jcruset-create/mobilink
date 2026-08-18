@@ -651,7 +651,32 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   // Coste estimado según el tarifario de la autorización (base + €/km × distancia)
   let estimatedCost: number | null = null;
   let costDetail: string | null = null;
+
+  /*
+   * Este es el instante contractual: la central acaba de dar la orden de
+   * salida al taller. El motor de tarifas congela aquí el forfait, y de ahí en
+   * adelante ya no cambia aunque el técnico llegue de madrugada.
+   *
+   * Si no hay tarifario configurado para este cliente o este proveedor, el
+   * motor no devuelve importe y se mantiene el cálculo de siempre: estrenar el
+   * motor no puede dejar asistencias sin coste.
+   */
+  let tarifado = false;
   try {
+    const { bloquear } = await import("./pricing/service.ts");
+    const breakdownPrevio = asg.scoreBreakdown ? JSON.parse(asg.scoreBreakdown) : {};
+    const r = await bloquear(asg.assistanceId, {
+      distanceKm: Number(breakdownPrevio.distanceKm) || null,
+      distanceSource: "estimated",
+      workshopId: asg.workshopId,
+    });
+    if (r?.ventaTotal != null) tarifado = true;
+  } catch (err: any) {
+    console.error("[Pricing] bloqueo de tarifa:", err?.message);
+  }
+
+  // Respaldo mientras no haya tarifario configurado para este caso
+  if (!tarifado) try {
     const breakdown = asg.scoreBreakdown ? JSON.parse(asg.scoreBreakdown) : {};
     const distanceKm = Number(breakdown.distanceKm) || 0;
     const t = await db.query(
