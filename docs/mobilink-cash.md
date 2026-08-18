@@ -386,6 +386,38 @@ Decisiones que conviene no reabrir sin pensarlas:
   formas de cobro: mañana puede haber una tercera —tienda, lavadero— sin tocar
   código.
 
+## 7 octies. El descuadre del arqueo
+
+El arqueo compara lo contado con el teórico. Cuando no coinciden, la diferencia
+**se asienta como un ajuste con su operación propia, pieza a pieza**: nunca se
+disuelve en un total.
+
+Hay **dos momentos** en que puede asentarse, y los dos comparten el mismo
+código (`asentarAjusteDeArqueo`) para que no diverjan:
+
+1. **Al regularizar** (`regularizarArqueo`), que es el camino recomendado: se
+   cuenta, se recuenta, se acepta el descuadre con su motivo y a partir de ahí
+   la caja cuadra. El cierre va después sobre limpio.
+2. **Al cerrar**, como red de seguridad: si nadie regularizó, el cierre lo hace
+   solo. Una caja ya regularizada no vuelve a asentar nada, porque para
+   entonces el teórico y lo contado son el mismo número.
+
+Detalles que costaron un fallo en producción:
+
+- **El cierre reparte LO CONTADO, no el teórico.** La pantalla usaba
+  `jornada.totalStockCentimos` (el teórico). Con la caja cuadrada son el mismo
+  número y no se nota; con un faltante pedía repartir un dinero que no estaba y
+  **el cierre no se podía completar**. El resumen expone ahora `ultimoArqueo`
+  con las piezas contadas.
+- **Las monedas de los cartuchos son monedas.** Al regularizar hay que sumar
+  `cartuchos_contados × piezas_por_cartucho` a las sueltas; si no, un tubo sin
+  abrir se lee como un faltante que no existe.
+- **El importe del ajuste nunca es cero** (`|diferencia| || 1`): un descuadre
+  solo de composición —sobra un billete de 10 y falta otro de 10— mueve piezas
+  sin mover el total, y una operación de 0 € desaparecería de los listados.
+- **El motivo es obligatorio** en la pantalla. Un ajuste sin explicación no lo
+  entiende nadie un mes después.
+
 ## 8. Estado de la entrega
 
 Implementado y probado:
