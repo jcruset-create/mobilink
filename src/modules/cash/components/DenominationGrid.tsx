@@ -48,6 +48,9 @@ type Props = {
   /** Columna extra para contar cartuchos (solo arqueo). */
   cartuchos?: CantidadesPorValor;
   onCartuchosChange?: (cartuchos: CantidadesPorValor) => void;
+  /** Columna extra para contar bolsas; solo sale si el catálogo las tiene. */
+  bolsas?: CantidadesPorValor;
+  onBolsasChange?: (bolsas: CantidadesPorValor) => void;
   titulo?: string;
   /** Importe que deberían sumar las piezas; pinta el total en verde o rojo. */
   objetivoCentimos?: number | null;
@@ -63,29 +66,42 @@ export default function DenominationGrid({
   mostrarDisponible = false,
   cartuchos,
   onCartuchosChange,
+  bolsas,
+  onBolsasChange,
   titulo,
   objetivoCentimos = null,
   compacto = false,
   deshabilitado = false,
 }: Props) {
   const lineas = lineasDesde(cantidades);
-  const total = totalLineas(lineas) + totalLineasCartuchos();
-  const piezas = totalPiezas(lineas) + piezasDeCartuchos();
+  const total = totalLineas(lineas) + valorEnvasado(cartuchos, "cartucho") + valorEnvasado(bolsas, "bolsa");
+  const piezas = totalPiezas(lineas) + piezasEnvasadas(cartuchos, "cartucho") + piezasEnvasadas(bolsas, "bolsa");
 
-  function totalLineasCartuchos(): number {
-    if (!cartuchos) return 0;
+  /** Piezas que hay dentro de un envase de esta denominación. */
+  function porEnvase(d: Denominacion, envase: "cartucho" | "bolsa"): number | null {
+    return envase === "cartucho" ? d.piezasPorCartucho : d.piezasPorBolsa;
+  }
+
+  function piezasEnvasadas(
+    envases: CantidadesPorValor | undefined,
+    envase: "cartucho" | "bolsa"
+  ): number {
+    if (!envases) return 0;
     return denominaciones.reduce((a, d) => {
-      const n = cartuchos[d.valor] ?? 0;
-      return a + (d.piezasPorCartucho ? n * d.piezasPorCartucho * d.valor : 0);
+      const n = porEnvase(d, envase);
+      return a + (n ? (envases[d.valor] ?? 0) * n : 0);
     }, 0);
   }
 
-  function piezasDeCartuchos(): number {
-    if (!cartuchos) return 0;
-    return denominaciones.reduce(
-      (a, d) => a + (d.piezasPorCartucho ? (cartuchos[d.valor] ?? 0) * d.piezasPorCartucho : 0),
-      0
-    );
+  function valorEnvasado(
+    envases: CantidadesPorValor | undefined,
+    envase: "cartucho" | "bolsa"
+  ): number {
+    if (!envases) return 0;
+    return denominaciones.reduce((a, d) => {
+      const n = porEnvase(d, envase);
+      return a + (n ? (envases[d.valor] ?? 0) * n * d.valor : 0);
+    }, 0);
   }
 
   function fijar(valor: number, cantidad: number) {
@@ -101,6 +117,11 @@ export default function DenominationGrid({
   function fijarCartuchos(valor: number, cantidad: number) {
     if (deshabilitado || !onCartuchosChange) return;
     onCartuchosChange({ ...(cartuchos ?? {}), [valor]: Math.max(0, cantidad) });
+  }
+
+  function fijarBolsas(valor: number, cantidad: number) {
+    if (deshabilitado || !onBolsasChange) return;
+    onBolsasChange({ ...(bolsas ?? {}), [valor]: Math.max(0, cantidad) });
   }
 
   const billetes = denominaciones.filter((d) => d.tipo === "BILLETE");
@@ -136,6 +157,8 @@ export default function DenominationGrid({
           deshabilitado={deshabilitado}
           cartuchos={cartuchos}
           fijarCartuchos={onCartuchosChange ? fijarCartuchos : undefined}
+          bolsas={bolsas}
+          fijarBolsas={onBolsasChange ? fijarBolsas : undefined}
         />
       </div>
 
@@ -180,6 +203,8 @@ function Grupo({
   deshabilitado,
   cartuchos,
   fijarCartuchos,
+  bolsas,
+  fijarBolsas,
 }: {
   etiqueta: string;
   denominaciones: Denominacion[];
@@ -190,13 +215,15 @@ function Grupo({
   deshabilitado: boolean;
   cartuchos?: CantidadesPorValor;
   fijarCartuchos?: (valor: number, cantidad: number) => void;
+  bolsas?: CantidadesPorValor;
+  fijarBolsas?: (valor: number, cantidad: number) => void;
 }) {
   if (denominaciones.length === 0) return null;
 
   // Existencias y cartuchos ocupan el hueco del subtotal. Con cualquiera de los
   // dos la fila ya no da de sí, y antes que encoger un importe hasta cortarlo
   // se prescinde de él: el total de la rejilla sigue abajo, entero.
-  const hayColumnaExtra = mostrarDisponible || Boolean(fijarCartuchos);
+  const hayColumnaExtra = mostrarDisponible || Boolean(fijarCartuchos) || Boolean(fijarBolsas);
 
   return (
     <div>
@@ -264,21 +291,26 @@ function Grupo({
               </button>
 
               {fijarCartuchos && d.piezasPorCartucho != null && (
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  aria-label={`Cartuchos de ${d.etiqueta} (${d.piezasPorCartucho} piezas)`}
-                  title={`Cartuchos de ${d.piezasPorCartucho} piezas`}
-                  value={(cartuchos?.[d.valor] ?? 0) === 0 ? "" : String(cartuchos?.[d.valor])}
-                  placeholder="cart."
-                  onChange={(e) => {
-                    const n = e.target.value.replace(/\D/g, "");
-                    fijarCartuchos(d.valor, n === "" ? 0 : Number(n));
-                  }}
-                  onFocus={(e) => e.target.select()}
-                  disabled={deshabilitado}
-                  className="h-11 w-12 shrink-0 rounded-lg border border-slate-600 bg-slate-900 text-center text-xs tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
+                <CampoEnvase
+                  etiqueta={d.etiqueta}
+                  nombre="Cartuchos"
+                  abreviatura="cart."
+                  piezas={d.piezasPorCartucho}
+                  valor={cartuchos?.[d.valor] ?? 0}
+                  onChange={(n) => fijarCartuchos(d.valor, n)}
+                  deshabilitado={deshabilitado}
+                />
+              )}
+
+              {fijarBolsas && d.piezasPorBolsa != null && (
+                <CampoEnvase
+                  etiqueta={d.etiqueta}
+                  nombre="Bolsas"
+                  abreviatura="bols."
+                  piezas={d.piezasPorBolsa}
+                  valor={bolsas?.[d.valor] ?? 0}
+                  onChange={(n) => fijarBolsas(d.valor, n)}
+                  deshabilitado={deshabilitado}
                 />
               )}
 
@@ -299,5 +331,49 @@ function Grupo({
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * Contador de envases precintados.
+ *
+ * Cartuchos y bolsas se cuentan igual —cuántos precintos, no cuántas monedas—
+ * así que comparten campo: si mañana aparece un tercer formato, se añade aquí y
+ * no en dos sitios que se van separando poco a poco.
+ */
+function CampoEnvase({
+  etiqueta,
+  nombre,
+  abreviatura,
+  piezas,
+  valor,
+  onChange,
+  deshabilitado,
+}: {
+  etiqueta: string;
+  nombre: string;
+  abreviatura: string;
+  piezas: number;
+  valor: number;
+  onChange: (n: number) => void;
+  deshabilitado: boolean;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      aria-label={`${nombre} de ${etiqueta} (${piezas} piezas)`}
+      title={`${nombre} de ${piezas} piezas`}
+      value={valor === 0 ? "" : String(valor)}
+      placeholder={abreviatura}
+      onChange={(e) => {
+        const n = e.target.value.replace(/\D/g, "");
+        onChange(n === "" ? 0 : Number(n));
+      }}
+      onFocus={(e) => e.target.select()}
+      disabled={deshabilitado}
+      className="h-11 w-12 shrink-0 rounded-lg border border-slate-600 bg-slate-900 text-center text-xs tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
+    />
   );
 }

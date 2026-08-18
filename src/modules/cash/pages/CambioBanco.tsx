@@ -29,12 +29,70 @@ import {
   inputCls,
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
-import type { PedidoCambio, Pendientes, PropuestaPedido } from "../types";
-import { filasDeCambio, aLinea } from "../utils/cambio";
+import type { Denominacion, PedidoCambio, Pendientes, PropuestaPedido } from "../types";
+import {
+  filasDeCambio,
+  lineasDeFila,
+  importeDeFila,
+  piezasDeFormato,
+  type Formato,
+  type FilaCambio,
+} from "../utils/cambio";
 import * as api from "../services/api";
 
 const etiquetaDe = (valor: number) =>
   valor >= 100 ? `${valor / 100} €` : `${valor} c`;
+
+/** Las líneas de la propuesta, en la forma que espera `filasDeCambio`. */
+const aConocidas = (lineas: readonly { valor: number; piezas: number; cartuchos: number; bolsas?: number; motivo: string }[]) =>
+  lineas.map((l) => ({
+    valor: l.valor,
+    cantidad: l.piezas,
+    cartuchos: l.cartuchos,
+    bolsas: l.bolsas ?? 0,
+    motivo: l.motivo,
+  }));
+
+/**
+ * Una casilla de la rejilla de pedido: un formato de una denominación.
+ *
+ * Cuando esa denominación no viene en ese formato —una bolsa de billetes de
+ * 10 €— la casilla no se pinta vacía sino con una raya: un hueco donde se puede
+ * escribir invita a pedir algo que el banco no sirve.
+ */
+function Casilla({
+  fila,
+  formato,
+  valor,
+  onChange,
+}: {
+  fila: FilaCambio;
+  formato: Formato;
+  valor: string | undefined;
+  onChange: (texto: string) => void;
+}) {
+  const piezas = piezasDeFormato(fila, formato);
+  if (piezas <= 0) {
+    return <td className={`${tdCls} text-center text-slate-600`}>—</td>;
+  }
+
+  return (
+    <td className={`${tdCls} text-center`}>
+      <input
+        type="number"
+        min={0}
+        value={valor ?? ""}
+        placeholder="0"
+        aria-label={`${formato} de ${etiquetaDe(fila.valor)}`}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${inputCls} w-20 text-right tabular-nums`}
+      />
+      {formato !== "sueltas" && (
+        <div className="mt-0.5 text-[10px] text-slate-500">de {piezas}</div>
+      )}
+    </td>
+  );
+}
 
 export default function CambioBanco() {
   const { jornada, cajaId, refrescar, puede, denominaciones } = useCash();
@@ -42,7 +100,10 @@ export default function CambioBanco() {
   const [pedidos, setPedidos] = useState<PedidoCambio[]>([]);
   const [importeTexto, setImporteTexto] = useState("200,00");
   const [propuesta, setPropuesta] = useState<PropuestaPedido | null>(null);
-  const [ajustes, setAjustes] = useState<Record<number, string>>({});
+  /** Lo tecleado, por valor y formato: `ajustes[100].cartuchos === "2"`. */
+  const [ajustes, setAjustes] = useState<Record<number, Partial<Record<Formato, string>>>>({});
+  /** Hoja de la propuesta, antes de sacar el dinero. */
+  const [propuestaImpresa, setPropuestaImpresa] = useState(false);
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [pedidoImpreso, setPedidoImpreso] = useState<PedidoCambio | null>(null);
@@ -88,7 +149,16 @@ export default function CambioBanco() {
       setPropuesta(p);
       // Las que el cálculo no propone quedan a cero, pero siguen en pantalla.
       setAjustes(
-        Object.fromEntries(p.lineas.map((l) => [l.valor, String(l.cartuchos || l.piezas)]))
+        Object.fromEntries(
+          filasDeCambio(denominaciones, aConocidas(p.lineas)).map((f) => [
+            f.valor,
+            {
+              sueltas: f.cantidades.sueltas > 0 ? String(f.cantidades.sueltas) : "",
+              cartuchos: f.cantidades.cartuchos > 0 ? String(f.cantidades.cartuchos) : "",
+              bolsas: f.cantidades.bolsas > 0 ? String(f.cantidades.bolsas) : "",
+            },
+          ])
+        )
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido calcular la propuesta");
@@ -97,27 +167,20 @@ export default function CambioBanco() {
 
   /** Todas las denominaciones de cambio, con lo propuesto donde lo haya. */
   const filas = useMemo(
-    () =>
-      filasDeCambio(
-        denominaciones,
-        (propuesta?.lineas ?? []).map((l) => ({
-          valor: l.valor,
-          cantidad: l.piezas,
-          cartuchos: l.cartuchos,
-          motivo: l.motivo,
-        }))
-      ),
+    () => filasDeCambio(denominaciones, aConocidas(propuesta?.lineas ?? [])),
     [denominaciones, propuesta]
   );
 
   /** Lo que finalmente se le pide al banco, con los ajustes del cajero. */
   const solicitado = useMemo(
-    () =>
-      filas
-        .map((f) => aLinea(f, ajustes[f.valor]))
-        .filter((l): l is NonNullable<typeof l> => l !== null),
+    () => filas.flatMap((f) => lineasDeFila(f, ajustes[f.valor] ?? {})),
     [filas, ajustes]
   );
+
+  /** Cambia una casilla sin pisar los otros dos formatos de la misma fila. */
+  function fijar(valor: number, formato: Formato, texto: string) {
+    setAjustes((prev) => ({ ...prev, [valor]: { ...prev[valor], [formato]: texto } }));
+  }
 
   const totalSolicitado = solicitado.reduce((a, l) => a + l.cantidad * l.valor, 0);
 
@@ -197,14 +260,16 @@ export default function CambioBanco() {
                 <thead>
                   <tr>
                     <th className={thCls}>Pedir</th>
-                    <th className={thCls}>Cuántos</th>
+                    <th className={`${thCls} text-center`}>Unidades</th>
+                    <th className={`${thCls} text-center`}>Cartuchos</th>
+                    <th className={`${thCls} text-center`}>Bolsas</th>
                     <th className={`${thCls} text-right`}>Importe</th>
                     <th className={thCls}>Por qué</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filas.length === 0 && (
-                    <EmptyRow cols={4} text="No hay denominaciones de cambio activas." />
+                    <EmptyRow cols={6} text="No hay denominaciones de cambio activas." />
                   )}
                   {/*
                     Todas las denominaciones, propuestas o no. Las que el
@@ -212,28 +277,31 @@ export default function CambioBanco() {
                     mano lo que uno sabe que va a hacer falta.
                   */}
                   {filas.map((f) => {
-                    const n = Number(ajustes[f.valor] ?? 0);
-                    const piezas = f.porTubo > 0 ? n * f.porTubo : n;
+                    const tecleado = ajustes[f.valor] ?? {};
+                    const importeFila = importeDeFila(f, tecleado);
                     return (
-                      <tr key={f.valor} className={n > 0 ? "" : "opacity-60"}>
+                      <tr key={f.valor} className={importeFila > 0 ? "" : "opacity-60"}>
                         <td className={`${tdCls} font-bold text-slate-100`}>{etiquetaDe(f.valor)}</td>
-                        <td className={tdCls}>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              min={0}
-                              value={ajustes[f.valor] ?? ""}
-                              placeholder="0"
-                              onChange={(e) => setAjustes({ ...ajustes, [f.valor]: e.target.value })}
-                              className={`${inputCls} w-20 text-right tabular-nums`}
-                            />
-                            <span className="text-[11px] text-slate-400">
-                              {f.porTubo > 0 ? `tubos de ${f.porTubo}` : "piezas"}
-                            </span>
-                          </div>
-                        </td>
+                        <Casilla
+                          fila={f}
+                          formato="sueltas"
+                          valor={tecleado.sueltas}
+                          onChange={(v) => fijar(f.valor, "sueltas", v)}
+                        />
+                        <Casilla
+                          fila={f}
+                          formato="cartuchos"
+                          valor={tecleado.cartuchos}
+                          onChange={(v) => fijar(f.valor, "cartuchos", v)}
+                        />
+                        <Casilla
+                          fila={f}
+                          formato="bolsas"
+                          valor={tecleado.bolsas}
+                          onChange={(v) => fijar(f.valor, "bolsas", v)}
+                        />
                         <td className={`${tdCls} text-right tabular-nums text-slate-300`}>
-                          {euros(piezas * f.valor)}
+                          {euros(importeFila)}
                         </td>
                         <td className={`${tdCls} text-[11px] text-slate-400`}>{f.motivo ?? ""}</td>
                       </tr>
@@ -241,6 +309,13 @@ export default function CambioBanco() {
                   })}
                 </tbody>
               </TableWrap>
+
+              <p className="text-[11px] text-slate-500">
+                «Unidades» son monedas o billetes sueltos; «cartuchos» y «bolsas», precintos
+                enteros. Se pueden pedir a la vez —tres cartuchos y ocho monedas sueltas— porque el
+                banco no siempre sirve lo que uno pediría. Las bolsas solo salen en las monedas que
+                las tengan configuradas.
+              </p>
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span
@@ -253,6 +328,19 @@ export default function CambioBanco() {
                     <> · el resto vendrá en lo que el banco tenga</>
                   )}
                 </span>
+
+                {/*
+                  Imprimir ANTES de sacar el dinero. La hoja se lleva al banco
+                  para que den exactamente esto; esperar a confirmar el pedido
+                  obligaba a sacar el dinero de la caja para poder imprimirla.
+                */}
+                <button
+                  onClick={() => setPropuestaImpresa(true)}
+                  disabled={solicitado.length === 0}
+                  className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+                >
+                  <Printer className="h-3.5 w-3.5" /> Imprimir para el banco
+                </button>
               </div>
 
               <BotonAccion
@@ -331,7 +419,25 @@ export default function CambioBanco() {
       </section>
 
       {pedidoImpreso && (
-        <HojaBanco pedido={pedidoImpreso} onCerrar={() => setPedidoImpreso(null)} />
+        <HojaBanco
+          titulo="Petición de cambio"
+          referencia={pedidoImpreso.numero}
+          lineas={pedidoImpreso.solicitado}
+          totalCentimos={pedidoImpreso.importeCentimos}
+          denominaciones={denominaciones}
+          onCerrar={() => setPedidoImpreso(null)}
+        />
+      )}
+
+      {propuestaImpresa && (
+        <HojaBanco
+          titulo="Cambio que necesitamos"
+          referencia="Todavía sin número: el pedido no se ha confirmado"
+          lineas={solicitado}
+          totalCentimos={importe}
+          denominaciones={denominaciones}
+          onCerrar={() => setPropuestaImpresa(false)}
+        />
       )}
     </div>
   );
@@ -358,8 +464,17 @@ function PedidoPendiente({
 
   // Se arranca de lo pedido: lo normal es que el banco dé justo eso, y así el
   // cajero solo corrige lo que venga distinto.
-  const [recibido, setRecibido] = useState<Record<number, string>>(() =>
-    Object.fromEntries(pedido.solicitado.map((l) => [l.valor, String(l.cartuchos || l.cantidad)]))
+  const [recibido, setRecibido] = useState<Record<number, Partial<Record<Formato, string>>>>(() =>
+    Object.fromEntries(
+      filasDeCambio(denominaciones, pedido.solicitado).map((f) => [
+        f.valor,
+        {
+          sueltas: f.cantidades.sueltas > 0 ? String(f.cantidades.sueltas) : "",
+          cartuchos: f.cantidades.cartuchos > 0 ? String(f.cantidades.cartuchos) : "",
+          bolsas: f.cantidades.bolsas > 0 ? String(f.cantidades.bolsas) : "",
+        },
+      ])
+    )
   );
   const [motivo, setMotivo] = useState("");
   const [motivoCancelar, setMotivoCancelar] = useState("");
@@ -372,11 +487,12 @@ function PedidoPendiente({
    */
   const filas = filasDeCambio(denominaciones, pedido.solicitado);
 
-  const lineas = filas
-    .map((f) => aLinea(f, recibido[f.valor]))
-    .filter((l): l is NonNullable<typeof l> => l !== null);
+  const lineas = filas.flatMap((f) => lineasDeFila(f, recibido[f.valor] ?? {}));
 
   const total = lineas.reduce((a, l) => a + l.cantidad * l.valor, 0);
+
+  const fijar = (valor: number, formato: Formato, texto: string) =>
+    setRecibido((prev) => ({ ...prev, [valor]: { ...prev[valor], [formato]: texto } }));
   const cuadra = total === pedido.importeCentimos;
 
   return (
@@ -401,28 +517,50 @@ function PedidoPendiente({
           <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
             Cuenta lo que ha traído el banco
           </div>
-          <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {filas.map((f) => {
-              const porTubo = f.porTubo;
-              return (
-                <label key={f.valor} className="flex items-center gap-2">
-                  <span className="w-16 shrink-0 text-sm font-bold text-slate-100">
-                    {etiquetaDe(f.valor)}
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={recibido[f.valor] ?? ""}
-                    placeholder="0"
-                    onChange={(e) => setRecibido({ ...recibido, [f.valor]: e.target.value })}
-                    className={`${inputCls} w-20 text-right tabular-nums`}
-                  />
-                  <span className="text-[11px] text-slate-400">
-                    {porTubo > 0 ? `tubos de ${porTubo}` : "piezas"}
-                  </span>
-                </label>
-              );
-            })}
+          <div className="mt-1">
+            <TableWrap>
+              <thead>
+                <tr>
+                  <th className={thCls}>Denominación</th>
+                  <th className={`${thCls} text-center`}>Unidades</th>
+                  <th className={`${thCls} text-center`}>Cartuchos</th>
+                  <th className={`${thCls} text-center`}>Bolsas</th>
+                  <th className={`${thCls} text-right`}>Importe</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map((f) => {
+                  const tecleado = recibido[f.valor] ?? {};
+                  const importeFila = importeDeFila(f, tecleado);
+                  return (
+                    <tr key={f.valor} className={importeFila > 0 ? "" : "opacity-60"}>
+                      <td className={`${tdCls} font-bold text-slate-100`}>{etiquetaDe(f.valor)}</td>
+                      <Casilla
+                        fila={f}
+                        formato="sueltas"
+                        valor={tecleado.sueltas}
+                        onChange={(v) => fijar(f.valor, "sueltas", v)}
+                      />
+                      <Casilla
+                        fila={f}
+                        formato="cartuchos"
+                        valor={tecleado.cartuchos}
+                        onChange={(v) => fijar(f.valor, "cartuchos", v)}
+                      />
+                      <Casilla
+                        fila={f}
+                        formato="bolsas"
+                        valor={tecleado.bolsas}
+                        onChange={(v) => fijar(f.valor, "bolsas", v)}
+                      />
+                      <td className={`${tdCls} text-right tabular-nums text-slate-300`}>
+                        {euros(importeFila)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </TableWrap>
           </div>
 
           <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2">
@@ -505,9 +643,42 @@ function PedidoPendiente({
 
 // ── Hoja para llevar al banco ──────────────────────────────────────────────
 
-function HojaBanco({ pedido, onCerrar }: { pedido: PedidoCambio; onCerrar: () => void }) {
+/**
+ * Hoja imprimible del cambio.
+ *
+ * Sirve para las dos cosas: la propuesta que se lleva al banco antes de sacar
+ * el dinero y el resguardo del pedido ya confirmado. Es la misma hoja porque
+ * quien la lee —el del banco— necesita exactamente lo mismo en los dos casos.
+ */
+function HojaBanco({
+  titulo,
+  referencia,
+  lineas,
+  totalCentimos,
+  denominaciones,
+  onCerrar,
+}: {
+  titulo: string;
+  referencia: string;
+  lineas: readonly { valor: number; cantidad: number; cartuchos: number; bolsas?: number }[];
+  totalCentimos: number;
+  denominaciones: readonly Denominacion[];
+  onCerrar: () => void;
+}) {
   const { cajas, cajaId } = useCash();
   const caja = cajas.find((c) => c.id === cajaId);
+
+  /** «3 cartuchos de 25» o «12 sueltas»: cómo se pide en la ventanilla. */
+  const comoSePide = (l: { valor: number; cantidad: number; cartuchos: number; bolsas?: number }) => {
+    const d = denominaciones.find((x) => x.valor === l.valor);
+    if (l.cartuchos > 0) {
+      return `${l.cartuchos} ${l.cartuchos === 1 ? "cartucho" : "cartuchos"} de ${d?.piezasPorCartucho ?? "?"}`;
+    }
+    if (l.bolsas && l.bolsas > 0) {
+      return `${l.bolsas} ${l.bolsas === 1 ? "bolsa" : "bolsas"} de ${d?.piezasPorBolsa ?? "?"}`;
+    }
+    return `${l.cantidad} sueltas`;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/70 p-4 print:static print:bg-white print:p-0">
@@ -531,8 +702,8 @@ function HojaBanco({ pedido, onCerrar }: { pedido: PedidoCambio; onCerrar: () =>
         </div>
 
         <div className="mb-3">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Petición de cambio</div>
-          <div className="font-mono text-sm">{pedido.numero}</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">{titulo}</div>
+          <div className="font-mono text-sm">{referencia}</div>
           {caja && <div className="text-sm text-slate-600">{caja.nombre}</div>}
         </div>
 
@@ -541,30 +712,26 @@ function HojaBanco({ pedido, onCerrar }: { pedido: PedidoCambio; onCerrar: () =>
             <tr className="border-b border-slate-300">
               <th className="py-1 text-left">Denominación</th>
               <th className="py-1 text-right">Cantidad</th>
+              <th className="py-1 text-right">Piezas</th>
               <th className="py-1 text-right">Importe</th>
             </tr>
           </thead>
           <tbody>
-            {pedido.solicitado.map((l) => (
-              <tr key={l.valor} className="border-b border-slate-200">
+            {lineas.map((l, i) => (
+              <tr key={`${l.valor}-${i}`} className="border-b border-slate-200">
                 <td className="py-1">{etiquetaDe(l.valor)}</td>
-                <td className="py-1 text-right tabular-nums">
-                  {l.cartuchos > 0
-                    ? `${l.cartuchos} ${l.cartuchos === 1 ? "cartucho" : "cartuchos"} (${l.cantidad} piezas)`
-                    : `${l.cantidad} piezas`}
-                </td>
+                <td className="py-1 text-right tabular-nums">{comoSePide(l)}</td>
+                <td className="py-1 text-right tabular-nums">{l.cantidad}</td>
                 <td className="py-1 text-right tabular-nums">{euros(l.cantidad * l.valor)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr>
-              <td className="py-2 font-bold" colSpan={2}>
+              <td className="py-2 font-bold" colSpan={3}>
                 Total a cambiar
               </td>
-              <td className="py-2 text-right font-black tabular-nums">
-                {euros(pedido.importeCentimos)}
-              </td>
+              <td className="py-2 text-right font-black tabular-nums">{euros(totalCentimos)}</td>
             </tr>
           </tfoot>
         </table>

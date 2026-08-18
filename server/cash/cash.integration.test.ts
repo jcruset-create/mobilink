@@ -2550,3 +2550,152 @@ describe.runIf(RUN)("regularizar el arqueo", () => {
     ).rejects.toMatchObject({ codigo: "CAJA_YA_CUADRA" });
   });
 });
+
+describe.runIf(RUN)("bolsas de monedas", () => {
+  /**
+   * Configura una bolsa para la moneda de 1 €.
+   *
+   * El catálogo no trae bolsas de fábrica —cada banco sirve el suyo— así que
+   * la prueba la configura como lo haría el usuario en Configuración.
+   */
+  async function configurarBolsa(valor: number, piezas: number) {
+    const { rows } = await db.query(`SELECT id FROM cash_denominations WHERE valor_centimos = $1`, [
+      valor,
+    ]);
+    await config.actualizarDenominacion(ctx, rows[0].id, { piezasPorBolsa: piezas });
+  }
+
+  /** Sueltas, tubos y bolsas de una denominación, leídos del libro mayor. */
+  async function stock(sessionId: number, valor: number) {
+    const { rows } = await db.query(
+      `SELECT SUM(CASE WHEN cartuchos = 0 AND bolsas = 0
+                       THEN (CASE WHEN direccion='IN' THEN cantidad ELSE -cantidad END)
+                       ELSE 0 END) AS sueltas,
+              SUM(CASE WHEN direccion='IN' THEN cartuchos ELSE -cartuchos END) AS tubos,
+              SUM(CASE WHEN direccion='IN' THEN bolsas ELSE -bolsas END) AS sacos
+         FROM cash_denomination_movements
+        WHERE session_id = $1 AND valor_unitario_centimos = $2`,
+      [sessionId, valor]
+    );
+    return {
+      sueltas: Number(rows[0].sueltas ?? 0),
+      tubos: Number(rows[0].tubos ?? 0),
+      bolsas: Number(rows[0].sacos ?? 0),
+    };
+  }
+
+  it("una bolsa entra en el fondo y vale lo que traen sus monedas", async () => {
+    await configurarBolsa(100, 500);
+    const caja = await crearCaja("bolsa-fondo");
+
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 3 }],
+      fondoBolsas: [{ valor: 100, cantidad: 1 }],
+    });
+
+    // 3 € sueltos + una bolsa de 500 monedas de 1 € = 503 €.
+    expect(sesion.fondoInicialCentimos).toBe(50300);
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 3, tubos: 0, bolsas: 1 });
+  });
+
+  it("se rompe el cartucho antes que la bolsa", async () => {
+    await configurarBolsa(100, 500);
+    const caja = await crearCaja("bolsa-orden");
+
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 1 }],
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+      fondoBolsas: [{ valor: 100, cantidad: 1 }],
+    });
+
+    // Faltan 3 monedas sueltas: basta con el cartucho, la bolsa no se toca.
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_OUT",
+      importeCentimos: 400,
+      formasPago: [{ forma: "CASH", importe: 400 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 4 }],
+      concepto: "Salida que solo necesita el cartucho",
+    });
+
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 22, tubos: 0, bolsas: 1 });
+  });
+
+  it("cuando el cartucho no llega, se abre también la bolsa", async () => {
+    await configurarBolsa(100, 500);
+    const caja = await crearCaja("bolsa-abierta");
+
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+      fondoBolsas: [{ valor: 100, cantidad: 1 }],
+    });
+
+    // 30 monedas: el tubo trae 25, así que hace falta abrir también la bolsa.
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_OUT",
+      importeCentimos: 3000,
+      formasPago: [{ forma: "CASH", importe: 3000 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 30 }],
+      concepto: "Salida que obliga a abrir la bolsa",
+    });
+
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, bolsas: 1, piezas: 525 }]);
+    // 25 + 500 monedas abiertas − 30 entregadas = 495 sueltas.
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 495, tubos: 0, bolsas: 0 });
+
+    // El libro mayor dice qué precinto se rompió, cada uno con su motivo.
+    const { rows } = await db.query(
+      `SELECT motivo, direccion, cantidad, cartuchos, bolsas
+         FROM cash_denomination_movements
+        WHERE session_id = $1 AND motivo IN ('CARTRIDGE_OPENED','BAG_OPENED')
+        ORDER BY id`,
+      [sesion.id]
+    );
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toMatchObject({ motivo: "CARTRIDGE_OPENED", direccion: "OUT", cartuchos: 1 });
+    expect(rows[2]).toMatchObject({ motivo: "BAG_OPENED", direccion: "OUT", bolsas: 1 });
+    expect(rows[3]).toMatchObject({ motivo: "BAG_OPENED", direccion: "IN", bolsas: 0, cantidad: 500 });
+  });
+
+  it("una bolsa contada en el arqueo sigue precintada al día siguiente", async () => {
+    await configurarBolsa(100, 500);
+    const caja = await crearCaja("bolsa-cierre");
+
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoBolsas: [{ valor: 100, cantidad: 1 }],
+    });
+
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [],
+      bolsas: [{ valor: 100, cantidad: 1 }],
+    });
+
+    // Todo se queda en caja: la bolsa no se manda al banco.
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [],
+      cambioFinalBolsas: [{ valor: 100, cantidad: 1 }],
+    });
+    expect(cierre.totalCambioCentimos).toBe(50000);
+    expect(cierre.totalIngresoCentimos).toBe(0);
+
+    // Y mañana amanece precintada, no como 500 monedas sueltas.
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(await stock(manana.sesion.id, 100)).toEqual({ sueltas: 0, tubos: 0, bolsas: 1 });
+    expect(manana.sesion.fondoInicialCentimos).toBe(50000);
+  });
+
+  it("la bolsa tiene que traer más monedas que el cartucho", async () => {
+    const { rows } = await db.query(`SELECT id FROM cash_denominations WHERE valor_centimos = 100`);
+    await expect(
+      config.actualizarDenominacion(ctx, rows[0].id, { piezasPorBolsa: 10 })
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+  });
+});

@@ -20,6 +20,7 @@ export default function StockCaja() {
   const porValor = new Map(jornada.stock.map((l) => [l.valor, l.cantidad]));
   const sueltas = new Map((jornada.stockSueltas ?? []).map((l) => [l.valor, l.cantidad]));
   const tubos = new Map((jornada.stockCartuchos ?? []).map((l) => [l.valor, l.cantidad]));
+  const sacos = new Map((jornada.stockBolsas ?? []).map((l) => [l.valor, l.cantidad]));
   const billetes = denominaciones.filter((d) => d.tipo === "BILLETE");
   const monedas = denominaciones.filter((d) => d.tipo === "MONEDA");
 
@@ -44,15 +45,30 @@ export default function StockCaja() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Grupo titulo="Billetes" denominaciones={billetes} porValor={porValor} sueltas={sueltas} tubos={tubos} />
-        <Grupo titulo="Monedas" denominaciones={monedas} porValor={porValor} sueltas={sueltas} tubos={tubos} />
+        <Grupo
+          titulo="Billetes"
+          denominaciones={billetes}
+          porValor={porValor}
+          sueltas={sueltas}
+          tubos={tubos}
+          sacos={sacos}
+        />
+        <Grupo
+          titulo="Monedas"
+          denominaciones={monedas}
+          porValor={porValor}
+          sueltas={sueltas}
+          tubos={tubos}
+          sacos={sacos}
+        />
       </div>
 
       <p className="text-[11px] text-slate-500">
         Este stock no se guarda como saldo: se reconstruye sumando el libro mayor de movimientos de
         la jornada (fondo inicial + entradas − salidas). Por eso no puede quedarse desincronizado.
-        Las monedas que aún están dentro de un cartucho cuentan como dinero disponible —el tubo se
-        puede abrir— pero se indican aparte, porque abrirlo no tiene vuelta atrás.
+        Las monedas que aún están dentro de un cartucho o de una bolsa cuentan como dinero
+        disponible —el precinto se puede abrir— pero se indican aparte, porque abrirlo no tiene
+        vuelta atrás.
       </p>
     </div>
   );
@@ -64,12 +80,14 @@ function Grupo({
   porValor,
   sueltas,
   tubos,
+  sacos,
 }: {
   titulo: string;
   denominaciones: { valor: number; etiqueta: string; piezasPorCartucho: number | null }[];
   porValor: Map<number, number>;
   sueltas: Map<number, number>;
   tubos: Map<number, number>;
+  sacos: Map<number, number>;
 }) {
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800">
@@ -83,7 +101,12 @@ function Grupo({
           // del total. Antes se enseñaba `cantidad / piezasPorCartucho`, que es
           // un equivalente y no dice nada de lo que hay físicamente en el cajón.
           const cartuchos = tubos.get(d.valor) ?? 0;
+          const bolsas = sacos.get(d.valor) ?? 0;
           const nSueltas = sueltas.get(d.valor) ?? 0;
+          const precintos = [
+            cartuchos > 0 ? `${cartuchos} ${cartuchos === 1 ? "cartucho" : "cartuchos"}` : null,
+            bolsas > 0 ? `${bolsas} ${bolsas === 1 ? "bolsa" : "bolsas"}` : null,
+          ].filter(Boolean);
           return (
             <div
               key={d.valor}
@@ -91,10 +114,9 @@ function Grupo({
             >
               <span className="w-16 text-sm font-bold tabular-nums text-slate-200">{d.etiqueta}</span>
               <span className="text-lg font-black tabular-nums text-slate-100">×{cantidad}</span>
-              {cartuchos > 0 && (
+              {precintos.length > 0 && (
                 <span className="text-[10px] text-amber-300/80">
-                  {nSueltas} suelta{nSueltas === 1 ? "" : "s"} + {cartuchos}{" "}
-                  {cartuchos === 1 ? "cartucho" : "cartuchos"}
+                  {nSueltas} suelta{nSueltas === 1 ? "" : "s"} + {precintos.join(" + ")}
                 </span>
               )}
               <span className="ml-auto text-sm tabular-nums text-slate-400">

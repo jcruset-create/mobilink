@@ -150,7 +150,12 @@ export async function actualizarCaja(
 export async function actualizarDenominacion(
   ctx: Contexto,
   id: number,
-  cambios: { activa?: boolean; piezasPorCartucho?: number | null }
+  cambios: {
+    activa?: boolean;
+    piezasPorCartucho?: number | null;
+    piezasPorBolsa?: number | null;
+    imagenUrl?: string | null;
+  }
 ): Promise<Denominacion> {
   const { rows: actual } = await pool.query(`SELECT * FROM cash_denominations WHERE id = $1`, [id]);
   if (actual.length === 0) {
@@ -161,10 +166,32 @@ export async function actualizarDenominacion(
   const piezasPorCartucho =
     cambios.piezasPorCartucho === undefined ? actual[0].piezas_por_cartucho : cambios.piezasPorCartucho;
 
+  const piezasPorBolsa =
+    cambios.piezasPorBolsa === undefined ? actual[0].piezas_por_bolsa : cambios.piezasPorBolsa;
+  const imagenUrl = cambios.imagenUrl === undefined ? actual[0].imagen_url : cambios.imagenUrl;
+
   if (piezasPorCartucho !== null && (!Number.isSafeInteger(piezasPorCartucho) || piezasPorCartucho <= 0)) {
     throw new ErrorCaja(
       "ENTRADA_NO_VALIDA",
       "Las piezas por cartucho tienen que ser un número entero mayor que cero, o vacío.",
+      400
+    );
+  }
+
+  if (piezasPorBolsa !== null && (!Number.isSafeInteger(piezasPorBolsa) || piezasPorBolsa <= 0)) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      "Las monedas por bolsa tienen que ser un número entero mayor que cero, o vacío.",
+      400
+    );
+  }
+
+  // Una bolsa que no llega ni a un cartucho no es una bolsa: sería un cartucho
+  // mal etiquetado, y el motor rompería siempre el envase equivocado.
+  if (piezasPorBolsa !== null && piezasPorCartucho !== null && piezasPorBolsa <= piezasPorCartucho) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      "Una bolsa tiene que traer más monedas que un cartucho de la misma denominación.",
       400
     );
   }
@@ -179,10 +206,12 @@ export async function actualizarDenominacion(
 
   const { rows } = await pool.query(
     `UPDATE cash_denominations
-        SET activa = $2, piezas_por_cartucho = $3, updated_at_ms = $4
+        SET activa = $2, piezas_por_cartucho = $3, piezas_por_bolsa = $4,
+            imagen_url = $5, updated_at_ms = $6
       WHERE id = $1
-      RETURNING id, valor_centimos, tipo, etiqueta, piezas_por_cartucho, activa, orden`,
-    [id, activa, piezasPorCartucho, Date.now()]
+      RETURNING id, valor_centimos, tipo, etiqueta, piezas_por_cartucho, piezas_por_bolsa,
+                imagen_url, activa, orden`,
+    [id, activa, piezasPorCartucho, piezasPorBolsa, imagenUrl, Date.now()]
   );
 
   await registrarAuditoria({
@@ -193,8 +222,12 @@ export async function actualizarDenominacion(
     entidadId: String(id),
     detalle: {
       valorCentimos: actual[0].valor_centimos,
-      antes: { activa: actual[0].activa, piezasPorCartucho: actual[0].piezas_por_cartucho },
-      despues: { activa, piezasPorCartucho },
+      antes: {
+        activa: actual[0].activa,
+        piezasPorCartucho: actual[0].piezas_por_cartucho,
+        piezasPorBolsa: actual[0].piezas_por_bolsa,
+      },
+      despues: { activa, piezasPorCartucho, piezasPorBolsa, imagenUrl },
     },
     ip: ctx.ip,
   });
@@ -206,6 +239,8 @@ export async function actualizarDenominacion(
     tipo: d.tipo,
     etiqueta: d.etiqueta,
     piezasPorCartucho: d.piezas_por_cartucho,
+    piezasPorBolsa: d.piezas_por_bolsa,
+    imagenUrl: d.imagen_url,
     activa: d.activa,
     orden: d.orden,
   };

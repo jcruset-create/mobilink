@@ -57,13 +57,13 @@ const eur = (c: number) => `${formatearEuros(c)} €`;
 async function composicionPorMotivo(
   sessionId: number,
   motivo: string
-): Promise<{ sueltas: LineaDenominacion[]; tubos: LineaDenominacion[] }> {
-  // Consulta propia y no `movimientosDeSesion` porque aquí hace falta la
-  // columna `cartuchos`: es lo que distingue un tubo precintado de las monedas
-  // sueltas del mismo valor, y sin eso el ingreso saldría descuadrado en el
-  // papel aunque el dinero estuviera bien.
+): Promise<Composicion> {
+  // Consulta propia y no `movimientosDeSesion` porque aquí hacen falta las
+  // columnas `cartuchos` y `bolsas`: es lo que distingue un envase precintado
+  // de las monedas sueltas del mismo valor, y sin eso el ingreso saldría
+  // descuadrado en el papel aunque el dinero estuviera bien.
   const { rows } = await pool.query(
-    `SELECT valor_unitario_centimos AS valor, cantidad, cartuchos
+    `SELECT valor_unitario_centimos AS valor, cantidad, cartuchos, bolsas
        FROM cash_denomination_movements
       WHERE session_id = $1 AND motivo = $2 AND direccion = 'OUT'
       ORDER BY valor_unitario_centimos DESC`,
@@ -72,9 +72,11 @@ async function composicionPorMotivo(
 
   const sueltas = new Map<number, number>();
   const tubos = new Map<number, number>();
+  const sacos = new Map<number, number>();
   /* eslint-disable @typescript-eslint/no-explicit-any */
   for (const m of rows as any[]) {
-    if (m.cartuchos > 0) tubos.set(m.valor, (tubos.get(m.valor) ?? 0) + m.cartuchos);
+    if (m.bolsas > 0) sacos.set(m.valor, (sacos.get(m.valor) ?? 0) + m.bolsas);
+    else if (m.cartuchos > 0) tubos.set(m.valor, (tubos.get(m.valor) ?? 0) + m.cartuchos);
     else sueltas.set(m.valor, (sueltas.get(m.valor) ?? 0) + m.cantidad);
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -84,8 +86,15 @@ async function composicionPorMotivo(
       .map(([valor, cantidad]) => ({ valor, cantidad }))
       .sort((a, b) => b.valor - a.valor);
 
-  return { sueltas: aLineas(sueltas), tubos: aLineas(tubos) };
+  return { sueltas: aLineas(sueltas), tubos: aLineas(tubos), sacos: aLineas(sacos) };
 }
+
+/** Composición de un montón de dinero, separada por formato. */
+type Composicion = {
+  sueltas: LineaDenominacion[];
+  tubos: LineaDenominacion[];
+  sacos: LineaDenominacion[];
+};
 
 /** Genera el informe entero. Devuelve el PDF listo para descargar. */
 export async function informeCierre(empresaId: string, sessionId: number): Promise<Buffer> {
@@ -111,6 +120,8 @@ export async function informeCierre(empresaId: string, sessionId: number): Promi
     denominaciones.find((d) => d.valor === valor)?.etiqueta ?? `${valor} c`;
   const piezasDe = (valor: number) =>
     denominaciones.find((d) => d.valor === valor)?.piezasPorCartucho ?? 0;
+  const piezasBolsaDe = (valor: number) =>
+    denominaciones.find((d) => d.valor === valor)?.piezasPorBolsa ?? 0;
 
   const portada = await construirPortada({
     detalle,
@@ -122,6 +133,7 @@ export async function informeCierre(empresaId: string, sessionId: number): Promi
     documentos: documentos.length,
     etiquetaDe,
     piezasDe,
+    piezasBolsaDe,
   });
 
   return montar(portada, documentos);
@@ -134,12 +146,13 @@ async function construirPortada(d: {
   detalle: Awaited<ReturnType<typeof detalleJornada>>;
   caja: { centro: string; nombre: string } | null;
   fuera: Awaited<ReturnType<typeof pendientes>>;
-  cambioFinal: { sueltas: LineaDenominacion[]; tubos: LineaDenominacion[] };
-  ingreso: { sueltas: LineaDenominacion[]; tubos: LineaDenominacion[] };
+  cambioFinal: Composicion;
+  ingreso: Composicion;
   conteos: Map<number, number>;
   documentos: number;
   etiquetaDe: (valor: number) => string;
   piezasDe: (valor: number) => number;
+  piezasBolsaDe: (valor: number) => number;
 }): Promise<Buffer> {
   const { detalle, caja, fuera, conteos } = d;
   const s = detalle.sesion;
@@ -234,7 +247,7 @@ async function construirPortada(d: {
   const composicion = (
     etiqueta: string,
     total: number | null,
-    piezas: { sueltas: LineaDenominacion[]; tubos: LineaDenominacion[] }
+    piezas: Composicion
   ) => {
     titulo(etiqueta);
     fila("Total", total == null ? "—" : eur(total), true);
@@ -248,7 +261,18 @@ async function construirPortada(d: {
         eur(t.valor * t.cantidad * n)
       );
     }
-    if (piezas.sueltas.length === 0 && piezas.tubos.length === 0) {
+    for (const b of piezas.sacos) {
+      const n = d.piezasBolsaDe(b.valor);
+      fila(
+        `   ${d.etiquetaDe(b.valor)} × ${b.cantidad} ${b.cantidad === 1 ? "bolsa" : "bolsas"} de ${n}`,
+        eur(b.valor * b.cantidad * n)
+      );
+    }
+    if (
+      piezas.sueltas.length === 0 &&
+      piezas.tubos.length === 0 &&
+      piezas.sacos.length === 0
+    ) {
       doc.fillColor(GRIS).fontSize(9).text("   sin desglose registrado", M);
       doc.fontSize(10);
       doc.moveDown(0.3);

@@ -18,9 +18,9 @@ import DenominationGrid, {
 } from "../components/DenominationGrid";
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, inputCls } from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
-import type { LineaDenominacion } from "../types";
+import type { Denominacion, LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
-import { repartirIngreso, valorEnTubos } from "../utils/cierre";
+import { repartirIngreso, valorEnvasado } from "../utils/cierre";
 import * as api from "../services/api";
 
 export default function Cierre() {
@@ -29,6 +29,7 @@ export default function Cierre() {
   const [objetivoTexto, setObjetivoTexto] = useState("300,00");
   const [cambioFinal, setCambioFinal] = useState<CantidadesPorValor>({});
   const [cambioFinalTubos, setCambioFinalTubos] = useState<LineaDenominacion[]>([]);
+  const [cambioFinalBolsas, setCambioFinalBolsas] = useState<LineaDenominacion[]>([]);
   const [notas, setNotas] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -38,15 +39,20 @@ export default function Cierre() {
   const totalCambio = totalLineas(lineasDesde(cambioFinal));
 
   /**
-   * Fija cuántos tubos de una denominación se quedan en caja.
+   * Fija cuántos envases de una denominación se quedan en caja.
    *
-   * Un solo sitio donde se toca `cambioFinalTubos`: lo tocaban los botones y la
-   * cajita por separado, y el tope —no puedes quedarte más tubos de los que has
-   * contado— tenía que repetirse en cada uno.
+   * Un solo sitio donde se tocan las listas de precintos: las tocaban los
+   * botones y la cajita por separado, y el tope —no puedes quedarte más
+   * envases de los que has contado— tenía que repetirse en cada uno.
    */
-  function fijarTubos(valor: number, cantidad: number, contados: number) {
+  function fijarEnvases(
+    fijar: React.Dispatch<React.SetStateAction<LineaDenominacion[]>>,
+    valor: number,
+    cantidad: number,
+    contados: number
+  ) {
     const n = Math.max(0, Math.min(contados, cantidad));
-    setCambioFinalTubos((prev) => [
+    fijar((prev) => [
       ...prev.filter((x) => x.valor !== valor),
       ...(n > 0 ? [{ valor, cantidad: n }] : []),
     ]);
@@ -61,6 +67,7 @@ export default function Cierre() {
       // queda, así que basta con fijar el cambio final.
       setCambioFinal(cantidadesDesde(r.cambioFinal));
       setCambioFinalTubos(r.cambioFinalCartuchos ?? []);
+      setCambioFinalBolsas(r.cambioFinalBolsas ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido preparar el cierre");
     }
@@ -87,6 +94,7 @@ export default function Cierre() {
   const contadoTotal = arqueo?.totalCentimos ?? jornada.totalStockCentimos;
   const sueltasContadas = arqueo?.sueltas ?? jornada.stockSueltas ?? [];
   const tubosContados = arqueo?.cartuchos ?? jornada.stockCartuchos ?? [];
+  const bolsasContadas = arqueo?.bolsas ?? jornada.stockBolsas ?? [];
   /** Diferencia del arqueo: se asienta sola como ajuste auditado al cerrar. */
   const descuadre = arqueo?.diferenciaCentimos ?? 0;
 
@@ -98,19 +106,23 @@ export default function Cierre() {
    * cuentas distintas y se separaron: el total contaba los cartuchos y la lista
    * no los pintaba, así que la hoja del ingreso se dejaba 75 € por el camino.
    *
-   * Las dos dimensiones van aparte: los tubos precintados no se desglosan en la
-   * rejilla porque un tubo entero se queda o se va, no se parte —y si se
-   * partiera dejaría de ser un tubo.
+   * Las tres dimensiones van aparte: los envases precintados no se desglosan
+   * en la rejilla porque un cartucho o una bolsa entera se queda o se va, no se
+   * parte —y si se partiera dejaría de ser un precinto.
    */
   const ingreso = repartirIngreso({
     sueltasContadas,
     tubosContados,
+    bolsasContadas,
     cambioFinalSueltas: cambioFinal,
     cambioFinalTubos,
+    cambioFinalBolsas,
     denominaciones,
   });
 
-  const valorTubosCambio = valorEnTubos(cambioFinalTubos, denominaciones);
+  const valorTubosCambio =
+    valorEnvasado(cambioFinalTubos, denominaciones, "cartucho") +
+    valorEnvasado(cambioFinalBolsas, denominaciones, "bolsa");
   const totalCambioConTubos = totalCambio + valorTubosCambio;
   /** Lo que falta (o sobra) para el cambio pedido, contando ya los cartuchos. */
   const desvioObjetivo = objetivo > 0 ? totalCambioConTubos - objetivo : 0;
@@ -132,6 +144,7 @@ export default function Cierre() {
   function quedarseloTodo() {
     setCambioFinal(cantidadesDesde(sueltasContadas));
     setCambioFinalTubos(tubosContados);
+    setCambioFinalBolsas(bolsasContadas);
     setObjetivoTexto(euros(contadoTotal).replace(" €", ""));
   }
 
@@ -142,6 +155,7 @@ export default function Cierre() {
       const r = await api.cerrarJornada(jornada!.sesion.id, {
         cambioFinal: lineasDesde(cambioFinal),
         cambioFinalCartuchos: cambioFinalTubos,
+        cambioFinalBolsas,
         notas: notas || undefined,
       });
       setCerrada(r);
@@ -215,13 +229,13 @@ export default function Cierre() {
         <Card
           title="Se queda en caja"
           value={euros(totalCambioConTubos)}
-          hint={cambioFinalTubos.length > 0 ? `incluye ${cambioFinalTubos.reduce((a, t) => a + t.cantidad, 0)} cartucho(s)` : undefined}
+          hint={pistaPrecintos(cambioFinalTubos, cambioFinalBolsas)}
           accent="text-emerald-400"
         />
         <Card
           title="Ingreso bancario"
           value={euros(totalIngresoConTubos)}
-          hint={ingreso.tubos.length > 0 ? `incluye ${ingreso.tubos.reduce((a, t) => a + t.cantidad, 0)} cartucho(s)` : undefined}
+          hint={pistaPrecintos(ingreso.tubos, ingreso.bolsas)}
           accent="text-sky-300"
         />
       </div>
@@ -257,8 +271,8 @@ export default function Cierre() {
           {desvioObjetivo < 0
             ? `Faltan ${euros(-desvioObjetivo)} para el cambio que has pedido (${euros(objetivo)}).`
             : `Sobran ${euros(desvioObjetivo)} sobre el cambio que has pedido (${euros(objetivo)}).`}{" "}
-          {tubosContados.length > 0 &&
-            "Si el hueco es de un cartucho entero, ajústalo en «Cartuchos precintados». "}
+          {(tubosContados.length > 0 || bolsasContadas.length > 0) &&
+            "Si el hueco es de un envase entero, ajústalo en «Cartuchos precintados» o «Bolsas precintadas». "}
           Puedes cerrar así igualmente: el resto va al ingreso bancario.
         </Aviso>
       )}
@@ -282,76 +296,29 @@ export default function Cierre() {
         />
 
         <div className="space-y-3">
-        {tubosContados.length > 0 && (
-          <div className="rounded-lg border border-slate-700 bg-slate-800">
-            <div className="border-b border-slate-700 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-              Cartuchos precintados
-            </div>
-            <div className="divide-y divide-slate-700/60">
-              {tubosContados.map((t) => {
-                const d = denominaciones.find((x) => x.valor === t.valor);
-                const sequedan = cambioFinalTubos.find((x) => x.valor === t.valor)?.cantidad ?? 0;
-                const valorTubo = t.valor * (d?.piezasPorCartucho ?? 0);
-                return (
-                  <div key={t.valor} className="flex items-center gap-2 px-3 py-2 text-sm">
-                    <div className="min-w-0">
-                      <div className="font-bold tabular-nums text-slate-200">{d?.etiqueta}</div>
-                      {/* Cuánto mueve cada tubo: sin esto no se sabe qué cambia al pulsar. */}
-                      <div className="text-[10px] tabular-nums text-slate-500">
-                        {t.cantidad} contado{t.cantidad === 1 ? "" : "s"} · {euros(valorTubo)} cada uno
-                      </div>
-                    </div>
+        <PanelEnvases
+          titulo="Cartuchos precintados"
+          nombre="cartucho"
+          plural="cartuchos"
+          contados={tubosContados}
+          sequedan={cambioFinalTubos}
+          piezasDe={(d) => d?.piezasPorCartucho ?? 0}
+          denominaciones={denominaciones}
+          onFijar={(valor, n, contados) => fijarEnvases(setCambioFinalTubos, valor, n, contados)}
+          deshabilitado={guardando}
+        />
 
-                    <div className="ml-auto flex shrink-0 items-center gap-1">
-                      <span className="mr-1 text-[11px] text-slate-500">se quedan</span>
-                      {/*
-                        Mismos botones −/+ de 44 px que la rejilla de monedas. Antes
-                        aquí solo había una cajita de texto: no parecía tocable, y
-                        quedarse un cartucho —lo normal— no se veía posible.
-                      */}
-                      <button
-                        type="button"
-                        aria-label={`Quitar un cartucho de ${d?.etiqueta} del cambio final`}
-                        onClick={() => fijarTubos(t.valor, sequedan - 1, t.cantidad)}
-                        disabled={guardando || sequedan === 0}
-                        className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
-                      >
-                        <Minus className="h-4 w-4" />
-                      </button>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        aria-label={`Cartuchos de ${d?.etiqueta} que se quedan en caja`}
-                        value={sequedan === 0 ? "" : String(sequedan)}
-                        placeholder="0"
-                        onChange={(e) =>
-                          fijarTubos(t.valor, Number(e.target.value.replace(/\D/g, "") || 0), t.cantidad)
-                        }
-                        onFocus={(e) => e.target.select()}
-                        disabled={guardando}
-                        className="h-11 w-12 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
-                      />
-                      <button
-                        type="button"
-                        aria-label={`Añadir un cartucho de ${d?.etiqueta} al cambio final`}
-                        onClick={() => fijarTubos(t.valor, sequedan + 1, t.cantidad)}
-                        disabled={guardando || sequedan >= t.cantidad}
-                        className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
-                      >
-                        <Plus className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="px-3 py-2 text-[11px] text-slate-500">
-              Un tubo entero se queda o se va: no se parte. Los que se quedan siguen precintados
-              mañana.
-            </p>
-          </div>
-        )}
+        <PanelEnvases
+          titulo="Bolsas precintadas"
+          nombre="bolsa"
+          plural="bolsas"
+          contados={bolsasContadas}
+          sequedan={cambioFinalBolsas}
+          piezasDe={(d) => d?.piezasPorBolsa ?? 0}
+          denominaciones={denominaciones}
+          onFijar={(valor, n, contados) => fijarEnvases(setCambioFinalBolsas, valor, n, contados)}
+          deshabilitado={guardando}
+        />
 
         <div className="rounded-lg border border-slate-700 bg-slate-800">
           <div className="flex items-center justify-between border-b border-slate-700 px-3 py-2">
@@ -366,11 +333,13 @@ export default function Cierre() {
             </button>
           </div>
           <div className="divide-y divide-slate-700/60">
-            {ingreso.sueltas.length === 0 && ingreso.tubos.length === 0 && (
+            {ingreso.sueltas.length === 0 &&
+              ingreso.tubos.length === 0 &&
+              ingreso.bolsas.length === 0 && (
               <p className="px-3 py-4 text-sm text-slate-500">
                 Todo el efectivo se queda en caja: no hay ingreso bancario.
               </p>
-            )}
+              )}
             {ingreso.sueltas.map((l) => {
               const d = denominaciones.find((x) => x.valor === l.valor);
               return (
@@ -386,14 +355,21 @@ export default function Cierre() {
               );
             })}
 
-            {/* Los tubos que se van al banco, en su propia línea. Sin esto, el
-                total contaba 75 € de cartuchos que no aparecían por ninguna
+            {/* Los envases que se van al banco, en su propia línea. Sin esto,
+                el total contaba 75 € de cartuchos que no aparecían por ninguna
                 parte y la hoja del ingreso no cuadraba con lo que se lleva. */}
-            {ingreso.tubos.map((t) => {
+            {[...ingreso.tubos, ...ingreso.bolsas].map((t) => {
               const d = denominaciones.find((x) => x.valor === t.valor);
-              const piezas = t.piezasPorCartucho;
+              const nombre =
+                t.tipo === "cartucho"
+                  ? t.cantidad === 1
+                    ? "cartucho"
+                    : "cartuchos"
+                  : t.cantidad === 1
+                    ? "bolsa"
+                    : "bolsas";
               return (
-                <div key={`tubo-${t.valor}`} className="flex items-center gap-3 px-3 py-1.5">
+                <div key={`${t.tipo}-${t.valor}`} className="flex items-center gap-3 px-3 py-1.5">
                   <span className="w-16 text-sm font-bold tabular-nums text-slate-200">
                     {d?.etiqueta ?? euros(t.valor)}
                   </span>
@@ -401,7 +377,7 @@ export default function Cierre() {
                     ×{t.cantidad}
                   </span>
                   <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-300">
-                    {t.cantidad === 1 ? "cartucho" : "cartuchos"} de {piezas}
+                    {nombre} de {t.piezasPorEnvase}
                   </span>
                   <span className="ml-auto text-sm tabular-nums text-slate-400">
                     {euros(t.importe)}
@@ -428,6 +404,122 @@ export default function Cierre() {
       <BotonAccion tono="cierre" onClick={() => void cerrar()} disabled={guardando || !cuadra}>
         {guardando ? "Cerrando…" : "Cerrar jornada"}
       </BotonAccion>
+    </div>
+  );
+}
+
+/** «incluye 2 cartuchos y 1 bolsa», o nada si no hay precintos. */
+function pistaPrecintos(
+  tubos: readonly { cantidad: number }[],
+  bolsas: readonly { cantidad: number }[]
+): string | undefined {
+  const nT = tubos.reduce((a, t) => a + t.cantidad, 0);
+  const nB = bolsas.reduce((a, t) => a + t.cantidad, 0);
+  const partes = [
+    nT > 0 ? `${nT} ${nT === 1 ? "cartucho" : "cartuchos"}` : null,
+    nB > 0 ? `${nB} ${nB === 1 ? "bolsa" : "bolsas"}` : null,
+  ].filter(Boolean);
+  return partes.length > 0 ? `incluye ${partes.join(" y ")}` : undefined;
+}
+
+/**
+ * Panel de envases precintados que se quedan en caja.
+ *
+ * Cartuchos y bolsas se reparten igual —el envase entero se queda o se va, no
+ * se parte— así que comparten panel. Lo único que cambia entre los dos es de
+ * dónde sale el número de piezas y cómo se llama la cosa en pantalla.
+ */
+function PanelEnvases({
+  titulo,
+  nombre,
+  plural,
+  contados,
+  sequedan,
+  piezasDe,
+  denominaciones,
+  onFijar,
+  deshabilitado,
+}: {
+  titulo: string;
+  nombre: string;
+  plural: string;
+  contados: readonly LineaDenominacion[];
+  sequedan: readonly LineaDenominacion[];
+  piezasDe: (d: Denominacion | undefined) => number;
+  denominaciones: readonly Denominacion[];
+  onFijar: (valor: number, cantidad: number, contados: number) => void;
+  deshabilitado: boolean;
+}) {
+  if (contados.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800">
+      <div className="border-b border-slate-700 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        {titulo}
+      </div>
+      <div className="divide-y divide-slate-700/60">
+        {contados.map((t) => {
+          const d = denominaciones.find((x) => x.valor === t.valor);
+          const quedan = sequedan.find((x) => x.valor === t.valor)?.cantidad ?? 0;
+          const valorEnvase = t.valor * piezasDe(d);
+          return (
+            <div key={t.valor} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <div className="font-bold tabular-nums text-slate-200">{d?.etiqueta}</div>
+                {/* Cuánto mueve cada envase: sin esto no se sabe qué cambia al pulsar. */}
+                <div className="text-[10px] tabular-nums text-slate-500">
+                  {t.cantidad} contado{t.cantidad === 1 ? "" : "s"} · {euros(valorEnvase)} cada uno
+                </div>
+              </div>
+
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                <span className="mr-1 text-[11px] text-slate-500">se quedan</span>
+                {/*
+                  Mismos botones −/+ de 44 px que la rejilla de monedas. Antes
+                  aquí solo había una cajita de texto: no parecía tocable, y
+                  quedarse un cartucho —lo normal— no se veía posible.
+                */}
+                <button
+                  type="button"
+                  aria-label={`Quitar un ${nombre} de ${d?.etiqueta} del cambio final`}
+                  onClick={() => onFijar(t.valor, quedan - 1, t.cantidad)}
+                  disabled={deshabilitado || quedan === 0}
+                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
+                >
+                  <Minus className="h-4 w-4" />
+                </button>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  aria-label={`${titulo} de ${d?.etiqueta} que se quedan en caja`}
+                  value={quedan === 0 ? "" : String(quedan)}
+                  placeholder="0"
+                  onChange={(e) =>
+                    onFijar(t.valor, Number(e.target.value.replace(/\D/g, "") || 0), t.cantidad)
+                  }
+                  onFocus={(e) => e.target.select()}
+                  disabled={deshabilitado}
+                  className="h-11 w-12 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
+                />
+                <button
+                  type="button"
+                  aria-label={`Añadir un ${nombre} de ${d?.etiqueta} al cambio final`}
+                  onClick={() => onFijar(t.valor, quedan + 1, t.cantidad)}
+                  disabled={deshabilitado || quedan >= t.cantidad}
+                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="px-3 py-2 text-[11px] text-slate-500">
+        Un envase entero se queda o se va: no se parte. Los {plural} que se quedan siguen
+        precintados mañana.
+      </p>
     </div>
   );
 }

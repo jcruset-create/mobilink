@@ -84,6 +84,21 @@ hay saldo acumulado que se pueda desincronizar.
   que conservar. El stock distingue sueltas de encartuchadas y abrir un tubo
   deja su propio par de asientos (`CARTRIDGE_OPENED`).
 
+  Desde la versión 1.8.8 hay un **tercer formato: la bolsa**, que es el precinto
+  grande con el que el banco sirve las monedas a granel (500 monedas de 1 €, por
+  ejemplo). Funciona igual que el cartucho: se cuenta aparte, viaja aparte y el
+  motor la puede abrir sola cuando hace falta, con su propio par de asientos
+  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → cartuchos →
+  bolsas**: se rompe el envase más pequeño primero, que es lo que haría
+  cualquiera en el mostrador. Cuántas monedas trae una bolsa se configura por
+  denominación (`piezas_por_bolsa`), porque cada banco sirve el suyo, y tiene
+  que ser mayor que el cartucho de esa misma moneda o el envase pequeño dejaría
+  de ser el pequeño.
+
+  Un asiento es de un solo formato: la restricción `cash_mov_un_formato` impide
+  que una fila lleve `cartuchos > 0` y `bolsas > 0` a la vez, porque entonces no
+  se sabría qué precinto se rompió al abrirla.
+
   Los tubos **entran y salen precintados** —la aportación de cambio del banco
   llega en tubos y se le devuelve igual— y solo se abren cuando un cobro o un
   pago necesita monedas sueltas que no hay. Sacar un tubo cerrado no es abrirlo:
@@ -409,9 +424,15 @@ Detalles que costaron un fallo en producción:
   número y no se nota; con un faltante pedía repartir un dinero que no estaba y
   **el cierre no se podía completar**. El resumen expone ahora `ultimoArqueo`
   con las piezas contadas.
-- **Las monedas de los cartuchos son monedas.** Al regularizar hay que sumar
-  `cartuchos_contados × piezas_por_cartucho` a las sueltas; si no, un tubo sin
-  abrir se lee como un faltante que no existe.
+- **Las monedas de los envases son monedas.** Al regularizar hay que sumar
+  `cartuchos_contados × piezas_por_cartucho` y `bolsas_contadas ×
+  piezas_por_bolsa` a las sueltas; si no, un precinto sin abrir se lee como un
+  faltante que no existe.
+- **Un CHECK lo recrea un único bloque de migración.** Dos bloques recreaban
+  `cash_denomination_movements_motivo_check`, y el de arriba llevaba la lista
+  vieja: en cuanto existió el primer asiento `BAG_OPENED`, arrancar el servidor
+  fallaba con «check constraint … is violated by some row» y el proceso moría
+  antes de escuchar. Ahora la lista de motivos vive en un solo sitio.
 - **El importe del ajuste nunca es cero** (`|diferencia| || 1`): un descuadre
   solo de composición —sobra un billete de 10 y falta otro de 10— mueve piezas
   sin mover el total, y una operación de 0 € desaparecería de los listados.
@@ -428,7 +449,8 @@ Implementado y probado:
 - Conector ERP + mock + outbox con reintentos e idempotencia.
 - Las diez pantallas del módulo, dadas de alta en `/inicio` y en `modulosApp`.
 - Configuración: alta, renombrado y baja de cajas físicas, y edición del
-  catálogo de denominaciones y cartuchos. Con dos protecciones que evitan dejar
+  catálogo de denominaciones, cartuchos y bolsas, con la foto de cada billete y
+  cada moneda. Con dos protecciones que evitan dejar
   el módulo en un estado sin salida: no se toca una caja con la jornada abierta
   (quedaría dinero contado en una caja invisible que nadie podría cerrar), y no
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
