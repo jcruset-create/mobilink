@@ -50,6 +50,7 @@ import {
   cargarDenominaciones,
   enTransaccion,
   piezasPorCartuchoDe,
+  piezasPorBolsaDe,
   siguienteNumeroDe,
   stockTeorico,
 } from "./repository.ts";
@@ -61,6 +62,7 @@ export type EstadoPedido = "PENDIENTE" | "RECIBIDO" | "CANCELADO";
 
 export type LineaPedidoGuardada = LineaDenominacion & {
   cartuchos: number;
+  bolsas: number;
   motivo: string | null;
 };
 
@@ -115,6 +117,7 @@ function aPedido(r: any, lineas: any[]): PedidoCambio {
         valor: l.valor_centimos,
         cantidad: l.cantidad,
         cartuchos: l.cartuchos,
+        bolsas: l.bolsas ?? 0,
         motivo: l.motivo,
       }));
 
@@ -293,8 +296,14 @@ export async function proponerPedido(
 export type EntradaPedido = {
   sessionId: number;
   importeCentimos: Centimos;
-  /** Lo que se le pide al banco. Puede llevar cartuchos. */
-  solicitado: { valor: Centimos; cantidad: number; cartuchos?: number; motivo?: string }[];
+  /** Lo que se le pide al banco. Puede llevar cartuchos y bolsas. */
+  solicitado: {
+    valor: Centimos;
+    cantidad: number;
+    cartuchos?: number;
+    bolsas?: number;
+    motivo?: string;
+  }[];
   /** Billetes que salen. Si se omite, se componen con los más grandes. */
   salida?: LineaDenominacion[];
   notas?: string;
@@ -372,9 +381,9 @@ export async function crearPedido(ctx: Contexto, e: EntradaPedido): Promise<Pedi
 
     for (const l of e.solicitado.filter((l) => l.cantidad > 0)) {
       await client.query(
-        `INSERT INTO cash_change_order_lines (change_order_id, rol, valor_centimos, cantidad, cartuchos, motivo)
-         VALUES ($1,'SOLICITADO',$2,$3,$4,$5)`,
-        [id, l.valor, l.cantidad, l.cartuchos ?? 0, l.motivo ?? null]
+        `INSERT INTO cash_change_order_lines (change_order_id, rol, valor_centimos, cantidad, cartuchos, bolsas, motivo)
+         VALUES ($1,'SOLICITADO',$2,$3,$4,$5,$6)`,
+        [id, l.valor, l.cantidad, l.cartuchos ?? 0, l.bolsas ?? 0, l.motivo ?? null]
       );
     }
     for (const l of salida.filter((l) => l.cantidad > 0)) {
@@ -404,8 +413,8 @@ export async function crearPedido(ctx: Contexto, e: EntradaPedido): Promise<Pedi
 
 export type EntradaRecepcion = {
   sessionId: number;
-  /** Lo que el banco ha dado de verdad. `cartuchos` son tubos precintados. */
-  recibido: { valor: Centimos; cantidad: number; cartuchos?: number }[];
+  /** Lo que el banco ha dado de verdad, por formato. */
+  recibido: { valor: Centimos; cantidad: number; cartuchos?: number; bolsas?: number }[];
   /** Obligatorio si lo recibido no suma lo que salió. */
   diferenciaMotivo?: string;
 };
@@ -439,22 +448,27 @@ export async function recibirPedido(
 
     const denominaciones = await cargarDenominaciones(client);
     const porCartucho = piezasPorCartuchoDe(denominaciones);
+    const porBolsa = piezasPorBolsaDe(denominaciones);
 
-    // Un tubo son N monedas: se convierte a piezas para el asiento, sin fundir
-    // las líneas, para que el libro mayor sepa que entró precintado.
+    // Un envase son N monedas: se convierte a piezas para el asiento, sin
+    // fundir las líneas, para que el libro mayor sepa que entró precintado.
     const sueltas: LineaDenominacion[] = [];
     const tubos: LineaDenominacion[] = [];
+    const sacos: LineaDenominacion[] = [];
     for (const l of e.recibido) {
       if (l.cantidad <= 0) continue;
-      if (l.cartuchos && l.cartuchos > 0) tubos.push({ valor: l.valor, cantidad: l.cartuchos });
+      if (l.bolsas && l.bolsas > 0) sacos.push({ valor: l.valor, cantidad: l.bolsas });
+      else if (l.cartuchos && l.cartuchos > 0) tubos.push({ valor: l.valor, cantidad: l.cartuchos });
       else sueltas.push({ valor: l.valor, cantidad: l.cantidad });
     }
 
-    const totalTubos = tubos.reduce(
-      (a, t) => a + t.cantidad * (porCartucho.get(t.valor) ?? 0) * t.valor,
-      0
-    );
-    const totalRecibido = totalInventario(inventarioDesdeLineas(sueltas)) + totalTubos;
+    const valorDe = (envases: LineaDenominacion[], por: ReadonlyMap<Centimos, number>) =>
+      envases.reduce((a, t) => a + t.cantidad * (por.get(t.valor) ?? 0) * t.valor, 0);
+
+    const totalRecibido =
+      totalInventario(inventarioDesdeLineas(sueltas)) +
+      valorDe(tubos, porCartucho) +
+      valorDe(sacos, porBolsa);
     if (totalRecibido <= 0) {
       throw new ErrorCaja("ENTRADA_NO_VALIDA", "Hay que contar lo que ha dado el banco.", 400);
     }
@@ -477,6 +491,7 @@ export async function recibirPedido(
         formasPago: [{ forma: "CASH", importe: totalRecibido }],
         efectivoRecibido: sueltas,
         cartuchosRecibidos: tubos,
+        bolsasRecibidas: sacos,
         concepto: `Cambio recibido del banco (${previo.numero})`,
       },
       client
@@ -502,9 +517,9 @@ export async function recibirPedido(
 
     for (const l of e.recibido.filter((l) => l.cantidad > 0)) {
       await client.query(
-        `INSERT INTO cash_change_order_lines (change_order_id, rol, valor_centimos, cantidad, cartuchos)
-         VALUES ($1,'RECIBIDO',$2,$3,$4)`,
-        [pedidoId, l.valor, l.cantidad, l.cartuchos ?? 0]
+        `INSERT INTO cash_change_order_lines (change_order_id, rol, valor_centimos, cantidad, cartuchos, bolsas)
+         VALUES ($1,'RECIBIDO',$2,$3,$4,$5)`,
+        [pedidoId, l.valor, l.cantidad, l.cartuchos ?? 0, l.bolsas ?? 0]
       );
     }
 

@@ -44,6 +44,7 @@ export default function Movimientos() {
   const [concepto, setConcepto] = useState("");
   const [efectivo, setEfectivo] = useState<CantidadesPorValor>({});
   const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
+  const [bolsas, setBolsas] = useState<CantidadesPorValor>({});
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [ultimo, setUltimo] = useState<string | null>(null);
@@ -51,15 +52,22 @@ export default function Movimientos() {
   const definicion = TIPOS.find((t) => t.valor === tipo)!;
   const importe = aCentimos(importeTexto) ?? 0;
 
-  // Un tubo vale lo que traen sus monedas: cuenta igual en el importe.
-  const piezasDe = (valor: number) =>
-    denominaciones.find((d) => d.valor === valor)?.piezasPorCartucho ?? 0;
+  // Un envase vale lo que traen sus monedas: cuenta igual en el importe.
+  const valorEnvasado = (
+    envases: readonly { valor: number; cantidad: number }[],
+    piezasDe: (d: (typeof denominaciones)[number]) => number | null
+  ) =>
+    envases.reduce((a, l) => {
+      const d = denominaciones.find((x) => x.valor === l.valor);
+      return a + l.valor * l.cantidad * (d ? (piezasDe(d) ?? 0) : 0);
+    }, 0);
+
   const lineasCartucho = lineasDesde(cartuchos);
-  const totalCartuchos = lineasCartucho.reduce(
-    (a, l) => a + l.valor * l.cantidad * piezasDe(l.valor),
-    0
-  );
-  const total = totalLineas(lineasDesde(efectivo)) + totalCartuchos;
+  const lineasBolsa = lineasDesde(bolsas);
+  const total =
+    totalLineas(lineasDesde(efectivo)) +
+    valorEnvasado(lineasCartucho, (d) => d.piezasPorCartucho) +
+    valorEnvasado(lineasBolsa, (d) => d.piezasPorBolsa);
 
   // El importe se deduce de las piezas: en un movimiento manual lo que manda es
   // lo que físicamente se mete o se saca, no un número tecleado aparte.
@@ -85,11 +93,13 @@ export default function Movimientos() {
         importeCentimos: importe,
         efectivo: lineasDesde(efectivo),
         cartuchos: lineasCartucho,
+        bolsas: lineasBolsa,
         concepto,
       });
       setUltimo(r.numero);
       setEfectivo({});
       setCartuchos({});
+      setBolsas({});
       setImporteTexto("");
       setConcepto("");
       await refrescar();
@@ -121,6 +131,7 @@ export default function Movimientos() {
                       setTipo(t.valor);
                       setEfectivo({});
                       setCartuchos({});
+                      setBolsas({});
                     }}
                     disabled={bloqueado}
                     className={`rounded-xl px-3 py-2 text-[12px] font-bold disabled:opacity-30 ${
@@ -167,15 +178,18 @@ export default function Movimientos() {
             onChange={setEfectivo}
             cartuchos={cartuchos}
             onCartuchosChange={setCartuchos}
+            bolsas={bolsas}
+            onBolsasChange={setBolsas}
             disponible={definicion.entra ? undefined : disponible}
             mostrarDisponible={!definicion.entra}
             deshabilitado={guardando}
           />
           <p className="text-[11px] text-slate-500">
-            La columna estrecha de las monedas es para <strong>cartuchos precintados</strong>. Un
-            tubo entra o sale entero, sin abrirse: es como llega la aportación de cambio del banco y
-            como se le devuelve. Para abrir uno no hay que hacer nada — se abre solo cuando un cobro
-            o un pago necesita monedas sueltas que no hay.
+            Las columnas estrechas de las monedas son para los precintos: «cart.» cartuchos y
+            «bols.» bolsas. Un envase entra o sale entero, sin abrirse: es como llega la aportación
+            de cambio del banco y como se le devuelve. Para abrir uno no hay que hacer nada — se
+            abre solo cuando un cobro o un pago necesita monedas sueltas que no hay, y siempre
+            empezando por el envase más pequeño.
           </p>
         </div>
       </div>

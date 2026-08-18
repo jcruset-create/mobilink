@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { repartirIngreso, valorEnTubos } from "./cierre";
+import { repartirIngreso, valorEnvasado } from "./cierre";
 import type { Denominacion } from "../types";
 
 const DENOMINACIONES: Denominacion[] = [
-  { id: 1, valor: 5000, tipo: "BILLETE", etiqueta: "50 €", piezasPorCartucho: null, activa: true, orden: 1 },
-  { id: 2, valor: 2000, tipo: "BILLETE", etiqueta: "20 €", piezasPorCartucho: null, activa: true, orden: 2 },
-  { id: 3, valor: 200, tipo: "MONEDA", etiqueta: "2 €", piezasPorCartucho: 25, activa: true, orden: 3 },
-  { id: 4, valor: 100, tipo: "MONEDA", etiqueta: "1 €", piezasPorCartucho: 25, activa: true, orden: 4 },
-  { id: 5, valor: 50, tipo: "MONEDA", etiqueta: "0,50 €", piezasPorCartucho: 25, activa: true, orden: 5 },
+  { id: 1, valor: 5000, tipo: "BILLETE", etiqueta: "50 €", piezasPorCartucho: null, piezasPorBolsa: null, imagenUrl: null, activa: true, orden: 1 },
+  { id: 2, valor: 2000, tipo: "BILLETE", etiqueta: "20 €", piezasPorCartucho: null, piezasPorBolsa: null, imagenUrl: null, activa: true, orden: 2 },
+  { id: 3, valor: 200, tipo: "MONEDA", etiqueta: "2 €", piezasPorCartucho: 25, piezasPorBolsa: null, imagenUrl: null, activa: true, orden: 3 },
+  { id: 4, valor: 100, tipo: "MONEDA", etiqueta: "1 €", piezasPorCartucho: 25, piezasPorBolsa: null, imagenUrl: null, activa: true, orden: 4 },
+  { id: 5, valor: 50, tipo: "MONEDA", etiqueta: "0,50 €", piezasPorCartucho: 25, piezasPorBolsa: null, imagenUrl: null, activa: true, orden: 5 },
 ];
 
 describe("reparto del cierre", () => {
@@ -53,8 +53,8 @@ describe("reparto del cierre", () => {
     });
 
     expect(r.tubos).toEqual([
-      { valor: 200, cantidad: 1, piezasPorCartucho: 25, importe: 5000 },
-      { valor: 100, cantidad: 1, piezasPorCartucho: 25, importe: 2500 },
+      { valor: 200, cantidad: 1, tipo: "cartucho", piezasPorEnvase: 25, importe: 5000 },
+      { valor: 100, cantidad: 1, tipo: "cartucho", piezasPorEnvase: 25, importe: 2500 },
     ]);
     expect(r.totalCentimos).toBe(7500);
   });
@@ -104,10 +104,10 @@ describe("reparto del cierre", () => {
   });
 });
 
-describe("valor de los tubos que se quedan", () => {
+describe("valor de los envases que se quedan", () => {
   it("multiplica tubos por piezas y por valor", () => {
     expect(
-      valorEnTubos(
+      valorEnvasado(
         [
           { valor: 200, cantidad: 1 },
           { valor: 100, cantidad: 2 },
@@ -115,6 +115,49 @@ describe("valor de los tubos que se quedan", () => {
         DENOMINACIONES
       )
     ).toBe(5000 + 5000);
+  });
+
+  it("una bolsa usa sus propias piezas, no las del cartucho", () => {
+    const conBolsa: Denominacion[] = DENOMINACIONES.map((d) =>
+      d.valor === 100 ? { ...d, piezasPorBolsa: 500 } : d
+    );
+    // 1 bolsa × 500 monedas × 1 € = 500 €, no 25 € como el cartucho.
+    expect(valorEnvasado([{ valor: 100, cantidad: 1 }], conBolsa, "bolsa")).toBe(50000);
+  });
+});
+
+describe("reparto del cierre con bolsas", () => {
+  it("una bolsa que se queda no va al banco, y la otra sí", () => {
+    const conBolsa: Denominacion[] = DENOMINACIONES.map((d) =>
+      d.valor === 100 ? { ...d, piezasPorBolsa: 500 } : d
+    );
+    const r = repartirIngreso({
+      sueltasContadas: [],
+      tubosContados: [],
+      bolsasContadas: [{ valor: 100, cantidad: 2 }],
+      cambioFinalSueltas: {},
+      cambioFinalTubos: [],
+      cambioFinalBolsas: [{ valor: 100, cantidad: 1 }],
+      denominaciones: conBolsa,
+    });
+
+    expect(r.bolsas).toEqual([
+      { valor: 100, cantidad: 1, tipo: "bolsa", piezasPorEnvase: 500, importe: 50000 },
+    ]);
+    expect(r.totalCentimos).toBe(50000);
+  });
+
+  it("sin bolsas en el arqueo el reparto no cambia", () => {
+    const r = repartirIngreso({
+      sueltasContadas: [{ valor: 5000, cantidad: 2 }],
+      tubosContados: [],
+      cambioFinalSueltas: {},
+      cambioFinalTubos: [],
+      denominaciones: DENOMINACIONES,
+    });
+
+    expect(r.bolsas).toEqual([]);
+    expect(r.totalCentimos).toBe(10000);
   });
 });
 
@@ -162,6 +205,6 @@ describe("dejarlo todo en caja", () => {
       denominaciones: DENOMINACIONES,
     });
     expect(r.totalCentimos).toBe(1250);
-    expect(r.tubos).toEqual([{ valor: 50, cantidad: 1, piezasPorCartucho: 25, importe: 1250 }]);
+    expect(r.tubos).toEqual([{ valor: 50, cantidad: 1, tipo: "cartucho", piezasPorEnvase: 25, importe: 1250 }]);
   });
 });

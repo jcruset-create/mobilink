@@ -181,3 +181,103 @@ describe("aperturas de una entrega elegida a mano", () => {
     expect(r.disponible).toBe(1);
   });
 });
+
+/*
+ * Bolsas.
+ *
+ * Una bolsa es el precinto grande del banco: monedas a granel, cientos de
+ * ellas. Vale la misma regla que el cartucho —se abre si hace falta y no se
+ * vuelve a cerrar— con un matiz que es el que fijan estos tests: **se rompe
+ * siempre el envoltorio más pequeño primero**. Abrir una bolsa de 500 monedas
+ * teniendo un tubo de 25 a mano llena el cajón de calderilla que ya no se
+ * puede volver a guardar.
+ */
+describe("bolsas de monedas", () => {
+  const POR_CARTUCHO = new Map([[100, 25]]);
+  const POR_BOLSA = new Map([[100, 500]]);
+
+  it("cuenta las monedas de la bolsa como monedas que hay", () => {
+    const stock = stockDesdeLineas([], [], [{ valor: 100, cantidad: 1 }]);
+    expect(piezasTotales(stock, 100, POR_CARTUCHO, POR_BOLSA)).toBe(500);
+  });
+
+  it("suma los tres formatos", () => {
+    const stock = stockDesdeLineas(
+      [{ valor: 100, cantidad: 3 }],
+      [{ valor: 100, cantidad: 2 }],
+      [{ valor: 100, cantidad: 1 }]
+    );
+    // 3 sueltas + 2 tubos de 25 + 1 bolsa de 500 = 553.
+    expect(piezasTotales(stock, 100, POR_CARTUCHO, POR_BOLSA)).toBe(553);
+  });
+
+  it("abre el cartucho antes que la bolsa: se rompe el precinto más pequeño", () => {
+    const stock = stockDesdeLineas(
+      [{ valor: 100, cantidad: 1 }],
+      [{ valor: 100, cantidad: 1 }],
+      [{ valor: 100, cantidad: 1 }]
+    );
+    // Hacen falta 4 monedas de 1 €: 1 suelta + hay que abrir algo.
+    const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO, POR_BOLSA);
+    if (!r.ok) throw new Error("debería poder darse");
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+  });
+
+  it("abre la bolsa cuando los cartuchos no llegan", () => {
+    const stock = stockDesdeLineas(
+      [],
+      [{ valor: 100, cantidad: 1 }], // 25 monedas
+      [{ valor: 100, cantidad: 1 }] // 500 monedas
+    );
+    // 30 monedas: el tubo da 25 y las 5 que faltan obligan a abrir la bolsa.
+    const r = calcularCambioConCartuchos(3000, stock, POR_CARTUCHO, POR_BOLSA);
+    if (!r.ok) throw new Error("debería poder darse");
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, bolsas: 1, piezas: 525 }]);
+  });
+
+  it("sin cartuchos, la bolsa se abre directamente", () => {
+    const stock = stockDesdeLineas([], [], [{ valor: 100, cantidad: 1 }]);
+    const r = calcularCambioConCartuchos(200, stock, POR_CARTUCHO, POR_BOLSA);
+    if (!r.ok) throw new Error("debería poder darse");
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 0, bolsas: 1, piezas: 500 }]);
+  });
+
+  it("no abre nada si las sueltas bastan", () => {
+    const stock = stockDesdeLineas(
+      [{ valor: 100, cantidad: 5 }],
+      [{ valor: 100, cantidad: 1 }],
+      [{ valor: 100, cantidad: 1 }]
+    );
+    const r = calcularCambioConCartuchos(300, stock, POR_CARTUCHO, POR_BOLSA);
+    if (!r.ok) throw new Error("debería poder darse");
+    expect(r.aperturas).toEqual([]);
+  });
+
+  it("una entrega a mano también sabe abrir la bolsa", () => {
+    const stock = stockDesdeLineas([], [], [{ valor: 100, cantidad: 1 }]);
+    const r = aperturasNecesarias(
+      [{ valor: 100, cantidad: 10 }],
+      stock,
+      POR_CARTUCHO,
+      POR_BOLSA
+    );
+    expect(r).toEqual({ ok: true, aperturas: [{ valor: 100, cartuchos: 0, bolsas: 1, piezas: 500 }] });
+  });
+
+  it("ni abriéndolo todo llega: se dice cuánto hay de verdad", () => {
+    const stock = stockDesdeLineas(
+      [{ valor: 100, cantidad: 2 }],
+      [{ valor: 100, cantidad: 1 }],
+      []
+    );
+    const r = aperturasNecesarias([{ valor: 100, cantidad: 40 }], stock, POR_CARTUCHO, POR_BOLSA);
+    expect(r).toMatchObject({ ok: false, valor: 100, pedido: 40, disponible: 27 });
+  });
+
+  it("sin bolsas configuradas, todo se comporta como antes", () => {
+    const stock = stockDesdeLineas([{ valor: 100, cantidad: 1 }], [{ valor: 100, cantidad: 1 }]);
+    const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO);
+    if (!r.ok) throw new Error("debería poder darse");
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+  });
+});

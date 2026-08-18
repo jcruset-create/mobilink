@@ -76,6 +76,8 @@ type FilaDenominacion = {
   tipo: "BILLETE" | "MONEDA";
   etiqueta: string;
   piezas_por_cartucho: number | null;
+  piezas_por_bolsa: number | null;
+  imagen_url: string | null;
   activa: boolean;
   orden: number;
 };
@@ -85,7 +87,8 @@ export async function cargarDenominaciones(
   soloActivas = false
 ): Promise<Denominacion[]> {
   const { rows } = await client.query<FilaDenominacion>(
-    `SELECT id, valor_centimos, tipo, etiqueta, piezas_por_cartucho, activa, orden
+    `SELECT id, valor_centimos, tipo, etiqueta, piezas_por_cartucho, piezas_por_bolsa,
+            imagen_url, activa, orden
        FROM cash_denominations
       ${soloActivas ? "WHERE activa = true" : ""}
       ORDER BY valor_centimos DESC`
@@ -96,6 +99,8 @@ export async function cargarDenominaciones(
     tipo: r.tipo,
     etiqueta: r.etiqueta,
     piezasPorCartucho: r.piezas_por_cartucho,
+    piezasPorBolsa: r.piezas_por_bolsa,
+    imagenUrl: r.imagen_url,
     activa: r.activa,
     orden: r.orden,
   }));
@@ -383,8 +388,9 @@ export async function insertarMovimientos(
       await client.query(
         `INSERT INTO cash_denomination_movements
            (session_id, operation_id, denomination_id, direccion, cantidad,
-            valor_unitario_centimos, importe_centimos, motivo, created_by, created_at_ms, cartuchos)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            valor_unitario_centimos, importe_centimos, motivo, created_by, created_at_ms,
+            cartuchos, bolsas)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
           opts.sessionId,
           opts.operationId,
@@ -397,6 +403,7 @@ export async function insertarMovimientos(
           opts.userId,
           opts.ahora,
           l.cartuchos ?? 0,
+          l.bolsas ?? 0,
         ]
       );
     }
@@ -732,17 +739,23 @@ export async function movimientosDeOperacion(
 export async function stockPorFormato(
   client: PoolClient | typeof pool,
   sessionId: number
-): Promise<{ sueltas: Map<Centimos, number>; cartuchos: Map<Centimos, number> }> {
+): Promise<{
+  sueltas: Map<Centimos, number>;
+  cartuchos: Map<Centimos, number>;
+  bolsas: Map<Centimos, number>;
+}> {
   const { rows } = await client.query<{
     valor_unitario_centimos: number;
     sueltas: string;
     tubos: string;
+    sacos: string;
   }>(
     `SELECT valor_unitario_centimos,
-            SUM(CASE WHEN cartuchos = 0
+            SUM(CASE WHEN cartuchos = 0 AND bolsas = 0
                      THEN (CASE WHEN direccion = 'IN' THEN cantidad ELSE -cantidad END)
                      ELSE 0 END) AS sueltas,
-            SUM(CASE WHEN direccion = 'IN' THEN cartuchos ELSE -cartuchos END) AS tubos
+            SUM(CASE WHEN direccion = 'IN' THEN cartuchos ELSE -cartuchos END) AS tubos,
+            SUM(CASE WHEN direccion = 'IN' THEN bolsas ELSE -bolsas END) AS sacos
        FROM cash_denomination_movements
       WHERE session_id = $1
       GROUP BY valor_unitario_centimos`,
@@ -751,25 +764,35 @@ export async function stockPorFormato(
 
   const sueltas = new Map<Centimos, number>();
   const cartuchos = new Map<Centimos, number>();
+  const bolsas = new Map<Centimos, number>();
   for (const r of rows) {
     const s = Number(r.sueltas);
     const t = Number(r.tubos);
+    const b = Number(r.sacos);
     if (s > 0) sueltas.set(r.valor_unitario_centimos, s);
     if (t > 0) cartuchos.set(r.valor_unitario_centimos, t);
-    if (s < 0 || t < 0) {
+    if (b > 0) bolsas.set(r.valor_unitario_centimos, b);
+    if (s < 0 || t < 0 || b < 0) {
       throw new ErrorCaja(
         "STOCK_NEGATIVO",
-        `El stock de la denominación de ${r.valor_unitario_centimos} céntimos es negativo (sueltas ${s}, cartuchos ${t}).`,
+        `El stock de la denominación de ${r.valor_unitario_centimos} céntimos es negativo (sueltas ${s}, cartuchos ${t}, bolsas ${b}).`,
         500
       );
     }
   }
-  return { sueltas, cartuchos };
+  return { sueltas, cartuchos, bolsas };
 }
 
 /** Piezas por cartucho del catálogo, indexadas por valor. */
 export function piezasPorCartuchoDe(denominaciones: readonly Denominacion[]): Map<Centimos, number> {
   const m = new Map<Centimos, number>();
   for (const d of denominaciones) if (d.piezasPorCartucho) m.set(d.valor, d.piezasPorCartucho);
+  return m;
+}
+
+/** Piezas por bolsa del catálogo, indexadas por valor. */
+export function piezasPorBolsaDe(denominaciones: readonly Denominacion[]): Map<Centimos, number> {
+  const m = new Map<Centimos, number>();
+  for (const d of denominaciones) if (d.piezasPorBolsa) m.set(d.valor, d.piezasPorBolsa);
   return m;
 }

@@ -499,9 +499,6 @@ function FormasPago() {
     }
   }
 
-  /** El servidor corta en 8 MB; avisar aquí ahorra subir la foto para nada. */
-  const MAXIMO_IMAGEN = 8 * 1024 * 1024;
-
   async function subirImagen(id: number, fichero: File | undefined) {
     if (!fichero) return;
     if (fichero.size > MAXIMO_IMAGEN) {
@@ -806,8 +803,6 @@ function BotonMixto({ editable }: { editable: boolean }) {
   const [ocupado, setOcupado] = useState(false);
   const [error, setError] = useState("");
 
-  const MAXIMO = 8 * 1024 * 1024;
-
   async function accion(fn: () => Promise<unknown>) {
     setOcupado(true);
     setError("");
@@ -861,7 +856,7 @@ function BotonMixto({ editable }: { editable: boolean }) {
                   const fichero = e.target.files?.[0];
                   e.target.value = "";
                   if (!fichero) return;
-                  if (fichero.size > MAXIMO) {
+                  if (fichero.size > MAXIMO_IMAGEN) {
                     setError(
                       `La imagen pesa ${(fichero.size / 1024 / 1024).toFixed(1)} MB y el máximo son 8 MB.`
                     );
@@ -888,6 +883,9 @@ function BotonMixto({ editable }: { editable: boolean }) {
   );
 }
 
+/** El servidor corta en 8 MB; avisar aquí ahorra subir la foto para nada. */
+const MAXIMO_IMAGEN = 8 * 1024 * 1024;
+
 // ── Denominaciones ─────────────────────────────────────────────────────────
 
 function Denominaciones() {
@@ -909,11 +907,23 @@ function Denominaciones() {
     void cargar();
   }, [cargar]);
 
-  async function guardar(id: number, datos: { activa?: boolean; piezasPorCartucho?: number | null }) {
+  async function guardar(
+    id: number,
+    datos: {
+      activa?: boolean;
+      piezasPorCartucho?: number | null;
+      piezasPorBolsa?: number | null;
+    }
+  ) {
+    await accion(id, () => api.actualizarDenominacion(id, datos));
+  }
+
+  /** Todo lo que toca el catálogo pasa por aquí: recarga y errores en un sitio. */
+  async function accion(id: number, hacer: () => Promise<unknown>) {
     setOcupado(id);
     setError("");
     try {
-      await api.actualizarDenominacion(id, datos);
+      await hacer();
       await cargar();
       await recargarConfiguracion();
     } catch (e) {
@@ -923,10 +933,19 @@ function Denominaciones() {
     }
   }
 
+  function subirImagen(id: number, fichero: File | undefined) {
+    if (!fichero) return;
+    if (fichero.size > MAXIMO_IMAGEN) {
+      setError(`La imagen pesa ${(fichero.size / 1024 / 1024).toFixed(1)} MB y el máximo son 8 MB.`);
+      return;
+    }
+    void accion(id, () => api.subirImagenDenominacion(id, fichero));
+  }
+
   return (
     <section className="space-y-2">
       <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
-        Denominaciones y cartuchos
+        Denominaciones, cartuchos y bolsas
       </h2>
 
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -941,42 +960,94 @@ function Denominaciones() {
         <thead>
           <tr>
             <th className={thCls}>Denominación</th>
+            <th className={thCls}>Imagen</th>
             <th className={thCls}>Tipo</th>
             <th className={`${thCls} text-right`}>Piezas por cartucho</th>
-            <th className={`${thCls} text-right`}>Valor del cartucho</th>
+            <th className={`${thCls} text-right`}>Monedas por bolsa</th>
+            <th className={`${thCls} text-right`}>Valor cartucho / bolsa</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}></th>
           </tr>
         </thead>
         <tbody>
-          {denominaciones.length === 0 && <EmptyRow cols={6} text="Cargando el catálogo…" />}
+          {denominaciones.length === 0 && <EmptyRow cols={8} text="Cargando el catálogo…" />}
           {denominaciones.map((d) => (
             <tr key={d.id} className={`border-t border-slate-700 ${d.activa ? "" : "opacity-50"}`}>
               <td className={`${tdCls} font-bold tabular-nums`}>{d.etiqueta}</td>
+              <td className={tdCls}>
+                <div className="flex items-center gap-1">
+                  {d.imagenUrl ? (
+                    <img
+                      src={d.imagenUrl}
+                      alt={d.etiqueta}
+                      className="h-8 w-12 rounded object-contain"
+                    />
+                  ) : (
+                    <span className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-500">
+                      sin foto
+                    </span>
+                  )}
+                  <label
+                    className={`${btnMini} cursor-pointer`}
+                    title={`Subir la foto de ${d.etiqueta}`}
+                  >
+                    <ImagePlus className="h-3.5 w-3.5" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={ocupado === d.id}
+                      onChange={(e) => {
+                        const fichero = e.target.files?.[0];
+                        e.target.value = "";
+                        subirImagen(d.id, fichero);
+                      }}
+                    />
+                  </label>
+                  {d.imagenUrl && (
+                    <button
+                      onClick={() => void accion(d.id, () => api.quitarImagenDenominacion(d.id))}
+                      disabled={ocupado === d.id}
+                      className={btnMini}
+                      title="Quitar la foto"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </td>
               <td className={`${tdCls} text-[11px] text-slate-400`}>
                 {d.tipo === "BILLETE" ? "Billete" : "Moneda"}
               </td>
               <td className={`${tdCls} text-right`}>
                 {d.tipo === "MONEDA" ? (
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    defaultValue={d.piezasPorCartucho ?? ""}
-                    placeholder="sin cartucho"
-                    disabled={ocupado === d.id}
-                    onBlur={(e) => {
-                      const texto = e.target.value.replace(/\D/g, "");
-                      const valor = texto === "" ? null : Number(texto);
-                      if (valor !== d.piezasPorCartucho) void guardar(d.id, { piezasPorCartucho: valor });
-                    }}
-                    className="h-8 w-24 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
+                  <CampoPiezas
+                    valor={d.piezasPorCartucho}
+                    marcador="sin cartucho"
+                    deshabilitado={ocupado === d.id}
+                    onGuardar={(v) => void guardar(d.id, { piezasPorCartucho: v })}
+                  />
+                ) : (
+                  <span className="text-slate-600">—</span>
+                )}
+              </td>
+              <td className={`${tdCls} text-right`}>
+                {d.tipo === "MONEDA" ? (
+                  <CampoPiezas
+                    valor={d.piezasPorBolsa}
+                    marcador="sin bolsa"
+                    deshabilitado={ocupado === d.id}
+                    onGuardar={(v) => void guardar(d.id, { piezasPorBolsa: v })}
                   />
                 ) : (
                   <span className="text-slate-600">—</span>
                 )}
               </td>
               <td className={`${tdCls} text-right tabular-nums text-slate-400`}>
-                {d.piezasPorCartucho ? euros(d.piezasPorCartucho * d.valor) : "—"}
+                <div>{d.piezasPorCartucho ? euros(d.piezasPorCartucho * d.valor) : "—"}</div>
+                <div className="text-[10px] text-slate-500">
+                  {d.piezasPorBolsa ? euros(d.piezasPorBolsa * d.valor) : "—"}
+                </div>
               </td>
               <td className={tdCls}>
                 <span className={`text-[11px] ${d.activa ? "text-slate-400" : "text-slate-500"}`}>
@@ -1001,10 +1072,54 @@ function Denominaciones() {
       </TableWrap>
 
       <p className="text-[11px] text-slate-500">
-        El número de piezas por cartucho se guarda al salir del campo. No se puede desactivar una
-        denominación que todavía tenga piezas en una caja abierta.
+        Los números se guardan al salir del campo. La <strong>bolsa</strong> es el precinto grande
+        del banco —monedas a granel— y tiene que traer más monedas que un cartucho de la misma
+        denominación; si una moneda no viene en bolsa, se deja vacío. Cuando haga falta romper un
+        precinto, el sistema abre primero el más pequeño: cartucho antes que bolsa. No se puede
+        desactivar una denominación que todavía tenga piezas en una caja abierta.
+      </p>
+
+      <p className="text-[11px] text-slate-500">
+        Las fotos son del catálogo, o sea de toda la instalación: un billete de 20 € es el mismo en
+        todas las empresas. De momento solo se ven aquí; están para poder enseñarlas en otras
+        pantallas más adelante.
       </p>
     </section>
+  );
+}
+
+/**
+ * Campo de piezas por envase.
+ *
+ * Cartucho y bolsa se teclean igual —un entero o vacío, guardado al salir del
+ * campo— así que comparten componente en lugar de duplicar el `onBlur` con su
+ * limpieza de caracteres y su comparación con el valor anterior.
+ */
+function CampoPiezas({
+  valor,
+  marcador,
+  deshabilitado,
+  onGuardar,
+}: {
+  valor: number | null;
+  marcador: string;
+  deshabilitado: boolean;
+  onGuardar: (valor: number | null) => void;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      defaultValue={valor ?? ""}
+      placeholder={marcador}
+      disabled={deshabilitado}
+      onBlur={(e) => {
+        const texto = e.target.value.replace(/\D/g, "");
+        const nuevo = texto === "" ? null : Number(texto);
+        if (nuevo !== valor) onGuardar(nuevo);
+      }}
+      className="h-8 w-24 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
+    />
   );
 }
 
@@ -1015,7 +1130,7 @@ function DenominacionesSoloLectura() {
   return (
     <section className="space-y-2">
       <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
-        Denominaciones y cartuchos
+        Denominaciones, cartuchos y bolsas
       </h2>
       <Aviso tono="info">
         El catálogo es de toda la instalación y solo lo puede modificar un administrador.
@@ -1026,11 +1141,12 @@ function DenominacionesSoloLectura() {
             <th className={thCls}>Denominación</th>
             <th className={thCls}>Tipo</th>
             <th className={`${thCls} text-right`}>Piezas por cartucho</th>
-            <th className={`${thCls} text-right`}>Valor del cartucho</th>
+            <th className={`${thCls} text-right`}>Monedas por bolsa</th>
+            <th className={`${thCls} text-right`}>Valor cartucho / bolsa</th>
           </tr>
         </thead>
         <tbody>
-          {denominaciones.length === 0 && <EmptyRow cols={4} text="Sin denominaciones activas." />}
+          {denominaciones.length === 0 && <EmptyRow cols={5} text="Sin denominaciones activas." />}
           {denominaciones.map((d) => (
             <tr key={d.id} className="border-t border-slate-700">
               <td className={`${tdCls} font-bold tabular-nums`}>{d.etiqueta}</td>
@@ -1038,8 +1154,12 @@ function DenominacionesSoloLectura() {
                 {d.tipo === "BILLETE" ? "Billete" : "Moneda"}
               </td>
               <td className={`${tdCls} text-right tabular-nums`}>{d.piezasPorCartucho ?? "—"}</td>
+              <td className={`${tdCls} text-right tabular-nums`}>{d.piezasPorBolsa ?? "—"}</td>
               <td className={`${tdCls} text-right tabular-nums text-slate-400`}>
-                {d.piezasPorCartucho ? euros(d.piezasPorCartucho * d.valor) : "—"}
+                <div>{d.piezasPorCartucho ? euros(d.piezasPorCartucho * d.valor) : "—"}</div>
+                <div className="text-[10px] text-slate-500">
+                  {d.piezasPorBolsa ? euros(d.piezasPorBolsa * d.valor) : "—"}
+                </div>
               </td>
             </tr>
           ))}

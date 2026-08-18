@@ -120,12 +120,29 @@ export const listarDenominaciones = () =>
 
 export const actualizarDenominacion = (
   id: number,
-  datos: { activa?: boolean; piezasPorCartucho?: number | null }
+  datos: {
+    activa?: boolean;
+    piezasPorCartucho?: number | null;
+    piezasPorBolsa?: number | null;
+  }
 ) =>
   pedir<{ denominacion: Denominacion }>(`/denominations/${id}`, {
     method: "PATCH",
     body: JSON.stringify(datos),
   });
+
+/** Sube la foto del billete o de la moneda y devuelve la fila ya con su URL. */
+export const subirImagenDenominacion = (id: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("imagen", fichero);
+  return pedir<{ denominacion: Denominacion }>(`/denominations/${id}/image`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
+export const quitarImagenDenominacion = (id: number) =>
+  pedir<{ denominacion: Denominacion }>(`/denominations/${id}/image`, { method: "DELETE" });
 
 /** Catálogo de formas de pago, incluidas las dadas de baja. */
 export const listarFormasPago = () =>
@@ -226,7 +243,13 @@ export const proponerPedidoCambio = (sessionId: number, importeCentimos: number)
 export const crearPedidoCambio = (datos: {
   sessionId: number;
   importeCentimos: number;
-  solicitado: { valor: number; cantidad: number; cartuchos?: number; motivo?: string }[];
+  solicitado: {
+    valor: number;
+    cantidad: number;
+    cartuchos?: number;
+    bolsas?: number;
+    motivo?: string;
+  }[];
   salida?: LineaDenominacion[];
   notas?: string;
 }) => pedir<{ pedido: PedidoCambio }>("/change-orders", json(datos));
@@ -235,7 +258,7 @@ export const recibirPedidoCambio = (
   id: number,
   datos: {
     sessionId: number;
-    recibido: { valor: number; cantidad: number; cartuchos?: number }[];
+    recibido: { valor: number; cantidad: number; cartuchos?: number; bolsas?: number }[];
     diferenciaMotivo?: string;
   }
 ) => pedir<{ pedido: PedidoCambio }>(`/change-orders/${id}/receive`, json(datos));
@@ -275,6 +298,8 @@ export const abrirJornada = (datos: {
   fondoManual?: LineaDenominacion[];
   /** Tubos precintados del fondo: `cantidad` son tubos, no monedas. */
   fondoCartuchos?: LineaDenominacion[];
+  /** Bolsas precintadas del fondo: `cantidad` son bolsas, no monedas. */
+  fondoBolsas?: LineaDenominacion[];
   motivoFondoManual?: string;
   /** Fecha contable `YYYY-MM-DD`. Omitida, hoy. Sirve para meter días pasados. */
   fecha?: string;
@@ -291,6 +316,7 @@ export const stockJornada = (sessionId: number) =>
     lineas: LineaDenominacion[];
     sueltas: LineaDenominacion[];
     cartuchos: LineaDenominacion[];
+    bolsas: LineaDenominacion[];
     totalCentimos: number;
     piezas: number;
   }>(`/sessions/${sessionId}/stock`);
@@ -360,6 +386,8 @@ export const registrarMovimiento = (datos: {
   efectivo: LineaDenominacion[];
   /** Tubos precintados que entran o salen sin abrirse. */
   cartuchos?: LineaDenominacion[];
+  /** Bolsas precintadas que entran o salen sin abrirse. */
+  bolsas?: LineaDenominacion[];
   concepto?: string;
   partyNombre?: string;
   referencia?: string | null;
@@ -375,6 +403,7 @@ export const guardarArqueo = (
   datos: {
     contado: LineaDenominacion[];
     cartuchos?: LineaDenominacion[];
+    bolsas?: LineaDenominacion[];
     tipo?: "INTERMEDIATE" | "CLOSING";
     notas?: string;
   }
@@ -384,8 +413,10 @@ export const proponerCierre = (sessionId: number, objetivoCentimos: number) =>
   pedir<{
     cambioFinal: LineaDenominacion[];
     cambioFinalCartuchos: LineaDenominacion[];
+    cambioFinalBolsas: LineaDenominacion[];
     ingresoBancario: LineaDenominacion[];
     ingresoBancarioCartuchos: LineaDenominacion[];
+    ingresoBancarioBolsas: LineaDenominacion[];
   }>(
     `/sessions/${sessionId}/closing-proposal?objetivo=${objetivoCentimos}`
   );
@@ -395,6 +426,7 @@ export const cerrarJornada = (
   datos: {
     cambioFinal: LineaDenominacion[];
     cambioFinalCartuchos?: LineaDenominacion[];
+    cambioFinalBolsas?: LineaDenominacion[];
     arqueoId?: number;
     notas?: string;
   }

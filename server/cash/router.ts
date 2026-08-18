@@ -152,14 +152,20 @@ function lineas(v: unknown, campo: string): LineaDenominacion[] {
 }
 
 /**
- * Líneas que además llevan tubos y una explicación: lo que se le pide al banco
- * y lo que el banco acaba dando. `cantidad` son SIEMPRE piezas; `cartuchos`,
- * cuántos tubos precintados son esas piezas.
+ * Líneas que además llevan envases y una explicación: lo que se le pide al
+ * banco y lo que el banco acaba dando. `cantidad` son SIEMPRE piezas;
+ * `cartuchos` y `bolsas`, cuántos envases precintados son esas piezas.
  */
 function lineasConCartuchos(
   v: unknown,
   campo: string
-): { valor: number; cantidad: number; cartuchos: number; motivo?: string }[] {
+): {
+  valor: number;
+  cantidad: number;
+  cartuchos: number;
+  bolsas: number;
+  motivo?: string;
+}[] {
   if (v == null) return [];
   if (!Array.isArray(v)) {
     throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo} tiene que ser una lista de denominaciones.`, 400);
@@ -178,10 +184,22 @@ function lineasConCartuchos(
       if (cartuchos < 0) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}].cartuchos no puede ser negativo.`, 400);
       }
+      const bolsas = o.bolsas == null ? 0 : entero(o.bolsas, `${campo}[${i}].bolsas`);
+      if (bolsas < 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${campo}[${i}].bolsas no puede ser negativo.`, 400);
+      }
+      if (cartuchos > 0 && bolsas > 0) {
+        throw new ErrorCaja(
+          "ENTRADA_NO_VALIDA",
+          `${campo}[${i}] no puede ser cartucho y bolsa a la vez.`,
+          400
+        );
+      }
       return {
         valor: enteroPositivo(o.valor, `${campo}[${i}].valor`),
         cantidad,
         cartuchos,
+        bolsas,
         motivo: typeof o.motivo === "string" ? o.motivo : undefined,
       };
     })
@@ -329,6 +347,12 @@ export function createCashRouter(): Router {
           : b.piezasPorCartucho === null || b.piezasPorCartucho === ""
             ? null
             : entero(b.piezasPorCartucho, "piezasPorCartucho");
+      const porBolsa =
+        b.piezasPorBolsa === undefined
+          ? undefined
+          : b.piezasPorBolsa === null || b.piezasPorBolsa === ""
+            ? null
+            : entero(b.piezasPorBolsa, "piezasPorBolsa");
 
       const denominacion = await config.actualizarDenominacion(
         contexto(req),
@@ -336,7 +360,51 @@ export function createCashRouter(): Router {
         {
           activa: typeof b.activa === "boolean" ? b.activa : undefined,
           piezasPorCartucho: piezas,
+          piezasPorBolsa: porBolsa,
         }
+      );
+      res.json({ denominacion });
+    })
+  );
+
+  /**
+   * Foto del billete o de la moneda.
+   *
+   * Va en el catálogo, que es de toda la instalación: un billete de 20 € se ve
+   * igual en todas las empresas, así que la imagen se sube una vez. La URL no
+   * se puede mandar por el PATCH a mano —solo se pone subiendo un fichero— para
+   * que la pantalla no acabe cargando imágenes de cualquier sitio de internet.
+   */
+  r.post(
+    "/denominations/:id/image",
+    exigirPermiso("cash.denominations.configure"),
+    subida(subidaImagen.single("imagen"), 8),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      const fichero = req.file;
+      if (!fichero) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(fichero.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+
+      const url = await guardarImagenBoton(fichero, `cash/denominations/${id}_${Date.now()}.png`);
+      const denominacion = await config.actualizarDenominacion(contexto(req), id, {
+        imagenUrl: url,
+      });
+      res.json({ denominacion });
+    })
+  );
+
+  r.delete(
+    "/denominations/:id/image",
+    exigirPermiso("cash.denominations.configure"),
+    ruta(async (req, res) => {
+      const denominacion = await config.actualizarDenominacion(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        { imagenUrl: null }
       );
       res.json({ denominacion });
     })
@@ -745,6 +813,7 @@ export function createCashRouter(): Router {
         registerId: enteroPositivo(b.registerId, "registerId"),
         fondoManual: lineas(b.fondoManual, "fondoManual"),
         fondoCartuchos: lineas(b.fondoCartuchos, "fondoCartuchos"),
+        fondoBolsas: lineas(b.fondoBolsas, "fondoBolsas"),
         motivoFondoManual: typeof b.motivoFondoManual === "string" ? b.motivoFondoManual : undefined,
         fecha: typeof b.fecha === "string" && b.fecha !== "" ? b.fecha : undefined,
         permitirFechaRepetida: b.permitirFechaRepetida === true,
@@ -998,6 +1067,8 @@ export function createCashRouter(): Router {
         // Tubos precintados: entran o salen sin abrirse. `cantidad` son tubos.
         cartuchosRecibidos: entra ? lineas(b.cartuchos, "cartuchos") : undefined,
         cartuchosEntregados: entra ? undefined : lineas(b.cartuchos, "cartuchos"),
+        bolsasRecibidas: entra ? lineas(b.bolsas, "bolsas") : undefined,
+        bolsasEntregadas: entra ? undefined : lineas(b.bolsas, "bolsas"),
         partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
         concepto,
         referencia: typeof b.referencia === "string" ? b.referencia : null,
@@ -1029,6 +1100,7 @@ export function createCashRouter(): Router {
           sessionId: enteroPositivo(req.params.id, "id"),
           contado: lineas(b.contado, "contado"),
           cartuchos: lineas(b.cartuchos, "cartuchos"),
+          bolsas: lineas(b.bolsas, "bolsas"),
           tipo: b.tipo === "INTERMEDIATE" ? "INTERMEDIATE" : "CLOSING",
           notas: typeof b.notas === "string" ? b.notas : undefined,
         })
@@ -1056,6 +1128,7 @@ export function createCashRouter(): Router {
           sessionId: enteroPositivo(req.params.id, "id"),
           cambioFinal: lineas(b.cambioFinal, "cambioFinal"),
           cambioFinalCartuchos: lineas(b.cambioFinalCartuchos, "cambioFinalCartuchos"),
+          cambioFinalBolsas: lineas(b.cambioFinalBolsas, "cambioFinalBolsas"),
           arqueoId: b.arqueoId ? enteroPositivo(b.arqueoId, "arqueoId") : undefined,
           notas: typeof b.notas === "string" ? b.notas : undefined,
         })

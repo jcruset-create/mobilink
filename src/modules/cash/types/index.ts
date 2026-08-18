@@ -14,6 +14,10 @@ export type Denominacion = {
   tipo: TipoDenominacion;
   etiqueta: string;
   piezasPorCartucho: number | null;
+  /** Monedas a granel que trae una bolsa del banco; null = sin bolsa. */
+  piezasPorBolsa: number | null;
+  /** Foto del billete o de la moneda; null = solo la etiqueta. */
+  imagenUrl: string | null;
   activa: boolean;
   orden: number;
 };
@@ -118,11 +122,13 @@ export type Movimiento = {
   createdAtMs: number;
 };
 
-/** Tubos que hay que abrir para poder entregar una combinación. */
+/** Envases que hay que abrir para poder entregar una combinación. */
 export type AperturaCartucho = {
   valor: number;
   cartuchos: number;
-  /** Monedas que salen del tubo al abrirlo. */
+  /** Bolsas abiertas; se rompe el envase más pequeño primero. */
+  bolsas?: number;
+  /** Monedas que salen del envase al abrirlo. */
   piezas: number;
 };
 
@@ -134,6 +140,8 @@ export type ResumenJornada = {
   stockSueltas: LineaDenominacion[];
   /** Tubos precintados por valor de la moneda. */
   stockCartuchos: LineaDenominacion[];
+  /** Bolsas precintadas por valor de la moneda. */
+  stockBolsas: LineaDenominacion[];
   totalStockCentimos: number;
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: number }[];
@@ -148,6 +156,7 @@ export type ResumenJornada = {
     id: number;
     sueltas: LineaDenominacion[];
     cartuchos: LineaDenominacion[];
+    bolsas: LineaDenominacion[];
     totalCentimos: number;
     diferenciaCentimos: number;
     creadoAtMs: number;
@@ -289,7 +298,11 @@ export type PanelIngresos = {
 
 // ── Tesorería ──────────────────────────────────────────────────────────────
 
-export type LineaConCartuchos = LineaDenominacion & { cartuchos: number; motivo?: string | null };
+export type LineaConCartuchos = LineaDenominacion & {
+  cartuchos: number;
+  bolsas?: number;
+  motivo?: string | null;
+};
 
 export type PedidoCambio = {
   id: number;
@@ -336,6 +349,7 @@ export type LineaPropuesta = {
   valor: number;
   piezas: number;
   cartuchos: number;
+  bolsas?: number;
   importe: number;
   /** Por qué se pide esta línea, en una frase. */
   motivo: string;

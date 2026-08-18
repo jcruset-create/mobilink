@@ -30,6 +30,7 @@ export default function Arqueo() {
 
   const [contado, setContado] = useState<CantidadesPorValor>({});
   const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
+  const [bolsas, setBolsas] = useState<CantidadesPorValor>({});
   const [notas, setNotas] = useState("");
   const [resultado, setResultado] = useState<ResultadoArqueo | null>(null);
   const [error, setError] = useState("");
@@ -49,14 +50,15 @@ export default function Arqueo() {
    * Copia el teórico como punto de partida: acelera el arqueo de una caja que
    * cuadra.
    *
-   * Copia las dos dimensiones por separado. Volcar el total de piezas en la
+   * Copia las tres dimensiones por separado. Volcar el total de piezas en la
    * columna de sueltas —que es lo que hacía antes— contaba las monedas de los
-   * tubos como si estuvieran sueltas y dejaba los cartuchos a cero: al cerrar,
-   * los tubos precintados desaparecían sin que nadie los hubiera abierto.
+   * envases como si estuvieran sueltas y dejaba los cartuchos a cero: al
+   * cerrar, los precintos desaparecían sin que nadie los hubiera abierto.
    */
   function precargarTeorico() {
     setContado(cantidadesDesde(jornada!.stockSueltas ?? []));
     setCartuchos(cantidadesDesde(jornada!.stockCartuchos ?? []));
+    setBolsas(cantidadesDesde(jornada!.stockBolsas ?? []));
   }
 
   /** Acepta el descuadre: el teórico pasa a ser lo contado, con su ajuste. */
@@ -84,6 +86,9 @@ export default function Arqueo() {
           .map(([valor, cantidad]) => ({ valor: Number(valor), cantidad }))
           .filter((l) => l.cantidad > 0),
         cartuchos: Object.entries(cartuchos)
+          .map(([valor, cantidad]) => ({ valor: Number(valor), cantidad }))
+          .filter((l) => l.cantidad > 0),
+        bolsas: Object.entries(bolsas)
           .map(([valor, cantidad]) => ({ valor: Number(valor), cantidad }))
           .filter((l) => l.cantidad > 0),
         notas: notas || undefined,
@@ -177,11 +182,14 @@ export default function Arqueo() {
             onChange={setContado}
             cartuchos={cartuchos}
             onCartuchosChange={setCartuchos}
+            bolsas={bolsas}
+            onBolsasChange={setBolsas}
             deshabilitado={guardando}
           />
           <p className="text-[11px] text-slate-500">
-            La columna estrecha de la derecha en las monedas es para cartuchos: se cuentan aparte y
-            el sistema los convierte a piezas con la configuración de cada denominación.
+            Las columnas estrechas de la derecha en las monedas son para los precintos: «cart.»
+            cartuchos y «bols.» bolsas. Se cuentan aparte y el sistema los convierte a piezas con la
+            configuración de cada denominación.
           </p>
 
           <label className="block">
