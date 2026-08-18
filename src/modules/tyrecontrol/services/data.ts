@@ -254,7 +254,7 @@ export async function listarRevisionesHistorico(filtros: {
   let q = supabase
     .from("revisiones_vehiculo")
     .select(
-      "id, fecha_revision, created_at, medido_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
+      "id, fecha_revision, created_at, medido_at, momento, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
       "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
       "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado), " +
       // Para saber QUIÉN midió. Una revisión del arco no tiene técnico, pero
@@ -268,7 +268,12 @@ export async function listarRevisionesHistorico(filtros: {
   if (filtros.empresaId) q = q.eq("empresa_id", filtros.empresaId);
   if (filtros.tecnicoId) q = q.eq("tecnico_id", filtros.tecnicoId);
   const { data, error } = await q
-    .order("created_at", { ascending: false })
+    // Por `momento` (columna generada = medido_at ?? created_at), que es
+    // justo lo que pinta la columna Hora. Ordenar por created_at y enseñar
+    // medido_at hacía saltar la lista: un informe del CheckPoint se importa
+    // de una vez, así que sus revisiones comparten created_at pero tienen
+    // horas de medición de toda la semana.
+    .order("momento", { ascending: false })
     .limit(filtros.limite ?? 200);
   if (error) throw new Error(error.message);
   return data ?? [];

@@ -187,6 +187,27 @@ export default function HistoricoRevisiones() {
     return { total: filas.length, conInc, pend };
   }, [filas]);
 
+  // Cuántas ha hecho cada uno, con los MISMOS filtros que la tabla — se cuenta
+  // sobre las filas ya cargadas, así que no puede discrepar de lo que se ve.
+  // El arco va aparte: no es un operario, y mezclarlo escondería cuánto hace
+  // cada persona.
+  const porQuien = useMemo(() => {
+    const m = new Map<string, { quien: string; esArco: boolean; n: number; conInc: number }>();
+    for (const f of filas) {
+      const quien = f.esArco ? "CheckPoint" : (f.tecnico && f.tecnico !== "—" ? f.tecnico : "Sin operario");
+      const e = m.get(quien) ?? { quien, esArco: f.esArco, n: 0, conInc: 0 };
+      e.n++; if (f.incidencias > 0) e.conInc++;
+      m.set(quien, e);
+    }
+    // De más a menos; a igualdad, por nombre, para que no baile entre recargas.
+    return [...m.values()].sort((a, b) => b.n - a.n || a.quien.localeCompare(b.quien));
+  }, [filas]);
+
+  // La consulta trae como mucho 200 filas. Si se alcanza el tope, el desglose
+  // (y el total) son de lo cargado, no de todo lo que cumple el filtro: se
+  // dice, en vez de dar un número que parece completo y no lo es.
+  const topeAlcanzado = filas.length >= 200;
+
   const btnCls = (activo: boolean) =>
     `rounded-lg px-3 py-1.5 text-sm font-bold ${activo ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`;
 
@@ -215,9 +236,24 @@ export default function HistoricoRevisiones() {
           {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
         </select>
         <span className="pb-2 text-xs text-slate-500">
-          {resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
+          {topeAlcanzado ? "Primeras " : ""}{resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
+          {topeAlcanzado && <span className="ml-1 text-amber-400">· hay más: acota las fechas</span>}
         </span>
       </div>
+
+      {porQuien.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold uppercase text-slate-500">Quién las ha hecho</span>
+          {porQuien.map((p) => (
+            <span key={p.quien}
+              className={`rounded-full px-2.5 py-1 text-[12px] font-semibold ${
+                p.esArco ? "bg-sky-500/15 text-sky-300" : "bg-slate-700/60 text-slate-200"}`}>
+              {p.quien} <span className="font-black">{p.n}</span>
+              {p.conInc > 0 && <span className="ml-1 text-amber-300">({p.conInc} con incid.)</span>}
+            </span>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="mb-3 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300">
@@ -340,16 +376,24 @@ export default function HistoricoRevisiones() {
           <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Mediciones por posición</div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th><th className={thCls}>Profundidad</th>
+              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th>
+              <th className={thCls}>Marca y modelo</th><th className={thCls}>Profundidad</th>
               <th className={thCls}>Presión</th><th className={thCls}>Estado visual</th><th className={thCls}>Observaciones</th>
             </tr></thead>
             <tbody>
-              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Cargando…</td></tr>
-              : fichaDetalleOrden.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos de posiciones para esta revisión.</td></tr>
+              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Cargando…</td></tr>
+              : fichaDetalleOrden.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Sin datos de posiciones para esta revisión.</td></tr>
               : fichaDetalleOrden.map((d) => (
                 <tr key={d.id} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
+                  {/* El número interno identifica la goma pero no dice cuál es:
+                      con dos modelos de la misma marca y medida, un
+                      "IMP-1492HPW-P2" no le sirve a nadie. Solo lo informado. */}
+                  <td className={tdCls + " text-slate-300"}>
+                    {[d.neumatico?.marca, d.neumatico?.modelo].filter(Boolean).join(" ") || "—"}
+                    {d.neumatico?.medida ? <span className="ml-1 text-[11px] text-slate-500">{d.neumatico.medida}</span> : null}
+                  </td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
