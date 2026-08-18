@@ -33,6 +33,13 @@ export async function initCash(): Promise<void> {
       tipo TEXT NOT NULL CHECK (tipo IN ('BILLETE','MONEDA')),
       etiqueta TEXT NOT NULL,
       piezas_por_cartucho INTEGER,
+      -- Monedas a granel que trae una bolsa del banco. NULL = esa denominación
+      -- no viene en bolsa (los billetes, por ejemplo).
+      piezas_por_bolsa INTEGER,
+      -- Foto del billete o de la moneda, para las pantallas que quieran
+      -- enseñarla. Es del catálogo, o sea de toda la instalación: un billete de
+      -- 20 € es el mismo en todas las empresas.
+      imagen_url TEXT,
       activa BOOLEAN NOT NULL DEFAULT true,
       orden INTEGER NOT NULL DEFAULT 0,
       created_at_ms BIGINT NOT NULL,
@@ -291,15 +298,21 @@ export async function initCash(): Promise<void> {
       motivo TEXT NOT NULL CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED')),
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED')),
       -- Tubos precintados que representa este asiento. 0 = monedas sueltas.
       -- La columna cantidad son SIEMPRE piezas: en una fila de cartuchos vale
       -- tubos x piezas_por_cartucho. Asi el total de piezas sigue siendo la
       -- suma de cantidad sin ningun caso especial, y las sueltas salen de
       -- filtrar por cartuchos = 0.
       cartuchos INTEGER NOT NULL DEFAULT 0,
+      -- Bolsas precintadas que representa este asiento, con la misma regla que
+      -- los cartuchos: la columna cantidad sigue siendo SIEMPRE piezas.
+      bolsas INTEGER NOT NULL DEFAULT 0,
       created_by UUID,
-      created_at_ms BIGINT NOT NULL
+      created_at_ms BIGINT NOT NULL,
+      -- Un asiento es de un solo formato. Mezclar tubos y bolsas en la misma
+      -- fila haría imposible saber qué precinto se rompió al abrirlo.
+      CONSTRAINT cash_mov_un_formato CHECK (NOT (cartuchos > 0 AND bolsas > 0))
     );
     CREATE INDEX IF NOT EXISTS cash_denmov_session_idx ON cash_denomination_movements(session_id);
     CREATE INDEX IF NOT EXISTS cash_denmov_op_idx ON cash_denomination_movements(operation_id);
@@ -311,17 +324,15 @@ export async function initCash(): Promise<void> {
    * Cartuchos: se añade después del CREATE para las bases que ya existían.
    * Abrir un tubo es irreversible y deja su propio par de asientos
    * (CARTRIDGE_OPENED), así que el rastro del efectivo sigue cuadrando.
+   *
+   * La lista de motivos NO se toca aquí. La tiene un único bloque, más abajo,
+   * con la lista completa: cuando dos sitios recreaban el mismo CHECK, el de
+   * arriba —con la lista vieja— se lo cargaba al arrancar sobre una base que
+   * ya tenía asientos del motivo nuevo, y el servidor no levantaba.
    */
   await pool.query(`
     ALTER TABLE cash_denomination_movements
       ADD COLUMN IF NOT EXISTS cartuchos INTEGER NOT NULL DEFAULT 0;
-
-    ALTER TABLE cash_denomination_movements DROP CONSTRAINT IF EXISTS cash_denomination_movements_motivo_check;
-    ALTER TABLE cash_denomination_movements ADD CONSTRAINT cash_denomination_movements_motivo_check
-      CHECK (motivo IN (
-        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
-        'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED'));
   `);
 
   // ── Arqueos ───────────────────────────────────────────────────────────────
@@ -352,6 +363,9 @@ export async function initCash(): Promise<void> {
       -- Cartuchos contados aparte de las piezas sueltas, porque en el mostrador
       -- se cuentan aparte: 3 cartuchos de 2 EUR son 75 monedas.
       cartuchos_contados INTEGER NOT NULL DEFAULT 0,
+      -- Bolsas contadas aparte, como los cartuchos: en el mostrador se cuentan
+      -- sin abrirlas.
+      bolsas_contadas INTEGER NOT NULL DEFAULT 0,
       diferencia INTEGER NOT NULL DEFAULT 0,
       UNIQUE (count_id, denomination_id)
     );
@@ -524,6 +538,7 @@ export async function initCash(): Promise<void> {
       valor_centimos INTEGER NOT NULL,
       cantidad INTEGER NOT NULL CHECK (cantidad > 0),
       cartuchos INTEGER NOT NULL DEFAULT 0,
+      bolsas INTEGER NOT NULL DEFAULT 0,
       motivo TEXT
     );
     CREATE INDEX IF NOT EXISTS cash_change_order_lines_idx
@@ -643,6 +658,57 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Bolsas de monedas: migración para bases que ya existen.
+   *
+   * El DDL de arriba es `CREATE TABLE IF NOT EXISTS`, así que en una base que
+   * ya está creada no añade nada. Estas columnas son las que hacen que la
+   * bolsa exista en una instalación en marcha.
+   *
+   * La bolsa es el precinto grande del banco: monedas a granel, cientos de
+   * ellas. Misma mecánica que el cartucho —`cantidad` sigue siendo SIEMPRE
+   * piezas y `bolsas` dice cuántos precintos representan— y por eso el CHECK:
+   * un asiento es de un solo formato, porque si mezclara tubos y bolsas no se
+   * sabría qué precinto se rompió al abrirlo.
+   */
+  await pool.query(`
+    ALTER TABLE cash_denominations
+      ADD COLUMN IF NOT EXISTS piezas_por_bolsa INTEGER;
+
+    ALTER TABLE cash_denomination_movements
+      ADD COLUMN IF NOT EXISTS bolsas INTEGER NOT NULL DEFAULT 0;
+
+    ALTER TABLE cash_denomination_movements
+      DROP CONSTRAINT IF EXISTS cash_mov_un_formato;
+    ALTER TABLE cash_denomination_movements
+      ADD CONSTRAINT cash_mov_un_formato CHECK (NOT (cartuchos > 0 AND bolsas > 0));
+
+    ALTER TABLE cash_count_lines
+      ADD COLUMN IF NOT EXISTS bolsas_contadas INTEGER NOT NULL DEFAULT 0;
+
+    ALTER TABLE cash_change_order_lines
+      ADD COLUMN IF NOT EXISTS bolsas INTEGER NOT NULL DEFAULT 0;
+
+    ALTER TABLE cash_denominations
+      ADD COLUMN IF NOT EXISTS imagen_url TEXT;
+  `);
+
+  /*
+   * El motivo `BAG_OPENED` en el CHECK de los movimientos. Se recrea entero
+   * porque un CHECK no se amplía: se tira y se vuelve a poner. El nombre es el
+   * que genera Postgres para un CHECK de columna, y el DROP va con IF EXISTS
+   * para que en una base nueva —donde ya viene bien de fábrica— no falle.
+   */
+  await pool.query(`
+    ALTER TABLE cash_denomination_movements
+      DROP CONSTRAINT IF EXISTS cash_denomination_movements_motivo_check;
+    ALTER TABLE cash_denomination_movements
+      ADD CONSTRAINT cash_denomination_movements_motivo_check CHECK (motivo IN (
+        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
+        'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED'));
+  `);
+
+  /*
    * Secciones de negocio dentro de una misma caja.
    *
    * El modelo estándar del módulo es «una caja = un cajón = una liquidación».
@@ -739,10 +805,11 @@ async function sembrarDenominaciones(): Promise<void> {
   for (const d of DENOMINACIONES_SEMILLA) {
     await pool.query(
       `INSERT INTO cash_denominations
-         (valor_centimos, tipo, etiqueta, piezas_por_cartucho, activa, orden, created_at_ms, updated_at_ms)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+         (valor_centimos, tipo, etiqueta, piezas_por_cartucho, piezas_por_bolsa,
+          activa, orden, created_at_ms, updated_at_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
        ON CONFLICT (valor_centimos) DO NOTHING`,
-      [d.valor, d.tipo, d.etiqueta, d.piezasPorCartucho, d.activa, d.orden, ahora]
+      [d.valor, d.tipo, d.etiqueta, d.piezasPorCartucho, d.piezasPorBolsa, d.activa, d.orden, ahora]
     );
   }
 }

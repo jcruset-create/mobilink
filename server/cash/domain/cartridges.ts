@@ -1,20 +1,25 @@
 /**
- * Cartuchos de monedas.
+ * Formatos de las monedas: sueltas, en cartucho y en bolsa.
  *
- * Un cartucho NO es otro tipo de dinero: es un envoltorio de 25 o 50 monedas
- * iguales. Y en una caja real tiene dos propiedades que mandan sobre todo lo
- * demás:
+ * Ni el cartucho ni la bolsa son otro tipo de dinero: son envoltorios de
+ * monedas iguales —25 o 50 en un tubo, varios cientos en una bolsa del banco—.
+ * Y en una caja real tienen dos propiedades que mandan sobre todo lo demás:
  *
- *  · **Se abre, y no se vuelve a cerrar.** Nadie se pone a reencartuchar
- *    monedas en el mostrador. Abrir un tubo es irreversible: sus monedas pasan
- *    a ser sueltas para siempre.
- *  · **Solo se abre si hace falta.** Si hay sueltas suficientes de esa misma
- *    denominación, el tubo no se toca.
+ *  · **Se abren, y no se vuelven a cerrar.** Nadie se pone a reencartuchar
+ *    monedas en el mostrador. Abrir es irreversible: sus monedas pasan a ser
+ *    sueltas para siempre.
+ *  · **Solo se abren si hace falta.** Si hay sueltas suficientes de esa misma
+ *    denominación, el precinto no se toca.
  *
- * De ahí que el stock tenga que distinguir sueltas de encartuchadas. Contarlo
- * todo como piezas —que es lo que hacía la primera versión— dejaba al operador
- * sin saber que de las cuatro monedas de 1 € que le pide la pantalla solo una
- * está suelta y las otras tres están dentro de un tubo precintado.
+ * De ahí que el stock distinga los tres formatos. Contarlo todo como piezas
+ * —que es lo que hacía la primera versión— dejaba al operador sin saber que de
+ * las cuatro monedas de 1 € que le pide la pantalla solo una está suelta y las
+ * otras tres están dentro de un tubo precintado.
+ *
+ * **Orden de apertura dentro de una denominación: sueltas → cartuchos → bolsa.**
+ * Se rompe siempre el envoltorio más pequeño primero. Abrir una bolsa de 500
+ * monedas para dar dos es desproporcionado si había un tubo de 25 a mano, y
+ * deja el cajón lleno de calderilla suelta que ya no se puede volver a guardar.
  */
 
 import type { Centimos } from "./money.ts";
@@ -25,19 +30,31 @@ import { esExito, esFallo } from "./result.ts";
 /** Cuántas piezas trae un cartucho de cada denominación. Sin entrada = sin cartucho. */
 export type PiezasPorCartucho = ReadonlyMap<Centimos, number>;
 
+/** Cuántas piezas trae una bolsa de cada denominación. Sin entrada = sin bolsa. */
+export type PiezasPorBolsa = ReadonlyMap<Centimos, number>;
+
 /** Existencias separadas por formato. */
 export type StockConCartuchos = {
   /** Monedas y billetes sueltos, por valor. */
   sueltas: Inventario;
   /** Tubos precintados, por valor de la moneda que contienen. */
   cartuchos: ReadonlyMap<Centimos, number>;
+  /** Bolsas precintadas del banco, por valor de la moneda que contienen. */
+  bolsas?: ReadonlyMap<Centimos, number>;
 };
 
-/** Cartuchos que hay que abrir para poder entregar una combinación. */
+/**
+ * Lo que hay que abrir para poder entregar una combinación.
+ *
+ * `cartuchos` y `bolsas` van por separado porque son dos precintos distintos y
+ * el asiento en el libro tiene que decir cuál se rompió: no es lo mismo abrir
+ * un tubo de 25 que una bolsa de 500.
+ */
 export type AperturaCartucho = {
   valor: Centimos;
   cartuchos: number;
-  /** Monedas que salen del tubo al abrirlo. */
+  bolsas?: number;
+  /** Monedas que salen al abrir, sumando los dos formatos. */
   piezas: number;
 };
 
@@ -51,28 +68,84 @@ export type ResultadoCambioCartuchos =
     }
   | { ok: false; motivo: MotivoCambioImposible; mensaje: string };
 
-/** Piezas totales de una denominación, estén sueltas o dentro de un tubo. */
+/** Mapa vacío reutilizable: sin bolsas configuradas nada cambia. */
+const SIN_BOLSAS: PiezasPorBolsa = new Map();
+
+/** Piezas totales de una denominación, sueltas o dentro de cualquier precinto. */
 export function piezasTotales(
   stock: StockConCartuchos,
   valor: Centimos,
-  porCartucho: PiezasPorCartucho
+  porCartucho: PiezasPorCartucho,
+  porBolsa: PiezasPorBolsa = SIN_BOLSAS
 ): number {
   const sueltas = stock.sueltas.get(valor) ?? 0;
   const tubos = stock.cartuchos.get(valor) ?? 0;
-  return sueltas + tubos * (porCartucho.get(valor) ?? 0);
+  const bolsas = stock.bolsas?.get(valor) ?? 0;
+  return (
+    sueltas + tubos * (porCartucho.get(valor) ?? 0) + bolsas * (porBolsa.get(valor) ?? 0)
+  );
 }
 
-/** Inventario equivalente con todos los tubos abiertos. Es el máximo disponible. */
+/** Inventario equivalente con todo abierto. Es el máximo disponible. */
 export function inventarioConTodoAbierto(
   stock: StockConCartuchos,
-  porCartucho: PiezasPorCartucho
+  porCartucho: PiezasPorCartucho,
+  porBolsa: PiezasPorBolsa = SIN_BOLSAS
 ): Inventario {
   const m = new Map(stock.sueltas);
   for (const [valor, tubos] of stock.cartuchos) {
     const n = porCartucho.get(valor) ?? 0;
     if (tubos > 0 && n > 0) m.set(valor, (m.get(valor) ?? 0) + tubos * n);
   }
+  for (const [valor, bolsas] of stock.bolsas ?? []) {
+    const n = porBolsa.get(valor) ?? 0;
+    if (bolsas > 0 && n > 0) m.set(valor, (m.get(valor) ?? 0) + bolsas * n);
+  }
   return m;
+}
+
+/**
+ * Qué precintos hay que romper de UNA denominación para reunir `cantidad`
+ * piezas, gastando primero lo que menos cuesta deshacer.
+ *
+ * Orden: sueltas → cartuchos → bolsas. Se rompe el envoltorio más pequeño
+ * primero; abrir una bolsa de 500 monedas para dar dos, teniendo un tubo de 25
+ * a mano, llena el cajón de calderilla que ya no se puede volver a guardar.
+ *
+ * Devuelve `null` si con todo abierto no llega.
+ */
+function romperPara(
+  valor: Centimos,
+  cantidad: number,
+  stock: StockConCartuchos,
+  porCartucho: PiezasPorCartucho,
+  porBolsa: PiezasPorBolsa
+): AperturaCartucho | null {
+  const sueltas = stock.sueltas.get(valor) ?? 0;
+  let faltan = cantidad - sueltas;
+  if (faltan <= 0) return null;
+
+  const porTubo = porCartucho.get(valor) ?? 0;
+  const tubosHay = stock.cartuchos.get(valor) ?? 0;
+  const tubos = porTubo > 0 ? Math.min(tubosHay, Math.ceil(faltan / porTubo)) : 0;
+  faltan -= tubos * porTubo;
+
+  const porSaco = porBolsa.get(valor) ?? 0;
+  const bolsasHay = stock.bolsas?.get(valor) ?? 0;
+  const bolsas = faltan > 0 && porSaco > 0 ? Math.min(bolsasHay, Math.ceil(faltan / porSaco)) : 0;
+  faltan -= bolsas * porSaco;
+
+  // No llega ni abriéndolo todo: quien llame decide qué hacer con el hueco.
+  if (faltan > 0) return null;
+
+  // `bolsas` solo aparece si de verdad se ha roto alguna: emitir un 0 en cada
+  // apertura ensuciaría la API y la pantalla con un formato que no se usa.
+  return {
+    valor,
+    cartuchos: tubos,
+    ...(bolsas > 0 ? { bolsas } : {}),
+    piezas: tubos * porTubo + bolsas * porSaco,
+  };
 }
 
 /**
@@ -100,25 +173,19 @@ export function inventarioConTodoAbierto(
 export function calcularCambioConCartuchos(
   importe: Centimos,
   stock: StockConCartuchos,
-  porCartucho: PiezasPorCartucho
+  porCartucho: PiezasPorCartucho,
+  porBolsa: PiezasPorBolsa = SIN_BOLSAS
 ): ResultadoCambioCartuchos {
-  const todo = inventarioConTodoAbierto(stock, porCartucho);
+  const todo = inventarioConTodoAbierto(stock, porCartucho, porBolsa);
   const conTubos = calcularCambio(importe, todo);
   if (esFallo(conTubos)) return conTubos;
 
   const aperturas: AperturaCartucho[] = [];
   for (const linea of conTubos.lineas) {
-    const sueltas = stock.sueltas.get(linea.valor) ?? 0;
-    const faltan = linea.cantidad - sueltas;
-    if (faltan <= 0) continue;
-
-    const n = porCartucho.get(linea.valor) ?? 0;
-    /* c8 ignore next — si faltan piezas y no hay cartucho, `calcularCambio` no
-       habría encontrado esta solución: el pool no las tendría. */
-    if (n <= 0) continue;
-
-    const tubos = Math.ceil(faltan / n);
-    aperturas.push({ valor: linea.valor, cartuchos: tubos, piezas: tubos * n });
+    const rota = romperPara(linea.valor, linea.cantidad, stock, porCartucho, porBolsa);
+    /* c8 ignore next — si no llega, `calcularCambio` no habría encontrado esta
+       solución: el pool sale de este mismo stock. */
+    if (rota) aperturas.push(rota);
   }
 
   return { ok: true, lineas: conTubos.lineas, piezas: conTubos.piezas, aperturas };
@@ -127,11 +194,13 @@ export function calcularCambioConCartuchos(
 /** Atajo para las pruebas y la API, que hablan en líneas. */
 export function stockDesdeLineas(
   sueltas: readonly LineaDenominacion[],
-  cartuchos: readonly LineaDenominacion[] = []
+  cartuchos: readonly LineaDenominacion[] = [],
+  bolsas: readonly LineaDenominacion[] = []
 ): StockConCartuchos {
   return {
     sueltas: inventarioDesdeLineas(sueltas),
     cartuchos: inventarioDesdeLineas(cartuchos),
+    bolsas: inventarioDesdeLineas(bolsas),
   };
 }
 
@@ -146,7 +215,8 @@ export function stockDesdeLineas(
 export function aperturasNecesarias(
   entrega: readonly LineaDenominacion[],
   stock: StockConCartuchos,
-  porCartucho: PiezasPorCartucho
+  porCartucho: PiezasPorCartucho,
+  porBolsa: PiezasPorBolsa = SIN_BOLSAS
 ):
   | { ok: true; aperturas: AperturaCartucho[] }
   | { ok: false; valor: Centimos; pedido: number; disponible: number } {
@@ -157,20 +227,16 @@ export function aperturasNecesarias(
     const sueltas = stock.sueltas.get(valor) ?? 0;
     if (cantidad <= sueltas) continue;
 
-    const faltan = cantidad - sueltas;
-    const n = porCartucho.get(valor) ?? 0;
-    const tubos = n > 0 ? Math.ceil(faltan / n) : 0;
-    const disponiblesTubos = stock.cartuchos.get(valor) ?? 0;
-
-    if (n <= 0 || tubos > disponiblesTubos) {
+    const rota = romperPara(valor, cantidad, stock, porCartucho, porBolsa);
+    if (!rota) {
       return {
         ok: false,
         valor,
         pedido: cantidad,
-        disponible: sueltas + disponiblesTubos * n,
+        disponible: piezasTotales(stock, valor, porCartucho, porBolsa),
       };
     }
-    aperturas.push({ valor, cartuchos: tubos, piezas: tubos * n });
+    aperturas.push(rota);
   }
 
   return { ok: true, aperturas };

@@ -451,6 +451,7 @@ function Apertura({ cajaId }: { cajaId: number }) {
   const { denominaciones, refrescar, puede } = useCash();
   const [cantidades, setCantidades] = useState<CantidadesPorValor>({});
   const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
+  const [bolsas, setBolsas] = useState<CantidadesPorValor>({});
   const [notas, setNotas] = useState("");
   const [fecha, setFecha] = useState(hoyLocal());
   const [guardando, setGuardando] = useState(false);
@@ -463,16 +464,22 @@ function Apertura({ cajaId }: { cajaId: number }) {
 
   const lineas = lineasDesde(cantidades);
   const lineasCartuchos = lineasDesde(cartuchos);
-  // Un tubo de 1 € son 25 monedas: el fondo inicial no cuadraría si se contara
-  // como una pieza suelta.
-  const piezasPorCartucho = new Map(
-    denominaciones.filter((d) => d.piezasPorCartucho).map((d) => [d.valor, d.piezasPorCartucho as number])
-  );
-  const totalCartuchos = lineasCartuchos.reduce(
-    (a, l) => a + l.cantidad * (piezasPorCartucho.get(l.valor) ?? 0) * l.valor,
-    0
-  );
-  const total = totalLineas(lineas) + totalCartuchos;
+  const lineasBolsas = lineasDesde(bolsas);
+  // Un tubo de 1 € son 25 monedas y una bolsa son cientos: el fondo inicial no
+  // cuadraría si se contaran como una pieza suelta.
+  const valorEnvasado = (
+    envases: readonly { valor: number; cantidad: number }[],
+    piezasDe: (d: (typeof denominaciones)[number]) => number | null
+  ) =>
+    envases.reduce((a, l) => {
+      const d = denominaciones.find((x) => x.valor === l.valor);
+      return a + l.cantidad * (d ? (piezasDe(d) ?? 0) : 0) * l.valor;
+    }, 0);
+
+  const total =
+    totalLineas(lineas) +
+    valorEnvasado(lineasCartuchos, (d) => d.piezasPorCartucho) +
+    valorEnvasado(lineasBolsas, (d) => d.piezasPorBolsa);
 
   if (!puede("cash.open_session")) {
     return <Aviso tono="aviso">La caja está cerrada y no tienes permiso para abrirla.</Aviso>;
@@ -488,6 +495,7 @@ function Apertura({ cajaId }: { cajaId: number }) {
         registerId: cajaId,
         fondoManual: heredar ? [] : lineas,
         fondoCartuchos: heredar ? [] : lineasCartuchos,
+        fondoBolsas: heredar ? [] : lineasBolsas,
         fecha: fecha || undefined,
         permitirFechaRepetida: repetirFecha || undefined,
         notas: notas || undefined,
@@ -571,6 +579,8 @@ function Apertura({ cajaId }: { cajaId: number }) {
         onChange={setCantidades}
         cartuchos={cartuchos}
         onCartuchosChange={setCartuchos}
+        bolsas={bolsas}
+        onBolsasChange={setBolsas}
         deshabilitado={guardando}
       />
 

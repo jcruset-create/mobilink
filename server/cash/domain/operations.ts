@@ -109,15 +109,23 @@ export type MotivoMovimiento =
   | "ADJUSTMENT"
   | "CLOSING_FLOAT"
   /** Apertura de un cartucho: sale el tubo y entran sus monedas sueltas. */
-  | "CARTRIDGE_OPENED";
+  | "CARTRIDGE_OPENED"
+  /** Apertura de una bolsa: sale la bolsa y entran sus monedas sueltas. */
+  | "BAG_OPENED";
 
 export type Direccion = "IN" | "OUT";
 
 /**
- * Línea de un asiento. `cantidad` son SIEMPRE piezas; `cartuchos` dice cuántos
- * tubos precintados representan esas piezas (0 = monedas sueltas).
+ * Línea de un asiento. `cantidad` son SIEMPRE piezas; `cartuchos` y `bolsas`
+ * dicen cuántos envases precintados representan esas piezas. Los dos a cero =
+ * monedas sueltas, y nunca pueden venir los dos a la vez (una bolsa trae
+ * monedas sueltas, no cartuchos), invariante que además vigila la base de
+ * datos con la restricción `cash_mov_un_formato`.
  */
-export type LineaMovimiento = LineaDenominacion & { cartuchos?: number };
+export type LineaMovimiento = LineaDenominacion & {
+  cartuchos?: number;
+  bolsas?: number;
+};
 
 /** Movimiento de piezas ya resuelto, listo para escribir en el libro mayor. */
 export type MovimientoDenominacion = {

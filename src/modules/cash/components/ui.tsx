@@ -186,26 +186,32 @@ export function Cabecera({
 }
 
 /**
- * Aviso de que hay que romper el precinto de un cartucho.
+ * Aviso de que hay que romper el precinto de un cartucho o de una bolsa.
  *
  * Sin esto la pantalla pide "1 € × 4" y el operador ve una sola moneda suelta
  * en el cajón, sin saber que las otras tres están dentro de un tubo. Y romper
- * un tubo no tiene vuelta atrás, así que conviene decirlo antes.
+ * un precinto no tiene vuelta atrás, así que conviene decirlo antes.
  */
 export function AvisoCartuchos({
   aperturas,
 }: {
-  aperturas: { valor: number; cartuchos: number; piezas: number }[];
+  aperturas: { valor: number; cartuchos: number; bolsas?: number; piezas: number }[];
 }) {
   if (aperturas.length === 0) return null;
 
+  /** «2 cartuchos y 1 bolsa de 1 € (525 monedas)». */
+  const describir = (a: { valor: number; cartuchos: number; bolsas?: number; piezas: number }) => {
+    const partes = [
+      a.cartuchos > 0 ? `${a.cartuchos} ${a.cartuchos === 1 ? "cartucho" : "cartuchos"}` : null,
+      a.bolsas ? `${a.bolsas} ${a.bolsas === 1 ? "bolsa" : "bolsas"}` : null,
+    ].filter(Boolean);
+    return `${partes.join(" y ")} de ${euros(a.valor)} (${a.piezas} monedas)`;
+  };
+
   return (
     <Aviso tono="aviso">
-      <strong>Hay que abrir {aperturas.length === 1 ? "un cartucho" : "cartuchos"}:</strong>{" "}
-      {aperturas
-        .map((a) => `${a.cartuchos} de ${euros(a.valor)} (${a.piezas} monedas)`)
-        .join(", ")}
-      . Un tubo abierto no se vuelve a cerrar.
+      <strong>Hay que abrir {aperturas.length === 1 ? "un precinto" : "precintos"}:</strong>{" "}
+      {aperturas.map(describir).join(", ")}. Un envase abierto no se vuelve a cerrar.
     </Aviso>
   );
 }
