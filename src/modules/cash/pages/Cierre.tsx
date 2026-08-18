@@ -117,6 +117,24 @@ export default function Cierre() {
   const totalIngresoConTubos = ingreso.totalCentimos;
   const cuadra = totalCambioConTubos + totalIngresoConTubos === contadoTotal;
 
+  /**
+   * Vuelca el arqueo entero en el cambio final: todo se queda en caja.
+   *
+   * Es el cierre de un día que no va al banco, que en un mostrador son la
+   * mayoría. Sin esto había que teclear denominación por denominación lo mismo
+   * que se acababa de contar en el arqueo —cientos de piezas— y cualquier
+   * despiste dejaba el reparto sin cuadrar y el botón de cerrar apagado.
+   *
+   * El objetivo se pone también al total contado: pedir 350 € y quedárselo
+   * todo se contradicen, y dejarlo como estaba marcaría un "sobran 26 €" que
+   * no significa nada.
+   */
+  function quedarseloTodo() {
+    setCambioFinal(cantidadesDesde(sueltasContadas));
+    setCambioFinalTubos(tubosContados);
+    setObjetivoTexto(euros(contadoTotal).replace(" €", ""));
+  }
+
   async function cerrar() {
     setGuardando(true);
     setError("");
@@ -171,6 +189,13 @@ export default function Cierre() {
           className="h-[38px] rounded-lg bg-slate-700 px-3 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
         >
           Proponer composición
+        </button>
+        <button
+          onClick={quedarseloTodo}
+          title="Copia el arqueo entero en el cambio final: no va nada al banco"
+          className="h-[38px] rounded-lg bg-slate-700 px-3 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
+        >
+          Dejarlo todo en caja ({euros(contadoTotal)})
         </button>
       </div>
 
