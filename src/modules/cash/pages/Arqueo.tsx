@@ -26,7 +26,7 @@ import type { ResultadoArqueo } from "../types";
 import * as api from "../services/api";
 
 export default function Arqueo() {
-  const { jornada, denominaciones, refrescar } = useCash();
+  const { jornada, denominaciones, refrescar, puede } = useCash();
 
   const [contado, setContado] = useState<CantidadesPorValor>({});
   const [cartuchos, setCartuchos] = useState<CantidadesPorValor>({});
@@ -34,6 +34,12 @@ export default function Arqueo() {
   const [resultado, setResultado] = useState<ResultadoArqueo | null>(null);
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
+  /** Motivo del descuadre, obligatorio para regularizar. */
+  const [motivo, setMotivo] = useState("");
+  const [regularizando, setRegularizando] = useState(false);
+  const [regularizado, setRegularizado] = useState<{ numero: string; diferencia: number } | null>(
+    null
+  );
 
   if (!jornada) {
     return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
@@ -53,6 +59,22 @@ export default function Arqueo() {
     setCartuchos(cantidadesDesde(jornada!.stockCartuchos ?? []));
   }
 
+  /** Acepta el descuadre: el teórico pasa a ser lo contado, con su ajuste. */
+  async function regularizar() {
+    setRegularizando(true);
+    setError("");
+    try {
+      const r = await api.regularizarArqueo(jornada!.sesion.id, motivo.trim());
+      if (r) setRegularizado({ numero: r.numero, diferencia: r.diferenciaCentimos });
+      setMotivo("");
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido registrar el descuadre");
+    } finally {
+      setRegularizando(false);
+    }
+  }
+
   async function guardar() {
     setGuardando(true);
     setError("");
@@ -67,6 +89,8 @@ export default function Arqueo() {
         notas: notas || undefined,
       });
       setResultado(r);
+      // Un arqueo nuevo deja sin sentido la regularización del anterior.
+      setRegularizado(null);
       await refrescar();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido guardar el arqueo");
@@ -89,6 +113,60 @@ export default function Arqueo() {
       {error && <ErrorBox>{error}</ErrorBox>}
 
       {resultado && <ResumenArqueo r={resultado} />}
+
+      {/*
+        Confirmar el descuadre.
+        Va justo debajo del resultado, que es donde se está mirando la cifra y
+        donde se toma la decisión. Antes había que irse a Cierre y confiar en
+        que allí pasara algo: ahora se acepta aquí, con su motivo, y a partir
+        de ese momento la caja cuadra y el cierre va sobre limpio.
+      */}
+      {resultado && !resultado.cuadraImporte && !regularizado && puede("cash.adjustment.create") && (
+        <div className="rounded-lg border border-amber-600/50 bg-amber-950/30 p-3">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-amber-300">
+            Confirmar y registrar el descuadre
+          </div>
+          <p className="mt-1 text-[12px] text-slate-300">
+            Recuenta antes de pulsar. Al confirmar, el teórico pasa a ser lo contado y la
+            diferencia de <strong>{eurosConSigno(resultado.diferencia)}</strong> queda escrita como
+            un ajuste con su número propio, pieza a pieza. Aparecerá en Movimientos y en el
+            histórico, y a partir de ahí la caja cuadra.
+          </p>
+
+          <label className="mt-2 block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Motivo del descuadre
+            </span>
+            <input
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              className={inputCls}
+              placeholder="Recontado dos veces. Falta un billete de 20 € y sobra uno de 10."
+            />
+          </label>
+
+          <button
+            onClick={() => void regularizar()}
+            disabled={regularizando || !motivo.trim()}
+            className="mt-2 rounded-xl bg-amber-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-amber-500 disabled:opacity-40"
+          >
+            {regularizando ? "Registrando…" : "Confirmar y registrar el descuadre"}
+          </button>
+          {!motivo.trim() && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              El motivo es obligatorio: dentro de un mes, un ajuste sin explicación no lo entiende
+              nadie.
+            </p>
+          )}
+        </div>
+      )}
+
+      {regularizado && (
+        <Aviso tono="bien">
+          Descuadre registrado como <strong>{regularizado.numero}</strong> (
+          {eurosConSigno(regularizado.diferencia)}). La caja ya cuadra: puedes hacer el cierre.
+        </Aviso>
+      )}
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <div className="space-y-2">

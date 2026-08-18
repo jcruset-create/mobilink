@@ -54,6 +54,7 @@ import {
   calcularCambioConCartuchos,
   type AperturaCartucho,
 } from "./domain/cartridges.ts";
+import type { Denominacion } from "./domain/denominations.ts";
 import { esFallo } from "./domain/result.ts";
 import { compararArqueo, proponerCambioFinal, repartirCierre, type ResultadoArqueo } from "./domain/arqueo.ts";
 import {
@@ -1059,45 +1060,23 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
      * Ese cuadre es un ajuste, y como tal se asienta con su operación propia y
      * su auditoría: la diferencia no se disuelve, queda escrita.
      */
-    const teorico = await stockTeorico(client, e.sessionId);
-    const comparacion = compararArqueo(teorico, contado);
+    /*
+     * El cuadre contra el teórico se calcula aquí porque la jornada guarda su
+     * resultado —contado, diferencia y si cuadran las denominaciones— aunque
+     * el ajuste ya se hubiera asentado antes al regularizar. En ese caso la
+     * diferencia sale cero, que es exactamente lo que hay que dejar escrito.
+     */
+    const comparacion = compararArqueo(await stockTeorico(client, e.sessionId), contado);
 
-    if (comparacion.descuadres.length > 0) {
-      const entradas = comparacion.descuadres
-        .filter((d) => d.diferencia > 0)
-        .map((d) => ({ valor: d.valor, cantidad: d.diferencia }));
-      const salidas = comparacion.descuadres
-        .filter((d) => d.diferencia < 0)
-        .map((d) => ({ valor: d.valor, cantidad: -d.diferencia }));
-
-      const numeroAjuste = await siguienteNumero(client, "ADJUSTMENT", anio);
-      const opAjuste = await insertarOperacion(client, {
-        empresaId: ctx.empresaId,
-        sessionId: e.sessionId,
-        numero: numeroAjuste,
-        tipo: "ADJUSTMENT",
-        origen: "MANUAL",
-        concepto: "Ajuste por diferencia de arqueo al cerrar",
-        importeCentimos: Math.abs(comparacion.diferencia) || 1,
-        efectivoNetoCentimos: comparacion.diferencia,
-        erpSyncStatus: "NOT_APPLICABLE",
-        userId: ctx.userId,
-        ahora,
-      });
-
-      const movimientos = [];
-      if (entradas.length > 0) movimientos.push({ direccion: "IN" as const, motivo: "ADJUSTMENT" as const, lineas: entradas });
-      if (salidas.length > 0) movimientos.push({ direccion: "OUT" as const, motivo: "ADJUSTMENT" as const, lineas: salidas });
-
-      await insertarMovimientos(client, {
-        sessionId: e.sessionId,
-        operationId: opAjuste,
-        movimientos,
-        denominaciones,
-        userId: ctx.userId,
-        ahora,
-      });
-    }
+    await asentarAjusteDeArqueo(client, {
+      ctx,
+      sessionId: e.sessionId,
+      contado,
+      denominaciones,
+      anio,
+      ahora,
+      concepto: "Ajuste por diferencia de arqueo al cerrar",
+    });
 
     // Cambio final: sale de la jornada de hoy y mañana entra como fondo.
     if (reparto.totalCambio > 0) {
@@ -1559,6 +1538,22 @@ export type ResumenJornada = {
   operaciones: number;
   pendientesErp: number;
   /**
+   * El arqueo más reciente de la jornada, si lo hay.
+   *
+   * El cierre reparte **lo contado**, no el teórico, así que la pantalla
+   * necesita las piezas que se contaron de verdad. Sin esto usaba el stock
+   * teórico y, con un descuadre, pedía repartir un dinero que físicamente no
+   * estaba: el reparto no cuadraba nunca y no se podía cerrar.
+   */
+  ultimoArqueo: {
+    id: number;
+    sueltas: LineaDenominacion[];
+    cartuchos: LineaDenominacion[];
+    totalCentimos: Centimos;
+    diferenciaCentimos: Centimos;
+    creadoAtMs: number;
+  } | null;
+  /**
    * Reparto por sección de negocio. **Dato informativo, no un segundo arqueo**:
    * el cajón es uno solo y este dinero no está separado físicamente. Sirve para
    * saber cuánto ha aportado cada negocio, no para cuadrarlos por separado.
@@ -1630,6 +1625,38 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     [sessionId]
   );
 
+  /*
+   * El arqueo más reciente, con sus piezas. Solo el último: con dos arqueos en
+   * la misma jornada, sumar las líneas de todos duplicaría lo contado.
+   */
+  const { rows: arqueoCab } = await pool.query(
+    `SELECT id, contado_centimos, diferencia_centimos, created_at_ms
+       FROM cash_counts WHERE session_id = $1 ORDER BY id DESC LIMIT 1`,
+    [sessionId]
+  );
+  let ultimoArqueo: ResumenJornada["ultimoArqueo"] = null;
+  if (arqueoCab.length > 0) {
+    const { rows: lineasArqueo } = await pool.query(
+      `SELECT valor_unitario_centimos, cantidad_contada, cartuchos_contados
+         FROM cash_count_lines WHERE count_id = $1`,
+      [arqueoCab[0].id]
+    );
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    ultimoArqueo = {
+      id: arqueoCab[0].id,
+      sueltas: lineasArqueo
+        .map((r: any) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r.cantidad_contada) }))
+        .filter((l: LineaDenominacion) => l.cantidad > 0),
+      cartuchos: lineasArqueo
+        .map((r: any) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r.cartuchos_contados) }))
+        .filter((l: LineaDenominacion) => l.cantidad > 0),
+      totalCentimos: Number(arqueoCab[0].contado_centimos),
+      diferenciaCentimos: Number(arqueoCab[0].diferencia_centimos),
+      creadoAtMs: Number(arqueoCab[0].created_at_ms),
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }
+
   const { rows: pendientes } = await pool.query(
     `SELECT COUNT(*) AS n FROM cash_operations
       WHERE session_id = $1 AND erp_sync_status IN ('PENDING','ERROR','RETRY_PENDING')`,
@@ -1666,6 +1693,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     entregasCentimos: suma("CASH_DELIVERY"),
     operaciones: Number(totalOps[0].n),
     pendientesErp: Number(pendientes[0].n),
+    ultimoArqueo,
     /* eslint-disable @typescript-eslint/no-explicit-any */
     porSeccion: secciones.map((r: any) => ({
       sectionId: r.section_id ?? null,
@@ -1868,4 +1896,192 @@ export async function cambiarSeccion(
   });
 
   return { operacionId: operationId, sectionId, seccionNombre: nombre };
+}
+
+// ── Regularización del arqueo ──────────────────────────────────────────────
+
+/**
+ * Asienta la diferencia entre el teórico y lo contado, pieza a pieza.
+ *
+ * Un solo sitio para el ajuste, porque hay dos momentos en que hace falta:
+ * cuando se regulariza el arqueo a propósito y cuando se cierra una jornada
+ * que todavía no cuadraba. Si fueran dos bloques distintos acabarían
+ * divergiendo, y el que menos se usa sería el que se quedara mal.
+ *
+ * No cuadra un importe: cuadra CADA denominación. Dejar el total bien pero las
+ * piezas mal haría que mañana la caja no pudiera dar un cambio que el sistema
+ * cree tener.
+ *
+ * Devuelve `null` si no había nada que ajustar.
+ */
+async function asentarAjusteDeArqueo(
+  client: PoolClient,
+  p: {
+    ctx: Contexto;
+    sessionId: number;
+    contado: Inventario;
+    denominaciones: Denominacion[];
+    anio: number;
+    ahora: number;
+    concepto: string;
+    motivo?: string;
+  }
+): Promise<{ operacionId: number; numero: string; diferenciaCentimos: Centimos } | null> {
+  const teorico = await stockTeorico(client, p.sessionId);
+  const comparacion = compararArqueo(teorico, p.contado);
+  if (comparacion.descuadres.length === 0) return null;
+
+  const entradas = comparacion.descuadres
+    .filter((d) => d.diferencia > 0)
+    .map((d) => ({ valor: d.valor, cantidad: d.diferencia }));
+  const salidas = comparacion.descuadres
+    .filter((d) => d.diferencia < 0)
+    .map((d) => ({ valor: d.valor, cantidad: -d.diferencia }));
+
+  const numero = await siguienteNumero(client, "ADJUSTMENT", p.anio);
+  const operacionId = await insertarOperacion(client, {
+    empresaId: p.ctx.empresaId,
+    sessionId: p.sessionId,
+    numero,
+    tipo: "ADJUSTMENT",
+    origen: "MANUAL",
+    concepto: p.motivo?.trim() ? `${p.concepto} — ${p.motivo.trim()}` : p.concepto,
+    // El importe nunca es cero: un descuadre solo de composición —sobra un
+    // billete de 10 y falta uno de 10— mueve piezas sin mover el total, y una
+    // operación de 0 € desaparecería de cualquier listado por importe.
+    importeCentimos: Math.abs(comparacion.diferencia) || 1,
+    efectivoNetoCentimos: comparacion.diferencia,
+    erpSyncStatus: "NOT_APPLICABLE",
+    userId: p.ctx.userId,
+    ahora: p.ahora,
+  });
+
+  const movimientos = [];
+  if (entradas.length > 0)
+    movimientos.push({ direccion: "IN" as const, motivo: "ADJUSTMENT" as const, lineas: entradas });
+  if (salidas.length > 0)
+    movimientos.push({ direccion: "OUT" as const, motivo: "ADJUSTMENT" as const, lineas: salidas });
+
+  await insertarMovimientos(client, {
+    sessionId: p.sessionId,
+    operationId: operacionId,
+    movimientos,
+    denominaciones: p.denominaciones,
+    userId: p.ctx.userId,
+    ahora: p.ahora,
+  });
+
+  return { operacionId, numero, diferenciaCentimos: comparacion.diferencia };
+}
+
+/**
+ * Regulariza la caja contra el último arqueo: deja el teórico igual a lo
+ * contado y escribe la diferencia como ajuste.
+ *
+ * Es lo que se pulsa cuando el recuento está confirmado y se acepta el
+ * descuadre. A partir de ahí la caja cuadra y el cierre va sobre limpio, sin
+ * arrastrar una diferencia que nadie ha decidido asumir.
+ *
+ * Bloquea la jornada, al contrario que reclasificar una sección: esto SÍ mueve
+ * el libro de piezas, y dos regularizaciones a la vez asentarían dos veces la
+ * misma diferencia.
+ */
+export async function regularizarArqueo(
+  ctx: Contexto,
+  e: { sessionId: number; motivo?: string }
+): Promise<{
+  operacionId: number;
+  numero: string;
+  diferenciaCentimos: Centimos;
+  arqueoId: number;
+} | null> {
+  return enTransaccion(async (client) => {
+    const sesion = await bloquearSesion(client, e.sessionId);
+    if (sesion.empresaId !== ctx.empresaId) {
+      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
+    }
+    if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
+      throw new ErrorCaja(
+        "JORNADA_CERRADA",
+        "La jornada ya está cerrada: su descuadre se asentó al cerrarla.",
+        409
+      );
+    }
+
+    // Solo el arqueo MÁS RECIENTE: con dos en la misma jornada, el bueno es el
+    // último, que es el que refleja lo que hay en el cajón ahora.
+    const { rows: arqueos } = await client.query<{ id: number }>(
+      `SELECT id FROM cash_counts WHERE session_id = $1 ORDER BY id DESC LIMIT 1`,
+      [e.sessionId]
+    );
+    if (arqueos.length === 0) {
+      throw new ErrorCaja(
+        "FALTA_ARQUEO",
+        "Hay que guardar un arqueo antes de poder regularizar la caja.",
+        409
+      );
+    }
+    const arqueoId = arqueos[0].id;
+
+    const { rows: lineas } = await client.query(
+      `SELECT valor_unitario_centimos, cantidad_contada, cartuchos_contados
+         FROM cash_count_lines WHERE count_id = $1`,
+      [arqueoId]
+    );
+
+    const denominaciones = await cargarDenominaciones(client);
+    const porCartucho = piezasPorCartuchoDe(denominaciones);
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const contado = inventarioDesdeLineas(
+      lineas
+        .map((r: any) => ({
+          valor: r.valor_unitario_centimos,
+          // Las monedas de los tubos también son monedas: si no se sumaran, la
+          // regularización "descubriría" un faltante que no existe.
+          cantidad:
+            Number(r.cantidad_contada) +
+            Number(r.cartuchos_contados) * (porCartucho.get(r.valor_unitario_centimos) ?? 0),
+        }))
+        .filter((l: LineaDenominacion) => l.cantidad > 0)
+    );
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    const ahora = Date.now();
+    const ajuste = await asentarAjusteDeArqueo(client, {
+      ctx,
+      sessionId: e.sessionId,
+      contado,
+      denominaciones,
+      anio: Number(sesion.fecha.slice(0, 4)),
+      ahora,
+      concepto: "Regularización de arqueo",
+      motivo: e.motivo,
+    });
+
+    if (!ajuste) {
+      throw new ErrorCaja(
+        "CAJA_YA_CUADRA",
+        "La caja ya cuadra con el último arqueo: no hay nada que regularizar.",
+        409
+      );
+    }
+
+    await registrarAuditoria({
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: "cash.count.regularize",
+      entidad: "cash_sessions",
+      entidadId: String(e.sessionId),
+      detalle: {
+        arqueoId,
+        numeroAjuste: ajuste.numero,
+        diferenciaCentimos: ajuste.diferenciaCentimos,
+        motivo: e.motivo ?? null,
+      },
+      ip: ctx.ip,
+    });
+
+    return { ...ajuste, arqueoId };
+  });
 }
