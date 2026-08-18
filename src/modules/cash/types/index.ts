@@ -143,6 +143,15 @@ export type ResumenJornada = {
   entregasCentimos: number;
   operaciones: number;
   pendientesErp: number;
+  /** El arqueo más reciente. El cierre reparte esto, no el teórico. */
+  ultimoArqueo: {
+    id: number;
+    sueltas: LineaDenominacion[];
+    cartuchos: LineaDenominacion[];
+    totalCentimos: number;
+    diferenciaCentimos: number;
+    creadoAtMs: number;
+  } | null;
   /** Reparto por sección. Informativo: el cajón y su arqueo son uno solo. */
   porSeccion: {
     sectionId: number | null;

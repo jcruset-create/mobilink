@@ -2349,3 +2349,204 @@ describe.runIf(RUN)("reclasificar la sección de una operación", () => {
     });
   });
 });
+
+/*
+ * El cierre reparte LO CONTADO, no el teórico.
+ *
+ * Con la caja cuadrada los dos números son el mismo y no se nota. El caso que
+ * importa es el descuadre: si el resumen devolviera el teórico, la pantalla
+ * pediría repartir un dinero que físicamente no está y la jornada no se
+ * podría cerrar. Pasó de verdad con un faltante de 5,62 €.
+ */
+describe.runIf(RUN)("cierre con descuadre de arqueo", () => {
+  it("el resumen trae el arqueo contado, no el teórico", async () => {
+    const caja = await crearCaja("descuadre-resumen");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 }, // 100 €
+        { valor: 1000, cantidad: 5 }, //  50 €
+      ],
+    });
+
+    // Falta un billete de 10 €: contado 140 €, teórico 150 €.
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 4 },
+      ],
+    });
+
+    const r = await servicio.resumenJornada(sesion.id);
+    expect(r.totalStockCentimos).toBe(15000); // el teórico no se toca
+    expect(r.ultimoArqueo?.totalCentimos).toBe(14000);
+    expect(r.ultimoArqueo?.diferenciaCentimos).toBe(-1000);
+    expect(r.ultimoArqueo?.sueltas).toEqual([
+      { valor: 5000, cantidad: 2 },
+      { valor: 1000, cantidad: 4 },
+    ]);
+  });
+
+  it("cierra con el faltante y lo asienta como ajuste auditado", async () => {
+    const caja = await crearCaja("descuadre-cierre");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 5 },
+      ],
+    });
+
+    const contado = [
+      { valor: 5000, cantidad: 2 },
+      { valor: 1000, cantidad: 4 },
+    ];
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado });
+
+    // Se cierra dejándolo todo en caja: 140 €, que es lo que hay de verdad.
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: contado,
+    });
+    expect(cierre.totalCambioCentimos).toBe(14000);
+    expect(cierre.totalIngresoCentimos).toBe(0);
+    expect(cierre.diferenciaCentimos).toBe(-1000);
+
+    // El ajuste existe, con su propia operación y su numeración.
+    const ops = await repo.operacionesDeSesion(sesion.id);
+    const ajuste = ops.find((o) => o.tipo === "ADJUSTMENT");
+    expect(ajuste).toBeDefined();
+    expect(ajuste!.numero).toMatch(/^MC-/);
+    expect(ajuste!.efectivoNetoCentimos).toBe(-1000);
+
+    // Y el libro cierra en cero: todo lo que entró ha salido.
+    const stockFinal = await servicio.stockDeJornada(sesion.id);
+    expect(stockFinal.totalCentimos).toBe(0);
+  });
+});
+
+/*
+ * Regularizar el arqueo: aceptar el descuadre y dejar la caja cuadrada.
+ *
+ * Lo que se fija aquí es que la diferencia se escriba UNA vez. El ajuste puede
+ * asentarse en dos momentos —al regularizar y al cerrar— y si los dos caminos
+ * no compartieran el mismo cuadre, una caja regularizada volvería a "descubrir"
+ * su descuadre al cerrar y lo asentaría dos veces.
+ */
+describe.runIf(RUN)("regularizar el arqueo", () => {
+  /** Abre una jornada de 150 EUR y arquea 140: falta un billete de 10. */
+  async function jornadaConFaltante(nombre: string) {
+    const caja = await crearCaja(nombre);
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 5 },
+      ],
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 4 },
+      ],
+    });
+    return sesion;
+  }
+
+  it("deja el teórico igual a lo contado y escribe el ajuste", async () => {
+    const sesion = await jornadaConFaltante("regularizar");
+
+    const antes = await servicio.stockDeJornada(sesion.id);
+    expect(antes.totalCentimos).toBe(15000);
+
+    const r = await servicio.regularizarArqueo(ctx, {
+      sessionId: sesion.id,
+      motivo: "Recontado dos veces",
+    });
+    expect(r!.diferenciaCentimos).toBe(-1000);
+
+    // El teórico ya es lo contado: la caja cuadra.
+    const despues = await servicio.stockDeJornada(sesion.id);
+    expect(despues.totalCentimos).toBe(14000);
+
+    // Y la diferencia quedó escrita, con el motivo dentro del concepto.
+    const ops = await repo.operacionesDeSesion(sesion.id);
+    const ajuste = ops.find((o) => o.tipo === "ADJUSTMENT")!;
+    expect(ajuste.numero).toBe(r!.numero);
+    expect(ajuste.efectivoNetoCentimos).toBe(-1000);
+    expect(ajuste.concepto).toContain("Recontado dos veces");
+  });
+
+  it("una caja regularizada no vuelve a asentar el descuadre al cerrar", async () => {
+    const sesion = await jornadaConFaltante("regularizar-y-cerrar");
+    await servicio.regularizarArqueo(ctx, { sessionId: sesion.id, motivo: "Aceptado" });
+
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 4 },
+      ],
+    });
+
+    // Ya cuadraba, así que el cierre no encuentra diferencia que asentar.
+    expect(cierre.diferenciaCentimos).toBe(0);
+    expect(cierre.denominacionesCuadran).toBe(true);
+
+    // Y sigue habiendo UN solo ajuste, no dos.
+    const ops = await repo.operacionesDeSesion(sesion.id);
+    expect(ops.filter((o) => o.tipo === "ADJUSTMENT")).toHaveLength(1);
+
+    const stockFinal = await servicio.stockDeJornada(sesion.id);
+    expect(stockFinal.totalCentimos).toBe(0);
+  });
+
+  it("no se regulariza una caja que ya cuadra", async () => {
+    const caja = await crearCaja("ya-cuadra");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+
+    await expect(
+      servicio.regularizarArqueo(ctx, { sessionId: sesion.id })
+    ).rejects.toMatchObject({ codigo: "CAJA_YA_CUADRA" });
+  });
+
+  it("sin arqueo no hay nada que regularizar", async () => {
+    const caja = await crearCaja("sin-arqueo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    await expect(
+      servicio.regularizarArqueo(ctx, { sessionId: sesion.id })
+    ).rejects.toMatchObject({ codigo: "FALTA_ARQUEO" });
+  });
+
+  it("las monedas de los cartuchos cuentan: no se inventa un faltante", async () => {
+    const caja = await crearCaja("regularizar-cartuchos");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }], // 100 €
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }], // 1 tubo de 25 × 1 € = 25 €
+    });
+
+    // Se cuenta igual: 2 billetes y el tubo entero, sin monedas sueltas.
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [{ valor: 5000, cantidad: 2 }],
+      cartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    // La caja cuadra: si el tubo no se contara, saldría un faltante de 25 €.
+    await expect(
+      servicio.regularizarArqueo(ctx, { sessionId: sesion.id })
+    ).rejects.toMatchObject({ codigo: "CAJA_YA_CUADRA" });
+  });
+});
