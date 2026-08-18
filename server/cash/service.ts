@@ -1559,6 +1559,22 @@ export type ResumenJornada = {
   operaciones: number;
   pendientesErp: number;
   /**
+   * El arqueo más reciente de la jornada, si lo hay.
+   *
+   * El cierre reparte **lo contado**, no el teórico, así que la pantalla
+   * necesita las piezas que se contaron de verdad. Sin esto usaba el stock
+   * teórico y, con un descuadre, pedía repartir un dinero que físicamente no
+   * estaba: el reparto no cuadraba nunca y no se podía cerrar.
+   */
+  ultimoArqueo: {
+    id: number;
+    sueltas: LineaDenominacion[];
+    cartuchos: LineaDenominacion[];
+    totalCentimos: Centimos;
+    diferenciaCentimos: Centimos;
+    creadoAtMs: number;
+  } | null;
+  /**
    * Reparto por sección de negocio. **Dato informativo, no un segundo arqueo**:
    * el cajón es uno solo y este dinero no está separado físicamente. Sirve para
    * saber cuánto ha aportado cada negocio, no para cuadrarlos por separado.
@@ -1630,6 +1646,38 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     [sessionId]
   );
 
+  /*
+   * El arqueo más reciente, con sus piezas. Solo el último: con dos arqueos en
+   * la misma jornada, sumar las líneas de todos duplicaría lo contado.
+   */
+  const { rows: arqueoCab } = await pool.query(
+    `SELECT id, contado_centimos, diferencia_centimos, created_at_ms
+       FROM cash_counts WHERE session_id = $1 ORDER BY id DESC LIMIT 1`,
+    [sessionId]
+  );
+  let ultimoArqueo: ResumenJornada["ultimoArqueo"] = null;
+  if (arqueoCab.length > 0) {
+    const { rows: lineasArqueo } = await pool.query(
+      `SELECT valor_unitario_centimos, cantidad_contada, cartuchos_contados
+         FROM cash_count_lines WHERE count_id = $1`,
+      [arqueoCab[0].id]
+    );
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    ultimoArqueo = {
+      id: arqueoCab[0].id,
+      sueltas: lineasArqueo
+        .map((r: any) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r.cantidad_contada) }))
+        .filter((l: LineaDenominacion) => l.cantidad > 0),
+      cartuchos: lineasArqueo
+        .map((r: any) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r.cartuchos_contados) }))
+        .filter((l: LineaDenominacion) => l.cantidad > 0),
+      totalCentimos: Number(arqueoCab[0].contado_centimos),
+      diferenciaCentimos: Number(arqueoCab[0].diferencia_centimos),
+      creadoAtMs: Number(arqueoCab[0].created_at_ms),
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }
+
   const { rows: pendientes } = await pool.query(
     `SELECT COUNT(*) AS n FROM cash_operations
       WHERE session_id = $1 AND erp_sync_status IN ('PENDING','ERROR','RETRY_PENDING')`,
@@ -1666,6 +1714,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     entregasCentimos: suma("CASH_DELIVERY"),
     operaciones: Number(totalOps[0].n),
     pendientesErp: Number(pendientes[0].n),
+    ultimoArqueo,
     /* eslint-disable @typescript-eslint/no-explicit-any */
     porSeccion: secciones.map((r: any) => ({
       sectionId: r.section_id ?? null,
