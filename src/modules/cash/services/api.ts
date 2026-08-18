@@ -488,3 +488,15 @@ export const cambiarSeccionOperacion = (operationId: number, sectionId: number |
     `/operations/${operationId}/section`,
     { method: "PATCH", body: JSON.stringify({ sectionId }) }
   );
+
+/**
+ * Regulariza la caja contra el último arqueo: deja el teórico igual a lo
+ * contado y escribe la diferencia como ajuste auditado.
+ */
+export const regularizarArqueo = (sessionId: number, motivo?: string) =>
+  pedir<{
+    operacionId: number;
+    numero: string;
+    diferenciaCentimos: number;
+    arqueoId: number;
+  }>(`/sessions/${sessionId}/regularize`, json({ motivo }));
