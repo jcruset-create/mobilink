@@ -70,8 +70,25 @@ export default function Cierre() {
 
   if (cerrada) return <Cerrada r={cerrada} />;
 
-  const contadoTotal = jornada.totalStockCentimos;
-  const tubosContados = jornada.stockCartuchos ?? [];
+  /*
+   * Lo que se reparte es EL ARQUEO, no el stock teórico.
+   *
+   * Antes esto era `jornada.totalStockCentimos`, que es el teórico. Mientras la
+   * caja cuadraba nadie lo notaba, porque son el mismo número. Con un descuadre
+   * la pantalla pedía repartir un dinero que físicamente no estaba —381,62 €
+   * cuando en el cajón había 376,00 €— y como el reparto no podía cuadrar
+   * nunca, el botón de cerrar no se activaba y la jornada no había forma de
+   * cerrarla.
+   *
+   * El servidor ya lo hacía bien: su propuesta sale del último arqueo. Era la
+   * pantalla la que iba por otro sitio.
+   */
+  const arqueo = jornada.ultimoArqueo;
+  const contadoTotal = arqueo?.totalCentimos ?? jornada.totalStockCentimos;
+  const sueltasContadas = arqueo?.sueltas ?? jornada.stockSueltas ?? [];
+  const tubosContados = arqueo?.cartuchos ?? jornada.stockCartuchos ?? [];
+  /** Diferencia del arqueo: se asienta sola como ajuste auditado al cerrar. */
+  const descuadre = arqueo?.diferenciaCentimos ?? 0;
 
   /*
    * El ingreso es siempre "lo contado menos lo que se queda", nunca un número
@@ -86,7 +103,7 @@ export default function Cierre() {
    * partiera dejaría de ser un tubo.
    */
   const ingreso = repartirIngreso({
-    sueltasContadas: jornada.stockSueltas ?? [],
+    sueltasContadas,
     tubosContados,
     cambioFinalSueltas: cambioFinal,
     cambioFinalTubos,
@@ -158,7 +175,18 @@ export default function Cierre() {
       </div>
 
       <div className="grid gap-2 sm:grid-cols-3">
-        <Card title="Contado en el arqueo" value={euros(contadoTotal)} />
+        <Card
+          title="Contado en el arqueo"
+          value={euros(contadoTotal)}
+          hint={
+            arqueo
+              ? descuadre === 0
+                ? "Cuadra con el teórico"
+                : `${descuadre > 0 ? "Sobran" : "Faltan"} ${euros(Math.abs(descuadre))} sobre el teórico`
+              : "Sin arqueo: se está usando el teórico"
+          }
+          accent={descuadre !== 0 ? "text-amber-300" : undefined}
+        />
         <Card
           title="Se queda en caja"
           value={euros(totalCambioConTubos)}
@@ -172,6 +200,21 @@ export default function Cierre() {
           accent="text-sky-300"
         />
       </div>
+
+      {/*
+        El descuadre, dicho antes de cerrar y con lo que va a pasar con él.
+        Sin esto, quien cierra ve un total que no es el que calculó el sistema
+        y no sabe si se ha equivocado él o la máquina.
+      */}
+      {descuadre !== 0 && (
+        <Aviso tono="aviso">
+          El arqueo salió con <strong>{euros(Math.abs(descuadre))}</strong> de{" "}
+          {descuadre > 0 ? "sobrante" : "faltante"} sobre el teórico. Se reparte lo{" "}
+          <strong>contado</strong>, que es el dinero que existe de verdad, y al cerrar se asienta
+          solo un <strong>ajuste auditado</strong> con la diferencia, pieza a pieza. No tienes que
+          hacer nada más: quedará como una operación propia en Movimientos.
+        </Aviso>
+      )}
 
       {!cuadra && (
         <Aviso tono="mal">
@@ -201,7 +244,7 @@ export default function Cierre() {
           denominaciones={denominaciones}
           cantidades={cambioFinal}
           onChange={setCambioFinal}
-          disponible={Object.fromEntries((jornada.stockSueltas ?? []).map((l) => [l.valor, l.cantidad]))}
+          disponible={Object.fromEntries(sueltasContadas.map((l) => [l.valor, l.cantidad]))}
           mostrarDisponible
           /*
            * El objetivo de la rejilla es el que queda DESPUÉS de los cartuchos:

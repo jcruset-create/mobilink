@@ -898,6 +898,26 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Regularizar la caja contra el último arqueo.
+   *
+   * `cash.adjustment.create` —permiso de responsable— porque esto SÍ mueve el
+   * libro de piezas: deja el teórico igual a lo contado y escribe la
+   * diferencia. No es lo mismo que contar, que puede hacer un cajero.
+   */
+  r.post(
+    "/sessions/:id/regularize",
+    exigirPermiso("cash.adjustment.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const salida = await servicio.regularizarArqueo(contexto(req), {
+        sessionId: enteroPositivo(req.params.id, "id"),
+        motivo: typeof b.motivo === "string" ? b.motivo : undefined,
+      });
+      res.status(201).json(salida);
+    })
+  );
+
   // ── Secciones de negocio ─────────────────────────────────────────────────
 
   r.get(
