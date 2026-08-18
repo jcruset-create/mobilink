@@ -1079,6 +1079,21 @@ function Denominaciones() {
         desactivar una denominación que todavía tenga piezas en una caja abierta.
       </p>
 
+      <div className="flex flex-wrap items-center gap-2">
+        {/* El 0 marca «toda la tabla ocupada»: los ids de verdad empiezan en 1. */}
+        <button
+          onClick={() => void accion(0, api.recortarImagenesDenominaciones)}
+          disabled={ocupado !== null}
+          className="rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+        >
+          {ocupado === 0 ? "Recortando…" : "Recortar el fondo de las fotos"}
+        </button>
+        <span className="text-[11px] text-slate-500">
+          Las fotos que se suben ahora salen ya con el fondo quitado. Esto es para las que subiste
+          antes, que llevan el blanco del JPG dentro.
+        </span>
+      </div>
+
       <p className="text-[11px] text-slate-500">
         Las fotos son del catálogo, o sea de toda la instalación: un billete de 20 € es el mismo en
         todas las empresas. De momento solo se ven aquí; están para poder enseñarlas en otras
