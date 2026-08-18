@@ -211,7 +211,7 @@ export async function initCash(): Promise<void> {
 
       tipo TEXT NOT NULL CHECK (tipo IN (
         'COLLECTION','PAYMENT','MANUAL_IN','MANUAL_OUT','CASH_DELIVERY',
-        'BANK_DEPOSIT','ADJUSTMENT','OPENING_FLOAT','CLOSING_FLOAT')),
+        'BANK_DEPOSIT','ADJUSTMENT','OPENING_FLOAT','CLOSING_FLOAT','EXCHANGE')),
       origen TEXT NOT NULL DEFAULT 'MANUAL'
         CHECK (origen IN ('MANUAL','ERP','API','IMPORT','POS','OTHER')),
 
@@ -693,10 +693,12 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
-   * El motivo `BAG_OPENED` en el CHECK de los movimientos. Se recrea entero
-   * porque un CHECK no se amplía: se tira y se vuelve a poner. El nombre es el
-   * que genera Postgres para un CHECK de columna, y el DROP va con IF EXISTS
-   * para que en una base nueva —donde ya viene bien de fábrica— no falle.
+   * Los motivos y tipos nuevos en los CHECK. Se recrean enteros porque un
+   * CHECK no se amplía: se tira y se vuelve a poner. El nombre es el que
+   * genera Postgres para un CHECK de columna, el DROP va con IF EXISTS para
+   * que en una base nueva —donde ya viene bien de fábrica— no falle, y cada
+   * CHECK se recrea en UN único sitio: cuando hubo dos, el segundo aplicaba la
+   * lista vieja sobre filas que ya usaban el valor nuevo y el arranque moría.
    */
   await pool.query(`
     ALTER TABLE cash_denomination_movements
@@ -705,7 +707,14 @@ export async function initCash(): Promise<void> {
       ADD CONSTRAINT cash_denomination_movements_motivo_check CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED'));
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED','EXCHANGE'));
+
+    ALTER TABLE cash_operations
+      DROP CONSTRAINT IF EXISTS cash_operations_tipo_check;
+    ALTER TABLE cash_operations
+      ADD CONSTRAINT cash_operations_tipo_check CHECK (tipo IN (
+        'COLLECTION','PAYMENT','MANUAL_IN','MANUAL_OUT','CASH_DELIVERY',
+        'BANK_DEPOSIT','ADJUSTMENT','OPENING_FLOAT','CLOSING_FLOAT','EXCHANGE'));
   `);
 
   /*

@@ -395,10 +395,22 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
 
+      /*
+       * El recorte es solo para las monedas. Un billete es un rectángulo que
+       * llena su recuadro y no le sobra fondo por ningún lado; pasarlo por el
+       * recorte solo abre la puerta a que se le coma un borde claro. La moneda
+       * es redonda: ahí las esquinas SÍ sobran.
+       */
+      const catalogo = await cargarDenominaciones(pool, false);
+      const denominacion0 = catalogo.find((d) => d.id === id);
+      if (!denominacion0) {
+        throw new ErrorCaja("DENOMINACION_NO_ENCONTRADA", "La denominación no existe.", 404);
+      }
+
       const url = await guardarImagenBoton(
         fichero,
         `cash/denominations/${id}_${Date.now()}.png`,
-        "ficha"
+        denominacion0.tipo === "MONEDA" ? "ficha" : "boton"
       );
       const denominacion = await config.actualizarDenominacion(contexto(req), id, {
         imagenUrl: url,
@@ -411,9 +423,12 @@ export function createCashRouter(): Router {
    * Recorta el fondo de las fotos que ya estaban subidas.
    *
    * Las primeras se guardaron tal cual venían, con su fondo blanco de JPG
-   * dentro. Volver a subir quince fotos a mano para arreglarlo es trabajo
-   * tonto: el recorte funciona igual sobre lo que ya está guardado, así que se
-   * hace desde aquí.
+   * dentro. Volver a subir las fotos a mano para arreglarlo es trabajo tonto:
+   * el recorte funciona igual sobre lo que ya está guardado, así que se hace
+   * desde aquí.
+   *
+   * Solo las monedas, por lo mismo que en la subida: un billete llena su
+   * recuadro y no tiene fondo que sobre.
    *
    * La foto nueva se sube a otra ruta y la fila apunta a ella. Machacar la
    * anterior dejaría la pantalla enseñando la vieja durante horas, porque las
@@ -428,7 +443,7 @@ export function createCashRouter(): Router {
       const fallos: string[] = [];
 
       for (const d of denominaciones) {
-        if (!d.imagenUrl) continue;
+        if (!d.imagenUrl || d.tipo !== "MONEDA") continue;
         try {
           const respuesta = await fetch(d.imagenUrl);
           if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
@@ -911,7 +926,15 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const importe = entero(req.query.importe, "importe");
-      res.json(await servicio.proponerCambio(enteroPositivo(req.params.id, "id"), importe));
+      // `excluir`: denominaciones que no se pueden proponer, en CSV de
+      // céntimos. Lo usa el cambio a cliente para no devolver lo que entra.
+      const excluir =
+        typeof req.query.excluir === "string" && req.query.excluir !== ""
+          ? req.query.excluir.split(",").map((v) => enteroPositivo(v, "excluir"))
+          : undefined;
+      res.json(
+        await servicio.proponerCambio(enteroPositivo(req.params.id, "id"), importe, excluir)
+      );
     })
   );
 
@@ -1085,6 +1108,35 @@ export function createCashRouter(): Router {
         }
       );
       res.json({ seccion });
+    })
+  );
+
+
+  /**
+   * Cambio de moneda a un cliente: entra dinero y sale el mismo importe en
+   * otras piezas. Neto cero — no es un cobro ni un pago, y por eso no va por
+   * `/movements`: allí cada tipo o entra o sale, y aquí pasan las dos cosas.
+   */
+  r.post(
+    "/exchange",
+    exigirPermiso("cash.movement.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const importe = enteroPositivo(b.importeCentimos, "importeCentimos");
+      const salida = await servicio.registrarOperacion(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        tipo: "EXCHANGE",
+        origen: "MANUAL",
+        importeCentimos: importe,
+        formasPago: [{ forma: "CASH" as never, importe }],
+        efectivoRecibido: lineas(b.recibido, "recibido"),
+        efectivoEntregado: lineas(b.entregado, "entregado"),
+        concepto:
+          typeof b.concepto === "string" && b.concepto.trim()
+            ? b.concepto.trim()
+            : "Cambio de moneda en mostrador",
+      });
+      res.status(201).json(salida);
     })
   );
 

@@ -893,6 +893,16 @@ function Denominaciones() {
   const [denominaciones, setDenominaciones] = useState<Denominacion[]>([]);
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState<number | null>(null);
+  /**
+   * Cuenta de refrescos, que va en la `key` de los campos.
+   *
+   * Los campos son no controlados —se guardan al salir— así que se quedan con
+   * lo que uno tecleó aunque el servidor lo haya rechazado. Con eso, una bolsa
+   * que no se ha guardado seguía enseñando su número como si sí, y la pantalla
+   * mentía. Al cambiar la `key`, React los vuelve a montar con el valor que hay
+   * de verdad en la base.
+   */
+  const [refresco, setRefresco] = useState(0);
 
   const cargar = useCallback(async () => {
     try {
@@ -928,6 +938,8 @@ function Denominaciones() {
       await recargarConfiguracion();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido guardar");
+      // Que los campos vuelvan a lo que está guardado: lo tecleado no cuajó.
+      setRefresco((n) => n + 1);
     } finally {
       setOcupado(null);
     }
@@ -1022,6 +1034,7 @@ function Denominaciones() {
               <td className={`${tdCls} text-right`}>
                 {d.tipo === "MONEDA" ? (
                   <CampoPiezas
+                    key={`cartucho-${refresco}`}
                     valor={d.piezasPorCartucho}
                     marcador="sin cartucho"
                     deshabilitado={ocupado === d.id}
@@ -1034,6 +1047,7 @@ function Denominaciones() {
               <td className={`${tdCls} text-right`}>
                 {d.tipo === "MONEDA" ? (
                   <CampoPiezas
+                    key={`bolsa-${refresco}`}
                     valor={d.piezasPorBolsa}
                     marcador="sin bolsa"
                     deshabilitado={ocupado === d.id}
@@ -1072,11 +1086,12 @@ function Denominaciones() {
       </TableWrap>
 
       <p className="text-[11px] text-slate-500">
-        Los números se guardan al salir del campo. La <strong>bolsa</strong> es el precinto grande
-        del banco —monedas a granel— y tiene que traer más monedas que un cartucho de la misma
-        denominación; si una moneda no viene en bolsa, se deja vacío. Cuando haga falta romper un
-        precinto, el sistema abre primero el más pequeño: cartucho antes que bolsa. No se puede
-        desactivar una denominación que todavía tenga piezas en una caja abierta.
+        Los números se guardan al salir del campo. La <strong>bolsa</strong> es el precinto con el
+        que llegan las monedas del banco, a granel; puede traer más o menos monedas que un cartucho,
+        da igual. Si una moneda no viene en bolsa, se deja vacío. Cuando haga falta romper un
+        precinto, se abre <strong>siempre la bolsa antes que el cartucho</strong>: el cartucho es lo
+        que se guarda ordenado para el cajón. No se puede desactivar una denominación que todavía
+        tenga piezas en una caja abierta.
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -1086,11 +1101,12 @@ function Denominaciones() {
           disabled={ocupado !== null}
           className="rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
         >
-          {ocupado === 0 ? "Recortando…" : "Recortar el fondo de las fotos"}
+          {ocupado === 0 ? "Recortando…" : "Recortar el fondo de las monedas"}
         </button>
         <span className="text-[11px] text-slate-500">
-          Las fotos que se suben ahora salen ya con el fondo quitado. Esto es para las que subiste
-          antes, que llevan el blanco del JPG dentro.
+          Solo las monedas: a un billete no le sobra fondo, así que su foto se guarda tal cual se
+          sube. Las monedas que se suban a partir de ahora ya salen recortadas; el botón es para las
+          que subiste antes, que llevan el blanco del JPG dentro.
         </span>
       </div>
 

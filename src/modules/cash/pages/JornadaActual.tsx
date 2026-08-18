@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { HandCoins, Banknote, ArrowLeftRight, ClipboardCheck, Lock, PlayCircle } from "lucide-react";
+import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../components/DenominationGrid";
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox } from "../components/ui";
@@ -64,6 +64,11 @@ export default function JornadaActual() {
         {puede("cash.movement.create") && (
           <BotonAccion icono={<ArrowLeftRight className="h-5 w-5" />} onClick={() => navigate("/cash/movimientos")}>
             Movimiento
+          </BotonAccion>
+        )}
+        {puede("cash.movement.create") && (
+          <BotonAccion icono={<Repeat className="h-5 w-5" />} onClick={() => navigate("/cash/dar-cambio")}>
+            Dar cambio
           </BotonAccion>
         )}
         {puede("cash.count.create") && (
