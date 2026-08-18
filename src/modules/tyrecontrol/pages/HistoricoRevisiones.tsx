@@ -279,7 +279,19 @@ export default function HistoricoRevisiones() {
               <tr key={f.id} className="border-t border-slate-700/60">
                 <td className={tdCls + " text-slate-300"}>{fechaCorta(f.fecha)}</td>
                 <td className={tdCls + " text-slate-400"}>{f.hora || "—"}</td>
-                <td className={tdCls + " font-bold"}>{f.matricula}{f.unidad ? <span className="ml-1 text-[11px] font-normal text-slate-500">· {f.unidad}</span> : null}</td>
+                <td className={tdCls + " font-bold"}>
+                  {/* La matrícula lleva a la ficha: es donde se pincha por
+                      instinto, y desde el histórico la pregunta que sigue
+                      siempre es "¿qué le pasa a ese vehículo?". Sin
+                      vehiculoId (revisión sin vehículo) queda como texto. */}
+                  {f.vehiculoId
+                    ? <button onClick={() => navigate(`/tyrecontrol/vehiculos/${f.vehiculoId}`)}
+                        className="font-bold text-sky-300 hover:underline" title="Ver la ficha del vehículo">
+                        {f.matricula}
+                      </button>
+                    : f.matricula}
+                  {f.unidad ? <span className="ml-1 text-[11px] font-normal text-slate-500">· {f.unidad}</span> : null}
+                </td>
                 <td className={tdCls + " text-slate-400"}>{f.cliente}</td>
                 <td className={tdCls + " text-slate-400"}>{f.base}</td>
                 <td className={tdCls + " text-slate-300"}>
@@ -320,6 +332,16 @@ export default function HistoricoRevisiones() {
             {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
+            {/* Mirando una revisión, lo siguiente que se quiere ver es el
+                vehículo entero. Cierra el modal para no dejarlo colgando
+                encima de otra pantalla. */}
+            {ficha.vehiculoId && (
+              <button
+                onClick={() => { const id = ficha.vehiculoId; setFicha(null); navigate(`/tyrecontrol/vehiculos/${id}`); }}
+                className="ml-2 font-semibold text-sky-300 hover:underline">
+                Ver ficha del vehículo →
+              </button>
+            )}
           </div>
 
           {/* Plano visual del vehículo con las mediciones de esta revisión */}
