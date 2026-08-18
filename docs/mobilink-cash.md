@@ -74,6 +74,12 @@ hay saldo acumulado que se pueda desincronizar.
   diferencia. Registrarlo como "salen 19,50 €" sería mentir sobre las piezas.
 - `arqueo.ts` — teórico vs contado por denominación, doble cuadre, reparto
   cambio final / ingreso bancario.
+- Cambio de moneda en mostrador (`EXCHANGE`, serie `MC-DC-…`): entra dinero y
+  sale el mismo importe en otras piezas, en los dos sentidos — un billete por
+  monedas o monedas por un billete. Es el único tipo con efectivo neto CERO, y
+  el cambio sale del cajón, no de lo que el cliente acaba de dar: se valida
+  contra el stock sin sumar lo recibido. Pantalla propia («Dar cambio»), con la
+  propuesta del motor excluyendo las denominaciones que entran.
 - `cartridges.ts` — cartuchos de monedas. Un tubo **se abre y no se vuelve a
   cerrar**. La regla que manda es **dar siempre las piezas de mayor valor**: si
   la moneda que toca está encartuchada, el tubo se abre. El precinto solo se

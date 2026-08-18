@@ -14,6 +14,7 @@ import JornadaActual from "./pages/JornadaActual";
 import Cobros from "./pages/Cobros";
 import Pagos from "./pages/Pagos";
 import Movimientos from "./pages/Movimientos";
+import DarCambio from "./pages/DarCambio";
 import StockCaja from "./pages/StockCaja";
 import CambioBanco from "./pages/CambioBanco";
 import Entregas from "./pages/Entregas";
@@ -59,6 +60,7 @@ function Contenido() {
         <Route path="cobros" element={<Cobros />} />
         <Route path="pagos" element={<Pagos />} />
         <Route path="movimientos" element={<Movimientos />} />
+        <Route path="dar-cambio" element={<DarCambio />} />
         <Route path="stock" element={<StockCaja />} />
         <Route path="cambio" element={<CambioBanco />} />
         <Route path="entregas" element={<Entregas />} />

@@ -926,7 +926,15 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const importe = entero(req.query.importe, "importe");
-      res.json(await servicio.proponerCambio(enteroPositivo(req.params.id, "id"), importe));
+      // `excluir`: denominaciones que no se pueden proponer, en CSV de
+      // céntimos. Lo usa el cambio a cliente para no devolver lo que entra.
+      const excluir =
+        typeof req.query.excluir === "string" && req.query.excluir !== ""
+          ? req.query.excluir.split(",").map((v) => enteroPositivo(v, "excluir"))
+          : undefined;
+      res.json(
+        await servicio.proponerCambio(enteroPositivo(req.params.id, "id"), importe, excluir)
+      );
     })
   );
 
@@ -1100,6 +1108,35 @@ export function createCashRouter(): Router {
         }
       );
       res.json({ seccion });
+    })
+  );
+
+
+  /**
+   * Cambio de moneda a un cliente: entra dinero y sale el mismo importe en
+   * otras piezas. Neto cero — no es un cobro ni un pago, y por eso no va por
+   * `/movements`: allí cada tipo o entra o sale, y aquí pasan las dos cosas.
+   */
+  r.post(
+    "/exchange",
+    exigirPermiso("cash.movement.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const importe = enteroPositivo(b.importeCentimos, "importeCentimos");
+      const salida = await servicio.registrarOperacion(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        tipo: "EXCHANGE",
+        origen: "MANUAL",
+        importeCentimos: importe,
+        formasPago: [{ forma: "CASH" as never, importe }],
+        efectivoRecibido: lineas(b.recibido, "recibido"),
+        efectivoEntregado: lineas(b.entregado, "entregado"),
+        concepto:
+          typeof b.concepto === "string" && b.concepto.trim()
+            ? b.concepto.trim()
+            : "Cambio de moneda en mostrador",
+      });
+      res.status(201).json(salida);
     })
   );
 

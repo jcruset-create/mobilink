@@ -413,14 +413,30 @@ export async function stockDeJornada(sessionId: number): Promise<{
  * stock puede cambiar, y por eso la confirmación vuelve a validar con la
  * jornada bloqueada.
  */
-export async function proponerCambio(sessionId: number, importe: Centimos) {
+export async function proponerCambio(
+  sessionId: number,
+  importe: Centimos,
+  /**
+   * Denominaciones a excluir de la propuesta: las que acaban de ENTRAR.
+   *
+   * Un cambio de moneda va en los dos sentidos —entra un billete y salen
+   * monedas, o entran monedas y sale un billete— así que no vale un tope por
+   * valor. Lo que sí vale siempre: nadie cambia una pieza para recibir de
+   * vuelta esa misma pieza. Quitando del stock lo que entra, el motor —que da
+   * siempre la pieza más grande— resuelve solo los dos sentidos.
+   */
+  excluirValores?: readonly Centimos[]
+) {
   const [stock, denominaciones] = await Promise.all([
     stockPorFormato(pool, sessionId),
     cargarDenominaciones(pool),
   ]);
+  const fuera = new Set(excluirValores ?? []);
+  const recorte = (m: Map<Centimos, number>) =>
+    fuera.size === 0 ? m : new Map([...m].filter(([valor]) => !fuera.has(valor)));
   return calcularCambioConCartuchos(
     importe,
-    stock,
+    { sueltas: recorte(stock.sueltas), cartuchos: recorte(stock.cartuchos), bolsas: recorte(stock.bolsas) },
     piezasPorCartuchoDe(denominaciones),
     piezasPorBolsaDe(denominaciones)
   );

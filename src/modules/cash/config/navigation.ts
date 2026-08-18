@@ -8,6 +8,7 @@
 
 import {
   LayoutDashboard,
+  Repeat,
   HandCoins,
   Banknote,
   ArrowLeftRight,
@@ -37,6 +38,7 @@ export const NAV: NavItem[] = [
   { key: "cobros", path: "cobros", label: "Cobros", icon: HandCoins, permiso: "cash.view" },
   { key: "pagos", path: "pagos", label: "Pagos", icon: Banknote, permiso: "cash.view" },
   { key: "movimientos", path: "movimientos", label: "Movimientos", icon: ArrowLeftRight, permiso: "cash.view" },
+  { key: "darCambio", path: "dar-cambio", label: "Dar cambio", icon: Repeat, permiso: "cash.view" },
   { key: "stock", path: "stock", label: "Stock de caja", icon: Coins, permiso: "cash.view" },
   { key: "cambio", path: "cambio", label: "Cambio del banco", icon: Landmark, permiso: "cash.view" },
   { key: "entregas", path: "entregas", label: "Entregas de dinero", icon: UserRoundCheck, permiso: "cash.view" },

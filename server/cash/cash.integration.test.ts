@@ -2712,3 +2712,116 @@ describe.runIf(RUN)("bolsas de monedas", () => {
     }
   });
 });
+
+describe.runIf(RUN)("cambio de moneda en mostrador", () => {
+  it("un billete de 20 € por 10 + 5 + cinco monedas: neto cero y numeración propia", async () => {
+    const caja = await crearCaja("dar-cambio");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 1000, cantidad: 2 },
+        { valor: 500, cantidad: 2 },
+        { valor: 100, cantidad: 10 },
+      ],
+    });
+    const antes = (await servicio.stockDeJornada(sesion.id)).totalCentimos;
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "EXCHANGE",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+      efectivoEntregado: [
+        { valor: 1000, cantidad: 1 },
+        { valor: 500, cantidad: 1 },
+        { valor: 100, cantidad: 5 },
+      ],
+      concepto: "Cambio de un billete de 20 €",
+    });
+
+    // Serie propia: el histórico distingue un cambio de un cobro o un pago.
+    expect(r.numero).toMatch(/^MC-DC-\d{4}-\d{6}$/);
+    expect(r.efectivoNetoCentimos).toBe(0);
+    expect(r.totalStockCentimos).toBe(antes);
+
+    // La composición sí cambió: hay un 20 € que antes no estaba.
+    const stock = await servicio.stockDeJornada(sesion.id);
+    const de = (valor: number) => stock.lineas.find((l) => l.valor === valor)?.cantidad ?? 0;
+    expect(de(2000)).toBe(1);
+    expect(de(1000)).toBe(1);
+    expect(de(100)).toBe(5);
+  });
+
+  it("al revés: entran monedas y sale el billete", async () => {
+    const caja = await crearCaja("dar-cambio-inverso");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 1 }],
+    });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "EXCHANGE",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 100, cantidad: 20 }],
+      efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+    });
+
+    expect(r.efectivoNetoCentimos).toBe(0);
+    const stock = await servicio.stockDeJornada(sesion.id);
+    expect(stock.lineas).toEqual([{ valor: 100, cantidad: 20 }]);
+  });
+
+  it("si hay que abrir un envase para juntar el cambio, se abre y lo dice", async () => {
+    const caja = await crearCaja("dar-cambio-envase");
+    // Nada suelto de 1 €: solo un cartucho de 25.
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "EXCHANGE",
+      importeCentimos: 500,
+      formasPago: [{ forma: "CASH", importe: 500 }],
+      efectivoRecibido: [{ valor: 500, cantidad: 1 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 5 }],
+    });
+
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+    expect(r.efectivoNetoCentimos).toBe(0);
+  });
+
+  it("un cambio que no cuadra o sin piezas suficientes se rechaza", async () => {
+    const caja = await crearCaja("dar-cambio-malo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 1000, cantidad: 1 }],
+    });
+
+    await expect(
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "EXCHANGE",
+        importeCentimos: 2000,
+        formasPago: [{ forma: "CASH", importe: 2000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+        efectivoEntregado: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "EFECTIVO_NO_CUADRA" });
+
+    await expect(
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "EXCHANGE",
+        importeCentimos: 2000,
+        formasPago: [{ forma: "CASH", importe: 2000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+        efectivoEntregado: [{ valor: 1000, cantidad: 2 }],
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+  });
+});

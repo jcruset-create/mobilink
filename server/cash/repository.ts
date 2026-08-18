@@ -460,6 +460,7 @@ const PREFIJO_POR_TIPO: Partial<Record<TipoOperacion, string>> = {
   ADJUSTMENT: "A",
   OPENING_FLOAT: "AP",
   CLOSING_FLOAT: "CI",
+  EXCHANGE: "DC",
 };
 
 /**
