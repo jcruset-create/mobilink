@@ -2349,3 +2349,79 @@ describe.runIf(RUN)("reclasificar la sección de una operación", () => {
     });
   });
 });
+
+/*
+ * El cierre reparte LO CONTADO, no el teórico.
+ *
+ * Con la caja cuadrada los dos números son el mismo y no se nota. El caso que
+ * importa es el descuadre: si el resumen devolviera el teórico, la pantalla
+ * pediría repartir un dinero que físicamente no está y la jornada no se
+ * podría cerrar. Pasó de verdad con un faltante de 5,62 €.
+ */
+describe.runIf(RUN)("cierre con descuadre de arqueo", () => {
+  it("el resumen trae el arqueo contado, no el teórico", async () => {
+    const caja = await crearCaja("descuadre-resumen");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 }, // 100 €
+        { valor: 1000, cantidad: 5 }, //  50 €
+      ],
+    });
+
+    // Falta un billete de 10 €: contado 140 €, teórico 150 €.
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 4 },
+      ],
+    });
+
+    const r = await servicio.resumenJornada(sesion.id);
+    expect(r.totalStockCentimos).toBe(15000); // el teórico no se toca
+    expect(r.ultimoArqueo?.totalCentimos).toBe(14000);
+    expect(r.ultimoArqueo?.diferenciaCentimos).toBe(-1000);
+    expect(r.ultimoArqueo?.sueltas).toEqual([
+      { valor: 5000, cantidad: 2 },
+      { valor: 1000, cantidad: 4 },
+    ]);
+  });
+
+  it("cierra con el faltante y lo asienta como ajuste auditado", async () => {
+    const caja = await crearCaja("descuadre-cierre");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 1000, cantidad: 5 },
+      ],
+    });
+
+    const contado = [
+      { valor: 5000, cantidad: 2 },
+      { valor: 1000, cantidad: 4 },
+    ];
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado });
+
+    // Se cierra dejándolo todo en caja: 140 €, que es lo que hay de verdad.
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: contado,
+    });
+    expect(cierre.totalCambioCentimos).toBe(14000);
+    expect(cierre.totalIngresoCentimos).toBe(0);
+    expect(cierre.diferenciaCentimos).toBe(-1000);
+
+    // El ajuste existe, con su propia operación y su numeración.
+    const ops = await repo.operacionesDeSesion(sesion.id);
+    const ajuste = ops.find((o) => o.tipo === "ADJUSTMENT");
+    expect(ajuste).toBeDefined();
+    expect(ajuste!.numero).toMatch(/^MC-/);
+    expect(ajuste!.efectivoNetoCentimos).toBe(-1000);
+
+    // Y el libro cierra en cero: todo lo que entró ha salido.
+    const stockFinal = await servicio.stockDeJornada(sesion.id);
+    expect(stockFinal.totalCentimos).toBe(0);
+  });
+});
