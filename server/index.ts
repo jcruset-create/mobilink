@@ -16954,15 +16954,16 @@ const APK_APPS: Record<
     releaseTag: "assist-v",
     pubspec: "flutter_app/pubspec.yaml",
   },
-  // Sin "pubspec" a proposito: ese campo es el repliegue cuando la API de
-  // GitHub falla, y construye la URL de la release a partir de la version del
-  // repositorio. Mientras Lite no tenga su primera release publicada eso daria
-  // un enlace roto; mejor "No disponible" que un 404. Se anade en cuanto la CI
-  // publique la primera.
+  // Lite ya publica releases, asi que lleva "pubspec" como las demas. Estuvo
+  // sin el a proposito mientras no habia publicado ninguna: la etiqueta se
+  // construye con la version del repositorio, y sin release detras eso daba un
+  // enlace roto. Ahora no puede pasar, porque la CI guarda esa version DESPUES
+  // de publicar; si el numero esta en el repo, su release existe.
   "assist-lite": {
     prefix: "mobilink-assist-lite-",
     label: "Mobilink Assist Lite",
     releaseTag: "assist-lite-v",
+    pubspec: "lite_app/pubspec.yaml",
   },
   tyrecontrol: {
     prefix: "tyrecontrol-",
