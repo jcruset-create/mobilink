@@ -117,3 +117,51 @@ describe("valor de los tubos que se quedan", () => {
     ).toBe(5000 + 5000);
   });
 });
+
+/*
+ * «Dejarlo todo en caja»: el botón que copia el arqueo en el cambio final.
+ *
+ * Lo que importa es que el reparto quede EXACTO, porque el cierre solo se
+ * activa cuando cambio + ingreso = contado. Un redondeo o un tubo olvidado
+ * dejaría el botón apagado y al usuario tecleando piezas a mano, que es justo
+ * lo que este botón viene a evitar.
+ */
+describe("dejarlo todo en caja", () => {
+  const sueltasContadas = [
+    { valor: 5000, cantidad: 4 },
+    { valor: 2000, cantidad: 3 },
+    { valor: 100, cantidad: 25 },
+  ];
+  const tubosContados = [{ valor: 50, cantidad: 1 }]; // 25 × 0,50 = 12,50 €
+
+  it("no deja nada para el banco cuando se copia el arqueo entero", () => {
+    // Lo que hace el botón: volcar lo contado tal cual, sueltas y tubos.
+    const cambioFinalSueltas = Object.fromEntries(
+      sueltasContadas.map((l) => [l.valor, l.cantidad])
+    );
+
+    const r = repartirIngreso({
+      sueltasContadas,
+      tubosContados,
+      cambioFinalSueltas,
+      cambioFinalTubos: tubosContados,
+      denominaciones: DENOMINACIONES,
+    });
+
+    expect(r.sueltas).toEqual([]);
+    expect(r.tubos).toEqual([]);
+    expect(r.totalCentimos).toBe(0);
+  });
+
+  it("un tubo que no se copia sí se va al banco", () => {
+    const r = repartirIngreso({
+      sueltasContadas: [],
+      tubosContados,
+      cambioFinalSueltas: {},
+      cambioFinalTubos: [],
+      denominaciones: DENOMINACIONES,
+    });
+    expect(r.totalCentimos).toBe(1250);
+    expect(r.tubos).toEqual([{ valor: 50, cantidad: 1, piezasPorCartucho: 25, importe: 1250 }]);
+  });
+});
