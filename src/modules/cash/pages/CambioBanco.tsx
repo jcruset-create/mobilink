@@ -30,13 +30,14 @@ import {
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
 import type { PedidoCambio, Pendientes, PropuestaPedido } from "../types";
+import { filasDeCambio, aLinea } from "../utils/cambio";
 import * as api from "../services/api";
 
 const etiquetaDe = (valor: number) =>
   valor >= 100 ? `${valor / 100} €` : `${valor} c`;
 
 export default function CambioBanco() {
-  const { jornada, cajaId, refrescar, puede } = useCash();
+  const { jornada, cajaId, refrescar, puede, denominaciones } = useCash();
 
   const [pedidos, setPedidos] = useState<PedidoCambio[]>([]);
   const [importeTexto, setImporteTexto] = useState("200,00");
@@ -85,6 +86,7 @@ export default function CambioBanco() {
     try {
       const p = await api.proponerPedidoCambio(jornada.sesion.id, importe);
       setPropuesta(p);
+      // Las que el cálculo no propone quedan a cero, pero siguen en pantalla.
       setAjustes(
         Object.fromEntries(p.lineas.map((l) => [l.valor, String(l.cartuchos || l.piezas)]))
       );
@@ -93,20 +95,29 @@ export default function CambioBanco() {
     }
   }
 
+  /** Todas las denominaciones de cambio, con lo propuesto donde lo haya. */
+  const filas = useMemo(
+    () =>
+      filasDeCambio(
+        denominaciones,
+        (propuesta?.lineas ?? []).map((l) => ({
+          valor: l.valor,
+          cantidad: l.piezas,
+          cartuchos: l.cartuchos,
+          motivo: l.motivo,
+        }))
+      ),
+    [denominaciones, propuesta]
+  );
+
   /** Lo que finalmente se le pide al banco, con los ajustes del cajero. */
-  const solicitado = useMemo(() => {
-    if (!propuesta) return [];
-    return propuesta.lineas
-      .map((l) => {
-        const n = Number(ajustes[l.valor] ?? 0);
-        if (!Number.isFinite(n) || n <= 0) return null;
-        const porTubo = l.cartuchos > 0 ? l.piezas / l.cartuchos : 0;
-        return porTubo > 0
-          ? { valor: l.valor, cantidad: n * porTubo, cartuchos: n, motivo: l.motivo }
-          : { valor: l.valor, cantidad: n, cartuchos: 0, motivo: l.motivo };
-      })
-      .filter((l): l is NonNullable<typeof l> => l !== null);
-  }, [propuesta, ajustes]);
+  const solicitado = useMemo(
+    () =>
+      filas
+        .map((f) => aLinea(f, ajustes[f.valor]))
+        .filter((l): l is NonNullable<typeof l> => l !== null),
+    [filas, ajustes]
+  );
 
   const totalSolicitado = solicitado.reduce((a, l) => a + l.cantidad * l.valor, 0);
 
@@ -192,33 +203,39 @@ export default function CambioBanco() {
                   </tr>
                 </thead>
                 <tbody>
-                  {propuesta.lineas.length === 0 && (
-                    <EmptyRow cols={4} text="No hace falta reponer nada." />
+                  {filas.length === 0 && (
+                    <EmptyRow cols={4} text="No hay denominaciones de cambio activas." />
                   )}
-                  {propuesta.lineas.map((l) => {
-                    const porTubo = l.cartuchos > 0 ? l.piezas / l.cartuchos : 0;
-                    const n = Number(ajustes[l.valor] ?? 0);
+                  {/*
+                    Todas las denominaciones, propuestas o no. Las que el
+                    cálculo no necesita salen vacías: están para poder pedir a
+                    mano lo que uno sabe que va a hacer falta.
+                  */}
+                  {filas.map((f) => {
+                    const n = Number(ajustes[f.valor] ?? 0);
+                    const piezas = f.porTubo > 0 ? n * f.porTubo : n;
                     return (
-                      <tr key={l.valor}>
-                        <td className={`${tdCls} font-bold text-slate-100`}>{etiquetaDe(l.valor)}</td>
+                      <tr key={f.valor} className={n > 0 ? "" : "opacity-60"}>
+                        <td className={`${tdCls} font-bold text-slate-100`}>{etiquetaDe(f.valor)}</td>
                         <td className={tdCls}>
                           <div className="flex items-center gap-2">
                             <input
                               type="number"
                               min={0}
-                              value={ajustes[l.valor] ?? ""}
-                              onChange={(e) => setAjustes({ ...ajustes, [l.valor]: e.target.value })}
+                              value={ajustes[f.valor] ?? ""}
+                              placeholder="0"
+                              onChange={(e) => setAjustes({ ...ajustes, [f.valor]: e.target.value })}
                               className={`${inputCls} w-20 text-right tabular-nums`}
                             />
                             <span className="text-[11px] text-slate-400">
-                              {porTubo > 0 ? `tubos de ${porTubo}` : "piezas"}
+                              {f.porTubo > 0 ? `tubos de ${f.porTubo}` : "piezas"}
                             </span>
                           </div>
                         </td>
                         <td className={`${tdCls} text-right tabular-nums text-slate-300`}>
-                          {euros((porTubo > 0 ? n * porTubo : n) * l.valor)}
+                          {euros(piezas * f.valor)}
                         </td>
-                        <td className={`${tdCls} text-[11px] text-slate-400`}>{l.motivo}</td>
+                        <td className={`${tdCls} text-[11px] text-slate-400`}>{f.motivo ?? ""}</td>
                       </tr>
                     );
                   })}
@@ -337,6 +354,8 @@ function PedidoPendiente({
   onAccion: (fn: () => Promise<unknown>) => Promise<void>;
   onImprimir: () => void;
 }) {
+  const { denominaciones } = useCash();
+
   // Se arranca de lo pedido: lo normal es que el banco dé justo eso, y así el
   // cajero solo corrige lo que venga distinto.
   const [recibido, setRecibido] = useState<Record<number, string>>(() =>
@@ -346,15 +365,15 @@ function PedidoPendiente({
   const [motivoCancelar, setMotivoCancelar] = useState("");
   const [cancelando, setCancelando] = useState(false);
 
-  const lineas = pedido.solicitado
-    .map((l) => {
-      const n = Number(recibido[l.valor] ?? 0);
-      if (!Number.isFinite(n) || n <= 0) return null;
-      const porTubo = l.cartuchos > 0 ? l.cantidad / l.cartuchos : 0;
-      return porTubo > 0
-        ? { valor: l.valor, cantidad: n * porTubo, cartuchos: n }
-        : { valor: l.valor, cantidad: n, cartuchos: 0 };
-    })
+  /*
+   * Todas las denominaciones, no solo las pedidas. El banco no siempre trae lo
+   * que se le pide —se queda sin tubos de 20 c y compensa con los de 10— y sin
+   * una casilla para lo que no se pidió, ese dinero no se podía registrar.
+   */
+  const filas = filasDeCambio(denominaciones, pedido.solicitado);
+
+  const lineas = filas
+    .map((f) => aLinea(f, recibido[f.valor]))
     .filter((l): l is NonNullable<typeof l> => l !== null);
 
   const total = lineas.reduce((a, l) => a + l.cantidad * l.valor, 0);
@@ -383,18 +402,19 @@ function PedidoPendiente({
             Cuenta lo que ha traído el banco
           </div>
           <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {pedido.solicitado.map((l) => {
-              const porTubo = l.cartuchos > 0 ? l.cantidad / l.cartuchos : 0;
+            {filas.map((f) => {
+              const porTubo = f.porTubo;
               return (
-                <label key={l.valor} className="flex items-center gap-2">
+                <label key={f.valor} className="flex items-center gap-2">
                   <span className="w-16 shrink-0 text-sm font-bold text-slate-100">
-                    {etiquetaDe(l.valor)}
+                    {etiquetaDe(f.valor)}
                   </span>
                   <input
                     type="number"
                     min={0}
-                    value={recibido[l.valor] ?? ""}
-                    onChange={(e) => setRecibido({ ...recibido, [l.valor]: e.target.value })}
+                    value={recibido[f.valor] ?? ""}
+                    placeholder="0"
+                    onChange={(e) => setRecibido({ ...recibido, [f.valor]: e.target.value })}
                     className={`${inputCls} w-20 text-right tabular-nums`}
                   />
                   <span className="text-[11px] text-slate-400">
