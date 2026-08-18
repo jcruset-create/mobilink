@@ -893,6 +893,16 @@ function Denominaciones() {
   const [denominaciones, setDenominaciones] = useState<Denominacion[]>([]);
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState<number | null>(null);
+  /**
+   * Cuenta de refrescos, que va en la `key` de los campos.
+   *
+   * Los campos son no controlados —se guardan al salir— así que se quedan con
+   * lo que uno tecleó aunque el servidor lo haya rechazado. Con eso, una bolsa
+   * que no se ha guardado seguía enseñando su número como si sí, y la pantalla
+   * mentía. Al cambiar la `key`, React los vuelve a montar con el valor que hay
+   * de verdad en la base.
+   */
+  const [refresco, setRefresco] = useState(0);
 
   const cargar = useCallback(async () => {
     try {
@@ -928,6 +938,8 @@ function Denominaciones() {
       await recargarConfiguracion();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido guardar");
+      // Que los campos vuelvan a lo que está guardado: lo tecleado no cuajó.
+      setRefresco((n) => n + 1);
     } finally {
       setOcupado(null);
     }
@@ -1022,6 +1034,7 @@ function Denominaciones() {
               <td className={`${tdCls} text-right`}>
                 {d.tipo === "MONEDA" ? (
                   <CampoPiezas
+                    key={`cartucho-${refresco}`}
                     valor={d.piezasPorCartucho}
                     marcador="sin cartucho"
                     deshabilitado={ocupado === d.id}
@@ -1034,6 +1047,7 @@ function Denominaciones() {
               <td className={`${tdCls} text-right`}>
                 {d.tipo === "MONEDA" ? (
                   <CampoPiezas
+                    key={`bolsa-${refresco}`}
                     valor={d.piezasPorBolsa}
                     marcador="sin bolsa"
                     deshabilitado={ocupado === d.id}
@@ -1086,11 +1100,12 @@ function Denominaciones() {
           disabled={ocupado !== null}
           className="rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
         >
-          {ocupado === 0 ? "Recortando…" : "Recortar el fondo de las fotos"}
+          {ocupado === 0 ? "Recortando…" : "Recortar el fondo de las monedas"}
         </button>
         <span className="text-[11px] text-slate-500">
-          Las fotos que se suben ahora salen ya con el fondo quitado. Esto es para las que subiste
-          antes, que llevan el blanco del JPG dentro.
+          Solo las monedas: a un billete no le sobra fondo, así que su foto se guarda tal cual se
+          sube. Las monedas que se suban a partir de ahora ya salen recortadas; el botón es para las
+          que subiste antes, que llevan el blanco del JPG dentro.
         </span>
       </div>
 

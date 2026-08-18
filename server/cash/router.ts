@@ -395,10 +395,22 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
 
+      /*
+       * El recorte es solo para las monedas. Un billete es un rectángulo que
+       * llena su recuadro y no le sobra fondo por ningún lado; pasarlo por el
+       * recorte solo abre la puerta a que se le coma un borde claro. La moneda
+       * es redonda: ahí las esquinas SÍ sobran.
+       */
+      const catalogo = await cargarDenominaciones(pool, false);
+      const denominacion0 = catalogo.find((d) => d.id === id);
+      if (!denominacion0) {
+        throw new ErrorCaja("DENOMINACION_NO_ENCONTRADA", "La denominación no existe.", 404);
+      }
+
       const url = await guardarImagenBoton(
         fichero,
         `cash/denominations/${id}_${Date.now()}.png`,
-        "ficha"
+        denominacion0.tipo === "MONEDA" ? "ficha" : "boton"
       );
       const denominacion = await config.actualizarDenominacion(contexto(req), id, {
         imagenUrl: url,
@@ -411,9 +423,12 @@ export function createCashRouter(): Router {
    * Recorta el fondo de las fotos que ya estaban subidas.
    *
    * Las primeras se guardaron tal cual venían, con su fondo blanco de JPG
-   * dentro. Volver a subir quince fotos a mano para arreglarlo es trabajo
-   * tonto: el recorte funciona igual sobre lo que ya está guardado, así que se
-   * hace desde aquí.
+   * dentro. Volver a subir las fotos a mano para arreglarlo es trabajo tonto:
+   * el recorte funciona igual sobre lo que ya está guardado, así que se hace
+   * desde aquí.
+   *
+   * Solo las monedas, por lo mismo que en la subida: un billete llena su
+   * recuadro y no tiene fondo que sobre.
    *
    * La foto nueva se sube a otra ruta y la fila apunta a ella. Machacar la
    * anterior dejaría la pantalla enseñando la vieja durante horas, porque las
@@ -428,7 +443,7 @@ export function createCashRouter(): Router {
       const fallos: string[] = [];
 
       for (const d of denominaciones) {
-        if (!d.imagenUrl) continue;
+        if (!d.imagenUrl || d.tipo !== "MONEDA") continue;
         try {
           const respuesta = await fetch(d.imagenUrl);
           if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
