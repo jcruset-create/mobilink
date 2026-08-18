@@ -1086,11 +1086,12 @@ function Denominaciones() {
       </TableWrap>
 
       <p className="text-[11px] text-slate-500">
-        Los números se guardan al salir del campo. La <strong>bolsa</strong> es el precinto grande
-        del banco —monedas a granel— y tiene que traer más monedas que un cartucho de la misma
-        denominación; si una moneda no viene en bolsa, se deja vacío. Cuando haga falta romper un
-        precinto, el sistema abre primero el más pequeño: cartucho antes que bolsa. No se puede
-        desactivar una denominación que todavía tenga piezas en una caja abierta.
+        Los números se guardan al salir del campo. La <strong>bolsa</strong> es el precinto con el
+        que llegan las monedas del banco, a granel; puede traer más o menos monedas que un cartucho,
+        da igual. Si una moneda no viene en bolsa, se deja vacío. Cuando haga falta romper un
+        precinto, se abre <strong>siempre la bolsa antes que el cartucho</strong>: el cartucho es lo
+        que se guarda ordenado para el cajón. No se puede desactivar una denominación que todavía
+        tenga piezas en una caja abierta.
       </p>
 
       <div className="flex flex-wrap items-center gap-2">

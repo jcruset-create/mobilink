@@ -1341,9 +1341,12 @@ export async function proponerCierre(
   let restante = objetivoCentimos;
 
   /**
-   * Envases que se quedan: los de menor valor primero, mientras quepan. Se
-   * empieza por las bolsas porque una bolsa entera que se manda al banco y
-   * vuelve a pedirse es el viaje más caro de todos.
+   * Envases que se quedan: los de menor valor primero, mientras quepan.
+   *
+   * Los cartuchos se reparten antes que las bolsas, al revés que al romper: lo
+   * que se conserva precintado para mañana es el cartucho, que es lo que el
+   * cajón necesita ordenado. Una bolsa se abre en cuanto hace falta suelto, así
+   * que quedársela no aporta gran cosa.
    */
   const repartirEnvases = (envases: LineaDenominacion[], por: ReadonlyMap<Centimos, number>) => {
     const quedan: LineaDenominacion[] = [];
@@ -1359,8 +1362,8 @@ export async function proponerCierre(
     return quedan;
   };
 
-  const cambioFinalBolsas = repartirEnvases(sacos, porBolsa);
   const cambioFinalCartuchos = repartirEnvases(tubos, porCartucho);
+  const cambioFinalBolsas = repartirEnvases(sacos, porBolsa);
 
   const cambioFinal = proponerCambioFinal(sueltas, restante);
 

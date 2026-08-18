@@ -211,26 +211,27 @@ describe("bolsas de monedas", () => {
     expect(piezasTotales(stock, 100, POR_CARTUCHO, POR_BOLSA)).toBe(553);
   });
 
-  it("abre el cartucho antes que la bolsa: se rompe el precinto más pequeño", () => {
+  it("abre la bolsa antes que el cartucho, aunque la bolsa sea la grande", () => {
     const stock = stockDesdeLineas(
       [{ valor: 100, cantidad: 1 }],
       [{ valor: 100, cantidad: 1 }],
       [{ valor: 100, cantidad: 1 }]
     );
-    // Hacen falta 4 monedas de 1 €: 1 suelta + hay que abrir algo.
+    // Hacen falta 4 monedas de 1 €: 1 suelta + hay que abrir algo. Se abre la
+    // bolsa: el cartucho es lo que se guarda ordenado para el cajón.
     const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO, POR_BOLSA);
     if (!r.ok) throw new Error("debería poder darse");
-    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 0, bolsas: 1, piezas: 500 }]);
   });
 
-  it("abre la bolsa cuando los cartuchos no llegan", () => {
+  it("abre el cartucho solo cuando las bolsas no llegan", () => {
     const stock = stockDesdeLineas(
       [],
       [{ valor: 100, cantidad: 1 }], // 25 monedas
       [{ valor: 100, cantidad: 1 }] // 500 monedas
     );
-    // 30 monedas: el tubo da 25 y las 5 que faltan obligan a abrir la bolsa.
-    const r = calcularCambioConCartuchos(3000, stock, POR_CARTUCHO, POR_BOLSA);
+    // 510 monedas: la bolsa da 500 y las 10 que faltan obligan al cartucho.
+    const r = calcularCambioConCartuchos(51000, stock, POR_CARTUCHO, POR_BOLSA);
     if (!r.ok) throw new Error("debería poder darse");
     expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, bolsas: 1, piezas: 525 }]);
   });
@@ -279,5 +280,72 @@ describe("bolsas de monedas", () => {
     const r = calcularCambioConCartuchos(400, stock, POR_CARTUCHO);
     if (!r.ok) throw new Error("debería poder darse");
     expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+  });
+});
+
+/*
+ * La bolsa no siempre es el envase grande: en este taller las bolsas del banco
+ * son de veinte monedas y los cartuchos de cincuenta. La regla es la misma
+ * pase lo que pase con los tamaños — bolsa primero — y estas pruebas lo fijan
+ * con los números al revés de los del bloque de arriba.
+ */
+describe("bolsas más pequeñas que el cartucho", () => {
+  const POR_CARTUCHO = new Map([[100, 50]]);
+  const POR_BOLSA = new Map([[100, 20]]);
+
+  it("rompe la bolsa y no el cartucho", () => {
+    const stock = stockDesdeLineas(
+      [],
+      [{ valor: 100, cantidad: 1 }],
+      [{ valor: 100, cantidad: 1 }]
+    );
+    const r = aperturasNecesarias(
+      [{ valor: 100, cantidad: 3 }],
+      stock,
+      POR_CARTUCHO,
+      POR_BOLSA
+    );
+    expect(r).toEqual({
+      ok: true,
+      aperturas: [{ valor: 100, cartuchos: 0, bolsas: 1, piezas: 20 }],
+    });
+  });
+
+  it("si la bolsa no llega, sigue por el cartucho", () => {
+    const stock = stockDesdeLineas(
+      [],
+      [{ valor: 100, cantidad: 1 }],
+      [{ valor: 100, cantidad: 1 }]
+    );
+    // 30 monedas: la bolsa trae 20, el resto sale del cartucho.
+    const r = aperturasNecesarias(
+      [{ valor: 100, cantidad: 30 }],
+      stock,
+      POR_CARTUCHO,
+      POR_BOLSA
+    );
+    expect(r).toEqual({
+      ok: true,
+      aperturas: [{ valor: 100, cartuchos: 1, bolsas: 1, piezas: 70 }],
+    });
+  });
+
+  it("el orden no depende del tamaño: con la bolsa grande sigue yendo primero", () => {
+    // Mismo código, bolsa de 500 y cartucho de 25: la bolsa manda igual.
+    const stock = stockDesdeLineas(
+      [],
+      [{ valor: 100, cantidad: 1 }],
+      [{ valor: 100, cantidad: 1 }]
+    );
+    const r = aperturasNecesarias(
+      [{ valor: 100, cantidad: 3 }],
+      stock,
+      new Map([[100, 25]]),
+      new Map([[100, 500]])
+    );
+    expect(r).toEqual({
+      ok: true,
+      aperturas: [{ valor: 100, cartuchos: 0, bolsas: 1, piezas: 500 }],
+    });
   });
 });

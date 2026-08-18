@@ -88,12 +88,13 @@ hay saldo acumulado que se pueda desincronizar.
   grande con el que el banco sirve las monedas a granel (500 monedas de 1 €, por
   ejemplo). Funciona igual que el cartucho: se cuenta aparte, viaja aparte y el
   motor la puede abrir sola cuando hace falta, con su propio par de asientos
-  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → cartuchos →
-  bolsas**: se rompe el envase más pequeño primero, que es lo que haría
-  cualquiera en el mostrador. Cuántas monedas trae una bolsa se configura por
-  denominación (`piezas_por_bolsa`), porque cada banco sirve el suyo, y tiene
-  que ser mayor que el cartucho de esa misma moneda o el envase pequeño dejaría
-  de ser el pequeño.
+  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → bolsas →
+  cartuchos**, siempre, sin mirar tamaños: la bolsa es lo que llega del banco y
+  se deshace nada más abrirla, y el cartucho es lo que se guarda ordenado para
+  el cajón. Cuántas monedas trae una bolsa se configura por denominación
+  (`piezas_por_bolsa`), porque cada banco sirve el suyo, y **puede ser menos que
+  un cartucho** — hubo una validación que lo prohibía y rechazaba la
+  configuración real de un taller con bolsas de veinte y cartuchos de cincuenta.
 
   Un asiento es de un solo formato: la restricción `cash_mov_un_formato` impide
   que una fila lleve `cartuchos > 0` y `bolsas > 0` a la vez, porque entonces no
