@@ -111,6 +111,9 @@ export type RoadsideAssistance = {
   solicitanteEmpresa?: string | null;
   solicitanteNombre?: string | null;
   solicitanteTelefono?: string | null;
+  // Nº de autorización o de cita que da quien solicita: es lo que luego pide
+  // la aseguradora o el gestor de flota para pagar el servicio.
+  solicitanteAutorizacion?: string | null;
   reportToken?: string | null;
   whatsappAsignadaSentAtMs?: number | null;
   whatsappFinalizadaSentAtMs?: number | null;
@@ -127,6 +130,7 @@ export type RoadsideAssistanceDraft = {
   solicitanteEmpresa: string;
   solicitanteNombre: string;
   solicitanteTelefono: string;
+  solicitanteAutorizacion: string;
   customerName: string;
   customerPhone: string;
   conductorNombre: string;

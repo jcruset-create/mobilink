@@ -20,6 +20,7 @@ import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
+import { initCash, mountCash, startCashErpWorker } from "./cash/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
@@ -713,6 +714,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     solicitanteEmpresa: row.solicitanteEmpresa ?? null,
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
+    solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -7120,6 +7122,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "solicitanteEmpresa",
           "solicitanteNombre",
           "solicitanteTelefono",
+          "solicitanteAutorizacion",
           "createdAtMs",
           "assignedAtMs",
           "departedAtMs",
@@ -7132,7 +7135,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
         )
         RETURNING *
       `,
@@ -7161,6 +7164,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         body.solicitanteEmpresa ? String(body.solicitanteEmpresa).trim() : null,
         body.solicitanteNombre ? String(body.solicitanteNombre).trim() : null,
         body.solicitanteTelefono ? String(body.solicitanteTelefono).trim() : null,
+        body.solicitanteAutorizacion ? String(body.solicitanteAutorizacion).trim() : null,
         now,
         timestampField === "assignedAtMs" ? now : null,
         timestampField === "departedAtMs" ? now : null,
@@ -7296,6 +7300,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "solicitanteEmpresa" = COALESCE($22, "solicitanteEmpresa"),
           "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
           "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
+          "solicitanteAutorizacion" = COALESCE($25, "solicitanteAutorizacion"),
           "updatedAtMs" = $17
           ${
             timestampField
@@ -7332,6 +7337,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.solicitanteEmpresa != null ? String(body.solicitanteEmpresa).trim() : null,
         body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
         body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
+        body.solicitanteAutorizacion != null ? String(body.solicitanteAutorizacion).trim() : null,
       ]
     );
 
@@ -16897,6 +16903,13 @@ function startRecobrosNotifierChecker() {
 mountIntegrationHub(app);
 
 /* =========================================================
+   MOBILINK CASH (API bajo /api/cash)
+   Igual que el hub: antes del catch-all del SPA.
+========================================================= */
+
+mountCash(app);
+
+/* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
 ========================================================= */
 
@@ -17282,10 +17295,38 @@ function startAutoEnCaminoWatcher() {
   console.log(`Auto en-camino: vigilancia activa (radio ${AUTO_EN_CAMINO_RADIO_M} m, cada 60 s)`);
 }
 
+/**
+ * Prepara el esquema de un módulo sin poder tumbar el arranque.
+ *
+ * Antes, cualquier fallo aquí hacía `process.exit(1)` y el servicio no llegaba
+ * a abrir el puerto. Eso convertía un tropiezo pasajero de la base —una
+ * sentencia que se pasa del `statement_timeout`, un cerrojo que tarda— en una
+ * caída de TODO el SaaS: ni Connect, ni Licencias, ni Cash, ni el panel. Y como
+ * el proceso moría sin soltar sus conexiones, el reintento se encontraba el
+ * mismo cerrojo pillado y volvía a morir; el servicio no salía solo del bucle.
+ *
+ * Las migraciones son idempotentes y la base ya tiene el esquema puesto desde
+ * hace meses: servir con un esquema que quizá no se ha podido repasar es mucho
+ * mejor que no servir nada. El fallo se registra bien visible para que se vea
+ * en los logs del despliegue.
+ */
+async function prepararEsquema(nombre: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    console.error(
+      `[ARRANQUE] No se ha podido preparar el esquema de ${nombre}. ` +
+        "El servidor arranca igualmente; revisa este error cuanto antes.",
+      error
+    );
+  }
+}
+
 initDb()
-  .then(() => initIntegrationHub())
-  .then(() => initLicenses())
-  .then(() => initConnect())
+  .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
+  .then(() => prepararEsquema("Licencias", initLicenses))
+  .then(() => prepararEsquema("Connect Pro", initConnect))
+  .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -17301,9 +17342,13 @@ initDb()
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
+      startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
     });
   })
   .catch((error) => {
-    console.error("Error inicializando base de datos:", error);
+    // Solo llega aquí si falla `initDb`, que es la conexión con la base del
+    // núcleo: sin ella no hay nada que servir. Los esquemas de los módulos ya
+    // no pueden caer por aquí, van envueltos en `prepararEsquema`.
+    console.error("Error conectando con la base de datos del núcleo:", error);
     process.exit(1);
   });

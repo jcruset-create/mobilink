@@ -4813,6 +4813,7 @@ if (view === "whatsapp_inbox" && canView("whatsapp_inbox")) {
           solicitanteEmpresa: extracted.empresaSolicitante ?? "",
           solicitanteNombre: "",
           solicitanteTelefono: "",
+          solicitanteAutorizacion: "",
           customerName: extracted.cliente ?? "",
           customerPhone: extracted.telefonoWhatsapp ?? fromPhone.replace("whatsapp:", "") ?? "",
           conductorNombre: "",

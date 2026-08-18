@@ -1,8 +1,12 @@
 /**
  * Carga un tarifario en un centro de control.
  *
- *   npm run tarifa:cargar -- --centro=1 --tarifario=seas2026
- *   npm run tarifa:cargar -- --centro=1 --tarifario=seas2026 --publicar
+ *   npm run tarifa:cargar -- --centro=1 --tarifario=seas2026-venta
+ *   npm run tarifa:cargar -- --centro=1 --tarifario=seas2026-compra --publicar
+ *
+ * SEAS son DOS tarifarios, no uno: el documento publica una tabla de venta y
+ * otra de compra, y no coinciden. El contrato de venta apunta al plan de venta
+ * y el de compra al de compra.
  *
  * Sin `--publicar` el tarifario queda como BORRADOR y no factura nada. Es
  * deliberado: un fichero de datos no debe convertirse en tarifa activa por
@@ -15,7 +19,8 @@ import db from "../server/db.ts";
 import { cargarTarifario, publicarVersion, type DefinicionTarifario } from "../server/connect/pricing/tarifario.ts";
 
 const TARIFARIOS: Record<string, () => Promise<DefinicionTarifario>> = {
-  seas2026: async () => (await import("../server/connect/pricing/tarifarios/seas2026.ts")).SEAS_2026,
+  "seas2026-venta": async () => (await import("../server/connect/pricing/tarifarios/seas2026.ts")).SEAS_2026_VENTA,
+  "seas2026-compra": async () => (await import("../server/connect/pricing/tarifarios/seas2026.ts")).SEAS_2026_COMPRA,
 };
 
 function argumento(nombre: string): string | null {

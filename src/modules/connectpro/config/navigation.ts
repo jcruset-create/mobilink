@@ -7,7 +7,7 @@
 import {
   LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
   AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, type LucideIcon,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, Tags, Rocket, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -40,6 +40,12 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   { key: "integraciones", path: "integraciones", label: "Partners e integraciones", icon: Plug, minRole: "cc_admin" },
   { key: "estadisticas", path: "estadisticas", label: "Estadísticas", icon: BarChart3, minRole: "analyst" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, minRole: "analyst" },
+  // "Puesta en marcha" va junto a Tarifas porque es donde manda a la central
+  // nueva: sin tarifario publicado y sin contratos no se factura nada.
+  { key: "puesta-en-marcha", path: "puesta-en-marcha", label: "Puesta en marcha", icon: Rocket, minRole: "cc_admin" },
+  // Tarifas va justo antes de Facturación porque es de donde salen los
+  // importes que ahí se liquidan.
+  { key: "tarifas", path: "tarifas", label: "Tarifas", icon: Tags, minRole: "cc_admin" },
   { key: "facturacion", path: "facturacion", label: "Facturación", icon: Receipt, minRole: "cc_admin" },
   { key: "usuarios", path: "usuarios", label: "Usuarios", icon: UserCog, minRole: "cc_admin" },
   { key: "auditoria", path: "auditoria", label: "Auditoría", icon: ScrollText, minRole: "cc_admin" },

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
+import FestivosTalleres from "../components/FestivosTalleres";
 import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
   WORKSHOP_TIER, WORKSHOP_TIER_LABELS, WORKSHOP_TIER_STYLES, fmtDateTime,
@@ -198,6 +199,7 @@ export function LitePanel({ workshop, canEdit, onError }: {
 export default function Talleres() {
   const { user } = useConnectAuth();
   const canEdit = hasRole(user, "cc_admin");
+  const [vista, setVista] = useState<"red" | "festivos">("red");
   const [rows, setRows] = useState<Workshop[]>([]);
   const [providers, setProviders] = useState<ProviderCompany[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -284,11 +286,29 @@ export default function Talleres() {
     <div>
       <PageTitle
         title="Talleres"
-        subtitle="Talleres de la red con cobertura, producto contratado y capacidades para recibir asistencias."
+        subtitle={vista === "red"
+          ? "Talleres de la red con cobertura, producto contratado y capacidades para recibir asistencias."
+          : "Festivos autonómicos y locales de cada taller: lo que se avisa al operador antes de llamar."}
       />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
 
-      {canEdit && (
+      <div className="mb-4 flex gap-1">
+        {([["red", "Red de talleres"], ["festivos", "Festivos"]] as const).map(([v, t]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setVista(v)}
+            className={`rounded-lg px-3 py-1.5 text-[13px] font-medium ${
+              vista === v ? "bg-cyan-600/20 text-cyan-300" : "text-slate-400 hover:bg-slate-800"}`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {vista === "festivos" && <FestivosTalleres />}
+
+      {vista === "red" && canEdit && (
         <ImportarTallerWhatsApp
           empresas={providers}
           valoresActuales={valoresActuales}
@@ -296,7 +316,7 @@ export default function Talleres() {
         />
       )}
 
-      {canEdit && (
+      {vista === "red" && canEdit && (
         <div ref={formRef}>
         <Card className="mb-4 p-4">
           <h2 className="mb-3 text-sm font-semibold text-slate-300">Añadir taller</h2>

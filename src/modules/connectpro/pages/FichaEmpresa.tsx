@@ -11,7 +11,6 @@ import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState, KpiCard } from "../components/ui";
 import TablaUnidades from "../components/TablaUnidades";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
-import TarifasEditor from "../components/TarifasEditor";
 import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
   WORKSHOP_TIER, WORKSHOP_TIER_LABELS, WORKSHOP_TIER_STYLES, fmtDateTime,
@@ -35,7 +34,7 @@ type WorkshopRow = {
 
 type Ficha = {
   provider: Provider;
-  authorization: (Authorization & { requiresAcceptance?: boolean; acceptTimeoutMin?: number; tariffLines?: number }) | null;
+  authorization: (Authorization & { requiresAcceptance?: boolean; acceptTimeoutMin?: number }) | null;
   workshops: WorkshopRow[];
   summary: {
     units: { total: number; available: number; offline: number };
@@ -53,7 +52,7 @@ const TALLER_VACIO = {
   commercialNetwork: "", address: "", postalCode: "", city: "", province: "", email: "",
   openingHours: "", services: "", notes: "",
 };
-const TABS = ["Resumen", "Talleres", "Operarios", "Unidades", "Tarifas"] as const;
+const TABS = ["Resumen", "Talleres", "Operarios", "Unidades"] as const;
 
 /** Campo editable de la ficha (edición en línea, cc_admin). */
 function Campo({ label, value, onSave, canEdit, placeholder }: {
@@ -267,7 +266,6 @@ export default function FichaEmpresa() {
                 <span>SLA aceptación: <b>{f.authorization.slaAcceptMin ?? "—"} min</b></span>
                 <span>SLA llegada: <b>{f.authorization.slaArrivalMin ?? "—"} min</b></span>
                 <span>Requiere aceptación: <b>{f.authorization.requiresAcceptance ? `Sí (${f.authorization.acceptTimeoutMin} min)` : "No"}</b></span>
-                <span>Líneas de tarifa: <b>{f.authorization.tariffLines ?? 0}</b></span>
                 <span>Preferente: <b>{f.authorization.preferred ? "Sí" : "No"}</b></span>
               </div>
             )}
@@ -424,13 +422,6 @@ export default function FichaEmpresa() {
         </div>
       )}
 
-      {tab === "Tarifas" && (
-        !f.authorization ? (
-          <EmptyState message="Autoriza la empresa para poder definir sus tarifas." />
-        ) : (
-          <TarifasEditor authorizationId={f.authorization.id} providerName={p.name} canEdit={canEdit} />
-        )
-      )}
     </div>
   );
 }

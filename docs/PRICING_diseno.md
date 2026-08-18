@@ -495,7 +495,7 @@ donde se indica.
 | Snapshot | `snapshot.test.ts` |
 | Override | `snapshot.test.ts` |
 | Aislamiento multi-tenant | `tenant.integration.test.ts` *(con base de datos)* |
-| Idempotencia | `pricing/schema.integration.test.ts`, a nivel de restricción. **La de servicio llega en la FASE 8**, que es donde existe la operación que hay que hacer idempotente |
+| Idempotencia | `pricing/schema.integration.test.ts` (restricción) y `pricing/etapas.integration.test.ts` (servicio: bloquear dos veces, y dos bloqueos simultáneos) |
 
 ---
 

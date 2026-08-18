@@ -176,9 +176,48 @@ export function calcularTarifa(
     durationMin: ctx.durationMin,
   };
 
+  /*
+   * El lado de compra puede tener MÁS clases de día que el de venta.
+   *
+   * Si en el pueblo del taller es fiesta local, ese taller trabaja en festivo y
+   * lo factura como tal, aunque para el cliente de la central sea un martes
+   * cualquiera. Es la única asimetría deliberada entre los dos lados, y por eso
+   * va con su propio aviso: un forfait de compra más caro que el de venta sin
+   * explicación parece un error de configuración.
+   */
+  const extraTaller = (ctx.clasesDiaTaller ?? []).filter((c) => !dia.clases.includes(c));
+  const ctxCompra: ContextoRegla = extraTaller.length === 0 ? ctxRegla : {
+    ...ctxRegla,
+    // El genérico 'holiday' al final: si adelantara a 'holiday_local', una
+    // regla de festivo local dejaría de ser la más específica.
+    dayClasses: [
+      ...extraTaller.filter((c) => c !== "holiday"),
+      ...ctxRegla.dayClasses,
+      ...(extraTaller.includes("holiday") ? ["holiday"] : []),
+    ],
+  };
+
   const venta = resolverLado(cfg.venta, ctxRegla, "sale", opciones.reglaVentaBloqueadaId);
-  const compra = resolverLado(cfg.compra, ctxRegla, "purchase", opciones.reglaCompraBloqueadaId);
+  const compra = resolverLado(cfg.compra, ctxCompra, "purchase", opciones.reglaCompraBloqueadaId);
   avisos.push(...venta.avisos, ...compra.avisos);
+
+  /*
+   * Se avisa solo si el festivo del taller ha CAMBIADO algo. Un 25 de diciembre
+   * el taller también está de fiesta local, pero ese día los dos lados cobran
+   * festivo igual: avisarlo sería ruido, y un aviso que casi siempre sale deja
+   * de leerse.
+   */
+  if (extraTaller.length > 0 && cfg.compra) {
+    const sinTaller = resolverLado(cfg.compra, ctxRegla, "purchase", opciones.reglaCompraBloqueadaId);
+    if (sinTaller.regla?.id !== compra.regla?.id) {
+      avisos.push({
+        codigo: "WORKSHOP_HOLIDAY", lado: "purchase",
+        detalle: `El taller está de festivo (${extraTaller.filter((c) => c !== "holiday").join(", ")}): ` +
+                 `su lado de compra pasa de "${sinTaller.regla?.name ?? "sin regla"}" a ` +
+                 `"${compra.regla?.name ?? "sin regla"}" aunque para el cliente no sea festivo`,
+      });
+    }
+  }
 
   // ── Líneas ──────────────────────────────────────────────────────────────
   const lineas: LineaPrecio[] = [];
@@ -250,7 +289,7 @@ export function calcularTarifa(
 
   return {
     etapa: opciones.etapa,
-    estado: estadoDe(ventaTotal, compraTotal, avisos),
+    estado: estadoDe(ventaTotal, compraTotal, avisos, lineas),
     currency: venta.lado?.currency ?? compra.lado?.currency ?? "EUR",
     compraTotal,
     ventaTotal,
@@ -285,10 +324,28 @@ function totalDe(lineas: LineaPrecio[], columna: "ventaTotal" | "compraTotal", r
   return alguna ? redondearCentimos(total) : CERO;
 }
 
-function estadoDe(venta: Dinero | null, compra: Dinero | null, avisos: Aviso[]): EstadoTarifa {
+/**
+ * `manual_review` significa que nadie debería facturar esto sin mirarlo.
+ * `partial` es que el precio está pero incompleto —venta sí y compra no, por
+ * ejemplo—, que es corriente y no bloquea nada.
+ *
+ * Una línea SIN precio de venta es motivo de revisión aunque el total salga:
+ * el total sale porque esa línea suma cero, y la factura iría corta por un
+ * importe que nadie ha decidido. Es el caso del neumático sin precio, que los
+ * tarifarios suelen mandar a revisión manual expresamente.
+ */
+function estadoDe(
+  venta: Dinero | null,
+  compra: Dinero | null,
+  avisos: Aviso[],
+  lineas: LineaPrecio[],
+): EstadoTarifa {
   const graves: CodigoAviso[] = ["NO_TARIFF_PLAN", "NO_MATCHING_RULE", "FORMULA_NOT_SUPPORTED"];
-  if (venta == null || avisos.some((a) => graves.includes(a.codigo))) return "manual_review";
-  if (compra == null || avisos.length > 0) return "partial";
+  const lineaSinPrecio = lineas.some((l) => l.ventaTotal == null);
+  if (venta == null || lineaSinPrecio || avisos.some((a) => graves.includes(a.codigo))) {
+    return "manual_review";
+  }
+  if (compra == null || lineas.some((l) => l.compraTotal == null) || avisos.length > 0) return "partial";
   return "ok";
 }
 
