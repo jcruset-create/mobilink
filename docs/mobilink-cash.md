@@ -74,6 +74,12 @@ hay saldo acumulado que se pueda desincronizar.
   diferencia. Registrarlo como "salen 19,50 €" sería mentir sobre las piezas.
 - `arqueo.ts` — teórico vs contado por denominación, doble cuadre, reparto
   cambio final / ingreso bancario.
+- Cambio de moneda en mostrador (`EXCHANGE`, serie `MC-DC-…`): entra dinero y
+  sale el mismo importe en otras piezas, en los dos sentidos — un billete por
+  monedas o monedas por un billete. Es el único tipo con efectivo neto CERO, y
+  el cambio sale del cajón, no de lo que el cliente acaba de dar: se valida
+  contra el stock sin sumar lo recibido. Pantalla propia («Dar cambio»), con la
+  propuesta del motor excluyendo las denominaciones que entran.
 - `cartridges.ts` — cartuchos de monedas. Un tubo **se abre y no se vuelve a
   cerrar**. La regla que manda es **dar siempre las piezas de mayor valor**: si
   la moneda que toca está encartuchada, el tubo se abre. El precinto solo se
@@ -88,12 +94,13 @@ hay saldo acumulado que se pueda desincronizar.
   grande con el que el banco sirve las monedas a granel (500 monedas de 1 €, por
   ejemplo). Funciona igual que el cartucho: se cuenta aparte, viaja aparte y el
   motor la puede abrir sola cuando hace falta, con su propio par de asientos
-  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → cartuchos →
-  bolsas**: se rompe el envase más pequeño primero, que es lo que haría
-  cualquiera en el mostrador. Cuántas monedas trae una bolsa se configura por
-  denominación (`piezas_por_bolsa`), porque cada banco sirve el suyo, y tiene
-  que ser mayor que el cartucho de esa misma moneda o el envase pequeño dejaría
-  de ser el pequeño.
+  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → bolsas →
+  cartuchos**, siempre, sin mirar tamaños: la bolsa es lo que llega del banco y
+  se deshace nada más abrirla, y el cartucho es lo que se guarda ordenado para
+  el cajón. Cuántas monedas trae una bolsa se configura por denominación
+  (`piezas_por_bolsa`), porque cada banco sirve el suyo, y **puede ser menos que
+  un cartucho** — hubo una validación que lo prohibía y rechazaba la
+  configuración real de un taller con bolsas de veinte y cartuchos de cincuenta.
 
   Un asiento es de un solo formato: la restricción `cash_mov_un_formato` impide
   que una fila lleve `cartuchos > 0` y `bolsas > 0` a la vez, porque entonces no

@@ -338,8 +338,28 @@ export const reabrirJornada = (sessionId: number, motivo: string) =>
  * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
  * confirmación vuelve a validar en el servidor con la jornada bloqueada.
  */
-export const proponerCambio = (sessionId: number, importeCentimos: number) =>
-  pedir<ResultadoCambio>(`/sessions/${sessionId}/change?importe=${importeCentimos}`);
+export const proponerCambio = (
+  sessionId: number,
+  importeCentimos: number,
+  /** Denominaciones que no se pueden proponer: las que acaban de entrar. */
+  excluirValores?: readonly number[]
+) =>
+  pedir<ResultadoCambio>(
+    `/sessions/${sessionId}/change?importe=${importeCentimos}` +
+      (excluirValores && excluirValores.length > 0 ? `&excluir=${excluirValores.join(",")}` : "")
+  );
+
+/**
+ * Cambio de moneda en mostrador: entra dinero y sale el mismo importe en otras
+ * piezas. En los dos sentidos — un billete por monedas, o monedas por billete.
+ */
+export const darCambio = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  recibido: LineaDenominacion[];
+  entregado: LineaDenominacion[];
+  concepto?: string;
+}) => pedir<RespuestaOperacion>("/exchange", json(datos));
 
 // ── Operaciones ────────────────────────────────────────────────────────────
 

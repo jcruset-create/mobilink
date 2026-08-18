@@ -33,7 +33,8 @@ export type TipoOperacion =
   | "BANK_DEPOSIT" // ingreso en el banco
   | "ADJUSTMENT" // ajuste auditado
   | "OPENING_FLOAT" // fondo inicial de la jornada
-  | "CLOSING_FLOAT"; // cambio que se deja para el día siguiente
+  | "CLOSING_FLOAT" // cambio que se deja para el día siguiente
+  | "EXCHANGE"; // cambio de moneda a un cliente: entra un billete, sale su equivalente
 
 /** De dónde salió la operación. El motor se comporta igual con todos. */
 export type OrigenOperacion = "MANUAL" | "ERP" | "API" | "IMPORT" | "POS" | "OTHER";
@@ -108,6 +109,8 @@ export type MotivoMovimiento =
   | "BANK_DEPOSIT"
   | "ADJUSTMENT"
   | "CLOSING_FLOAT"
+  /** Cambio de moneda: entra un billete y salen sus piezas. Neto cero. */
+  | "EXCHANGE"
   /** Apertura de un cartucho: sale el tubo y entran sus monedas sueltas. */
   | "CARTRIDGE_OPENED"
   /** Apertura de una bolsa: sale la bolsa y entran sus monedas sueltas. */
@@ -213,6 +216,7 @@ const SALEN: ReadonlySet<TipoOperacion> = new Set<TipoOperacion>([
 ]);
 
 const MOTIVO_ENTRADA: Record<string, MotivoMovimiento> = {
+  EXCHANGE: "EXCHANGE",
   COLLECTION: "CUSTOMER_PAYMENT",
   MANUAL_IN: "MANUAL_IN",
   OPENING_FLOAT: "OPENING_FLOAT",
@@ -220,6 +224,7 @@ const MOTIVO_ENTRADA: Record<string, MotivoMovimiento> = {
 };
 
 const MOTIVO_SALIDA: Record<string, MotivoMovimiento> = {
+  EXCHANGE: "EXCHANGE",
   COLLECTION: "CHANGE_GIVEN",
   PAYMENT: "SUPPLIER_PAYMENT",
   MANUAL_OUT: "MANUAL_OUT",
@@ -260,7 +265,7 @@ export function validarOperacion(
     return { ok: false, codigo: "IMPORTE_NO_VALIDO", mensaje: "El importe de la operación debe ser un número entero de céntimos mayor que cero." };
   }
 
-  if (!ENTRAN.has(op.tipo) && !SALEN.has(op.tipo) && op.tipo !== "ADJUSTMENT") {
+  if (!ENTRAN.has(op.tipo) && !SALEN.has(op.tipo) && op.tipo !== "ADJUSTMENT" && op.tipo !== "EXCHANGE") {
     return { ok: false, codigo: "TIPO_NO_SOPORTADO", mensaje: `Tipo de operación no soportado: ${op.tipo}.` };
   }
 
@@ -317,6 +322,51 @@ export function validarOperacion(
       };
     }
     return { ok: true, movimientos: [], efectivoNeto: 0 };
+  }
+
+  /*
+   * Cambio de moneda: entra un billete y sale su equivalente en piezas más
+   * pequeñas. Es el único tipo cuyo efectivo neto es CERO —no es un cobro ni
+   * un pago, es el mismo dinero cambiando de forma— así que no puede pasar por
+   * el cuadre general (recibido − entregado = ±efectivo), que jamás daría cero.
+   */
+  if (op.tipo === "EXCHANGE") {
+    if (efectivo !== op.importe) {
+      return {
+        ok: false,
+        codigo: "FORMAS_PAGO_NO_CUADRAN",
+        mensaje: "Un cambio de moneda es todo efectivo: no admite otras formas de pago.",
+      };
+    }
+    if (totalRecibido !== op.importe || totalEntregado !== op.importe) {
+      return {
+        ok: false,
+        codigo: "EFECTIVO_NO_CUADRA",
+        mensaje: `Entran ${totalRecibido} y salen ${totalEntregado} céntimos: en un cambio las dos cifras tienen que ser el importe cambiado (${op.importe}).`,
+      };
+    }
+    /*
+     * El cambio sale del cajón, no de lo que el cliente acaba de dar: nadie
+     * cambia un billete para recibir de vuelta el mismo billete. Por eso se
+     * valida contra el stock A SECAS, sin sumar lo recibido.
+     */
+    const falta = faltantes(stock, entregado);
+    if (falta.length > 0) {
+      const p = falta[0];
+      return {
+        ok: false,
+        codigo: "STOCK_INSUFICIENTE",
+        mensaje: `No hay suficientes piezas de ${p.valor} céntimos: se necesitan ${p.pedido} y hay ${p.disponible}.`,
+      };
+    }
+    return {
+      ok: true,
+      movimientos: [
+        { direccion: "IN", motivo: "EXCHANGE", lineas: ordenar(op.efectivoRecibido ?? []) },
+        { direccion: "OUT", motivo: "EXCHANGE", lineas: ordenar(op.efectivoEntregado ?? []) },
+      ],
+      efectivoNeto: 0,
+    };
   }
 
   if (entraEfectivo && totalRecibido === 0) {

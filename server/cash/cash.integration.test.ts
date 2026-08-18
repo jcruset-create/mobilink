@@ -2599,7 +2599,7 @@ describe.runIf(RUN)("bolsas de monedas", () => {
     expect(await stock(sesion.id, 100)).toEqual({ sueltas: 3, tubos: 0, bolsas: 1 });
   });
 
-  it("se rompe el cartucho antes que la bolsa", async () => {
+  it("se rompe la bolsa antes que el cartucho", async () => {
     await configurarBolsa(100, 500);
     const caja = await crearCaja("bolsa-orden");
 
@@ -2610,21 +2610,22 @@ describe.runIf(RUN)("bolsas de monedas", () => {
       fondoBolsas: [{ valor: 100, cantidad: 1 }],
     });
 
-    // Faltan 3 monedas sueltas: basta con el cartucho, la bolsa no se toca.
+    // Faltan 3 monedas sueltas: se abre la bolsa y el cartucho no se toca.
     const r = await servicio.registrarOperacion(ctx, {
       sessionId: sesion.id,
       tipo: "MANUAL_OUT",
       importeCentimos: 400,
       formasPago: [{ forma: "CASH", importe: 400 }],
       efectivoEntregado: [{ valor: 100, cantidad: 4 }],
-      concepto: "Salida que solo necesita el cartucho",
+      concepto: "Salida que abre la bolsa",
     });
 
-    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
-    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 22, tubos: 0, bolsas: 1 });
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 0, bolsas: 1, piezas: 500 }]);
+    // 1 suelta + 500 de la bolsa − 4 entregadas = 497, y el tubo intacto.
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 497, tubos: 1, bolsas: 0 });
   });
 
-  it("cuando el cartucho no llega, se abre también la bolsa", async () => {
+  it("cuando la bolsa no llega, se abre también el cartucho", async () => {
     await configurarBolsa(100, 500);
     const caja = await crearCaja("bolsa-abierta");
 
@@ -2634,19 +2635,19 @@ describe.runIf(RUN)("bolsas de monedas", () => {
       fondoBolsas: [{ valor: 100, cantidad: 1 }],
     });
 
-    // 30 monedas: el tubo trae 25, así que hace falta abrir también la bolsa.
+    // 510 monedas: la bolsa trae 500, así que hace falta abrir también el tubo.
     const r = await servicio.registrarOperacion(ctx, {
       sessionId: sesion.id,
       tipo: "MANUAL_OUT",
-      importeCentimos: 3000,
-      formasPago: [{ forma: "CASH", importe: 3000 }],
-      efectivoEntregado: [{ valor: 100, cantidad: 30 }],
-      concepto: "Salida que obliga a abrir la bolsa",
+      importeCentimos: 51000,
+      formasPago: [{ forma: "CASH", importe: 51000 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 510 }],
+      concepto: "Salida que obliga a abrir también el cartucho",
     });
 
     expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, bolsas: 1, piezas: 525 }]);
-    // 25 + 500 monedas abiertas − 30 entregadas = 495 sueltas.
-    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 495, tubos: 0, bolsas: 0 });
+    // 500 + 25 monedas abiertas − 510 entregadas = 15 sueltas.
+    expect(await stock(sesion.id, 100)).toEqual({ sueltas: 15, tubos: 0, bolsas: 0 });
 
     // El libro mayor dice qué precinto se rompió, cada uno con su motivo.
     const { rows } = await db.query(
@@ -2658,6 +2659,7 @@ describe.runIf(RUN)("bolsas de monedas", () => {
     );
     expect(rows).toHaveLength(4);
     expect(rows[0]).toMatchObject({ motivo: "CARTRIDGE_OPENED", direccion: "OUT", cartuchos: 1 });
+    expect(rows[1]).toMatchObject({ motivo: "CARTRIDGE_OPENED", direccion: "IN", cartuchos: 0, cantidad: 25 });
     expect(rows[2]).toMatchObject({ motivo: "BAG_OPENED", direccion: "OUT", bolsas: 1 });
     expect(rows[3]).toMatchObject({ motivo: "BAG_OPENED", direccion: "IN", bolsas: 0, cantidad: 500 });
   });
@@ -2692,10 +2694,134 @@ describe.runIf(RUN)("bolsas de monedas", () => {
     expect(manana.sesion.fondoInicialCentimos).toBe(50000);
   });
 
-  it("la bolsa tiene que traer más monedas que el cartucho", async () => {
+  it("una bolsa puede traer menos monedas que el cartucho", async () => {
+    // Las del banco de este taller son de veinte y los cartuchos de cincuenta.
+    // Hubo una validación que lo prohibía y rechazaba la configuración real.
     const { rows } = await db.query(`SELECT id FROM cash_denominations WHERE valor_centimos = 100`);
+    const d = await config.actualizarDenominacion(ctx, rows[0].id, { piezasPorBolsa: 20 });
+    expect(d.piezasPorBolsa).toBe(20);
+    await config.actualizarDenominacion(ctx, rows[0].id, { piezasPorBolsa: null });
+  });
+
+  it("cero o un número con coma no valen como monedas por bolsa", async () => {
+    const { rows } = await db.query(`SELECT id FROM cash_denominations WHERE valor_centimos = 100`);
+    for (const malo of [0, -5, 2.5]) {
+      await expect(
+        config.actualizarDenominacion(ctx, rows[0].id, { piezasPorBolsa: malo })
+      ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+    }
+  });
+});
+
+describe.runIf(RUN)("cambio de moneda en mostrador", () => {
+  it("un billete de 20 € por 10 + 5 + cinco monedas: neto cero y numeración propia", async () => {
+    const caja = await crearCaja("dar-cambio");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 1000, cantidad: 2 },
+        { valor: 500, cantidad: 2 },
+        { valor: 100, cantidad: 10 },
+      ],
+    });
+    const antes = (await servicio.stockDeJornada(sesion.id)).totalCentimos;
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "EXCHANGE",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+      efectivoEntregado: [
+        { valor: 1000, cantidad: 1 },
+        { valor: 500, cantidad: 1 },
+        { valor: 100, cantidad: 5 },
+      ],
+      concepto: "Cambio de un billete de 20 €",
+    });
+
+    // Serie propia: el histórico distingue un cambio de un cobro o un pago.
+    expect(r.numero).toMatch(/^MC-DC-\d{4}-\d{6}$/);
+    expect(r.efectivoNetoCentimos).toBe(0);
+    expect(r.totalStockCentimos).toBe(antes);
+
+    // La composición sí cambió: hay un 20 € que antes no estaba.
+    const stock = await servicio.stockDeJornada(sesion.id);
+    const de = (valor: number) => stock.lineas.find((l) => l.valor === valor)?.cantidad ?? 0;
+    expect(de(2000)).toBe(1);
+    expect(de(1000)).toBe(1);
+    expect(de(100)).toBe(5);
+  });
+
+  it("al revés: entran monedas y sale el billete", async () => {
+    const caja = await crearCaja("dar-cambio-inverso");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 1 }],
+    });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "EXCHANGE",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 100, cantidad: 20 }],
+      efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+    });
+
+    expect(r.efectivoNetoCentimos).toBe(0);
+    const stock = await servicio.stockDeJornada(sesion.id);
+    expect(stock.lineas).toEqual([{ valor: 100, cantidad: 20 }]);
+  });
+
+  it("si hay que abrir un envase para juntar el cambio, se abre y lo dice", async () => {
+    const caja = await crearCaja("dar-cambio-envase");
+    // Nada suelto de 1 €: solo un cartucho de 25.
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoCartuchos: [{ valor: 100, cantidad: 1 }],
+    });
+
+    const r = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "EXCHANGE",
+      importeCentimos: 500,
+      formasPago: [{ forma: "CASH", importe: 500 }],
+      efectivoRecibido: [{ valor: 500, cantidad: 1 }],
+      efectivoEntregado: [{ valor: 100, cantidad: 5 }],
+    });
+
+    expect(r.aperturas).toEqual([{ valor: 100, cartuchos: 1, piezas: 25 }]);
+    expect(r.efectivoNetoCentimos).toBe(0);
+  });
+
+  it("un cambio que no cuadra o sin piezas suficientes se rechaza", async () => {
+    const caja = await crearCaja("dar-cambio-malo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 1000, cantidad: 1 }],
+    });
+
     await expect(
-      config.actualizarDenominacion(ctx, rows[0].id, { piezasPorBolsa: 10 })
-    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "EXCHANGE",
+        importeCentimos: 2000,
+        formasPago: [{ forma: "CASH", importe: 2000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+        efectivoEntregado: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "EFECTIVO_NO_CUADRA" });
+
+    await expect(
+      servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "EXCHANGE",
+        importeCentimos: 2000,
+        formasPago: [{ forma: "CASH", importe: 2000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+        efectivoEntregado: [{ valor: 1000, cantidad: 2 }],
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
   });
 });

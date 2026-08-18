@@ -186,15 +186,14 @@ export async function actualizarDenominacion(
     );
   }
 
-  // Una bolsa que no llega ni a un cartucho no es una bolsa: sería un cartucho
-  // mal etiquetado, y el motor rompería siempre el envase equivocado.
-  if (piezasPorBolsa !== null && piezasPorCartucho !== null && piezasPorBolsa <= piezasPorCartucho) {
-    throw new ErrorCaja(
-      "ENTRADA_NO_VALIDA",
-      "Una bolsa tiene que traer más monedas que un cartucho de la misma denominación.",
-      400
-    );
-  }
+  /*
+   * Una bolsa PUEDE traer menos monedas que un cartucho. Aquí había una
+   * validación que lo prohibía, porque el motor daba por hecho que la bolsa era
+   * el envase grande y rompía el cartucho primero. Con bolsas del banco de
+   * veinte monedas y cartuchos de cincuenta, esa regla rechazaba la
+   * configuración de verdad. Ahora el orden de rotura lo decide el número de
+   * monedas de cada envase, así que no hace falta imponer cuál es mayor.
+   */
 
   if (!activa && actual[0].activa && (await tienePiezasEnCajaAbierta(id))) {
     throw new ErrorCaja(
