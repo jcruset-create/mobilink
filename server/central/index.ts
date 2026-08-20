@@ -16,6 +16,7 @@ import { createCentralRouter } from "./router.ts";
 import { TransporteLocal } from "./transport.ts";
 import { registrarTransporte } from "../cash/events/transport.ts";
 import { startCentralRulesWorker } from "./rules/service.ts";
+import { startCentralNotificationWorker } from "./notifications/service.ts";
 
 export { initCentral };
 
@@ -23,5 +24,6 @@ export function mountCentral(app: Express): void {
   app.use("/api/central", createCentralRouter());
   registrarTransporte(new TransporteLocal());
   startCentralRulesWorker();
+  startCentralNotificationWorker();
   console.log("MC Central: API montada en /api/central y transporte local registrado");
 }

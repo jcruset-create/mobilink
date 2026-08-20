@@ -197,6 +197,31 @@ export const cambiarIncidencia = (id: string, estado: "RECONOCIDA" | "RESUELTA",
     body: JSON.stringify({ estado, nota }),
   });
 
+export type CanalAviso = {
+  id: string;
+  canal: string;
+  destino: string;
+  ambito: string;
+  ambitoId: string | null;
+  tipos: string[];
+  activo: boolean;
+};
+
+export const canales = () =>
+  pedir<{
+    canales: CanalAviso[];
+    cola: { estado: string; total: number }[];
+    smtp: boolean;
+  }>("/channels");
+
+export const guardarCanal = (c: {
+  destino: string;
+  ambito?: string;
+  ambitoId?: string | null;
+  tipos?: string[];
+  activo?: boolean;
+}) => pedir<{ canal: CanalAviso }>("/channels", json(c));
+
 export const red = () =>
   pedir<{
     resumen: ResumenRed;

@@ -28,6 +28,7 @@ import {
 } from "./queries.ts";
 import * as jerarquia from "../cash/hierarchy.ts";
 import * as reglas from "./rules/service.ts";
+import * as avisos from "./notifications/service.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
@@ -208,6 +209,46 @@ export function createCentralRouter(): Router {
         typeof b.nota === "string" ? b.nota : undefined
       );
       res.json({ ok: true });
+    })
+  );
+
+  // ── A quién se avisa ─────────────────────────────────────────────────────
+
+  r.get(
+    "/channels",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [canales, cola] = await Promise.all([
+        avisos.listarCanales(empresaId),
+        avisos.estadoCola(empresaId),
+      ]);
+      /*
+       * `smtp` le dice a la pantalla si hay salida de correo. Sin ella los
+       * avisos se acumulan esperando, que no es un error pero sí algo que hay
+       * que poder ver: si no, alguien configura destinatarios y se queda
+       * esperando correos que nunca van a salir.
+       */
+      res.json({ canales, cola, smtp: Boolean(process.env.SMTP_HOST) });
+    })
+  );
+
+  r.post(
+    "/channels",
+    exigirPermiso("central.rules.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const canal = await avisos.guardarCanal(
+        { empresaId: req.authCtx!.empresaId },
+        {
+          destino: String(b.destino ?? ""),
+          ambito: typeof b.ambito === "string" ? b.ambito : "EMPRESA",
+          ambitoId: typeof b.ambitoId === "string" && b.ambitoId ? b.ambitoId : null,
+          tipos: Array.isArray(b.tipos) ? b.tipos.map(String) : [],
+          activo: typeof b.activo === "boolean" ? b.activo : true,
+        }
+      );
+      res.status(201).json({ canal });
     })
   );
 
